@@ -1,0 +1,42 @@
+{
+  "token": "octopushy@pve!agent=00000000-0000-4000-8000-000000000000",
+  "version": "8.4.1",
+  "cluster": { "name": "home", "quorate": true },
+  "nodes": [
+    {
+      "name": "korriban", "online": true, "cpu": 0.07, "maxCpu": 16,
+      "memoryBytes": 12884901888, "maxMemoryBytes": 68719476736, "uptimeSeconds": 86400
+    },
+    {
+      "name": "moraband", "online": true, "cpu": 0.21, "maxCpu": 8,
+      "memoryBytes": 8589934592, "maxMemoryBytes": 34359738368, "uptimeSeconds": 172800
+    }
+  ],
+  "vms": [
+    {
+      "vmid": 210, "name": "krb-crt-01", "node": "korriban", "status": "running",
+      "tags": ["nixos", "opentofu"], "protection": true, "ipv4": ["10.1.0.21"],
+      "maxCpu": 4, "maxMemoryBytes": 8589934592, "uptimeSeconds": 3600
+    },
+    {
+      "vmid": 211, "name": "krb-svc-01", "node": "korriban", "status": "running",
+      "tags": ["nixos", "opentofu"], "protection": true, "ipv4": null,
+      "maxCpu": 2, "maxMemoryBytes": 4294967296, "uptimeSeconds": 120
+    },
+    {
+      "vmid": 9000, "name": "nixos-25-11-template", "node": "korriban", "status": "stopped",
+      "template": true, "tags": ["template"], "protection": false,
+      "maxCpu": 2, "maxMemoryBytes": 2147483648
+    },
+    {
+      "vmid": 310, "name": "mrb-ai-01", "node": "moraband", "status": "running",
+      "tags": ["nixos", "opentofu", "ai"], "protection": true, "ipv4": ["10.1.0.31"],
+      "maxCpu": 6, "maxMemoryBytes": 17179869184, "uptimeSeconds": 7200
+    },
+    {
+      "vmid": 150, "name": "legacy-win11", "node": "moraband", "status": "stopped",
+      "tags": [], "protection": false, "ipv4": null,
+      "maxCpu": 4, "maxMemoryBytes": 8589934592
+    }
+  ]
+}

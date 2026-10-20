@@ -1,0 +1,48 @@
+[package]
+name = "octopushy"
+description = "The Octopushy agent (and, later, supervisor) binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "octopushy"
+path = "src/main.rs"
+
+[dependencies]
+octopushy-proto.workspace = true
+octopushy-proxmox.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+tonic.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rcgen.workspace = true
+x509-parser.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tar.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+fastrand.workspace = true
+libc.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+mock-proxmox.workspace = true
+tempfile.workspace = true
+axum.workspace = true
+rcgen = { workspace = true, features = ["x509-parser"] }

@@ -1,0 +1,106 @@
+# Example systemd unit for the Octopushy agent (not tested on a real host yet).
+#
+# Install:
+#   useradd --system --home-dir /var/lib/octopushy-agent --shell /usr/sbin/nologin octopushy-agent
+#   # rootless podman needs subordinate ID ranges for the user:
+#   usermod --add-subuids 200000-265535 --add-subgids 200000-265535 octopushy-agent
+#   install -m 0755 octopushy /usr/local/bin/octopushy
+#   install -m 0644 octopushy-agent.service /etc/systemd/system/
+#   # enroll once, as the agent user (the token is read from the environment):
+#   sudo -u octopushy-agent env STATE_DIRECTORY=/var/lib/octopushy-agent \
+#       OCTOPUSHY_ENROLLMENT_TOKEN='opy1....' \
+#       octopushy agent enroll --server https://octopushy.lan:8443
+#   systemctl daemon-reload && systemctl enable --now octopushy-agent
+#
+# The settings below are as strict as rootless podman allows. Each relaxation
+# is marked "podman:"; with --tool-runtime local you can tighten them as noted.
+
+[Unit]
+Description=Octopushy agent
+Documentation=file:///usr/share/doc/octopushy/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=octopushy-agent
+Group=octopushy-agent
+ExecStart=/usr/local/bin/octopushy agent run --tool-runtime podman
+
+# State (enrollment, outbox, workspaces, provider cache) lives in
+# /var/lib/octopushy-agent; systemd passes it as $STATE_DIRECTORY.
+StateDirectory=octopushy-agent
+StateDirectoryMode=0700
+# podman: rootless podman keeps its storage under $HOME and its runtime files
+# under $XDG_RUNTIME_DIR. Point both at directories this unit owns, so no login
+# session (or lingering) is needed.
+RuntimeDirectory=octopushy-agent
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/octopushy-agent
+Environment=XDG_RUNTIME_DIR=/run/octopushy-agent
+Environment=OCTOPUSHY_LOG=info
+
+# Stopping: SIGTERM goes to the agent only (KillMode=mixed), which stops
+# cancellable attempts, waits for running applies, flushes results, and exits.
+# A stop timeout must never kill an apply, so the timeout is generous; whatever
+# is still running after it is killed and reported as uncertain on restart.
+KillMode=mixed
+TimeoutStopSec=30min
+Restart=on-failure
+RestartSec=5s
+
+# Filesystem
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
+# Writable: only the state and runtime directories above (and a private /tmp,
+# which podman also uses for image pulls).
+
+# Privileges
+# podman: rootless podman maps subordinate IDs with newuidmap/newgidmap, which
+# gain privileges through setuid or file capabilities. NoNewPrivileges=yes
+# blocks that; set it to yes (and CapabilityBoundingSet= empty) with
+# --tool-runtime local.
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+# podman: user, mount, network, PID, IPC and UTS namespaces are how containers
+# work, so RestrictNamespaces stays off. With --tool-runtime local:
+# RestrictNamespaces=yes
+RestrictNamespaces=no
+# podman: needs /dev/fuse (fuse-overlayfs) and /dev/net/tun (pasta networking),
+# so PrivateDevices=yes would break it. With --tool-runtime local:
+# PrivateDevices=yes
+PrivateDevices=no
+DeviceAllow=/dev/fuse rw
+DeviceAllow=/dev/net/tun rw
+# podman: containers get their own cgroup; without delegation, configure
+# cgroup_manager = "cgroupfs" in ~/.config/containers/containers.conf of the
+# agent user, or run with --cgroups=disabled. Delegate lets podman manage a
+# sub-tree of this unit's cgroup.
+Delegate=yes
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+# podman: ProtectControlGroups=yes makes /sys/fs/cgroup read-only, which breaks
+# the delegated cgroup above. With --tool-runtime local: ProtectControlGroups=yes
+ProtectControlGroups=no
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+RestrictRealtime=yes
+# podman: pulling an image unpacks its layers, which may contain setuid files.
+# With --tool-runtime local: RestrictSUIDSGID=yes
+RestrictSUIDSGID=no
+# podman: pasta needs netlink; the agent itself only needs IP and Unix sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# podman: container setup needs mount, unshare, setns, pivot_root and keyctl,
+# which @system-service lacks; a filter that admits them gains little, so none
+# is set. With --tool-runtime local: SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

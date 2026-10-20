@@ -1,0 +1,29 @@
+[package]
+name = "mock-proxmox"
+description = "A fake Proxmox VE API for Octopushy's tests and end-to-end runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "mock-proxmox"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+hyper = { workspace = true, features = ["http1", "http2", "server"] }
+hyper-util.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rcgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tower.workspace = true
