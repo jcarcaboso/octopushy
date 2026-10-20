@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Octopushy · Infrastructure</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="Octopushy home"><span class="mark" aria-hidden="true">◈</span> octopushy</a>
+    <span class="eyebrow">LOCAL CONTROL PLANE <span class="dot"></span> POC</span>
+    <button id="refresh" class="quiet" hidden>Refresh</button>
+    <button id="logout" class="quiet" hidden>Lock</button>
+  </header>
+  <main>
+    <section id="login" class="panel login">
+      <p class="eyebrow">SINGLE ADMIN · TRUSTED NETWORK ONLY</p>
+      <h1>Your infrastructure,<br>with a clearer picture.</h1>
+      <p class="muted">Connect this browser using the access token in your controller’s private <code>access-token</code> file. Do not paste a Proxmox token here.</p>
+      <form id="login-form">
+        <label for="access-token">Controller access token</label>
+        <input id="access-token" type="password" autocomplete="off" required>
+        <button type="submit">Unlock dashboard</button>
+      </form>
+      <p class="small muted">The token stays in this tab’s memory. Reloading locks the dashboard.</p>
+      <p class="small warning">HTTP access is unencrypted. Use only on a trusted LAN or over a secure tunnel; never expose this prototype publicly.</p>
+    </section>
+    <div id="message" role="status" aria-live="polite" hidden></div>
+    <div id="dashboard" hidden>
+      <div class="heading"><div><p class="eyebrow">INFRASTRUCTURE / OVERVIEW</p><h1>Know what changed.</h1><p class="muted">Git is the desired configuration. OpenTofu owns the state. You approve the changes.</p></div></div>
+      <div id="warnings"></div>
+      <section id="metrics" class="metrics" aria-label="Overview"></section>
+      <details id="setup" class="panel">
+        <summary>Connections & repository setup <span class="muted small">Register once. Keep credentials out of Git.</span></summary>
+        <p class="small warning">Trusted repositories only: providers and configuration execute as the controller’s OS user. This is not a sandbox. No automatic applies.</p>
+        <div class="setup-grid">
+          <form id="connection-form">
+            <h3>1. Proxmox connection</h3>
+            <label>Name<input name="name" placeholder="lab" pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}" required></label>
+            <label>API endpoint<input name="endpoint" type="url" placeholder="https://pve.example:8006/" required></label>
+            <label>Token environment reference<input name="token_env" placeholder="OCTOPUSHY_SECRET_PVE" pattern="OCTOPUSHY_SECRET_[A-Z0-9_]+" required></label>
+            <p class="small muted">Set the referenced variable on the server before starting it. Never enter the token value here.</p>
+            <button type="submit" class="secondary">Register connection</button>
+          </form>
+          <form id="repo-form">
+            <h3>2. Link existing Git repository</h3>
+            <label>Name<input name="name" placeholder="homelab" required></label>
+            <label>Repository URL or absolute local path<input name="source" placeholder="git@forge.example:you/homelab.git" required></label>
+            <label>Branch<input name="branch" value="main" required></label>
+            <p class="small muted">Requires a committed <code>.octopushy.json</code> manifest. Existing state stays in its remote backend; local state is never silently imported.</p>
+            <label class="check"><input name="trusted" type="checkbox" required> I trust this repository to execute on this host.</label>
+            <button type="submit" class="secondary">Link & sync</button>
+          </form>
+          <form id="init-form">
+            <h3>Or start with a new repository</h3>
+            <label>Repository name<input name="name" placeholder="new-lab" required></label>
+            <label>Connection<select id="init-connection" name="connection" required><option value="">Register a connection first</option></select></label>
+            <p class="small muted">Creates and links a local Git repository with an empty VM definition and a <strong>new</strong> controller-managed state. Does not push to a forge or adopt existing VMs.</p>
+            <label class="check"><input type="checkbox" required> I will review the template and provider version before planning.</label>
+            <button type="submit" class="secondary">Initialize & link</button>
+          </form>
+        </div>
+      </details>
+      <section class="section"><div class="section-title"><h2>OpenTofu stacks</h2><span class="small muted">Inventory from last state observation · not live health</span></div><div id="stacks" class="stacks"></div></section>
+      <section class="section"><div class="section-title"><h2>Execution history</h2><span class="small muted">Select a run to review its plan, issue, and next action</span></div>
+        <div class="history"><div id="runs" class="run-list"></div><section id="review" class="panel review" aria-label="Run details"><p class="muted">Your runs will appear here. Start with a plan; nothing is applied until you approve it.</p></section></div>
+      </section>
+      <section class="section"><div class="section-title"><h2>Repositories</h2><span class="small muted">Sync records commits; it never applies</span></div><div id="repositories"></div></section>
+      <section class="section"><div class="section-title"><h2>Proxmox connections</h2><span class="small muted">Credential references, not stored API tokens</span></div><div id="connections" class="connections"></div></section>
+      <footer>One controller · Serial execution · Default workspace only · No agents, SSH, Ansible, or service-health checks yet</footer>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octopushy — operational dashboard concept</title>
+<style>
+*{box-sizing:border-box}body{margin:0;color:var(--foreground,#e8edf5);font:14px/1.5 var(--font-sans,system-ui,sans-serif)}button,summary{font:inherit}button,summary{cursor:pointer}button:focus-visible,summary:focus-visible{outline:3px solid var(--ring,#93c5fd);outline-offset:4px}button{color:inherit}h1,h2,h3,p{margin:0}h1{font-size:25px;letter-spacing:-.7px}h2{font-size:19px;letter-spacing:-.3px}h3{font-size:14px}small,.muted{color:var(--muted-foreground,#a4afc2)}small{font-size:12px}.eyebrow{text-transform:uppercase;letter-spacing:1.6px;font-size:10px;font-weight:750;color:var(--muted-foreground,#a4afc2)}.app{padding:22px;background:var(--card,#141b29);border-radius:var(--radius,14px)}header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:21px;border-bottom:1px solid var(--border,#303b4c)}.brand{display:flex;align-items:center;gap:10px;font-weight:750;letter-spacing:-.3px}.mark{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--accent-surface,#25314d);color:var(--accent-surface-foreground,#c4d3fa);font-size:19px}.pill{padding:4px 9px;background:var(--secondary,#253044);color:var(--secondary-foreground,#dce6f7);border-radius:20px;font-size:11px;white-space:nowrap}.intro{padding:22px 0 16px}.intro p{margin-top:5px}.scenarios{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:14px 0 20px}.scenario{text-align:left;background:transparent;border:1px solid var(--border,#303b4c);border-radius:9px;padding:12px;min-height:76px}.scenario[aria-pressed=true]{background:var(--accent-surface,#25314d);border-color:var(--ring,#7e9ac7)}.scenario strong{display:block;font-size:13px;margin-top:5px}.status{font-size:10px;font-weight:750;letter-spacing:.5px;text-transform:uppercase}.red{color:var(--destructive,#fda4af)}.amber{color:var(--warning,#fcd34d)}.green{color:var(--success,#86efac)}.detail{padding:18px;background:var(--background,#0d1420);border-radius:var(--radius,12px)}.detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.metadata{font-size:12px;margin-top:6px;color:var(--muted-foreground,#a4afc2)}.journey{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0;font-size:12px}.journey span{padding:5px 9px;border:1px solid var(--border,#303b4c);border-radius:6px}.error{border-left:3px solid var(--destructive,#fda4af);padding:1px 0 1px 12px;margin-bottom:14px}.error p{font-size:13px;margin-top:4px}.code{display:block;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-background,#172032);color:var(--code-foreground,#d6dfed);padding:12px;border-radius:7px;font:12px/1.6 var(--font-mono,monospace);margin:12px 0}.split{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0}.split p{font-size:12px;margin-top:3px}.recovery{margin-top:18px;border-top:1px solid var(--border,#303b4c);padding-top:15px}.recovery summary{display:inline-block;background:var(--primary,#cedcfa);color:var(--primary-foreground,#101c33);font-weight:650;padding:9px 13px;border-radius:7px;list-style:none}.recovery summary::-webkit-details-marker{display:none}.recovery[open] summary{margin-bottom:13px}.recovery ul{margin:8px 0;padding-left:18px;font-size:12px}.note{font-size:12px;margin-top:12px}.disabled{background:var(--secondary,#253044);border:1px solid var(--border,#303b4c);padding:9px 13px;border-radius:7px;cursor:not-allowed;opacity:.6}.plan{display:flex;gap:14px;flex-wrap:wrap;font:16px var(--font-mono,monospace);margin:20px 0}.foot{margin-top:14px;font-size:11px;color:var(--muted-foreground,#a4afc2)}[hidden]{display:none!important}@media(max-width:480px){.app{padding:16px}.detail{padding:16px}.scenarios{gap:6px}.scenario{padding:9px}.scenario strong{font-size:11px}.status{font-size:9px}.split{grid-template-columns:1fr;gap:10px}.detail-head{flex-direction:column}.intro h1{font-size:23px}header .pill{font-size:10px}}
+</style>
+</head>
+<body>
+<main class="app">
+  <header><div class="brand"><span class="mark" aria-hidden="true">◎</span> octopushy <span class="muted">/ homelab</span></div><span class="pill">Design concept</span></header>
+  <div class="intro"><div class="eyebrow">Operations, not a wall of jobs</div><h1>What needs your attention?</h1><p class="muted">See the impact. Find the cause. Know what happens next.</p></div>
+  <nav class="scenarios" aria-label="Example issue scenarios">
+    <button class="scenario" data-scenario="failed" aria-pressed="true" aria-controls="failed"><span class="status red">× Deployment failed</span><strong>Gitea · vm-app-02</strong></button>
+    <button class="scenario" data-scenario="approval" aria-pressed="false" aria-controls="approval"><span class="status amber">◇ Review needed</span><strong>Create a test VM</strong></button>
+    <button class="scenario" data-scenario="unknown" aria-pressed="false" aria-controls="unknown"><span class="status amber">? Outcome unknown</span><strong>Site B disconnected</strong></button>
+  </nav>
+  <section class="detail" id="failed" aria-labelledby="failed-title">
+    <div class="detail-head"><div><h2 id="failed-title">Deploy Gitea</h2><p class="metadata">home / site-a / vm-app-02 · run #128 · revision 7c2a9d1</p></div><span class="pill">Attempt 1 · failed</span></div>
+    <div class="journey" aria-label="Deployment steps"><span class="green">✓ Prepare</span><span class="red">× Deploy</span><span class="muted">— Verify · blocked</span></div>
+    <div class="error"><h3>Could not pull the pinned service image</h3><p class="muted">Ansible · deploy-service.yml · task “Pull image” · vm-app-02</p></div>
+    <code class="code">registry.example.test:443 — connection timed out
+Image pull failed before the service restart task.</code>
+    <div class="split"><div><h3>Impact</h3><p class="muted">New version was not deployed. No restart task ran.</p></div><div><h3>Last health observation</h3><p class="muted">Previous version passed · 8 minutes ago.<br>Current health is not yet verified.</p></div></div>
+    <details class="recovery" id="recovery"><summary>Preview recovery →</summary><h3>Rerun the reviewed deployment playbook</h3><ul><li>First check registry connectivity from vm-app-02.</li><li>Same revision and pinned image; new attempt, same run.</li><li>Repeat the deployment playbook from the beginning for vm-app-02, then verify.</li><li>Do not provision infrastructure or patch the operating system.</li><li>Allow only after authorization and concurrency checks pass.</li></ul><p class="note muted">Mock only. No command is sent and no infrastructure is changed.</p></details>
+  </section>
+  <section class="detail" id="approval" aria-labelledby="approval-title" hidden>
+    <div class="detail-head"><div><h2 id="approval-title">Review infrastructure change</h2><p class="metadata">lab / site-a / test-vm · revision 24d18b0</p></div><span class="pill">Awaiting approval</span></div>
+    <div class="plan"><span class="green">+ 1 create</span><span>~ 0 change</span><span class="red">− 0 destroy</span></div>
+    <h3>One disposable VM on pve-a</h3><p class="muted note">The approval belongs to this saved plan and its exact inputs, not to all future changes on this stack.</p>
+    <code class="code">Plan fingerprint: sha256:8e72…c41a (illustrative)
+Revision: 24d18b0 · target: lab-test-vm
+Plan age: 2 minutes · execution agent: site-a-01</code>
+    <div class="split"><div><h3>Before applying</h3><p class="muted">Verify the complete diff, target, input identity, and plan freshness.</p></div><div><h3>If anything changed</h3><p class="muted">Create a new plan and obtain a new approval. Never silently re-plan and apply.</p></div></div>
+    <p class="note muted">Concept only: no real plan is attached and approval is unavailable.</p>
+  </section>
+  <section class="detail" id="unknown" aria-labelledby="unknown-title" hidden>
+    <div class="detail-head"><div><h2 id="unknown-title">Connection lost during apply</h2><p class="metadata">lab / site-b / test-vm · agent site-b-01</p></div><span class="pill">Needs reconciliation</span></div>
+    <div class="journey"><span class="green">✓ Plan approved</span><span class="amber">? Apply · unknown</span><span class="muted">— Configure · blocked</span></div>
+    <div class="error"><h3>The operation may still be running</h3><p class="muted">A missed heartbeat is not evidence that an infrastructure change stopped.</p></div>
+    <code class="code">Last event: creating VM
+Agent heartbeat: stale · final result: not received
+Mutation reservation: retained</code>
+    <div class="split"><div><h3>Next action</h3><p class="muted">Restore connectivity and reconcile the existing attempt with the agent journal and infrastructure state.</p></div><div><h3>If evidence is lost</h3><p class="muted">Confirm the old executor stopped. Inspect state before a new plan and approval.</p></div></div>
+    <button class="disabled" disabled aria-describedby="retry-reason">Retry unavailable</button><p class="note muted" id="retry-reason">Prevent a competing apply until the previous attempt is accounted for.</p>
+  </section>
+  <p class="foot">Illustrative data · three independent scenarios, not a live fleet snapshot · select a scenario to explore.</p>
+</main>
+<script>
+const buttons = [...document.querySelectorAll('[data-scenario]')];
+function showScenario(id) {
+  if (!buttons.some(button => button.dataset.scenario === id)) throw new Error('Unknown scenario');
+  for (const button of buttons) {
+    const selected = button.dataset.scenario === id;
+    button.setAttribute('aria-pressed', String(selected));
+    document.getElementById(button.dataset.scenario).hidden = !selected;
+  }
+}
+for (const button of buttons) button.addEventListener('click', () => showScenario(button.dataset.scenario));
+// Runnable smoke check: call checkConcept() in the browser console.
+function checkConcept() {
+  const original = buttons.find(button => button.getAttribute('aria-pressed') === 'true').dataset.scenario;
+  try {
+    for (const button of buttons) {
+      button.click();
+      if (document.querySelectorAll('.detail:not([hidden])').length !== 1 ||
+          document.getElementById(button.dataset.scenario).hidden ||
+          button.getAttribute('aria-pressed') !== 'true') throw new Error('Scenario selection failed');
+    }
+    if (!document.querySelector('#unknown button').disabled) throw new Error('Unsafe retry enabled');
+    const recovery = document.getElementById('recovery');
+    const wasOpen = recovery.open;
+    recovery.querySelector('summary').click();
+    if (recovery.open === wasOpen) throw new Error('Recovery preview did not toggle');
+    recovery.open = wasOpen;
+    if (document.documentElement.scrollWidth > window.innerWidth) throw new Error('Horizontal overflow');
+    return 'PASS: scenario selection, recovery preview, disabled unsafe retry, responsive width';
+  } finally { showScenario(original); }
+}
+console.log(checkConcept());
+</script>
+</body>
+</html>
