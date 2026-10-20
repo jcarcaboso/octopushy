@@ -1,0 +1,4 @@
+schemaVersion: 1
+name: End to end
+execution:
+  agentLabels: [e2e]

@@ -1,0 +1,7 @@
+schemaVersion: 1
+description: A VM on a Proxmox host, created from a downloaded cloud image with cloud-init.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/proxmox-vm   # an OpenTofu root module, relative to this file
+inputs: inputs.schema.json                # validates each guest's hardware and network
+verify: proxmox                           # check the VM through the Proxmox API afterwards

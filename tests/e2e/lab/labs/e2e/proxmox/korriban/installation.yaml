@@ -1,0 +1,11 @@
+schemaVersion: 1
+type: standalone
+connection:
+  endpoint: https://127.0.0.1:18006/
+  tls: { verify: false }
+  token: { store: e2e/proxmox-token }
+hosts:
+  korriban:
+    datastores: { images: local, disks: local-lvm }
+    bridges: [vmbr0]
+    limits: { concurrentOperations: 1 }

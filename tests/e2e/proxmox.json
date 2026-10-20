@@ -1,0 +1,19 @@
+{
+  "token": "octopushy@pve!e2e=00000000-0000-4000-8000-0000000000e2",
+  "version": "8.4.1",
+  "cluster": null,
+  "nodes": [
+    { "name": "korriban", "online": true, "cpu": 0.05, "maxCpu": 8, "memoryBytes": 8589934592, "maxMemoryBytes": 34359738368, "uptimeSeconds": 86400 }
+  ],
+  "vms": [
+    {
+      "vmid": 310, "name": "e2e-vm-01", "node": "korriban", "status": "running",
+      "tags": ["octopushy", "e2e"], "protection": true, "ipv4": ["10.1.0.31"],
+      "maxCpu": 2, "maxMemoryBytes": 2147483648, "uptimeSeconds": 60
+    },
+    {
+      "vmid": 150, "name": "made-by-hand", "node": "korriban", "status": "stopped",
+      "tags": [], "protection": false, "ipv4": null, "maxCpu": 2, "maxMemoryBytes": 2147483648
+    }
+  ]
+}

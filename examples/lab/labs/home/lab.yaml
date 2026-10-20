@@ -1,0 +1,5 @@
+schemaVersion: 1
+name: Home
+timezone: Europe/Madrid
+execution:
+  agentLabels: [home]             # agents that may act on this lab's resources

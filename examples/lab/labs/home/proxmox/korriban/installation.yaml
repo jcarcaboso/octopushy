@@ -1,0 +1,11 @@
+schemaVersion: 1
+type: standalone                  # standalone | cluster
+connection:
+  endpoint: https://10.1.0.10:8006/
+  tls: { verify: false }          # or caCertificate: { store: <key> }
+  token: { store: proxmox/korriban/api-token }
+hosts:
+  korriban:
+    datastores: { images: local, disks: local-lvm }
+    bridges: [vmbr0]
+    limits: { concurrentOperations: 2 }

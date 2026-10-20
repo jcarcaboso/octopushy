@@ -1,0 +1,25 @@
+schemaVersion: 1
+type: vm
+lifecycle: active                 # active | retired
+host: korriban
+vmid: 310
+template: fedora-44
+hardware:
+  cores: 2
+  memory: 4096
+  disks:
+    - { size: 32 }                # system disk; datastore from the host
+network:
+  bridge: vmbr0
+  mode: static
+  address: 10.1.0.31/24
+  gateway: 10.1.0.1
+  dns: [10.1.0.1]
+provision:
+  recipe: proxmox-vm
+  state: { backend: gitlab }      # one state per guest, named by its address
+access:
+  sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example
+policy:
+  destructive: manual             # deleting this VM waits for approval

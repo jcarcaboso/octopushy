@@ -1,0 +1,8 @@
+schemaVersion: 1
+stateBackends:
+  postgres:
+    type: pg
+    config: { schema_name: octopushy_e2e_state }
+    workspace: "{stack}"
+    env:
+      PG_CONN_STR: { store: e2e/pg-conn }

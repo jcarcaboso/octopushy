@@ -1,0 +1,13 @@
+schemaVersion: 1
+type: standalone
+connection:
+  endpoint: https://10.1.0.50:8006/
+  tls: { verify: false }
+  token: { store: proxmox/moraband/api-token }
+hosts:
+  moraband:
+    datastores: { images: local, disks: local-lvm }
+    bridges: [vmbr0]
+    limits: { concurrentOperations: 1 }
+policy:
+  approval: manual                # every change on this installation waits for approval

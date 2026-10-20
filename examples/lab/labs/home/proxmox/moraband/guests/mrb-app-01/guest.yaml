@@ -1,0 +1,20 @@
+schemaVersion: 1
+type: vm
+host: moraband
+vmid: 410
+template: fedora-44
+hardware:
+  cores: 4
+  memory: 8192
+  disks:
+    - { size: 40 }
+    - { size: 100, datastore: local-lvm }
+network:
+  bridge: vmbr0
+  mode: dhcp
+provision:
+  recipe: proxmox-vm
+  state: { backend: gitlab }
+access:
+  sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example

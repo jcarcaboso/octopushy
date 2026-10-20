@@ -1,0 +1,70 @@
+# The control host: PostgreSQL, the backend, and the frontend. Agents run elsewhere (or on
+# this host under their own user) and connect to the agent port. See deploy/README.md.
+name: octopushy
+
+services:
+  postgres:
+    image: docker.io/library/postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: octopushy
+      POSTGRES_DB: octopushy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "octopushy", "-d", "octopushy"]
+      interval: 5s
+      retries: 20
+
+  # Applies database migrations, then exits; the backend starts only after it succeeds.
+  migrate:
+    image: ${OCTOPUSHY_BACKEND_IMAGE:-localhost/octopushy-backend:dev}
+    command: ["migrate"]
+    environment:
+      ConnectionStrings__Octopushy: Host=postgres;Database=octopushy;Username=octopushy;Password=${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    image: ${OCTOPUSHY_BACKEND_IMAGE:-localhost/octopushy-backend:dev}
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__Octopushy: Host=postgres;Database=octopushy;Username=octopushy;Password=${POSTGRES_PASSWORD}
+      Octopushy__TrustForwardedHeaders: "true"
+      Octopushy__Store__KeyFile: /run/secrets/kek
+      # The name or address agents use to reach this host; it goes into the agent endpoint's certificate.
+      Octopushy__AgentChannel__Hostnames__0: ${OCTOPUSHY_AGENT_HOST:?set OCTOPUSHY_AGENT_HOST in .env}
+      Octopushy__AgentChannel__PublicUrl: https://${OCTOPUSHY_AGENT_HOST}:${OCTOPUSHY_AGENT_PORT:-8443}
+    secrets:
+      - kek
+    volumes:
+      - data:/var/lib/octopushy
+    ports:
+      # Agents connect here: gRPC over TLS with client certificates.
+      - "${OCTOPUSHY_AGENT_PORT:-8443}:8443"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    image: ${OCTOPUSHY_FRONTEND_IMAGE:-localhost/octopushy-frontend:dev}
+    restart: unless-stopped
+    environment:
+      OCTOPUSHY_BACKEND: backend:8080
+    ports:
+      # The web interface. It listens on localhost by default; put TLS in front before exposing it.
+      - "${OCTOPUSHY_UI_BIND:-127.0.0.1}:${OCTOPUSHY_UI_PORT:-8081}:8081"
+    depends_on:
+      - backend
+
+secrets:
+  # The key-encryption key for the variable store: 32 random bytes, kept out of backups.
+  kek:
+    file: ./secrets/kek
+
+volumes:
+  postgres:
+  data:
