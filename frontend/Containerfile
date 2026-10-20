@@ -1,0 +1,27 @@
+# The Octopushy frontend: the Vite build served by Caddy, which also forwards /api.
+# Build context is the repository root:
+#   podman build -f frontend/Containerfile -t octopushy-frontend:dev .
+# src/api/schema.d.ts is committed, so the build does not regenerate it from contracts/.
+
+FROM docker.io/library/node:24-alpine AS build
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/index.html frontend/vite.config.ts frontend/tsconfig.json frontend/tsconfig.app.json frontend/tsconfig.node.json ./
+COPY frontend/public ./public
+COPY frontend/src ./src
+RUN npm run build
+
+FROM docker.io/library/caddy:2-alpine
+# Port 8081 needs no privileges, so drop the binary's file capability (it would fail to
+# start with all capabilities dropped) and run as an unprivileged user.
+RUN setcap -r /usr/bin/caddy \
+ && addgroup -S -g 10001 octopushy \
+ && adduser -S -D -H -u 10001 -G octopushy -s /sbin/nologin octopushy \
+ && mkdir -p /data /config \
+ && chown -R octopushy:octopushy /data /config
+COPY frontend/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /src/frontend/dist /srv
+USER octopushy
+EXPOSE 8081
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

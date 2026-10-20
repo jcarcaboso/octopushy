@@ -1,0 +1,183 @@
+/* Design tokens. Light by default, dark under prefers-color-scheme. Text colors meet WCAG AA on their surfaces. */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --sidebar-width: 13.5rem;
+  --topbar-height: 3rem;
+  --content-max: 96rem;
+
+  /* Surfaces and text */
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef1f4;
+  --sidebar-bg: #eceff3;
+  --border: #dde2e8;
+  --border-strong: #c3cbd5;
+  --text: #19212c;
+  --text-muted: #556172;
+  --text-faint: #6b7686;
+  --link: #1f4fbf;
+  --link-hover: #163b91;
+
+  --accent: #2856c9;
+  --accent-hover: #1f47ab;
+  --accent-text: #ffffff;
+  --accent-soft: #e7eefc;
+  --focus: #2856c9;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
+
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-lg: 0 12px 32px rgb(16 24 40 / 18%), 0 2px 6px rgb(16 24 40 / 8%);
+
+  /* Tones: foreground, background, border */
+  --neutral-fg: #3f4a5a;
+  --neutral-bg: #eef1f4;
+  --neutral-border: #d3d9e1;
+
+  --info-fg: #1d4fb8;
+  --info-bg: #e8effd;
+  --info-border: #c3d4f6;
+
+  --success-fg: #1a6a37;
+  --success-bg: #e5f4ea;
+  --success-border: #b6dcc3;
+
+  --warning-fg: #835400;
+  --warning-bg: #fcf2db;
+  --warning-border: #ecd391;
+
+  --danger-fg: #b0211f;
+  --danger-bg: #fdeaea;
+  --danger-border: #f1c0bf;
+
+  --attention-fg: #5b30ad;
+  --attention-bg: #f1ebfd;
+  --attention-border: #d8c9f4;
+
+  --uncertain-fg: #a23f00;
+  --uncertain-bg: #fdeedf;
+  --uncertain-border: #f3c9a2;
+
+  --muted-fg: #5d6878;
+  --muted-bg: #f1f3f5;
+  --muted-border: #dce1e7;
+
+  /* Code and logs */
+  --code-bg: #f6f8fa;
+  --code-border: #e1e5ea;
+  --code-text: #1f2733;
+  --code-line-number: #8a94a3;
+  --yaml-key: #1f4fbf;
+  --yaml-comment: #687384;
+  --log-bg: #0f151d;
+  --log-text: #d7dee8;
+  --log-time: #7d8898;
+  --log-stderr-bg: rgb(220 70 70 / 14%);
+  --log-stderr-text: #ffb4b0;
+  --log-agent-text: #9ec1ff;
+
+  --meter-track: #e3e7ec;
+  --meter-ok: #3a7bd5;
+  --meter-warning: #d08a0b;
+  --meter-danger: #d1403c;
+
+  --skeleton: #e6eaef;
+  --skeleton-shine: #f2f4f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e131a;
+    --surface: #151b24;
+    --surface-2: #19202a;
+    --surface-3: #202834;
+    --sidebar-bg: #111720;
+    --border: #283241;
+    --border-strong: #3a4657;
+    --text: #e3e8ef;
+    --text-muted: #a1acbb;
+    --text-faint: #8d98a8;
+    --link: #8db2ff;
+    --link-hover: #b3cbff;
+
+    --accent: #4f7fe8;
+    --accent-hover: #6690ef;
+    --accent-text: #ffffff;
+    --accent-soft: #1d2a45;
+    --focus: #8db2ff;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow-lg: 0 16px 40px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 35%);
+
+    --neutral-fg: #c0c9d5;
+    --neutral-bg: #222b37;
+    --neutral-border: #354052;
+
+    --info-fg: #9dbcff;
+    --info-bg: #1a2741;
+    --info-border: #2d4370;
+
+    --success-fg: #82d6a0;
+    --success-bg: #15291e;
+    --success-border: #255238;
+
+    --warning-fg: #f0c463;
+    --warning-bg: #2c2412;
+    --warning-border: #5a4618;
+
+    --danger-fg: #ff9e9a;
+    --danger-bg: #331a1b;
+    --danger-border: #6a2c2c;
+
+    --attention-fg: #c8b0ff;
+    --attention-bg: #251d3d;
+    --attention-border: #463670;
+
+    --uncertain-fg: #ffb57a;
+    --uncertain-bg: #33210f;
+    --uncertain-border: #6b4220;
+
+    --muted-fg: #a7b1bf;
+    --muted-bg: #1c232d;
+    --muted-border: #2e3846;
+
+    --code-bg: #10161e;
+    --code-border: #263040;
+    --code-text: #d9e0ea;
+    --code-line-number: #6f7b8c;
+    --yaml-key: #8db2ff;
+    --yaml-comment: #8792a3;
+    --log-bg: #0a0f15;
+
+    --meter-track: #253041;
+    --meter-ok: #5b8ff0;
+    --meter-warning: #e0a32a;
+    --meter-danger: #ec6560;
+
+    --skeleton: #1d2530;
+    --skeleton-shine: #26303d;
+  }
+}
