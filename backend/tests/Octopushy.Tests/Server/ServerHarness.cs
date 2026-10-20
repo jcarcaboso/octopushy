@@ -235,10 +235,16 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         return await harness.Engine.OnResultAsync(Id, result, CancellationToken.None);
     }
 
-    public static JsonObject Plan(int create = 0, int update = 0, int delete = 0, int replace = 0) => new()
+    public static JsonObject Plan(int create = 0, int update = 0, int delete = 0, int replace = 0, bool? hasChanges = null) => new()
     {
-        ["hasChanges"] = create + update + delete + replace > 0,
-        ["changes"] = new JsonArray(),
+        ["hasChanges"] = hasChanges ?? create + update + delete + replace > 0,
+        ["changes"] = new JsonArray(Enumerable.Range(0, create + update + delete + replace)
+            .Select(i => (JsonNode)new JsonObject
+            {
+                ["address"] = $"terraform_data.r{i}",
+                ["actions"] = new JsonArray(i < create ? "create" : i < create + update ? "update" : i < create + update + delete ? "delete" : "delete", "create"),
+            })
+            .ToArray()),
         ["counts"] = new JsonObject { ["create"] = create, ["update"] = update, ["delete"] = delete, ["replace"] = replace },
         ["toolVersion"] = "1.13.1",
     };

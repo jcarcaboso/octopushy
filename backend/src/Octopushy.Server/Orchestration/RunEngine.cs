@@ -279,8 +279,11 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
+        // A plan can report changes without changing any resource, for example only outputs,
+        // or a destroy plan over a state that holds nothing. There is nothing to approve then.
+        var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
-        var manual = policy.Approval == "manual";
+        var manual = policy.Approval == "manual" && resourceChanges > 0;
         var destructiveManual = deletes > 0 && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
         step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();
@@ -289,9 +292,11 @@ public sealed partial class RunEngine(
             step.Decision = "approved";
             step.DecidedBy = "policy";
             step.DecidedAt = clock.GetUtcNow();
-            step.DecisionNote = deletes > 0
-                ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
-                : $"Approval is automatic (set by {policy.ApprovalSetBy}).";
+            step.DecisionNote = resourceChanges == 0
+                ? "The plan changes no resources, so it needs no approval."
+                : deletes > 0
+                    ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
+                    : $"Approval is automatic (set by {policy.ApprovalSetBy}).";
             step.Status = StepStatuses.Succeeded;
             step.StartedAt = step.FinishedAt = clock.GetUtcNow();
             return true;
