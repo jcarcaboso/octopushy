@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Octopushy.Definitions/Octopushy.Definitions.csproj" />
+    <Project Path="src/Octopushy.Server/Octopushy.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Octopushy.Tests/Octopushy.Tests.csproj" />
+  </Folder>
+</Solution>

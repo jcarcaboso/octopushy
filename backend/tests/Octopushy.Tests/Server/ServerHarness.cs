@@ -1,0 +1,251 @@
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using Google.Protobuf;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using Octopushy.Agent.V1;
+using Octopushy.Server.Agents;
+using Octopushy.Server.Data;
+using Octopushy.Server.Git;
+using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
+using Testcontainers.PostgreSql;
+
+namespace Octopushy.Tests.Server;
+
+[CollectionDefinition(Name)]
+public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
+{
+    public const string Name = "postgres";
+}
+
+/// <summary>One PostgreSQL container for all server tests; each test gets its own database.</summary>
+public sealed class PostgresFixture : IAsyncLifetime
+{
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18-alpine").Build();
+
+    public Task InitializeAsync() => _container.StartAsync();
+
+    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+
+    public async Task<string> NewDatabaseAsync()
+    {
+        var name = "t" + Guid.NewGuid().ToString("N");
+        await using var connection = new NpgsqlConnection(_container.GetConnectionString());
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
+        await command.ExecuteNonQueryAsync();
+        return new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name }.ConnectionString;
+    }
+}
+
+/// <summary>
+/// The server with its background loops turned off, a lab repository in a local Git repository,
+/// and a fake agent, so a test decides when things happen.
+/// </summary>
+public sealed class ServerHarness : IAsyncDisposable
+{
+    private readonly WebApplicationFactory<Program> _factory;
+    private readonly string _dataDirectory;
+
+    private ServerHarness(string connectionString, TestRepository repository)
+    {
+        Repository = repository;
+        _dataDirectory = Path.Combine(Path.GetTempPath(), "octopushy-server-" + Guid.NewGuid().ToString("N"));
+        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("ConnectionStrings:Octopushy", connectionString);
+            builder.UseSetting("Octopushy:DataDirectory", _dataDirectory);
+            builder.UseSetting("Octopushy:MigrateOnStart", "true");
+            builder.UseSetting("Octopushy:RunBackgroundServices", "false");
+            builder.UseSetting("Octopushy:AgentChannel:PublicUrl", "https://octopushy.test:8443");
+        });
+    }
+
+    public TestRepository Repository { get; }
+
+    public IServiceProvider Services => _factory.Services;
+
+    public RunEngine Engine => Services.GetRequiredService<RunEngine>();
+
+    public string DataDirectory => _dataDirectory;
+
+    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true)
+    {
+        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal());
+        _ = harness._factory.Server;
+        harness.Commit("Initial definitions");
+        await harness.WithDbAsync(async db =>
+        {
+            db.RepositorySettings.Add(new RepositorySettings { Url = harness.Repository.Root, Branch = "main", UpdatedAt = DateTimeOffset.UtcNow });
+            await db.SaveChangesAsync();
+        });
+        if (withSecrets)
+        {
+            await harness.SetSecretAsync("proxmox/korriban/api-token", "octopushy@pve!agent=secret-token");
+            await harness.SetSecretAsync("opentofu/pg", "postgres://state");
+        }
+
+        return harness;
+    }
+
+    // Endpoints are bound to the API port by host, so the client addresses it.
+    public HttpClient CreateClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, BaseAddress = new Uri("http://localhost:8080") });
+
+    public void Commit(string message)
+    {
+        Git("init", "--quiet", "-b", "main");
+        Git("add", "-A");
+        Git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", message);
+    }
+
+    public async Task SyncAsync() => await Services.GetRequiredService<RepositorySync>().SyncOnceAsync(CancellationToken.None);
+
+    public Task TickAsync() => Engine.TickAsync(CancellationToken.None);
+
+    public async Task SetSecretAsync(string key, string value)
+    {
+        await using var scope = Services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<VariableStore>().SetAsync(key, value, Visibilities.Secret, null, CancellationToken.None);
+    }
+
+    public async Task WithDbAsync(Func<OctopushyDb, Task> action)
+    {
+        await using var scope = Services.CreateAsyncScope();
+        await action(scope.ServiceProvider.GetRequiredService<OctopushyDb>());
+    }
+
+    public async Task<T> QueryAsync<T>(Func<OctopushyDb, Task<T>> query)
+    {
+        await using var scope = Services.CreateAsyncScope();
+        return await query(scope.ServiceProvider.GetRequiredService<OctopushyDb>());
+    }
+
+    public Task<Resource> ResourceAsync(string address) =>
+        QueryAsync(db => db.Resources.AsNoTracking().Where(r => r.Address == address).OrderBy(r => r.RetiredAt.HasValue).FirstAsync());
+
+    public Task<Run> LatestRunAsync(string address, string? operation = null) =>
+        QueryAsync(async db =>
+        {
+            var resource = await db.Resources.AsNoTracking().Where(r => r.Address == address).OrderBy(r => r.RetiredAt.HasValue).FirstAsync();
+            return await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+                .Where(r => r.ResourceId == resource.Id && (operation == null || r.Operation == operation))
+                .OrderByDescending(r => r.CreatedAt)
+                .FirstAsync();
+        });
+
+    public async Task<FakeAgent> ConnectAgentAsync(params string[] labels)
+    {
+        var agent = new AgentRecord
+        {
+            Id = Guid.CreateVersion7(),
+            Name = "fake",
+            Labels = labels,
+            MaxConcurrency = 4,
+            EnrolledAt = DateTimeOffset.UtcNow,
+            Executors = ["opentofu", "proxmox"],
+            CertificateSerial = Guid.NewGuid().ToString("N"),
+            CertificateExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+        };
+        await WithDbAsync(async db =>
+        {
+            db.Agents.Add(agent);
+            await db.SaveChangesAsync();
+        });
+        var session = new AgentSession(agent.Id, agent.Name, agent.Executors);
+        Services.GetRequiredService<AgentConnections>().Add(session);
+        await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
+        return new FakeAgent(this, agent.Id, session);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _factory.DisposeAsync();
+        Repository.Dispose();
+        if (Directory.Exists(_dataDirectory))
+        {
+            Directory.Delete(_dataDirectory, recursive: true);
+        }
+    }
+
+    private void Git(params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git") { WorkingDirectory = Repository.Root, RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
+        using var process = Process.Start(start)!;
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(process.StandardError.ReadToEnd());
+        }
+    }
+}
+
+/// <summary>An agent without a process: the test reads its assignments and reports results.</summary>
+public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession session)
+{
+    public Guid Id { get; } = id;
+
+    public List<Assignment> TakeAssignments()
+    {
+        var result = new List<Assignment>();
+        while (session.Outbound.TryRead(out var message))
+        {
+            if (message.KindCase == ServerMessage.KindOneofCase.Assignment)
+            {
+                result.Add(message.Assignment);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Ticks the engine until this agent receives an assignment for the action.</summary>
+    public async Task<Assignment> NextAsync(string action)
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            await harness.TickAsync();
+            var assignment = TakeAssignments().FirstOrDefault(a => a.Action == action);
+            if (assignment is not null)
+            {
+                return assignment;
+            }
+        }
+
+        throw new InvalidOperationException($"No {action} assignment arrived.");
+    }
+
+    public Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts) =>
+        ReportAsync(assignment.AttemptId, outcome, outputs, error, artifacts);
+
+    public async Task<bool> ReportAsync(string attemptId, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
+    {
+        await harness.Engine.OnStartedAsync(Id, Guid.Parse(attemptId), CancellationToken.None);
+        var result = new AttemptResult { AttemptId = attemptId, Outcome = outcome, OutputsJson = outputs?.ToJsonString() ?? "", Error = error ?? "" };
+        result.Artifacts.AddRange(artifacts);
+        return await harness.Engine.OnResultAsync(Id, result, CancellationToken.None);
+    }
+
+    public static JsonObject Plan(int create = 0, int update = 0, int delete = 0, int replace = 0) => new()
+    {
+        ["hasChanges"] = create + update + delete + replace > 0,
+        ["changes"] = new JsonArray(),
+        ["counts"] = new JsonObject { ["create"] = create, ["update"] = update, ["delete"] = delete, ["replace"] = replace },
+        ["toolVersion"] = "1.13.1",
+    };
+
+    public static Artifact PlanArtifact(string content = "a saved plan")
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        return new Artifact { Name = AssignmentBuilder.PlanArtifact, Content = ByteString.CopyFrom(bytes), Sha256 = ArtifactStore.Sha256(bytes) };
+    }
+}

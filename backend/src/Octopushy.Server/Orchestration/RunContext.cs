@@ -1,0 +1,90 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+namespace Octopushy.Server.Orchestration;
+
+/// <summary>
+/// What a run's steps are built from, fixed when the run is created. It names secrets by their
+/// store keys and never holds their values.
+/// </summary>
+public sealed record RunContext
+{
+    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public required string Address { get; init; }
+
+    public string? Commit { get; init; }
+
+    public IReadOnlyList<string> AgentLabels { get; init; } = [];
+
+    public string AgentLabelsSetBy { get; init; } = "default";
+
+    /// <summary>The Proxmox host the run acts on, as <c>lab/installation/host</c>.</summary>
+    public string? HostKey { get; init; }
+
+    public int? HostLimit { get; init; }
+
+    public PolicyContext? Policy { get; init; }
+
+    public OpenTofuContext? OpenTofu { get; init; }
+
+    public required ProxmoxContext Proxmox { get; init; }
+
+    /// <summary>Secret names used in assignments, mapped to store keys.</summary>
+    public Dictionary<string, string> Secrets { get; init; } = [];
+
+    /// <summary><c>proxmox</c> or <c>none</c>.</summary>
+    public string Verify { get; init; } = "proxmox";
+
+    public string Serialize() => JsonSerializer.Serialize(this, Json);
+
+    public static RunContext Parse(string json) =>
+        JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
+}
+
+public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy);
+
+public sealed record OpenTofuContext(
+    string Stack,
+    string Root,
+    string Image,
+    BackendContext Backend,
+    JsonObject Variables,
+    Dictionary<string, string> Env,
+    Dictionary<string, string> SecretEnv);
+
+public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace);
+
+public sealed record ProxmoxContext(
+    string Endpoint,
+    bool VerifyTls,
+    string? CaCertificateKey,
+    string? Node,
+    int? Vmid,
+    string? Name,
+    string? ExpectIpv4);
+
+/// <summary>Step names, shared with the API.</summary>
+public static class StepNames
+{
+    public const string Plan = "plan";
+    public const string Approval = "approval";
+    public const string Unprotect = "unprotect";
+    public const string Apply = "apply";
+    public const string Verify = "verify";
+    public const string VerifyAbsent = "verify-absent";
+    public const string Observe = "observe";
+}
+
+/// <summary>The secret names executors look for.</summary>
+public static class SecretNames
+{
+    public const string ProxmoxToken = "proxmox.token";
+    public const string ProxmoxCa = "proxmox.ca";
+
+    public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
+}

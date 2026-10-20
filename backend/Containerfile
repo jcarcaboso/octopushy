@@ -1,0 +1,31 @@
+# The backend image: the server, the Git CLI it reads the lab repository with, and its
+# migrations (run with `migrate`). Build from the repository root:
+#   podman build -f backend/Containerfile -t octopushy-backend:<version> .
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY contracts/ contracts/
+COPY backend/ backend/
+RUN dotnet publish backend/src/Octopushy.Server \
+      --configuration Release \
+      --runtime linux-x64 \
+      --self-contained \
+      -p:OpenApiGenerateDocuments=false \
+      --output /app
+
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends git openssh-client ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -o app -g app -m 0700 /var/lib/octopushy
+COPY --from=build /app /opt/octopushy
+# The content root, where appsettings.json is read from.
+WORKDIR /opt/octopushy
+USER app
+# Ports come from Octopushy settings, not the base image default.
+ENV ASPNETCORE_HTTP_PORTS= \
+    Octopushy__DataDirectory=/var/lib/octopushy \
+    Octopushy__ApiBindAddress=0.0.0.0 \
+    DOTNET_gcServer=0
+VOLUME /var/lib/octopushy
+EXPOSE 8080 8443
+ENTRYPOINT ["/opt/octopushy/octopushy-server"]
