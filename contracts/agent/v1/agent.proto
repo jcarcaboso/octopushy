@@ -1,0 +1,169 @@
+// The contract between the Octopushy backend and its agents.
+//
+// Agents connect outbound to the agent endpoint, which serves gRPC over TLS with a
+// certificate issued by the server's agent CA. Before enrolling, the agent fetches
+// that CA from `GET /agent/ca.pem` on the same endpoint and checks its SHA-256
+// fingerprint against the one in its enrollment token; from then on it trusts only
+// that CA. Enrollment needs no client certificate; AgentChannel requires the one
+// issued at enrollment.
+syntax = "proto3";
+
+package octopushy.agent.v1;
+
+option csharp_namespace = "Octopushy.Agent.V1";
+
+service Enrollment {
+  // Exchanges a one-time enrollment token and a certificate request for the
+  // agent's certificate.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+}
+
+service AgentChannel {
+  // One long-lived stream per agent. The agent sends Hello first.
+  rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+
+  // Issues a new certificate for a new key before the current one expires.
+  rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
+}
+
+message EnrollRequest {
+  // The secret part of the enrollment token.
+  string token = 1;
+  // The name the agent asks to be shown as, usually its hostname.
+  string name = 2;
+  // PKCS#10 certificate request for a key the agent generated itself.
+  bytes csr_der = 3;
+  string agent_version = 4;
+}
+
+message EnrollResponse {
+  string agent_id = 1;
+  bytes certificate_der = 2;
+  bytes ca_certificate_der = 3;
+}
+
+message RenewCertificateRequest {
+  bytes csr_der = 1;
+}
+
+message RenewCertificateResponse {
+  bytes certificate_der = 1;
+}
+
+message AgentMessage {
+  oneof kind {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    AttemptStarted started = 3;
+    AttemptLog log = 4;
+    AttemptResult result = 5;
+  }
+}
+
+message Hello {
+  string agent_version = 1;
+  // Executors this binary provides, such as "opentofu" and "proxmox".
+  repeated string executors = 2;
+  // Attempts still executing, for example after a reconnect.
+  repeated string running_attempt_ids = 3;
+  // How the agent runs tools: "podman", "docker", or "local".
+  string tool_runtime = 4;
+}
+
+message Heartbeat {
+  repeated string running_attempt_ids = 1;
+}
+
+message AttemptStarted {
+  string attempt_id = 1;
+}
+
+message AttemptLog {
+  string attempt_id = 1;
+  // Sequence number of the first line; lines are numbered from 0 per attempt, so
+  // the server can drop lines it already has after a reconnect.
+  uint64 first_sequence = 2;
+  repeated LogLine lines = 3;
+}
+
+message LogLine {
+  int64 unix_ms = 1;
+  LogStream stream = 2;
+  // Secret values from the assignment are already masked.
+  string text = 3;
+}
+
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
+  // Lines the agent writes itself, such as which command it is starting.
+  LOG_STREAM_AGENT = 3;
+}
+
+message AttemptResult {
+  string attempt_id = 1;
+  Outcome outcome = 2;
+  // Executor-specific JSON object.
+  string outputs_json = 3;
+  // Why the attempt did not succeed, for people to read.
+  string error = 4;
+  repeated Artifact artifacts = 5;
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  OUTCOME_SUCCEEDED = 1;
+  OUTCOME_FAILED = 2;
+  // The agent cannot tell whether the mutation happened, for example because it
+  // restarted while an apply was running.
+  OUTCOME_UNCERTAIN = 3;
+  OUTCOME_CANCELLED = 4;
+}
+
+message Artifact {
+  string name = 1;
+  bytes content = 2;
+  // Lowercase hex SHA-256 of content.
+  string sha256 = 3;
+}
+
+message ServerMessage {
+  oneof kind {
+    Welcome welcome = 1;
+    Assignment assignment = 2;
+    CancelAttempt cancel = 3;
+    ResultAck result_ack = 4;
+  }
+}
+
+message Welcome {
+  string agent_id = 1;
+  uint32 max_concurrency = 2;
+  uint32 heartbeat_seconds = 3;
+}
+
+message Assignment {
+  string attempt_id = 1;
+  // "opentofu" or "proxmox".
+  string executor = 2;
+  // Executor-specific, such as "preview", "apply", "observe", "verify-guest".
+  string action = 3;
+  // Executor-specific JSON object.
+  string input_json = 4;
+  // Secrets resolved for this attempt only, by name. Never logged.
+  map<string, string> secrets = 5;
+  // Repository files the attempt needs, such as an OpenTofu root, as a gzip tar.
+  bytes files_tar_gz = 6;
+  // Outputs of earlier steps, such as a saved plan.
+  repeated Artifact artifacts = 7;
+  uint32 lease_seconds = 8;
+}
+
+message CancelAttempt {
+  string attempt_id = 1;
+}
+
+message ResultAck {
+  string attempt_id = 1;
+}

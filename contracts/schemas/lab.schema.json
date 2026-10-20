@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/lab.schema.json",
+  "title": "Lab (labs/<lab>/lab.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "timezone": { "description": "IANA time zone for maintenance windows.", "type": "string" },
+    "execution": { "$ref": "common.schema.json#/$defs/execution" },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" },
+    "integrations": { "description": "Accepted, not acted on until the DNS milestone.", "type": "object" },
+    "dns": { "description": "Accepted, not acted on until the DNS milestone.", "type": "object" }
+  },
+  "required": ["schemaVersion"],
+  "additionalProperties": false
+}

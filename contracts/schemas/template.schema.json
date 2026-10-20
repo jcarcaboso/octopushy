@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/template.schema.json",
+  "title": "VM template (templates/<template>/template.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "os": { "type": "string" },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "pattern": "^https?://" },
+            "checksum": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64}|sha512:[0-9a-f]{128})$" },
+            "fileName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.(qcow2|raw|img|vmdk)$" }
+          },
+          "required": ["url", "checksum"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "build": {
+              "type": "object",
+              "properties": { "recipe": { "$ref": "common.schema.json#/$defs/id" } },
+              "required": ["recipe"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["build"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "availableOn": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  },
+  "required": ["schemaVersion", "source"],
+  "additionalProperties": false
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/guest.schema.json",
+  "title": "Guest (.../guests/<guest>/guest.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "type": { "const": "vm", "description": "Proxmox containers come later." },
+    "lifecycle": { "enum": ["active", "retired"] },
+    "renamedFrom": { "$ref": "common.schema.json#/$defs/id" },
+    "host": { "$ref": "common.schema.json#/$defs/id" },
+    "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999 },
+    "template": { "$ref": "common.schema.json#/$defs/id" },
+    "profiles": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/id" }, "uniqueItems": true },
+    "hardware": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
+    "network": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
+    "provision": {
+      "type": "object",
+      "properties": {
+        "recipe": { "$ref": "common.schema.json#/$defs/id" },
+        "state": {
+          "type": "object",
+          "properties": { "backend": { "$ref": "common.schema.json#/$defs/id" } },
+          "required": ["backend"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["recipe", "state"],
+      "additionalProperties": false
+    },
+    "setup": { "description": "Accepted, not acted on until the setup milestone.", "type": "object" },
+    "access": {
+      "type": "object",
+      "properties": {
+        "address": { "type": "string" },
+        "sshKey": { "$ref": "common.schema.json#/$defs/storeRef" },
+        "sshAuthorizedKeys": { "type": "array", "items": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)" } }
+      },
+      "additionalProperties": false
+    },
+    "execution": { "$ref": "common.schema.json#/$defs/execution" },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" }
+  },
+  "required": ["schemaVersion", "type", "host", "vmid", "provision"],
+  "additionalProperties": false
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/octopushy.schema.json",
+  "title": "Repository settings (octopushy.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "policy": { "$ref": "common.schema.json#/$defs/policy" },
+        "execution": { "$ref": "common.schema.json#/$defs/execution" }
+      },
+      "additionalProperties": false
+    },
+    "stateBackends": {
+      "description": "Named OpenTofu backends that guests refer to.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": { "description": "The OpenTofu backend type, such as http, pg, or s3.", "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "config": {
+            "description": "Passed to tofu init as -backend-config. {stack} is replaced by the stack name. Never put credentials here: use env.",
+            "type": "object",
+            "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+            "additionalProperties": { "type": ["string", "number", "boolean"] }
+          },
+          "workspace": { "description": "Workspace to select, for backends that have them. {stack} is replaced.", "type": "string" },
+          "env": {
+            "description": "Environment for OpenTofu, such as credentials. Values may be store references.",
+            "type": "object",
+            "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" },
+            "additionalProperties": { "$ref": "common.schema.json#/$defs/stringOrStoreRef" }
+          }
+        },
+        "required": ["type"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schemaVersion"],
+  "additionalProperties": false
+}

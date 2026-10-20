@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/installation.schema.json",
+  "title": "Proxmox installation (labs/<lab>/proxmox/<installation>/installation.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "type": { "enum": ["standalone", "cluster"] },
+    "connection": {
+      "type": "object",
+      "properties": {
+        "endpoint": { "type": "string", "pattern": "^https?://" },
+        "tls": { "$ref": "common.schema.json#/$defs/tls" },
+        "token": { "$ref": "common.schema.json#/$defs/storeRef" }
+      },
+      "required": ["endpoint", "token"],
+      "additionalProperties": false
+    },
+    "hosts": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "endpoint": { "type": "string", "pattern": "^https?://" },
+          "datastores": {
+            "type": "object",
+            "properties": {
+              "images": { "description": "Where downloaded images go.", "type": "string" },
+              "disks": { "description": "Default datastore for guest disks.", "type": "string" }
+            },
+            "additionalProperties": { "type": "string" }
+          },
+          "bridges": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "concurrentOperations": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution": { "$ref": "common.schema.json#/$defs/execution" },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" }
+  },
+  "required": ["schemaVersion", "type", "connection", "hosts"],
+  "additionalProperties": false
+}

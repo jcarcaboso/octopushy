@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/recipe.schema.json",
+  "title": "Operation recipe (recipes/<recipe>/recipe.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "operation": { "enum": ["provision"] },
+    "executor": { "enum": ["opentofu"] },
+    "root": { "description": "The OpenTofu root module, relative to this file.", "type": "string", "minLength": 1 },
+    "inputs": { "description": "JSON Schema validating the guest's hardware and network, relative to this file.", "type": "string" },
+    "verify": { "enum": ["proxmox", "none"] },
+    "image": { "description": "Overrides the server's default OpenTofu image.", "type": "string" }
+  },
+  "required": ["schemaVersion", "operation", "executor", "root"],
+  "additionalProperties": false
+}
