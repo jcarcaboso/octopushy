@@ -7,6 +7,9 @@ for them, and a visible record of every step. The design is in the
 [lab repository proposal](docs/lab-repository.md); the vocabulary is in
 [CONTEXT.md](CONTEXT.md).
 
+For the dated progress snapshot, validation boundaries, and proposed implementation
+sequence, see [Progress and next steps](docs/progress-and-next-steps.md).
+
 **Status:** milestone 1, Proxmox and virtual machines
 ([scope and contracts](docs/milestone-1.md)). Guests are planned, approved, applied,
 verified, and retired; installations are observed through the Proxmox API. Guest setup,
