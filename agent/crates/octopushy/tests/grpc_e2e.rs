@@ -95,6 +95,43 @@ fn dir_is_empty(p: &Path) -> bool {
 }
 
 #[tokio::test]
+async fn hello_only_advertises_usable_tool_capabilities() {
+    for (kind, binary, available) in [
+        (RuntimeKind::Local, "/bin/true", true),
+        (RuntimeKind::Local, "/nonexistent/octopushy-test-tofu", false),
+        (RuntimeKind::Podman, "/bin/false", false),
+        (RuntimeKind::Docker, "/nonexistent/octopushy-test-docker", false),
+    ] {
+        let mut server = FakeServer::start(Options::default()).await;
+        let state = tempfile::tempdir().unwrap();
+        enroll_into(&server, state.path()).await;
+        let mut opts = RunOptions::new(state.path().to_path_buf());
+        opts.tool_runtime = kind;
+        opts.tofu_binary = binary.into();
+        opts.container_binary = Some(binary.into());
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run(opts, shutdown.clone()));
+        let hello = server
+            .wait_for(|event| match event {
+                Event::Message(m) => match &m.kind {
+                    Some(AgentKind::Hello(h)) => Some(h.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .await;
+        let expected = if available {
+            vec!["opentofu", "proxmox", "nixos-rootfs"]
+        } else {
+            vec!["proxmox", "nixos-rootfs"]
+        };
+        assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn enroll_connect_observe_ack() {
     common::init_tracing();
     let mock = mock().await;
@@ -156,7 +193,8 @@ async fn enroll_connect_observe_ack() {
             _ => None,
         })
         .await;
-    assert_eq!(hello.executors, ["opentofu", "proxmox"]);
+    // /bin/false fails the runtime probe; native executors remain available.
+    assert_eq!(hello.executors, ["proxmox", "nixos-rootfs"]);
     assert_eq!(hello.tool_runtime, "local");
     assert!(hello.running_attempt_ids.is_empty());
     assert_eq!(hello.agent_version, octopushy::VERSION);

@@ -150,6 +150,7 @@ impl Client {
         segments: &[&str],
         query: &[(&str, &str)],
         form: Option<&[(&str, &str)]>,
+        json: Option<&serde_json::Value>,
     ) -> Result<T> {
         let url = self.url(segments);
         let path = format!("/{}", segments.join("/"));
@@ -163,6 +164,9 @@ impl Client {
         }
         if let Some(form) = form {
             req = req.form(form);
+        }
+        if let Some(json) = json {
+            req = req.json(json);
         }
         let resp = req.send().await.map_err(Error::transport)?;
         let status = resp.status();
@@ -193,7 +197,7 @@ impl Client {
         segments: &[&str],
         query: &[(&str, &str)],
     ) -> Result<T> {
-        self.request(Method::GET, segments, query, None).await
+        self.request(Method::GET, segments, query, None, None).await
     }
 
     /// `GET /version`.
@@ -259,10 +263,27 @@ impl Client {
                 &["nodes", node, "qemu", &id, "config"],
                 &[],
                 Some(&[("protection", value)]),
+                None,
             )
             .await
             .map_err(missing_vm)?;
         Ok(())
+    }
+
+    /// Executes an argument array through QEMU's guest agent; never retries a POST.
+    pub async fn guest_exec(&self, node: &str, vmid: u32, command: &[String]) -> Result<u64> {
+        #[derive(serde::Deserialize)]
+        struct Started { pid: u64 }
+        let id = vmid.to_string();
+        let body = serde_json::json!({ "command": command });
+        let started: Started = self.request(Method::POST,
+            &["nodes", node, "qemu", &id, "agent", "exec"], &[], None, Some(&body)).await?;
+        Ok(started.pid)
+    }
+
+    pub async fn guest_exec_status(&self, node: &str, vmid: u32, pid: u64) -> Result<GuestExecStatus> {
+        self.get(&["nodes", node, "qemu", &vmid.to_string(), "agent", "exec-status"],
+            &[("pid", &pid.to_string())]).await
     }
 
     /// The guest agent's network interfaces

@@ -569,6 +569,7 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             (Map::new(), Vec::new())
         }
         Err(Failure::Cancelled) => (Map::new(), Vec::new()),
+        Err(error @ Failure::Uncertain(_)) => return Err(error),
     };
     if !sensitive.is_empty() {
         ctx.log.agent(format!(

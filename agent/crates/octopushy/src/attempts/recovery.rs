@@ -6,6 +6,8 @@
 //! - A `running` marker without a result died mid-attempt: uncertain for
 //!   mutations (`opentofu/apply`, `proxmox/set-protection`), failed otherwise.
 //! - A workspace without a marker never got past setup and is removed.
+//! - A marker that exists but cannot be read says nothing about what the
+//!   attempt was doing: uncertain, never failed.
 
 use std::fs;
 use std::path::Path;
@@ -40,6 +42,16 @@ pub fn classify(marker: &Marker) -> (Outcome, String) {
     }
 }
 
+/// What to report when the marker cannot be read: without the executor and
+/// action the agent cannot rule out that a change was made.
+fn unreadable_marker() -> (Outcome, String) {
+    (
+        Outcome::Uncertain,
+        "the agent restarted and could not read this attempt's record; it cannot tell whether a change was made"
+            .to_owned(),
+    )
+}
+
 /// Scans `work_dir`, writes results for lost attempts into `outbox`, and
 /// returns the IDs of every result awaiting acknowledgement.
 pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
@@ -57,8 +69,8 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
             if outbox.contains(&id) {
                 continue; // reported already; cleaned up on acknowledgement
             }
-            let marker = match workspace::read(&ws) {
-                Ok(Some(m)) => m,
+            let (outcome, error) = match workspace::read(&ws) {
+                Ok(Some(marker)) => classify(&marker),
                 Ok(None) => {
                     tracing::info!("removing incomplete workspace {}", ws.display());
                     workspace::remove(&ws);
@@ -66,17 +78,9 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
                 }
                 Err(e) => {
                     tracing::warn!("unreadable marker in {}: {e:#}", ws.display());
-                    Marker {
-                        attempt_id: id.clone(),
-                        executor: String::new(),
-                        action: String::new(),
-                        phase: Phase::Running,
-                        accepted_at_ms: 0,
-                        started_at_ms: None,
-                    }
+                    unreadable_marker()
                 }
             };
-            let (outcome, error) = classify(&marker);
             tracing::warn!(
                 attempt = %id, outcome = outcome.as_str_name(),
                 "reporting an attempt interrupted by a restart"
@@ -142,6 +146,8 @@ mod tests {
         workspace::mark_running(&preview).unwrap();
         workspace::create(&work, "queued-1", "proxmox", "set-protection").unwrap();
         fs::create_dir_all(work.join("nomarker-1")).unwrap();
+        let torn = workspace::create(&work, "torn-1", "opentofu", "apply").unwrap();
+        fs::write(torn.join(workspace::MARKER), b"{\"attemptId\": \"torn-1\", \"exec").unwrap();
         // Already reported: keep its result as it is.
         workspace::create(&work, "done-1", "proxmox", "observe").unwrap();
         let done = AttemptResult {
@@ -154,20 +160,25 @@ mod tests {
 
         let mut pending = recover(&work, &outbox).unwrap();
         pending.sort();
-        assert_eq!(pending, ["apply-1", "done-1", "preview-1", "queued-1"]);
+        assert_eq!(pending, ["apply-1", "done-1", "preview-1", "queued-1", "torn-1"]);
 
         let get = |id: &str| outbox.get(id).unwrap().unwrap().to_result().unwrap();
         assert_eq!(get("apply-1").outcome(), Outcome::Uncertain);
         assert_eq!(get("preview-1").outcome(), Outcome::Failed);
         assert_eq!(get("preview-1").error, "agent restarted during the attempt");
         assert_eq!(get("queued-1").outcome(), Outcome::Failed);
+        assert_eq!(get("torn-1").outcome(), Outcome::Uncertain, "an unreadable marker is never a known failure");
+        assert!(get("torn-1").error.contains("could not read"));
         assert_eq!(get("done-1"), done);
         assert!(!work.join("nomarker-1").exists());
         assert!(work.join("apply-1").exists(), "kept until acknowledged");
 
-        // Running recovery again changes nothing.
+        // Running recovery again changes nothing, not even the stored results.
+        let stored = |id: &str| serde_json::to_vec(&outbox.get(id).unwrap().unwrap()).unwrap();
+        let before: Vec<_> = pending.iter().map(|id| stored(id)).collect();
         let mut again = recover(&work, &outbox).unwrap();
         again.sort();
         assert_eq!(again, pending);
+        assert_eq!(before, pending.iter().map(|id| stored(id)).collect::<Vec<_>>());
     }
 }

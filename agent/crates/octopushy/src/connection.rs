@@ -19,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::attempts::{AttemptManager, SessionCursor};
-use crate::executors::EXECUTORS;
 use crate::identity::{self, Identity};
 use crate::paths::StatePaths;
 use crate::tools::RuntimeKind;
@@ -39,6 +38,8 @@ pub struct Agent {
     pub paths: StatePaths,
     pub manager: Arc<AttemptManager>,
     pub tool_runtime: RuntimeKind,
+    /// Executors usable with the runtime probed at startup.
+    pub executors: Vec<String>,
 }
 
 enum End {
@@ -127,7 +128,7 @@ fn hello(agent: &Agent) -> AgentMessage {
     AgentMessage {
         kind: Some(Out::Hello(Hello {
             agent_version: crate::VERSION.to_owned(),
-            executors: EXECUTORS.iter().map(|s| (*s).to_owned()).collect(),
+            executors: agent.executors.clone(),
             running_attempt_ids: agent.manager.active_ids(),
             tool_runtime: agent.tool_runtime.as_str().to_owned(),
         })),

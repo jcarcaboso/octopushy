@@ -42,7 +42,7 @@ impl Connection {
     }
 }
 
-fn client(cfg: &ExecutorConfig, ctx: &ExecContext, conn: &Connection) -> Result<Client, Failure> {
+pub(super) fn client(cfg: &ExecutorConfig, ctx: &ExecContext, conn: &Connection) -> Result<Client, Failure> {
     let token = ApiToken::new(ctx.secrets.get(TOKEN_SECRET)?)?;
     let tls = conn.tls();
     ctx.log.agent(format!(
@@ -549,7 +549,8 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             word(input.protection)
         ));
         c.set_vm_protection(&vm.node, input.vmid, input.protection)
-            .await?;
+            .await
+            .map_err(|e| protection_failure(e, input.vmid))?;
     }
     let now = c.vm_config(&vm.node, input.vmid).await?.protection;
     if now != input.protection {
@@ -565,4 +566,60 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     Ok(Success::outputs(
         json!({ "absent": false, "previous": previous, "protection": now }),
     ))
+}
+
+/// A failed `set-protection` request. A rejection (bad token, missing privilege, a client error)
+/// changed nothing. When the request may have reached Proxmox but the answer was lost or was a
+/// server-side error, the agent cannot tell whether the change was made.
+fn protection_failure(error: PveError, vmid: u32) -> Failure {
+    let may_have_applied = matches!(
+        error,
+        PveError::Transport(_) | PveError::Decode { .. }
+    ) || matches!(error, PveError::Status { status, .. } if status >= 500);
+    if may_have_applied {
+        Failure::Uncertain(format!(
+            "{error}; Proxmox may have changed the protection of VM {vmid}"
+        ))
+    } else {
+        error.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_protection_request_that_may_have_been_applied_is_uncertain() {
+        let status = |status| PveError::Status {
+            status,
+            message: "x".into(),
+        };
+        let uncertain = [
+            PveError::Transport("connection reset".into()),
+            PveError::Decode {
+                path: "/nodes/n/qemu/1/config".into(),
+                message: "not json".into(),
+            },
+            status(500),
+            status(502),
+            status(599),
+        ];
+        for e in uncertain {
+            assert!(
+                matches!(protection_failure(e, 210), Failure::Uncertain(m) if m.contains("VM 210")),
+            );
+        }
+        let rejected = [
+            PveError::Unauthorized,
+            PveError::Forbidden("VM.Config.Options".into()),
+            PveError::NotFound("vm".into()),
+            PveError::Config("bad".into()),
+            status(400),
+            status(499),
+        ];
+        for e in rejected {
+            assert!(matches!(protection_failure(e, 210), Failure::Failed { .. }));
+        }
+    }
 }
