@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using DotNet.Testcontainers.Configurations;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -26,10 +27,56 @@ public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
 public sealed class PostgresFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18-alpine").Build();
+    private readonly HashSet<string> _databases = [];
 
     public Task InitializeAsync() => _container.StartAsync();
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+
+    /// <summary>Native custom-format dump; accepts only databases created by this fixture.</summary>
+    public async Task<byte[]> DumpAsync(string connectionString)
+    {
+        Assert.True(_databases.Contains(connectionString), "Backups require a database owned by this fixture.");
+        var source = new NpgsqlConnectionStringBuilder(connectionString);
+        var path = $"/tmp/recovery-{Guid.NewGuid():N}.dump";
+        try
+        {
+            await ExecAsync("sh", "-c", "umask 077; exec \"$@\"", "--",
+                "pg_dump", "-U", source.Username!, "--format=custom", "--no-owner", "--no-privileges",
+                "--file", path, source.Database!);
+            return await _container.ReadFileAsync(path);
+        }
+        finally
+        {
+            await ExecAsync("rm", "-f", path);
+        }
+    }
+
+    /// <summary>Restores into a newly allocated fixture database, never an existing target.</summary>
+    public async Task<string> RestoreAsync(byte[] dump)
+    {
+        var connectionString = await NewDatabaseAsync();
+        var target = new NpgsqlConnectionStringBuilder(connectionString);
+        var path = $"/tmp/recovery-{Guid.NewGuid():N}.dump";
+        try
+        {
+            await _container.CopyAsync(dump, path, fileMode: UnixFileModes.UserRead | UnixFileModes.UserWrite);
+            await ExecAsync("pg_restore", "-U", target.Username!, "--exit-on-error", "--no-owner", "--no-privileges",
+                "--dbname", target.Database!, path);
+            return connectionString;
+        }
+        finally
+        {
+            await ExecAsync("rm", "-f", path);
+        }
+    }
+
+    private async Task ExecAsync(params string[] command)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var result = await _container.ExecAsync(command, timeout.Token);
+        Assert.True(result.ExitCode == 0, $"{command[0]} failed: {result.Stderr}");
+    }
 
     public async Task<string> NewDatabaseAsync()
     {
@@ -38,7 +85,9 @@ public sealed class PostgresFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
         await command.ExecuteNonQueryAsync();
-        return new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name }.ConnectionString;
+        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name }.ConnectionString;
+        _databases.Add(connectionString);
+        return connectionString;
     }
 }
 

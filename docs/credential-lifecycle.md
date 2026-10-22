@@ -107,6 +107,11 @@ artifacts exist. Restore the original key; generating another cannot recover
 the ciphertext. Preserve the key separately from the database backup. This is
 loss protection, **not master-key rotation** or automated backup/restore.
 
+See the [matched database/key recovery rehearsal](recovery-rehearsal.md) for
+native backup/restore regression coverage and an operator checklist. Restoring
+an old snapshot also loses subsequent revocations and certificate-registration
+changes; reconcile those before dispatch resumes.
+
 ## Limits and next steps
 
 - One trusted administrator and one controller process. Namespace names are not

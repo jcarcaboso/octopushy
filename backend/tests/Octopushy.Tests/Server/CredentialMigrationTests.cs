@@ -14,13 +14,14 @@ namespace Octopushy.Tests.Server;
 public class CredentialMigrationTests(PostgresFixture postgres)
 {
     [Fact]
-    public async Task Upgrade_preserves_old_ciphertext_active_versions_and_version_allocation()
+    public async Task Pre_upgrade_backup_restores_old_schema_and_keys_without_downgrading_the_upgraded_source()
     {
         await using var db = new OctopushyDb(new DbContextOptionsBuilder<OctopushyDb>()
             .UseNpgsql(await postgres.NewDatabaseAsync()).UseSnakeCaseNamingConvention().Options);
         var migrator = db.GetService<IMigrator>();
         await migrator.MigrateAsync("20261020083859_Initial");
-        var envelope = new Envelope(new KeyEncryptionKey(RandomNumberGenerator.GetBytes(32)));
+        var escrowKey = RandomNumberGenerator.GetBytes(KeyEncryptionKey.Size);
+        var envelope = new Envelope(new KeyEncryptionKey(escrowKey));
         var now = DateTimeOffset.UtcNow;
         const string key = "fixture/token";
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -36,6 +37,7 @@ public class CredentialMigrationTests(PostgresFixture postgres)
                 VALUES ({key}, {version}, {ciphertext}, {wrapped}, {now})
                 """);
         }
+        var preUpgradeDump = await postgres.DumpAsync(db.Database.GetConnectionString()!);
         await migrator.MigrateAsync();
         var store = new VariableStore(db, envelope, TimeProvider.System);
         Assert.Equal(("legacy-value-2", 2), await store.GetAsync(key, CancellationToken.None));
@@ -47,6 +49,29 @@ public class CredentialMigrationTests(PostgresFixture postgres)
         Assert.Empty(missing);
         Assert.Equal("legacy-value-1", values["token"]);
         Assert.False(db.Database.HasPendingModelChanges());
+
+        // Downgrading would discard revocation/candidate semantics. Refusal must leave
+        // both the applied migration and the newly allocated candidate intact.
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => migrator.MigrateAsync("20261020083859_Initial"));
+        Assert.Contains("matched pre-upgrade database and key backup", error.Message);
+        Assert.Contains("20261021180000_CredentialLifecycle", await db.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(3, await db.StoreVersions.CountAsync());
+
+        // Restore the actual pre-upgrade archive into a different, fresh database.
+        // It must not inherit the source database's later schema or candidate.
+        await using var recovered = new OctopushyDb(new DbContextOptionsBuilder<OctopushyDb>()
+            .UseNpgsql(await postgres.RestoreAsync(preUpgradeDump)).UseSnakeCaseNamingConvention().Options);
+        Assert.Equal(["20261020083859_Initial"], await recovered.Database.GetAppliedMigrationsAsync());
+        var legacy = await recovered.StoreVersions.Where(v => v.Key == key && v.Version == 2)
+            .Select(v => new { v.Ciphertext, v.WrappedKey }).SingleAsync();
+        Assert.Equal("legacy-value-2", System.Text.Encoding.UTF8.GetString(envelope.Open(legacy.Ciphertext, legacy.WrappedKey, $"store\0{key}\0{2}")));
+        await recovered.Database.MigrateAsync();
+        var recoveredStore = new VariableStore(recovered, new Envelope(new KeyEncryptionKey(escrowKey.ToArray())), TimeProvider.System);
+        Assert.Equal(("legacy-value-2", 2), await recoveredStore.GetAsync(key, CancellationToken.None));
+        Assert.Equal(2, await recovered.StoreVersions.CountAsync());
+        Assert.All(await recovered.StoreVersions.ToListAsync(), v => Assert.Equal("legacy", v.ActivatedBy));
+        Assert.Equal(3, await recoveredStore.StageAsync(key, "independent-recovered-candidate", null, CancellationToken.None));
+        Assert.Equal(("legacy-value-2", 2), await recoveredStore.GetAsync(key, CancellationToken.None));
     }
 
     [Fact]
