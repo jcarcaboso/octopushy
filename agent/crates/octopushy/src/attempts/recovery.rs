@@ -147,7 +147,11 @@ mod tests {
         workspace::create(&work, "queued-1", "proxmox", "set-protection").unwrap();
         fs::create_dir_all(work.join("nomarker-1")).unwrap();
         let torn = workspace::create(&work, "torn-1", "opentofu", "apply").unwrap();
-        fs::write(torn.join(workspace::MARKER), b"{\"attemptId\": \"torn-1\", \"exec").unwrap();
+        fs::write(
+            torn.join(workspace::MARKER),
+            b"{\"attemptId\": \"torn-1\", \"exec",
+        )
+        .unwrap();
         // Already reported: keep its result as it is.
         workspace::create(&work, "done-1", "proxmox", "observe").unwrap();
         let done = AttemptResult {
@@ -160,14 +164,21 @@ mod tests {
 
         let mut pending = recover(&work, &outbox).unwrap();
         pending.sort();
-        assert_eq!(pending, ["apply-1", "done-1", "preview-1", "queued-1", "torn-1"]);
+        assert_eq!(
+            pending,
+            ["apply-1", "done-1", "preview-1", "queued-1", "torn-1"]
+        );
 
         let get = |id: &str| outbox.get(id).unwrap().unwrap().to_result().unwrap();
         assert_eq!(get("apply-1").outcome(), Outcome::Uncertain);
         assert_eq!(get("preview-1").outcome(), Outcome::Failed);
         assert_eq!(get("preview-1").error, "agent restarted during the attempt");
         assert_eq!(get("queued-1").outcome(), Outcome::Failed);
-        assert_eq!(get("torn-1").outcome(), Outcome::Uncertain, "an unreadable marker is never a known failure");
+        assert_eq!(
+            get("torn-1").outcome(),
+            Outcome::Uncertain,
+            "an unreadable marker is never a known failure"
+        );
         assert!(get("torn-1").error.contains("could not read"));
         assert_eq!(get("done-1"), done);
         assert!(!work.join("nomarker-1").exists());
@@ -179,6 +190,9 @@ mod tests {
         let mut again = recover(&work, &outbox).unwrap();
         again.sort();
         assert_eq!(again, pending);
-        assert_eq!(before, pending.iter().map(|id| stored(id)).collect::<Vec<_>>());
+        assert_eq!(
+            before,
+            pending.iter().map(|id| stored(id)).collect::<Vec<_>>()
+        );
     }
 }

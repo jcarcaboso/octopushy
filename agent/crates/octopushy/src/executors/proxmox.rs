@@ -42,7 +42,11 @@ impl Connection {
     }
 }
 
-pub(super) fn client(cfg: &ExecutorConfig, ctx: &ExecContext, conn: &Connection) -> Result<Client, Failure> {
+pub(super) fn client(
+    cfg: &ExecutorConfig,
+    ctx: &ExecContext,
+    conn: &Connection,
+) -> Result<Client, Failure> {
     let token = ApiToken::new(ctx.secrets.get(TOKEN_SECRET)?)?;
     let tls = conn.tls();
     ctx.log.agent(format!(
@@ -572,10 +576,8 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 /// changed nothing. When the request may have reached Proxmox but the answer was lost or was a
 /// server-side error, the agent cannot tell whether the change was made.
 fn protection_failure(error: PveError, vmid: u32) -> Failure {
-    let may_have_applied = matches!(
-        error,
-        PveError::Transport(_) | PveError::Decode { .. }
-    ) || matches!(error, PveError::Status { status, .. } if status >= 500);
+    let may_have_applied = matches!(error, PveError::Transport(_) | PveError::Decode { .. })
+        || matches!(error, PveError::Status { status, .. } if status >= 500);
     if may_have_applied {
         Failure::Uncertain(format!(
             "{error}; Proxmox may have changed the protection of VM {vmid}"

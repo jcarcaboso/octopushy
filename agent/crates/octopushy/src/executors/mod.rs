@@ -2,9 +2,9 @@
 //!
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
+pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
-pub mod nixos_rootfs;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

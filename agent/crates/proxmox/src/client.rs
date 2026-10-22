@@ -273,17 +273,41 @@ impl Client {
     /// Executes an argument array through QEMU's guest agent; never retries a POST.
     pub async fn guest_exec(&self, node: &str, vmid: u32, command: &[String]) -> Result<u64> {
         #[derive(serde::Deserialize)]
-        struct Started { pid: u64 }
+        struct Started {
+            pid: u64,
+        }
         let id = vmid.to_string();
         let body = serde_json::json!({ "command": command });
-        let started: Started = self.request(Method::POST,
-            &["nodes", node, "qemu", &id, "agent", "exec"], &[], None, Some(&body)).await?;
+        let started: Started = self
+            .request(
+                Method::POST,
+                &["nodes", node, "qemu", &id, "agent", "exec"],
+                &[],
+                None,
+                Some(&body),
+            )
+            .await?;
         Ok(started.pid)
     }
 
-    pub async fn guest_exec_status(&self, node: &str, vmid: u32, pid: u64) -> Result<GuestExecStatus> {
-        self.get(&["nodes", node, "qemu", &vmid.to_string(), "agent", "exec-status"],
-            &[("pid", &pid.to_string())]).await
+    pub async fn guest_exec_status(
+        &self,
+        node: &str,
+        vmid: u32,
+        pid: u64,
+    ) -> Result<GuestExecStatus> {
+        self.get(
+            &[
+                "nodes",
+                node,
+                "qemu",
+                &vmid.to_string(),
+                "agent",
+                "exec-status",
+            ],
+            &[("pid", &pid.to_string())],
+        )
+        .await
     }
 
     /// The guest agent's network interfaces

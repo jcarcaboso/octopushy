@@ -98,9 +98,17 @@ fn dir_is_empty(p: &Path) -> bool {
 async fn hello_only_advertises_usable_tool_capabilities() {
     for (kind, binary, available) in [
         (RuntimeKind::Local, "/bin/true", true),
-        (RuntimeKind::Local, "/nonexistent/octopushy-test-tofu", false),
+        (
+            RuntimeKind::Local,
+            "/nonexistent/octopushy-test-tofu",
+            false,
+        ),
         (RuntimeKind::Podman, "/bin/false", false),
-        (RuntimeKind::Docker, "/nonexistent/octopushy-test-docker", false),
+        (
+            RuntimeKind::Docker,
+            "/nonexistent/octopushy-test-docker",
+            false,
+        ),
     ] {
         let mut server = FakeServer::start(Options::default()).await;
         let state = tempfile::tempdir().unwrap();
