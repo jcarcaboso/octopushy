@@ -15,15 +15,25 @@ async fn guest_exec_sends_an_argument_array_and_decodes_completed_status() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api2/json/nodes/node/qemu/310/agent/exec"))
-        .and(wiremock::matchers::body_json(json!({"command":["/bin/echo","a b"]})))
-        .respond_with(data(json!({"pid":123}))).expect(1).mount(&server).await;
+        .and(wiremock::matchers::body_json(
+            json!({"command":["/bin/echo","a b"]}),
+        ))
+        .respond_with(data(json!({"pid":123})))
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/api2/json/nodes/node/qemu/310/agent/exec-status"))
         .and(query_param("pid", "123"))
         .respond_with(data(json!({"exited":1,"exitcode":0,"out-data":"ok"})))
-        .expect(1).mount(&server).await;
+        .expect(1)
+        .mount(&server)
+        .await;
     let c = client(&server);
-    let pid = c.guest_exec("node", 310, &["/bin/echo".into(), "a b".into()]).await.unwrap();
+    let pid = c
+        .guest_exec("node", 310, &["/bin/echo".into(), "a b".into()])
+        .await
+        .unwrap();
     assert_eq!(pid, 123);
     let status = c.guest_exec_status("node", 310, pid).await.unwrap();
     assert!(status.exited);

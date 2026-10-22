@@ -209,9 +209,17 @@ pub struct GuestExecStatus {
     pub stdout: String,
     #[serde(default, rename = "err-data")]
     pub stderr: String,
-    #[serde(default, rename = "out-truncated", deserialize_with = "de::bool_or_false")]
+    #[serde(
+        default,
+        rename = "out-truncated",
+        deserialize_with = "de::bool_or_false"
+    )]
     pub stdout_truncated: bool,
-    #[serde(default, rename = "err-truncated", deserialize_with = "de::bool_or_false")]
+    #[serde(
+        default,
+        rename = "err-truncated",
+        deserialize_with = "de::bool_or_false"
+    )]
     pub stderr_truncated: bool,
 }
 

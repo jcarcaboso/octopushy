@@ -1,0 +1,134 @@
+name: Baseline checks
+
+# main is intentional: the repository's default branch is still proxmox-e2e.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# GitHub-hosted disposable runners only. No deployment credentials or live harnesses.
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      # Testcontainers owns its PostgreSQL container; no dev-db or retained service.
+      - name: Backend tests (disposable PostgreSQL)
+        run: dotnet test backend/Octopushy.slnx
+      - name: OpenAPI document drift
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet build backend/src/Octopushy.Server --no-incremental
+          git diff --exit-code -- contracts/openapi/octopushy.json
+      - name: NuGet vulnerability audit (including transitive dependencies)
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet list backend/Octopushy.slnx package --vulnerable --include-transitive
+          # list reports findings but does not fail for them. Restore is the gate.
+          dotnet restore backend/Octopushy.slnx --force \
+            -p:NuGetAudit=true -p:NuGetAuditMode=all -p:NuGetAuditLevel=low \
+            -warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904,NU1905
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      # Do not enable --ignored: those tests run real Podman/OpenTofu.
+      - name: Rust workspace tests
+        run: cargo test --workspace --locked
+      - name: Rust formatting
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: RustSec vulnerability audit
+        if: ${{ !cancelled() }}
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.18.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          package_json_file: frontend/package.json
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Frontend tests
+        run: pnpm test
+      - name: TypeScript
+        if: ${{ !cancelled() }}
+        run: pnpm run typecheck
+      - name: Frontend lint
+        if: ${{ !cancelled() }}
+        run: pnpm run lint
+      - name: Frontend build
+        if: ${{ !cancelled() }}
+        run: pnpm run build
+      - name: Generated API client drift
+        if: ${{ !cancelled() }}
+        run: |
+          pnpm run gen:api
+          git diff --exit-code -- src/api/schema.d.ts
+      - name: Frontend vulnerability audit (including development dependencies)
+        if: ${{ !cancelled() }}
+        run: pnpm audit
+
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Python mocks and shell syntax (no live infrastructure)
+        run: bash scripts/checks/offline.sh
+
+  nix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          enable_kvm: false
+      - name: Locked Nix flake evaluation (no builds or activation)
+        run: bash tests/nixos/run.sh

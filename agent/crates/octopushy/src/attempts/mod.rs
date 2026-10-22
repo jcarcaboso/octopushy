@@ -323,7 +323,11 @@ impl AttemptManager {
                 error: message,
                 artifacts: Vec::new(),
             },
-            Err(_) if mutating => result(&id, Outcome::Uncertain, "the mutating executor panicked; inspect the target before retrying"),
+            Err(_) if mutating => result(
+                &id,
+                Outcome::Uncertain,
+                "the mutating executor panicked; inspect the target before retrying",
+            ),
             Err(_) => failed(&id, "internal error: the executor panicked"),
         };
         res.error = log.mask(&res.error);

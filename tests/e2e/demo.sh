@@ -52,7 +52,7 @@ OCTOPUSHY_ENROLLMENT_TOKEN=$token "$root/agent/target/debug/octopushy" agent enr
 "$root/agent/target/debug/octopushy" agent run --state-dir "$work/agent" --tool-runtime podman \
   --container-network host >"$work/agent.log" 2>&1 &
 pids+=($!)
-(cd "$root/frontend" && OCTOPUSHY_API=$api exec npx vite --port 5174 --strictPort) >"$work/frontend.log" 2>&1 &
+(cd "$root/frontend" && OCTOPUSHY_API=$api exec pnpm exec vite --port 5174 --strictPort) >"$work/frontend.log" 2>&1 &
 pids+=($!)
 
 cat <<INFO

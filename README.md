@@ -52,7 +52,11 @@ verification; Octopushy does not configure the DHCP server or create its reserva
 
 ## Development
 
-Requirements: .NET 10 SDK, Rust (cargo), Node 24, podman, Git, and [just](https://just.systems).
+Requirements: .NET SDK **10.0.112** (strictly selected by `global.json`),
+Rust **1.98.1** (tested toolchain, including cargo, rustfmt, and clippy), Node 24,
+pnpm (version pinned in `frontend/package.json`), Python 3, Bash, podman, Git,
+and [just](https://just.systems). The Rust workspace's declared MSRV remains 1.88.
+Install frontend dependencies with `pnpm --dir frontend install --frozen-lockfile`.
 
 ```sh
 just dev-db        # PostgreSQL in rootless podman on 127.0.0.1:55432
@@ -80,7 +84,11 @@ The [remote-worker acceptance mode](tests/remote-worker/README.md) uses a
 separately enrolled worker and dedicated existing controller/state backend.
 It does not install infrastructure or prove remote connectivity by itself.
 
-`just test` runs every test suite, and `just e2e` the end-to-end test: the backend and
+`just test` runs the disposable backend/Rust/frontend and offline Python suites.
+Backend integration tests need a Docker-compatible API (Docker, or a Podman API
+socket via `DOCKER_HOST`); Testcontainers creates its own PostgreSQL container and
+each test creates a fresh database. They do **not** use `just dev-db`.
+`just e2e` runs the separate end-to-end test: the backend and
 a real agent provision and retire a test guest with OpenTofu, against a mock Proxmox API.
 `just demo` leaves that setup running at http://127.0.0.1:5174 (user `demo`, password
 `octopushy-demo`) with manual approval, to try the web interface without a Proxmox
@@ -113,6 +121,29 @@ A reusable [NixOS Docker service-node and Portainer role](examples/lab/modules/n
 is available with a [live end-to-end test](tests/portainer/README.md). The test uses
 Octopushy for VM provisioning, then native NixOS/Docker for service setup and
 verification. Service operations are **not yet controller executors**.
+
+### Baseline checks / CI
+
+`.github/workflows/checks.yml` checks pushes and pull requests **to `main`**,
+explicitly rather than relying on the repository's current `proxmox-e2e` default.
+It runs backend tests; locked Rust tests, formatting and clippy; frozen pnpm
+tests/typecheck/lint/build; offline Python mocks and shell syntax; regeneration
+drift checks for both the OpenAPI document and typed client; and locked Nix flake
+evaluation without building an image or activating a host.
+
+After installing dependencies, `just test`, `just check`, and `just check-nix`
+(requires Nix) run those checks locally. CI also runs `cargo audit` (cargo-audit
+0.22.2), `pnpm --dir frontend audit`, and NuGet vulnerability reporting plus an
+audited restore that treats audit warnings/findings as errors. Audits include
+transitive and development dependencies, use current public advisory feeds, and
+do not silently update package versions or suppress findings.
+
+CI uses disposable hosted runners, read-only repository permissions, and no
+production secrets. It never runs `dev-db`, `demo`, the shared-development-DB
+mock e2e harness, or the opt-in real Proxmox/Portainer/remote-worker harnesses.
+Ignored Podman/OpenTofu Rust smoke tests and optional real-CLI archived Python
+tests stay opt-in. Nix/static firewall checks do not prove guest boot, runtime
+packet paths, remote access, or deployment success.
 
 ## Deployment
 

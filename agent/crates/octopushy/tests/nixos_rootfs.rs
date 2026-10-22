@@ -1,12 +1,32 @@
 //! Public executor contract against a scripted guest-agent API, not real disks.
-use std::{collections::HashMap, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
-use axum::{Json, Router, routing::{get, post}};
-use octopushy::{attempts::logs::{AttemptLogger, LogBuffer}, executors::{self, ExecContext, ExecutorConfig, Failure, Secrets}, masking::Masker, tools::{RuntimeKind, ToolRuntime}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
+use octopushy::{
+    attempts::logs::{AttemptLogger, LogBuffer},
+    executors::{self, ExecContext, ExecutorConfig, Failure, Secrets},
+    masking::Masker,
+    tools::{RuntimeKind, ToolRuntime},
+};
 use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-async fn exercise(action: &str, name: &str, response: Value, expected_ok: bool) -> (Result<executors::Success, Failure>, usize) {
+async fn exercise(
+    action: &str,
+    name: &str,
+    response: Value,
+    expected_ok: bool,
+) -> (Result<executors::Success, Failure>, usize) {
     let posts = Arc::new(AtomicUsize::new(0));
     let counter = posts.clone();
     let name = name.to_string();
@@ -32,7 +52,8 @@ async fn exercise(action: &str, name: &str, response: Value, expected_ok: bool) 
     let work = tempfile::tempdir().unwrap();
     let cfg = ExecutorConfig {
         runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
-        provider_cache: work.path().join("cache"), poll_interval: Duration::from_millis(5),
+        provider_cache: work.path().join("cache"),
+        poll_interval: Duration::from_millis(5),
         proxmox_timeout: Duration::from_secs(1),
     };
     let ctx = ExecContext {
@@ -61,32 +82,38 @@ fn report(fs_bytes: u64) -> Value {
 
 #[tokio::test]
 async fn verifies_real_capacity_and_keeps_mutation_and_verification_distinct() {
-    for action in ["grow","verify"] {
-        let (result, count) = exercise(action,"opy-service-01",report(27647782912),true).await;
-        assert_eq!(count,1);
-        assert_eq!(result.unwrap().outputs["changed"],false);
+    for action in ["grow", "verify"] {
+        let (result, count) = exercise(action, "opy-service-01", report(27647782912), true).await;
+        assert_eq!(count, 1);
+        assert_eq!(result.unwrap().outputs["changed"], false);
     }
-    assert!(executors::is_mutating("nixos-rootfs","grow"));
-    assert!(!executors::is_mutating("nixos-rootfs","verify"));
+    assert!(executors::is_mutating("nixos-rootfs", "grow"));
+    assert!(!executors::is_mutating("nixos-rootfs", "verify"));
 }
 
 #[tokio::test]
 async fn refuses_the_wrong_vm_before_guest_execution() {
-    let (_, count) = exercise("grow","unrelated-vm",report(27647782912),false).await;
-    assert_eq!(count,0);
+    let (_, count) = exercise("grow", "unrelated-vm", report(27647782912), false).await;
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
 async fn refuses_an_unexpanded_filesystem_and_nonzero_exit() {
-    let _ = exercise("verify","opy-service-01",report(16910364672),false).await;
-    let (r, count) = exercise("grow","opy-service-01",json!({"exited":1,"exitcode":1,"err-data":"unsupported layout"}),false).await;
-    assert!(matches!(r,Err(Failure::Failed { .. })));
-    assert_eq!(count,1);
+    let _ = exercise("verify", "opy-service-01", report(16910364672), false).await;
+    let (r, count) = exercise(
+        "grow",
+        "opy-service-01",
+        json!({"exited":1,"exitcode":1,"err-data":"unsupported layout"}),
+        false,
+    )
+    .await;
+    assert!(matches!(r, Err(Failure::Failed { .. })));
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]
 async fn lost_status_after_mutation_is_uncertain_and_never_resubmits() {
-    let (r,count) = exercise("grow","opy-service-01",json!({"exited":0}),false).await;
-    assert!(matches!(r,Err(Failure::Uncertain(_))));
-    assert_eq!(count,1);
+    let (r, count) = exercise("grow", "opy-service-01", json!({"exited":0}), false).await;
+    assert!(matches!(r, Err(Failure::Uncertain(_))));
+    assert_eq!(count, 1);
 }

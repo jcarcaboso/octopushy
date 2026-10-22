@@ -19,7 +19,7 @@ backend:
 
 # Run the frontend dev server on http://127.0.0.1:5173, forwarding /api to the backend.
 frontend:
-    cd frontend && npm run dev
+    cd frontend && pnpm run dev
 
 # Build the agent and run it against the local backend; enroll first with `just agent-enroll <token>`.
 agent:
@@ -30,14 +30,29 @@ agent-enroll token:
 
 # Regenerate the OpenAPI document and the frontend's typed client from it.
 openapi:
-    dotnet build backend/src/Octopushy.Server
-    cd frontend && npm run gen:api
+    dotnet build backend/src/Octopushy.Server --no-incremental
+    cd frontend && pnpm run gen:api
 
-# Run every test suite.
+# Run disposable tests only (Testcontainers needs Docker or a Podman API socket).
 test:
     dotnet test backend/Octopushy.slnx
-    cd agent && cargo test --workspace
-    cd frontend && npm test
+    cd agent && cargo test --workspace --locked
+    cd frontend && pnpm test
+    bash scripts/checks/offline.sh
+
+# Static validation and generated-contract drift, without running a deployment.
+check:
+    cd agent && cargo fmt --all -- --check
+    cd agent && cargo clippy --workspace --all-targets --locked -- -D warnings
+    cd frontend && pnpm run typecheck
+    cd frontend && pnpm run lint
+    cd frontend && pnpm run build
+    just openapi
+    git diff --exit-code -- contracts/openapi/octopushy.json frontend/src/api/schema.d.ts
+
+# Locked Nix module/derivation evaluation only; no images, VMs, or activation.
+check-nix:
+    bash tests/nixos/run.sh
 
 # End to end: backend, a real agent running OpenTofu in rootless podman, and a mock Proxmox API.
 e2e: dev-db
