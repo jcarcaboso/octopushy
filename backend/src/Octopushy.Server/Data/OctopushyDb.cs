@@ -102,11 +102,14 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<StoreEntry>(e =>
         {
             e.HasKey(x => x.Key);
+            e.Property(x => x.CurrentVersion).IsConcurrencyToken();
+            e.Property(x => x.LatestVersion).IsConcurrencyToken();
         });
 
         model.Entity<StoreVersion>(e =>
         {
             e.HasKey(x => new { x.Key, x.Version });
+            e.Property(x => x.RevokedAt).IsConcurrencyToken();
         });
 
         model.Entity<SecretResolution>(e =>

@@ -414,6 +414,9 @@ public sealed class StoreEntry
 
     public int CurrentVersion { get; set; }
 
+    /// <summary>Allocation counter; staging a candidate does not move CurrentVersion.</summary>
+    public int LatestVersion { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
@@ -433,6 +436,18 @@ public sealed class StoreVersion
     public required byte[] WrappedKey { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset? ActivatedAt { get; set; }
+
+    public string? ActivatedBy { get; set; }
+
+    public string? ActivationNote { get; set; }
+
+    public DateTimeOffset? RevokedAt { get; set; }
+
+    public string? RevokedBy { get; set; }
+
+    public string? RevocationNote { get; set; }
 }
 
 /// <summary>Audit record of a secret released to an attempt; never holds the value.</summary>

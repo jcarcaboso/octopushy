@@ -142,7 +142,7 @@ public sealed partial class LabRepositoryLoader
                     foreach (var (name, value) in envObject)
                     {
                         env[name] = value is JsonObject reference
-                            ? new EnvValue(null, new StoreReference(reference["store"]!.GetValue<string>()))
+                            ? new EnvValue(null, ParseStoreReference(reference))
                             : new EnvValue(value!.GetValue<string>(), null);
                     }
                 }
@@ -270,12 +270,17 @@ public sealed partial class LabRepositoryLoader
             root,
             inputs,
             json["verify"]?.GetValue<string>() ?? "proxmox",
-            json["image"]?.GetValue<string>());
+            json["image"]?.GetValue<string>(),
+            json["guestFilesystem"]?.GetValue<string>());
     }
 
     private void CheckRecipe(RecipeDefinition recipe)
     {
         var address = $"recipes/{recipe.Id}";
+        if (recipe.GuestFilesystem is not null && recipe.Verify != "proxmox")
+        {
+            Error(recipe.File, null, "guestFilesystem requires verify: proxmox.", address);
+        }
         var rootPath = Path.Combine(_root, recipe.Root);
         if (!Directory.Exists(rootPath))
         {
@@ -417,8 +422,8 @@ public sealed partial class LabRepositoryLoader
                 new ConnectionDefinition(
                     connection["endpoint"]!.GetValue<string>(),
                     connection["tls"]?["verify"]?.GetValue<bool>() ?? true,
-                    new StoreReference(connection["token"]!["store"]!.GetValue<string>()),
-                    connection["tls"]?["caCertificate"]?["store"] is JsonValue ca ? new StoreReference(ca.GetValue<string>()) : null),
+                    ParseStoreReference(connection["token"]!),
+                    connection["tls"]?["caCertificate"] is JsonObject ca ? ParseStoreReference(ca) : null),
                 hosts,
                 ParsePolicy(json["policy"]),
                 ParseLabels(json["execution"])));
@@ -562,6 +567,14 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
+        if (recipe?.GuestFilesystem is not null
+            && (guest.Json["hardware"]?["disks"] is not JsonArray disks || disks.Count == 0
+                || disks[0]?["size"] is not JsonValue size || !size.TryGetValue<int>(out var gib)
+                || gib < 2 || gib > 65536))
+        {
+            Error(guest.File, null, "guestFilesystem requires hardware.disks[0].size in GiB (2–65536).", guest.Address);
+        }
+
         if (settings is not null && !settings.StateBackends.ContainsKey(guest.StateBackend))
         {
             Error(guest.File, LineOf(guest.File, "/provision/state/backend"), $"The state backend '{guest.StateBackend}' is not defined in octopushy.yaml.", guest.Address);
@@ -606,15 +619,21 @@ public sealed partial class LabRepositoryLoader
     {
         switch (node)
         {
-            case JsonObject obj when obj.Count == 1 && obj["store"] is JsonValue key && key.TryGetValue<string>(out var storeKey):
-                _storeUses.Add(new StoreUse(storeKey, consumer, file));
-                if (storeKey.StartsWith(SystemScope, StringComparison.Ordinal))
+            case JsonObject obj:
+                // Permissive sections are scanned too: extra fields must not hide system-scope keys.
+                if (obj["store"] is JsonValue key && key.TryGetValue<string>(out var storeKey))
                 {
-                    Error(file, document.LineOf(pointer), $"The key '{storeKey}' is in the system scope, which definitions cannot use.", consumer);
+                    var version = obj["version"] is JsonValue value && value.TryGetValue<int>(out var number) && number > 0
+                        ? number
+                        : (int?)null;
+                    _storeUses.Add(new StoreUse(storeKey, consumer, file, version));
+                    if (storeKey.StartsWith(SystemScope, StringComparison.Ordinal))
+                    {
+                        Error(file, document.LineOf(pointer), $"The key '{storeKey}' is in the system scope, which definitions cannot use.",
+                            consumer == "octopushy.yaml" ? null : consumer);
+                    }
                 }
 
-                break;
-            case JsonObject obj:
                 foreach (var (name, child) in obj)
                 {
                     if (child is not null)
@@ -655,6 +674,9 @@ public sealed partial class LabRepositoryLoader
 
     private static List<string>? ParseLabels(JsonNode? execution) =>
         (execution?["agentLabels"] as JsonArray)?.Select(l => l!.GetValue<string>()).ToList();
+
+    private static StoreReference ParseStoreReference(JsonNode node) =>
+        new(node["store"]!.GetValue<string>(), node["version"]?.GetValue<int>());
 
     private string? ResolveInside(string baseDirectory, string relative)
     {

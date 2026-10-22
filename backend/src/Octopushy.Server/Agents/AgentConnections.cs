@@ -25,6 +25,9 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
 
     public ChannelReader<ServerMessage> Outbound => _outbound.Reader;
 
+    /// <summary>Nonblocking hand-off, so credential revocation can serialize with dispatch.</summary>
+    public bool TrySend(ServerMessage message) => _outbound.Writer.TryWrite(message);
+
     public async Task<bool> SendAsync(ServerMessage message, CancellationToken cancellationToken)
     {
         try

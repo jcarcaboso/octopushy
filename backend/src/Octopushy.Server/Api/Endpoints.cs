@@ -188,7 +188,7 @@ public static partial class Endpoints
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
-                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines)).ToList()))
+                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList()))
                 .ToList();
             var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
             var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain
@@ -224,6 +224,13 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("cancelRun");
+
+        group.MapPost("/{id:guid}/retry-filesystem", async (Guid id, RunEngine engine, CancellationToken ct) =>
+        {
+            await engine.RetryFilesystemAsync(id, ct);
+            return TypedResults.NoContent();
+        })
+        .WithName("retryFilesystem");
 
         group.MapPost("/{id:guid}/close", async (Guid id, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {
@@ -370,6 +377,7 @@ public static partial class Endpoints
             var visible = new List<VariableDto>();
             foreach (var entry in entries.Where(e => !e.Key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal)))
             {
+                var revoked = await db.StoreVersions.AnyAsync(v => v.Key == entry.Key && v.Version == entry.CurrentVersion && v.RevokedAt != null, ct);
                 visible.Add(new VariableDto(
                     entry.Key,
                     entry.Visibility,
@@ -377,7 +385,9 @@ public static partial class Endpoints
                     entry.CurrentVersion,
                     entry.UpdatedAt,
                     entry.Visibility == Visibilities.Plain ? await store.GetPlainAsync(entry.Key, ct) : null,
-                    uses.GetValueOrDefault(entry.Key) ?? []));
+                    uses.GetValueOrDefault(entry.Key) ?? [],
+                    entry.LatestVersion,
+                    revoked));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -388,17 +398,22 @@ public static partial class Endpoints
         })
         .WithName("listVariables");
 
-        group.MapPut("", async (VariableUpdate update, VariableStore store, OctopushyDb db, OrchestratorSignal signal, CancellationToken ct) =>
+        group.MapPut("", async (VariableUpdate update, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
         {
-            if (update.Value is not null)
+            await engine.ExecuteAsync(async (db, services) =>
             {
-                var existing = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == update.Key, ct);
-                await store.SetAsync(update.Key, update.Value, update.Visibility ?? existing?.Visibility ?? Visibilities.Secret, update.Description, ct);
-            }
-            else
-            {
-                await store.DescribeAsync(update.Key, update.Description, ct);
-            }
+                var store = services.GetRequiredService<VariableStore>();
+                if (update.Value is not null)
+                {
+                    var existing = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == update.Key, ct);
+                    await store.SetAsync(update.Key, update.Value, update.Visibility ?? existing?.Visibility ?? Visibilities.Secret, update.Description, ct);
+                }
+                else
+                {
+                    await store.DescribeAsync(update.Key, update.Description, ct);
+                }
+                return true;
+            }, ct);
 
             // Steps blocked on a missing secret can continue.
             signal.Wake();
@@ -406,13 +421,117 @@ public static partial class Endpoints
         })
         .WithName("setVariable");
 
-        group.MapDelete("", async (string key, VariableStore store, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
+        group.MapDelete("", async (string key, RunEngine engine, RevisionCache revisions, CancellationToken ct) =>
         {
-            var uses = await UsesAsync(db, revisions, ct);
-            await store.DeleteAsync(key, uses.GetValueOrDefault(key) ?? [], ct);
+            await engine.ExecuteAsync(async (db, services) =>
+            {
+                var uses = await UsesAsync(db, revisions, ct);
+                await services.GetRequiredService<VariableStore>().DeleteAsync(key, uses.GetValueOrDefault(key) ?? [], ct);
+                return true;
+            }, ct);
             return TypedResults.NoContent();
         })
         .WithName("deleteVariable");
+
+        group.MapPost("/candidates", async (VariableCandidateRequest request, RunEngine engine, CancellationToken ct) =>
+        {
+            var version = await engine.ExecuteAsync(async (_, services) =>
+                await services.GetRequiredService<VariableStore>().StageAsync(request.Key, request.Value, request.Description, ct), ct);
+            return TypedResults.Ok(new VariableCandidateDto(version));
+        })
+        .WithName("stageVariable");
+
+        group.MapPost("/promote", async (VariablePromotionRequest request, HttpContext http, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (_, services) =>
+            {
+                await services.GetRequiredService<VariableStore>().PromoteAsync(
+                    request.Key, request.Version, request.ExpectedCurrentVersion, request.VerificationNote,
+                    http.User.Identity?.Name ?? "administrator", ct);
+                return true;
+            }, ct);
+            signal.Wake();
+            return TypedResults.NoContent();
+        })
+        .WithName("promoteVariable");
+
+        group.MapPost("/revoke", async (VariableRevocationRequest request, HttpContext http, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (_, services) =>
+            {
+                await services.GetRequiredService<VariableStore>().RevokeAsync(
+                    request.Key, request.Version, request.Reason, http.User.Identity?.Name ?? "administrator", ct);
+                return true;
+            }, ct);
+            signal.Wake();
+            return TypedResults.NoContent();
+        })
+        .WithName("revokeVariable");
+
+        group.MapGet("/versions", async (string key, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
+        {
+            VariableStore.CheckUserKey(key);
+            var entry = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == key, ct)
+                ?? throw new StoreException($"There is no entry '{key}'.");
+            var versions = await db.StoreVersions.AsNoTracking().Where(v => v.Key == key).OrderByDescending(v => v.Version).ToListAsync(ct);
+            var runs = await db.Runs.AsNoTracking().Select(r => new { r.Id, r.Number, r.Context, r.Status }).ToListAsync(ct);
+            var releases = await (from release in db.SecretResolutions.AsNoTracking()
+                                  join attempt in db.Attempts on release.AttemptId equals attempt.Id
+                                  where release.Key == key
+                                  select new { attempt.RunId, release.Version }).Distinct().ToListAsync(ct);
+            var uses = new Dictionary<int, List<string>>();
+            void Add(int version, string use)
+            {
+                if (!uses.TryGetValue(version, out var list))
+                {
+                    uses[version] = list = [];
+                }
+                if (!list.Contains(use))
+                {
+                    list.Add(use);
+                }
+            }
+            foreach (var run in runs)
+            {
+                var released = releases.Where(r => r.RunId == run.Id).ToList();
+                foreach (var release in released)
+                {
+                    Add(release.Version, $"run #{run.Number} ({run.Status}; resolved for assignment)");
+                }
+                var context = RunContext.Parse(run.Context);
+                foreach (var (name, reference) in context.Secrets.Where(s => s.Value == key))
+                {
+                    if (context.SecretVersions.TryGetValue(name, out var pinned))
+                    {
+                        Add(pinned, $"run #{run.Number} ({run.Status})");
+                    }
+                    else if (context.RequestedSecretVersions.TryGetValue(name, out var requested))
+                    {
+                        Add(requested, $"run #{run.Number} ({run.Status}; requested)");
+                    }
+                    else if (released.Count == 0 && run.Status is not (RunStatuses.Succeeded or RunStatuses.Failed or RunStatuses.Cancelled))
+                    {
+                        Add(entry.CurrentVersion, $"run #{run.Number} ({run.Status}; not yet pinned)");
+                    }
+                }
+            }
+            var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+            if (revision is not null)
+            {
+                var repository = await revisions.GetAsync(revision.Commit, ct);
+                foreach (var use in repository.StoreUses.Where(u => u.Key == key))
+                {
+                    Add(use.Version ?? entry.CurrentVersion, $"definition {use.Consumer}");
+                }
+            }
+            return TypedResults.Ok(versions.Select(v => new VariableVersionDto(
+                v.Version,
+                v.RevokedAt is not null ? "revoked" : v.Version == entry.CurrentVersion ? "active" : v.ActivatedAt is null ? "candidate" : "previous",
+                v.CreatedAt, v.ActivatedAt, v.ActivatedBy, v.ActivationNote,
+                v.RevokedAt, v.RevokedBy, v.RevocationNote,
+                uses.GetValueOrDefault(v.Version) ?? [])).ToList());
+        })
+        .WithName("listVariableVersions");
     }
 
     /// <summary>Who uses each store key: definitions in the latest revision, and runs still in progress.</summary>

@@ -1,4 +1,4 @@
-import { KeyRound, Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import { History, KeyRound, Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useDeleteVariable, useVariables } from "../api/queries";
 import type { Variable } from "../api/types";
@@ -8,8 +8,9 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
-import { EmptyRow, Table } from "../components/Table";
+import { Table } from "../components/Table";
 import { VariableDialog } from "./variables/VariableDialog";
+import { VariableVersionsDialog } from "./variables/VariableVersionsDialog";
 
 type Editing = { existing: Variable | null; presetKey?: string } | null;
 
@@ -31,6 +32,10 @@ export function VariablesPage() {
   const remove = useDeleteVariable();
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<Variable | null>(null);
+  const [managing, setManaging] = useState<string | null>(null);
+  const entries = data?.entries.filter((entry) => !entry.key.startsWith("system/")) ?? [];
+  const missing = data?.missing.filter((entry) => !entry.key.startsWith("system/")) ?? [];
+  const managed = entries.find((entry) => entry.key === managing);
 
   const setButton = (
     <button type="button" className="button button--primary" onClick={() => setEditing({ existing: null })}>
@@ -52,8 +57,8 @@ export function VariablesPage() {
         <ErrorMessage error={error} title="The variables could not be loaded" />
       ) : (
         <div className="stack stack--large">
-          {data.missing.length > 0 ? (
-            <Card title="Referenced but not set" meta={data.missing.length} className="card--warning" flush>
+          {missing.length > 0 ? (
+            <Card title="Referenced but not set" meta={missing.length} className="card--warning" flush>
               <Table label="Referenced keys that are not set">
                 <thead>
                   <tr>
@@ -65,7 +70,7 @@ export function VariablesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.missing.map((m) => (
+                  {missing.map((m) => (
                     <tr key={m.key}>
                       <th scope="row" className="mono">
                         {m.key}
@@ -84,8 +89,8 @@ export function VariablesPage() {
               </Table>
             </Card>
           ) : null}
-          <Card title="Entries" meta={data.entries.length || undefined} flush>
-            {data.entries.length === 0 ? (
+          <Card title="Entries" meta={entries.length || undefined} flush>
+            {entries.length === 0 ? (
               <EmptyState icon={KeyRound} title="The store is empty" actions={setButton}>
                 Set the Proxmox tokens and state-backend credentials your definitions reference.
               </EmptyState>
@@ -97,7 +102,7 @@ export function VariablesPage() {
                     <th scope="col">Visibility</th>
                     <th scope="col">Description</th>
                     <th scope="col">Value</th>
-                    <th scope="col">Version</th>
+                    <th scope="col">Active version</th>
                     <th scope="col">Updated</th>
                     <th scope="col">Used by</th>
                     <th scope="col">
@@ -106,7 +111,7 @@ export function VariablesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.entries.map((v) => (
+                  {entries.map((v) => (
                     <tr key={v.key}>
                       <th scope="row" className="mono">
                         {v.key}
@@ -130,7 +135,11 @@ export function VariablesPage() {
                           <span className="muted">Concealed</span>
                         )}
                       </td>
-                      <td className="num">{v.version}</td>
+                      <td className="num">
+                        v{v.version}
+                        {v.latestVersion > v.version ? <div className="muted small">Latest: v{v.latestVersion}</div> : null}
+                        {v.revoked ? <Badge tone="danger">Revoked</Badge> : null}
+                      </td>
                       <td className="nowrap">
                         <RelativeTime value={v.updatedAt} />
                       </td>
@@ -143,6 +152,12 @@ export function VariablesPage() {
                             <Pencil size={14} aria-hidden="true" />
                             Update
                           </button>
+                          {v.visibility === "secret" ? (
+                            <button type="button" className="button button--small" onClick={() => setManaging(v.key)} aria-label={`Versions of ${v.key}`}>
+                              <History size={14} aria-hidden="true" />
+                              Versions
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="button button--small button--danger-outline"
@@ -160,33 +175,10 @@ export function VariablesPage() {
               </Table>
             )}
           </Card>
-          <Card title="System" meta={data.system.length || undefined}>
-            <p className="muted small">Octopushy's own credentials, such as the agent CA key and the repository credential. Managed by the server; definitions cannot reference them.</p>
-            <Table label="System keys">
-              <thead>
-                <tr>
-                  <th scope="col">Key</th>
-                  <th scope="col">Visibility</th>
-                  <th scope="col">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.system.length === 0 ? <EmptyRow colSpan={3}>None yet.</EmptyRow> : null}
-                {data.system.map((s) => (
-                  <tr key={s.key}>
-                    <td className="mono">{s.key}</td>
-                    <td className="muted">{s.visibility}</td>
-                    <td className="nowrap">
-                      <RelativeTime value={s.updatedAt} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Card>
         </div>
       )}
       {editing ? <VariableDialog existing={editing.existing} presetKey={editing.presetKey} onClose={() => setEditing(null)} /> : null}
+      {managed ? <VariableVersionsDialog existing={managed} onClose={() => setManaging(null)} /> : null}
       <ConfirmDialog
         open={deleting !== null}
         title={`Delete ${deleting?.key ?? ""}?`}

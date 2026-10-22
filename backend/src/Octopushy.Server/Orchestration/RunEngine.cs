@@ -119,6 +119,42 @@ public sealed partial class RunEngine(
     public Task CancelAsync(Guid runId, string reason, CancellationToken cancellationToken) =>
         WithDbAsync(db => CancelInternalAsync(db, runId, reason, cancellationToken), cancellationToken);
 
+    /// <summary>Retry only a known failed guest step, preserving the approved infrastructure work.</summary>
+    public Task RetryFilesystemAsync(Guid runId, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            var run = await LoadRunAsync(db, runId, cancellationToken);
+            var failed = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => s.Status == StepStatuses.Failed);
+            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.GrowRoot or StepNames.VerifyRoot)
+                // Only a mutating attempt can leave an unknown change behind; a read-only one that lost its agent changed nothing.
+                || run.Steps.SelectMany(s => s.Attempts).Any(a => a.Status == AttemptStatuses.Uncertain && a.Mutating))
+            {
+                throw new RunException("Only a known failed guest filesystem step can be retried. Inspect uncertain outcomes and plan again.");
+            }
+
+            var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
+            if (!resource.Valid || resource.MissingSince is not null || resource.RetiredAt is not null
+                || resource.DesiredInputsHash != run.InputsHash
+                || await db.Runs.AnyAsync(r => r.ResourceId == run.ResourceId && r.Id != run.Id && r.CreatedAt > run.CreatedAt, cancellationToken))
+            {
+                throw new RunException("This run is no longer current. Plan the current desired configuration instead.");
+            }
+
+            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal))
+            {
+                step.Status = StepStatuses.Pending;
+                step.Detail = null;
+                step.FinishedAt = null;
+                step.StartedAt = null;
+                step.Outputs = null;
+            }
+            run.Status = RunStatuses.Running;
+            run.FinishedAt = null;
+            run.Detail = null;
+            await db.SaveChangesAsync(cancellationToken);
+            signal.Wake();
+        }, cancellationToken);
+
     /// <summary>Closes a run whose outcome is uncertain, after the user has looked at it.</summary>
     public Task CloseUncertainAsync(Guid runId, string user, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
@@ -144,7 +180,7 @@ public sealed partial class RunEngine(
     public static bool CanSupersede(Run run) =>
         !RunStatuses.IsTerminal(run.Status)
         && run.Status != RunStatuses.Uncertain
-        && run.Steps.Where(s => s.Name is StepNames.Apply or StepNames.Unprotect).All(s => s.Attempts.Count == 0);
+        && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating);
 
     internal async Task CancelInternalAsync(OctopushyDb db, Guid runId, string reason, CancellationToken cancellationToken)
     {
@@ -228,11 +264,11 @@ public sealed partial class RunEngine(
                     run.Detail = step.Detail;
                     break;
                 case StepStatuses.Pending or StepStatuses.Blocked:
-                    var missing = await MissingSecretsAsync(db, step, context, cancellationToken);
+                    var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
                     if (missing.Count > 0)
                     {
                         step.Status = StepStatuses.Blocked;
-                        step.Detail = $"Missing secret: {string.Join(", ", missing)}. Add it under Variables.";
+                        step.Detail = $"Blocked credentials: {string.Join(", ", missing)}. Review Variables.";
                         run.Status = RunStatuses.Blocked;
                         run.Detail = step.Detail;
                         break;
@@ -245,7 +281,12 @@ public sealed partial class RunEngine(
                     run.Detail = null;
                     signal.Wake();
                     break;
-                case StepStatuses.Queued or StepStatuses.Running:
+                case StepStatuses.Queued:
+                    var unavailable = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
+                    run.Status = unavailable.Count == 0 ? RunStatuses.Running : RunStatuses.Blocked;
+                    run.Detail = unavailable.Count == 0 ? null : $"Blocked credentials: {string.Join(", ", unavailable)}.";
+                    break;
+                case StepStatuses.Running:
                     run.Status = RunStatuses.Running;
                     break;
                 case StepStatuses.AwaitingApproval:
@@ -310,13 +351,6 @@ public sealed partial class RunEngine(
         return false;
     }
 
-    private static async Task<List<string>> MissingSecretsAsync(OctopushyDb db, Step step, RunContext context, CancellationToken cancellationToken)
-    {
-        var keys = AssignmentBuilder.SecretsFor(step.Name, context).Select(n => context.Secrets[n]).Distinct().ToList();
-        var present = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).Select(e => e.Key).ToListAsync(cancellationToken);
-        return keys.Except(present).ToList();
-    }
-
     private void CreateAttempt(OctopushyDb db, Run run, Step step, RunContext context, Guid? preferredAgent = null)
     {
         var action = AssignmentBuilder.ActionFor(step.Name);
@@ -360,7 +394,7 @@ public sealed partial class RunEngine(
                 resource.CheckedAt = now;
                 if (outputs?["hasChanges"]?.GetValue<bool>() == false)
                 {
-                    if (run.Operation == Operations.Provision)
+                    if (run.Operation == Operations.Provision && RunContext.Parse(run.Context).RootDiskBytes is null)
                     {
                         resource.SyncedInputsHash = run.InputsHash;
                     }
@@ -378,7 +412,8 @@ public sealed partial class RunEngine(
                 resource.AppliedInputsHash = run.InputsHash;
                 resource.AppliedRevisionId = run.RevisionId;
                 resource.AppliedAt = now;
-                resource.SyncedInputsHash = run.InputsHash;
+                if (context.RootDiskBytes is null)
+                    resource.SyncedInputsHash = run.InputsHash;
                 resource.Outputs = outputs?["outputs"]?.ToJsonString();
                 if (resource.BoundVmid is null)
                 {
@@ -392,6 +427,10 @@ public sealed partial class RunEngine(
                 resource.Outputs = null;
                 break;
             case StepNames.Verify:
+                resource.VerifiedAt = now;
+                break;
+            case StepNames.VerifyRoot:
+                resource.SyncedInputsHash = run.InputsHash;
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:

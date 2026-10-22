@@ -12,7 +12,7 @@ public sealed partial class RunEngine
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
     public async Task DispatchAsync(CancellationToken cancellationToken)
     {
-        var sends = await WithDbAsync(async (db, services) =>
+        await WithDbAsync(async (db, services) =>
         {
             var queued = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .Where(a => a.Status == AttemptStatuses.Queued)
@@ -22,7 +22,7 @@ public sealed partial class RunEngine
             var result = new List<(AgentSession Session, ServerMessage Message, Guid AttemptId)>();
             if (queued.Count == 0)
             {
-                return result;
+                return 0;
             }
 
             var active = await db.Attempts.AsNoTracking()
@@ -46,9 +46,12 @@ public sealed partial class RunEngine
                 string? waiting = null;
                 if (candidates.Count == 0)
                 {
-                    waiting = attempt.RequiredLabels.Length == 0
-                        ? "Waiting for a connected agent."
-                        : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
+                    var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
+                    waiting = matchingLabels
+                        ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
+                        : attempt.RequiredLabels.Length == 0
+                            ? "Waiting for a connected agent."
+                            : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
                 }
                 else if (attempt.HostKey is { } hostKey && attempt.HostLimit is { } limit && perHost.GetValueOrDefault(hostKey) >= limit)
                 {
@@ -69,12 +72,25 @@ public sealed partial class RunEngine
 
                 var agent = free.FirstOrDefault(a => a.Id == attempt.PreferredAgentId)
                             ?? free.MinBy(a => perAgent.GetValueOrDefault(a.Id))!;
+                var session = connections.Get(agent.Id);
+                if (session is null)
+                {
+                    attempt.WaitingReason = "The agent disconnected before assignment.";
+                    continue;
+                }
                 var step = attempt.Step!;
                 var run = step.Run!;
                 Assignment assignment;
                 try
                 {
                     assignment = await builder.BuildAsync(attempt, step, run, RunContext.Parse(run.Context), agent.Id, cancellationToken);
+                }
+                catch (CredentialUnavailableException e)
+                {
+                    attempt.WaitingReason = e.Message;
+                    run.Status = RunStatuses.Blocked;
+                    run.Detail = e.Message;
+                    continue;
                 }
                 catch (Exception e) when (e is AssignmentException or IOException or Git.GitException)
                 {
@@ -103,20 +119,24 @@ public sealed partial class RunEngine
                 }
 
                 logs.RegisterSecrets(attempt.Id, assignment.Secrets.Values);
-                result.Add((connections.Get(agent.Id)!, new ServerMessage { Assignment = assignment }, attempt.Id));
+                result.Add((session, new ServerMessage { Assignment = assignment }, attempt.Id));
             }
 
             await db.SaveChangesAsync(cancellationToken);
-            return result;
-        }, cancellationToken);
-
-        foreach (var (session, message, attemptId) in sends)
-        {
-            if (!await session.SendAsync(message, cancellationToken))
+            // Keep revocation and the final outbound hand-off under the same controller
+            // gate. A full channel requeues immediately; it must not stall unrelated work.
+            foreach (var (session, message, attemptId) in result)
             {
-                await RequeueAsync(attemptId, session.AgentId, "The assignment could not be delivered; it will be reassigned.", cancellationToken);
+                if (!session.TrySend(message))
+                {
+                    var attempt = queued.Single(a => a.Id == attemptId);
+                    Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
+                    attempt.Step!.Status = StepStatuses.Queued;
+                }
             }
-        }
+            await db.SaveChangesAsync(cancellationToken);
+            return result.Count;
+        }, cancellationToken);
     }
 
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>
@@ -356,17 +376,6 @@ public sealed partial class RunEngine
             await db.SaveChangesAsync(cancellationToken);
         }
     }
-
-    private Task RequeueAsync(Guid attemptId, Guid agentId, string reason, CancellationToken cancellationToken) =>
-        WithDbAsync(async db =>
-        {
-            var attempt = await db.Attempts.FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
-            if (attempt?.Status == AttemptStatuses.Assigned)
-            {
-                Requeue(attempt, reason);
-                await db.SaveChangesAsync(cancellationToken);
-            }
-        }, cancellationToken);
 
     private static void Requeue(Attempt attempt, string reason)
     {

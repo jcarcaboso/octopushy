@@ -11,6 +11,7 @@
     "root": { "description": "The OpenTofu root module, relative to this file.", "type": "string", "minLength": 1 },
     "inputs": { "description": "JSON Schema validating the guest's hardware and network, relative to this file.", "type": "string" },
     "verify": { "enum": ["proxmox", "none"] },
+    "guestFilesystem": { "description": "Explicitly authorizes native online root growth and capacity verification through the Proxmox guest agent, including reconciliation after an infrastructure no-op. Only the supported NixOS ext4 layout is accepted.", "enum": ["nixos-ext4-root"] },
     "image": { "description": "Overrides the server's default OpenTofu image.", "type": "string" }
   },
   "required": ["schemaVersion", "operation", "executor", "root"],

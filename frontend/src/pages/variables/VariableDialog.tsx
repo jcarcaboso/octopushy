@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { useSetVariable } from "../../api/queries";
+import { useSetVariable, useStageVariable } from "../../api/queries";
 import type { Variable } from "../../api/types";
+import { Callout } from "../../components/Callout";
 import { Dialog } from "../../components/Dialog";
-import { ErrorMessage } from "../../components/States";
 
 interface Props {
   /** The entry being updated, or null to set a new one. */
@@ -17,6 +17,7 @@ const keyPattern = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 /** Rendered only while open, so every opening starts from the entry's current state. */
 export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
   const save = useSetVariable();
+  const stage = useStageVariable();
   const wasSecret = existing?.visibility === "secret";
   const [key, setKey] = useState(existing?.key ?? presetKey);
   const [value, setValue] = useState(existing && !wasSecret ? (existing.value ?? "") : "");
@@ -28,10 +29,26 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
   const visibilityChanged = existing ? visibility !== existing.visibility : true;
   const sendsValue = !existing || valueChanged || visibilityChanged;
   const valueMissing = !existing && value === "";
+  const staging = wasSecret && value !== "";
+  const pending = save.isPending || stage.isPending;
+
+  function close() {
+    setValue("");
+    save.reset();
+    stage.reset();
+    onClose();
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!keyValid || valueMissing) return;
+    if (!keyValid || valueMissing || pending) return;
+    if (staging) {
+      stage.mutate(
+        { key: key.trim(), value, description: description.trim() || null },
+        { onSuccess: close },
+      );
+      return;
+    }
     save.mutate(
       {
         key: key.trim(),
@@ -39,22 +56,22 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
         visibility: sendsValue ? visibility : null,
         description: description.trim() || null,
       },
-      { onSuccess: onClose },
+      { onSuccess: close },
     );
   }
 
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={close}
       title={existing ? `Update ${existing.key}` : "Set a variable"}
       footer={
         <>
-          <button type="button" className="button" onClick={onClose}>
+          <button type="button" className="button" onClick={close}>
             Cancel
           </button>
-          <button type="submit" form="variable-form" className="button button--primary" disabled={save.isPending || !keyValid || valueMissing}>
-            {save.isPending ? "Saving…" : "Save"}
+          <button type="submit" form="variable-form" className="button button--primary" disabled={pending || !keyValid || valueMissing}>
+            {pending ? (staging ? "Staging…" : "Saving…") : staging ? "Stage candidate" : "Save"}
           </button>
         </>
       }
@@ -95,7 +112,7 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
           />
           <div id="variable-value-hint" className="field__hint">
             {wasSecret
-              ? "The current value is concealed. Enter a new one to replace it, or leave this empty to change only the description."
+              ? "The current value is concealed. Enter a replacement to stage a candidate; the active version stays unchanged until you promote it in Versions. Leave empty to change only the description."
               : existing
                 ? "Unchanged, only the description is saved."
                 : "Multi-line values are kept as entered."}
@@ -139,7 +156,11 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
           </label>
           <input id="variable-description" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
-        <ErrorMessage error={save.error} />
+        {save.error || stage.error ? (
+          <Callout kind="danger" title={stage.error ? "The candidate could not be staged." : "The variable could not be saved."} alert>
+            Try again or reload the page. Submitted values are not shown in error messages.
+          </Callout>
+        ) : null}
       </form>
     </Dialog>
   );
