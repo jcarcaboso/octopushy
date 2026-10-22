@@ -1,0 +1,26 @@
+---
+- name: Check for this service's Compose project
+  ansible.builtin.stat:
+    path: "{{ service_root }}/{{ service.id }}/compose.yaml"
+  register: project_file
+- name: Stop only this service, retaining any data volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - "opy-{{ service.id }}"
+      - --file
+      - "{{ service_root }}/{{ service.id }}/compose.yaml"
+      - down
+  become_user: "{{ runtime_user }}"
+  environment: "{{ runtime_environment }}"
+  when: project_file.stat.exists
+  register: compose_remove
+  changed_when: "'Removing' in compose_remove.stderr or 'Stopping' in compose_remove.stderr"
+- name: Remove only this service's owned firewall rules after it stops
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/octopushy-exposure]
+    stdin: "{{ {'operation': 'remove', 'id': service.id} | to_json }}"
+  register: exposure_remove
+  changed_when: exposure_remove.rc == 0 and (exposure_remove.stdout | from_json).changed

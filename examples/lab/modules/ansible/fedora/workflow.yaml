@@ -1,0 +1,66 @@
+---
+- name: One explicit Fedora operation on one guest
+  hosts: fedora
+  become: true
+  gather_facts: true
+  vars:
+    operation: verify
+    allow_bootstrap: false
+    runtime_user: octopushy
+    runtime_home: /var/lib/octopushy/runtime
+    service_root: "{{ runtime_home }}/services"
+    # ponytail: serialize this native workflow per guest; narrow shared-resource
+    # locks belong in the future controller service-operation integration.
+    workflow_lock: /run/lock/octopushy-fedora-workflow
+  pre_tasks:
+    - name: Validate operation, target, and operating system before mutation
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - ansible_facts.distribution == 'Fedora'
+          - operation in ['setup', 'expose', 'deploy', 'verify', 'remove']
+          - not ansible_check_mode
+        fail_msg: Run one explicit operation against one Fedora guest. Check mode is not an execution preview.
+    - name: Acquire the guest operation lock
+      ansible.builtin.command:
+        argv: [mkdir, "{{ workflow_lock }}"]
+      changed_when: false
+  tasks:
+    - name: Execute the accepted operation
+      block:
+        - name: Bootstrap the dedicated runtime
+          ansible.builtin.include_tasks: tasks/setup.yaml
+          when: operation == 'setup'
+        - name: Read and verify the rootless runtime
+          ansible.builtin.include_tasks: tasks/runtime.yaml
+        - name: Validate the service inputs
+          ansible.builtin.include_tasks: tasks/service-inputs.yaml
+          when: operation != 'setup'
+        - name: Apply owned exposure rules
+          ansible.builtin.include_tasks: tasks/expose.yaml
+          when: operation == 'expose'
+        - name: Deploy only this service's Compose project
+          ansible.builtin.include_tasks: tasks/deploy.yaml
+          when: operation == 'deploy'
+        - name: Verify HTTP reachability from the execution host
+          ansible.builtin.uri:
+            url: "http://{{ service.address }}:{{ service.port }}{{ service.verify_path | default('/') }}"
+            use_proxy: false
+            return_content: true
+            status_code: 200
+          become: false
+          delegate_to: localhost
+          register: response
+          until: response.status | default(0) == 200 and service.expect in (response.content | default(''))
+          retries: "{{ verify_retries | default(30) }}"
+          delay: "{{ verify_delay | default(2) }}"
+          when: operation == 'verify'
+        - name: Remove only this service and its owned exposure
+          ansible.builtin.include_tasks: tasks/remove.yaml
+          when: operation == 'remove'
+      always:
+        - name: Release this operation's guest lock
+          ansible.builtin.file:
+            path: "{{ workflow_lock }}"
+            state: absent
+          changed_when: false

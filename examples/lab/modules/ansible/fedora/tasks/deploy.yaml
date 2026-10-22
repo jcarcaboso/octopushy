@@ -1,0 +1,39 @@
+---
+- name: Require the exact exposure inputs and rules before starting a service
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/octopushy-exposure]
+    stdin: "{{ {'operation': 'check', 'id': service.id, 'port': service.port, 'address': service.address, 'sources': service.sources, 'zone': service_zone} | to_json }}"
+  changed_when: false
+- name: Create this service's project directory
+  ansible.builtin.file:
+    path: "{{ service_root }}/{{ service.id }}"
+    state: directory
+    owner: "{{ runtime_user }}"
+    group: "{{ runtime_user }}"
+    mode: "0700"
+- name: Render this service's tool-native Compose definition
+  ansible.builtin.template:
+    src: templates/compose.yaml.j2
+    dest: "{{ service_root }}/{{ service.id }}/compose.yaml"
+    owner: "{{ runtime_user }}"
+    group: "{{ runtime_user }}"
+    mode: "0600"
+- name: Apply only this Compose project
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - "opy-{{ service.id }}"
+      - --file
+      - "{{ service_root }}/{{ service.id }}/compose.yaml"
+      - up
+      - --detach
+      - --wait
+      - --wait-timeout
+      - "120"
+      - --remove-orphans
+  become_user: "{{ runtime_user }}"
+  environment: "{{ runtime_environment }}"
+  register: compose_apply
+  changed_when: "'Creating' in compose_apply.stderr or 'Recreating' in compose_apply.stderr or 'Starting' in compose_apply.stderr"

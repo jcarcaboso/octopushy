@@ -1,0 +1,7 @@
+---
+- name: Reconcile only this service's runtime and permanent firewall rules
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/octopushy-exposure]
+    stdin: "{{ {'operation': 'apply', 'id': service.id, 'port': service.port, 'address': service.address, 'sources': service.sources, 'zone': service_zone} | to_json }}"
+  register: exposure_result
+  changed_when: exposure_result.rc == 0 and (exposure_result.stdout | from_json).changed

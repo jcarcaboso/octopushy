@@ -154,8 +154,9 @@ lab-repo/
    when shared. Paths in a definition are relative to its file. Octopushy checks
    that they exist and parse; their content stays the tool's business.
 9. **Secrets are references.** A definition writes non-secret values directly and
-   refers to variable-store entries as `{ store: <key> }`. It never contains a
-   secret value or names a secret provider.
+   refers to variable-store entries as `{ store: <key> }`, optionally with an
+   exact version as `{ store: <key>, version: 2 }`. It never contains a secret
+   value or names a secret provider.
 10. **Removal is explicit.** Deleting a file never destroys anything. Setting
     `lifecycle: retired` asks for removal while keeping what is needed to plan it.
     Once the removal is verified, the folder can be deleted; Octopushy keeps the
@@ -188,6 +189,29 @@ lab-repo/
     the way editor edits are.
 
 ## Definitions
+
+### Variable-store references
+
+Anywhere a store reference is accepted, use `{ store: <key> }` or
+`{ store: <key>, version: <positive integer> }`. For example:
+
+```yaml
+token: { store: proxmox/korriban/api-token, version: 2 }
+tls:
+  caCertificate: { store: proxmox/korriban/ca, version: 1 }
+```
+
+The same syntax applies to backend environment values, SSH keys, and references
+in integration or setup definitions. A reference contains only `store` and the
+optional `version`; neither a quoted version nor zero, a negative number, or a
+fraction is valid.
+
+For a new run, an unversioned reference pins the active store version before its
+first attempt; later attempts keep those pinned versions. An explicit version
+expresses the desired binding, not proof that the credential has been verified,
+and does not promote a candidate. Explicit candidate versions are blocked until
+promoted.
+The `system/` scope remains reserved and cannot be referenced by definitions.
 
 ### Repository settings: `octopushy.yaml`
 
