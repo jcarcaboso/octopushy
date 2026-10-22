@@ -47,6 +47,11 @@ e2e: dev-db
 demo: dev-db
     tests/e2e/demo.sh
 
+# The VM lifecycle on a real Proxmox host (umbrel by default): create, resize, delete.
+# Needs the host's API token in .dev/secrets/umbrel-proxmox-token; see tests/proxmox/README.md.
+proxmox-e2e: dev-db
+    tests/proxmox/run.sh
+
 # Build the container images by hand, tagged with the given version (releases are manual for now).
 images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .

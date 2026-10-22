@@ -144,6 +144,22 @@ public class ProvisioningTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_plan_that_changes_no_resources_needs_no_approval()
+    {
+        using var repository = TestRepository.Minimal();
+        repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(hasChanges: true), artifacts: FakeAgent.PlanArtifact());
+
+        Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
+        var approval = (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Equal(("approved", "policy"), (approval.Decision, approval.DecidedBy));
+        Assert.Equal("The plan changes no resources, so it needs no approval.", approval.DecisionNote);
+    }
+
+    [Fact]
     public async Task A_missing_secret_blocks_the_step_until_it_is_set()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
