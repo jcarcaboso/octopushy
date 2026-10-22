@@ -143,9 +143,12 @@ registrations; reconcile those before dispatch, rather than treating a restored
 database as current authorization.
 
 Recovery PR #4 now targets `main` after PR #3 merged; its diff remains limited
-to the seven recovery test/documentation files. This slice still needs its own
-hosted CI: PR #3's successful run validates the baseline, not these new tests.
-PR #4 remains unmerged, and hosted acceptance must be verified at its own head.
+to the seven recovery test/documentation files. **Hosted recovery CI passed at
+`2f27df3`**: Actions run `39849581578` completed on October 22, 2026, with all five
+jobs successful, including 169 backend tests, vulnerability audits and
+generated-contract drift checks. This is independent of PR #3's baseline
+evidence. PR #4 remains unmerged; this synthetic acceptance is not authorization
+to restore or upgrade a retained installation.
 
 ### Earlier implementation validation
 
