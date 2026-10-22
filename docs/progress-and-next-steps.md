@@ -13,10 +13,10 @@ running the guest setup externally after controller-driven provisioning.
 
 ### Publication boundary
 
-The current source baseline is `main` merge `893b19a1808114d8e2ce7e5ca23cb13f2f6332aa`
-(foundations-review-and-fixes PR #1). It includes the previously unpublished
-networking, guest examples, filesystem growth, worker readiness, and credential
-lifecycle work. The earlier documentation-only checkpoint on `proxmox-e2e`
+The current source baseline is `main` merge `f72770befd689baa7abedba06ea3b29cd45aed81`
+(baseline CI PR #3, merged October 22, 2026). It preserves the foundations work
+from PR #1 (`893b19a`): networking, guest examples, filesystem growth, worker
+readiness, and credential lifecycle. The earlier documentation-only checkpoint on `proxmox-e2e`
 described those changes before publication. The repository's default branch is
 still `proxmox-e2e`; baseline CI explicitly targets `main`.
 
@@ -75,9 +75,9 @@ pass after the first independent reviews, were checked locally against the
 baseline above. **Hosted CI passed for PR #3 at `ad20d6f`**: Actions run
 `39843529091` completed on October 22, 2026, with all five jobs (backend, Rust,
 frontend, offline checks and Nix evaluation) successful, including the audit and
-contract-drift steps. This records the tested head, not a merge or deployment.
-The corrective
-pass is limited to the strict SDK pin, Rust formatting, one equivalent input
+contract-drift steps. PR #3 subsequently merged without rewriting that history;
+neither event is a deployment. The corrective pass is limited to the strict SDK
+pin, Rust formatting, one equivalent input
 guard expression, and the two targeted security patch updates below.
 
 | Local check | Result |
@@ -142,10 +142,10 @@ reconnection. Restoring an older backup loses later revocations and certificate
 registrations; reconcile those before dispatch, rather than treating a restored
 database as current authorization.
 
-This slice still needs its own hosted CI after publication; PR #3's successful
-run validates the baseline, not these new tests. A stacked PR targeting the
-baseline branch does not trigger the workflow's `main`-only PR filter; retarget
-the follow-up to `main` after PR #3 merges before treating hosted CI as passed.
+Recovery PR #4 now targets `main` after PR #3 merged; its diff remains limited
+to the seven recovery test/documentation files. This slice still needs its own
+hosted CI: PR #3's successful run validates the baseline, not these new tests.
+PR #4 remains unmerged, and hosted acceptance must be verified at its own head.
 
 ### Earlier implementation validation
 
