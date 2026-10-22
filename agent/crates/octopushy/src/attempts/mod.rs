@@ -113,7 +113,9 @@ impl AttemptManager {
                     executor: String::new(),
                     action: String::new(),
                     state: State::Finished,
-                    mutating: false,
+                    // The executor and action are unknown after a restart. If the stored result
+                    // is later unreadable, that must read as "cannot tell", never as a failure.
+                    mutating: true,
                     cancel: CancellationToken::new(),
                     logs,
                     logger,
@@ -305,6 +307,7 @@ impl AttemptManager {
                 error: String::new(),
                 artifacts: success.artifacts,
             },
+            Ok(Err(Failure::Uncertain(message))) => result(&id, Outcome::Uncertain, &message),
             Ok(Err(Failure::Cancelled)) => {
                 result(&id, Outcome::Cancelled, "cancelled by the server")
             }
@@ -320,6 +323,7 @@ impl AttemptManager {
                 error: message,
                 artifacts: Vec::new(),
             },
+            Err(_) if mutating => result(&id, Outcome::Uncertain, "the mutating executor panicked; inspect the target before retrying"),
             Err(_) => failed(&id, "internal error: the executor panicked"),
         };
         res.error = log.mask(&res.error);

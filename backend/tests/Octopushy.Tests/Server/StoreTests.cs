@@ -37,7 +37,9 @@ public class VariableStoreTests(PostgresFixture postgres)
         var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
         await store.SetAsync("dns/zone", "hlab.example.com", Visibilities.Plain, "The zone", CancellationToken.None);
         await store.SetAsync("dns/token", "first", Visibilities.Secret, null, CancellationToken.None);
-        await store.SetAsync("dns/token", "second", Visibilities.Secret, null, CancellationToken.None);
+        var candidate = await store.StageAsync("dns/token", "second", null, CancellationToken.None);
+        Assert.Equal(("first", 1), await store.GetAsync("dns/token", CancellationToken.None));
+        await store.PromoteAsync("dns/token", candidate, 1, "Checked replacement access externally.", "test", CancellationToken.None);
 
         Assert.Equal("hlab.example.com", await store.GetPlainAsync("dns/zone", CancellationToken.None));
         Assert.Null(await store.GetPlainAsync("dns/token", CancellationToken.None));

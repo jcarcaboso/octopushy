@@ -4,6 +4,7 @@
 
 pub mod opentofu;
 pub mod proxmox;
+pub mod nixos_rootfs;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,14 +19,14 @@ use crate::attempts::logs::AttemptLogger;
 use crate::tools::ToolRuntime;
 
 /// Executors this binary provides, as announced in `Hello`.
-pub const EXECUTORS: &[&str] = &["opentofu", "proxmox"];
+pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "nixos-rootfs"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
 /// interruption by a restart makes their outcome uncertain.
 pub fn is_mutating(executor: &str, action: &str) -> bool {
     matches!(
         (executor, action),
-        ("opentofu", "apply") | ("proxmox", "set-protection")
+        ("opentofu", "apply") | ("proxmox", "set-protection") | ("nixos-rootfs", "grow")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -124,6 +125,7 @@ impl Success {
 /// agent.
 #[derive(Debug)]
 pub enum Failure {
+    Uncertain(String),
     Failed {
         message: String,
         /// Outputs to report even though the attempt failed.
@@ -167,6 +169,7 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
     match executor {
         "proxmox" => proxmox::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
+        "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,
         other => Err(Failure::msg(format!(

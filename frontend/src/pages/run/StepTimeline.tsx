@@ -1,5 +1,7 @@
 import { Link } from "react-router";
 import type { RunDetail, Step } from "../../api/types";
+import { useRetryFilesystem } from "../../api/queries";
+import { ErrorMessage } from "../../components/States";
 import { StatusBadge } from "../../components/Badge";
 import { JsonBlock } from "../../components/CodeBlock";
 import { RelativeTime } from "../../components/RelativeTime";
@@ -20,6 +22,8 @@ const stepNames: Record<string, string> = {
   verify: "Verify",
   "verify-absent": "Verify absent",
   observe: "Observe",
+  "grow-root": "Expand guest root filesystem",
+  "verify-root": "Verify guest capacity",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -40,12 +44,20 @@ function describe(step: Step, operation: string): string | null {
       return "Checks through the Proxmox API that the VM is gone.";
     case "observe":
       return "Reads hosts and VMs from the Proxmox API.";
+    case "grow-root":
+      return "Checks the supported NixOS layout and expands its root partition and ext4 filesystem online if needed.";
+    case "verify-root":
+      return "Independently measures guest disk, partition, and filesystem capacity.";
     default:
       return null;
   }
 }
 
 function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
+  const retry = useRetryFilesystem();
+  const canRetry = detail.run.status === "failed" && step.status === "failed"
+    && (step.name === "grow-root" || step.name === "verify-root")
+    && !detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {
     const planStep = detail.steps.find((s) => s.name === "plan");
@@ -61,6 +73,15 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
         </details>
       ) : null}
       <AttemptList attempts={step.attempts} />
+      {canRetry ? (
+        <div className="stack stack--small">
+          <p className="muted small">Retry this guest step without repeating the successful infrastructure steps. Stale runs are refused.</p>
+          <ErrorMessage error={retry.error} />
+          <button type="button" className="button" onClick={() => retry.mutate(detail.run.id)} disabled={retry.isPending}>
+            {retry.isPending ? "Retrying…" : "Retry guest step"}
+          </button>
+        </div>
+      ) : null}
     </>
   );
 }

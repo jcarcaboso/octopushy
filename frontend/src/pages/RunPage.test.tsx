@@ -8,6 +8,32 @@ import { RunPage } from "./RunPage";
 const sha = "3f6c2a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615e4d3";
 const created = "2026-10-20T08:00:00Z";
 
+it("retries a failed guest step without requesting another infrastructure plan", async () => {
+  const detail = runDetail({ status: "failed", currentStep: "grow-root" });
+  detail.steps = [{ ...detail.steps[0], name: "grow-root", kind: "agent", status: "failed", plan: null, approval: null }];
+  const { requests } = mockApi({
+    "GET /api/runs/run-1": () => detail,
+    "POST /api/runs/run-1/retry-filesystem": () => undefined,
+  });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await userEvent.click(await screen.findByRole("button", { name: "Retry guest step" }));
+  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-filesystem"]);
+});
+
+it.each([
+  { lost: "read-only", mutating: false, offered: true },
+  { lost: "mutating", mutating: true, offered: false },
+])("offers the guest retry after a lost $lost attempt only when it could not have changed anything", async ({ mutating, offered }) => {
+  const detail = runDetail({ status: "failed", currentStep: "verify-root" });
+  const lost = { ...detail.steps[0].attempts[0], id: "attempt-lost", status: "uncertain", mutating };
+  detail.steps = [{ ...detail.steps[0], name: "verify-root", kind: "agent", status: "failed", plan: null, approval: null, attempts: [lost] }];
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await screen.findByText(/Independently measures guest disk/);
+  expect(screen.queryByRole("button", { name: "Retry guest step" }) !== null).toBe(offered);
+});
+
 function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
   return {
     run: {
@@ -67,6 +93,7 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
             error: null,
             lateResult: false,
             logLines: 42,
+            mutating: false,
           },
         ],
       },

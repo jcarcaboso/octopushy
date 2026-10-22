@@ -1,13 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Octopushy.Server.Data;
 using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Store;
 
 /// <summary>
 /// The key-encryption key: 32 random bytes in a file only the server can read, outside the
-/// database and anything backed up with it. Created on first start when missing.
+/// database and anything backed up with it. Initialized only for an empty installation.
 /// </summary>
 public sealed class KeyEncryptionKey
 {
@@ -15,8 +17,7 @@ public sealed class KeyEncryptionKey
 
     public KeyEncryptionKey(IOptions<OctopushyOptions> options, ILogger<KeyEncryptionKey> logger)
     {
-        var path = options.Value.Store.KeyFile ?? Path.Combine(options.Value.DataDirectory, "keys", "kek");
-        Bytes = LoadOrCreate(path, logger);
+        Bytes = Load(PathFor(options.Value), logger);
     }
 
     internal KeyEncryptionKey(byte[] bytes)
@@ -26,7 +27,57 @@ public sealed class KeyEncryptionKey
 
     internal byte[] Bytes { get; }
 
-    private static byte[] LoadOrCreate(string path, ILogger logger)
+    private static string PathFor(OctopushyOptions options) => options.Store.KeyFile ?? Path.Combine(options.DataDirectory, "keys", "kek");
+
+    /// <summary>Must run after schema migration and before any encrypted store is opened.</summary>
+    internal static async Task InitializeAsync(OctopushyDb db, OctopushyOptions options, ILogger logger, CancellationToken ct)
+    {
+        var path = PathFor(options);
+        WarnIfBackedUpWithData(path, options, logger);
+        if (File.Exists(path))
+        {
+            _ = Load(path, logger);
+            return;
+        }
+
+        var artifacts = Path.Combine(options.DataDirectory, "artifacts");
+        if (await db.StoreVersions.AnyAsync(ct) || await db.StoreEntries.AnyAsync(ct) || await db.Artifacts.AnyAsync(ct) ||
+            (Directory.Exists(artifacts) && Directory.EnumerateFiles(artifacts, "*", SearchOption.AllDirectories).Any()))
+        {
+            throw new InvalidOperationException("The encryption key is missing from an existing installation. Restore its original key; a new key cannot recover stored values or artifacts.");
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        using var stream = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            UnixCreateMode = OperatingSystem.IsWindows() ? null : UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        });
+        stream.Write(RandomNumberGenerator.GetBytes(Size));
+        stream.Flush(flushToDisk: true);
+        logger.LogWarning("Initialized the encryption key for an empty installation at {Path}. Retain it separately from database backups.", path);
+    }
+
+    /// <summary>A backup of the data directory must not also hold the key that decrypts the store, which includes the agent CA's private key.</summary>
+    internal static void WarnIfBackedUpWithData(string path, OctopushyOptions options, ILogger logger)
+    {
+        // Lexical only: a symlink that puts the key inside the data directory is not detected.
+        var data = Path.GetFullPath(options.DataDirectory);
+        if (!data.EndsWith(Path.DirectorySeparatorChar))
+        {
+            data += Path.DirectorySeparatorChar;
+        }
+
+        if (Path.GetFullPath(path).StartsWith(data, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "The key-encryption key {Path} is inside the data directory, so a copy of the data directory plus the database can decrypt every stored secret and the agent CA key. Set Octopushy:Store:KeyFile to a path outside it, such as a container secret.",
+                path);
+        }
+    }
+
+    private static byte[] Load(string path, ILogger logger)
     {
         if (File.Exists(path))
         {
@@ -46,25 +97,7 @@ public sealed class KeyEncryptionKey
             return bytes;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var key = RandomNumberGenerator.GetBytes(Size);
-        var options = new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.Write,
-        };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        using (var stream = new FileStream(path, options))
-        {
-            stream.Write(key);
-        }
-
-        logger.LogWarning("Created a new key-encryption key at {Path}. Keep it out of database backups; without it, stored values cannot be read.", path);
-        return key;
+        throw new InvalidOperationException("The encryption key is missing. Initialize an empty installation or restore its original key.");
     }
 }
 

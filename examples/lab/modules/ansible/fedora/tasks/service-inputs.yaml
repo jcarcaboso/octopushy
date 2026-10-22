@@ -1,0 +1,37 @@
+---
+- name: Validate the accepted single-container service inputs
+  ansible.builtin.assert:
+    that:
+      - service is mapping
+      - service.keys() | difference(['id', 'address', 'port', 'image', 'container_port', 'sources', 'command', 'expect', 'verify_path', 'zone']) | length == 0
+      - service.id is match('^[a-z][a-z0-9-]{0,39}$')
+      - service.address == ansible_facts.default_ipv4.address
+      - service.port is integer
+      - service.port >= 1024 and service.port <= 65535
+      - service.image is match('^[^\\s]+@sha256:[0-9a-f]{64}$')
+      - service.container_port is integer
+      - service.container_port > 0 and service.container_port <= 65535
+      - service.sources is sequence and service.sources is not string
+      - service.sources | length > 0
+      - service.expect is string and service.expect | length > 0
+      - service.command | default([]) is sequence and service.command | default([]) is not string
+      - service.command | default([]) | select('string') | list | length == service.command | default([]) | length
+      - service.verify_path | default('/') is match('^/[^\\s]*$')
+    fail_msg: This workflow accepts one pinned-image, IPv4/TCP service with an explicit VM binding and allowed sources.
+- name: Read the default firewalld zone
+  ansible.builtin.command:
+    argv: [firewall-cmd, --get-default-zone]
+  register: default_zone
+  changed_when: false
+- name: Read the LAN interface's firewalld zone
+  ansible.builtin.command:
+    argv: [firewall-cmd, "--get-zone-of-interface={{ ansible_facts.default_ipv4.interface }}"]
+  register: interface_zone
+  changed_when: false
+  failed_when: interface_zone.rc not in [0, 2]
+- name: Use the zone that actually applies to the guest's LAN interface
+  ansible.builtin.set_fact:
+    service_zone: "{{ service.zone | default(interface_zone.stdout if interface_zone.rc == 0 else default_zone.stdout) }}"
+- name: Refuse to apply rules to an unrelated firewall zone
+  ansible.builtin.assert:
+    that: service_zone == (interface_zone.stdout if interface_zone.rc == 0 else default_zone.stdout)

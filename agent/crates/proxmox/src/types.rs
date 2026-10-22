@@ -198,6 +198,23 @@ pub struct VmConfig {
     pub other: BTreeMap<String, serde_json::Value>,
 }
 
+/// A polled QEMU guest execution result. No output is assumed until `exited`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuestExecStatus {
+    #[serde(default, deserialize_with = "de::bool_or_false")]
+    pub exited: bool,
+    pub exitcode: Option<i32>,
+    pub signal: Option<i32>,
+    #[serde(default, rename = "out-data")]
+    pub stdout: String,
+    #[serde(default, rename = "err-data")]
+    pub stderr: String,
+    #[serde(default, rename = "out-truncated", deserialize_with = "de::bool_or_false")]
+    pub stdout_truncated: bool,
+    #[serde(default, rename = "err-truncated", deserialize_with = "de::bool_or_false")]
+    pub stderr_truncated: bool,
+}
+
 /// One interface from the guest agent's `network-get-interfaces`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct GuestInterface {

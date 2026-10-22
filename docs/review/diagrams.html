@@ -1,0 +1,282 @@
+<!doctype html><html><head><meta charset="utf-8"><script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script><style>
+body{font-family:var(--font-sans);color:var(--foreground)}
+section{margin:0 0 30px}
+h3{font-size:15px;margin:0 0 4px}
+p{margin:0 0 10px;color:var(--muted-foreground);font-size:13px;line-height:1.45}
+code,.mono{font-family:var(--font-mono);font-size:12px}
+.mermaid{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:0;overflow-x:auto;text-align:left}
+.mermaid svg{max-width:none;height:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:600;color:var(--muted-foreground);border-bottom:1px solid var(--border);padding:6px 8px}
+td{border-bottom:1px solid var(--border);padding:6px 8px;vertical-align:top}
+td.muted{color:var(--muted-foreground)}
+.sev{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
+.sev-high{background:var(--destructive-surface);color:var(--destructive)}
+.sev-med{background:var(--warning-surface);color:var(--warning)}
+.sev-low{background:var(--secondary);color:var(--secondary-foreground)}
+.sev-info{background:transparent;color:var(--muted-foreground);border:1px solid var(--border)}
+</style></head><body>
+<section><h3>How it fits together</h3><p>The agent always dials out; the server never connects to workers, Proxmox or guests.</p><pre class="mermaid">flowchart LR
+  subgraph browser[Operator browser]
+    UI[React SPA&lt;br/&gt;react-query polling]
+  end
+
+  subgraph control[Control host - deploy/compose.yaml]
+    Caddy[Caddy :8081&lt;br/&gt;static SPA + /api proxy&lt;br/&gt;CSP, no TLS]
+    subgraph backend[octopushy-server .NET 10]
+      API[REST API :8080&lt;br/&gt;cookie auth]
+      AGP[Agent port :8443&lt;br/&gt;gRPC over mTLS&lt;br/&gt;/agent/ca.pem]
+      ORCH[Orchestrator loop&lt;br/&gt;RunEngine + global gate]
+      SYNC[RepositorySync&lt;br/&gt;poll / trigger]
+      STORE[VariableStore&lt;br/&gt;AES-GCM envelope]
+      CA[Agent CA]
+    end
+    PG[(PostgreSQL 18)]
+    DATA[/data dir&lt;br/&gt;KEK, mirror.git, snapshots,&lt;br/&gt;bundles, logs, artifacts/]
+  end
+
+  subgraph worker[Worker host - systemd]
+    AGENT[octopushy agent&lt;br/&gt;Rust, tokio]
+    PODMAN[rootless podman&lt;br/&gt;OpenTofu container]
+    OUTBOX[/state dir&lt;br/&gt;key, cert, outbox, work/]
+  end
+
+  GIT[(Lab Git repo)]
+  PVE[Proxmox VE API]
+  TFSTATE[(OpenTofu state backend&lt;br/&gt;pg / http)]
+
+  UI --&gt;|HTTPS via front proxy| Caddy --&gt; API
+  API --- ORCH
+  ORCH --- STORE
+  SYNC --&gt;|git fetch / archive| GIT
+  backend --- PG
+  backend --- DATA
+  AGENT --&gt;|outbound mTLS gRPC| AGP
+  AGENT --&gt; PODMAN
+  AGENT --- OUTBOX
+  PODMAN --&gt;|bpg/proxmox provider| PVE
+  PODMAN --&gt; TFSTATE
+  AGENT --&gt;|verify / observe / guest-exec| PVE
+</pre></section><section><h3>Inside the backend today</h3><p>Almost every change to runs, steps and attempts goes through one in-process lock in <code>RunEngine</code>, including git bundling and artifact writes.</p><pre class="mermaid">flowchart TB
+  subgraph Definitions[Octopushy.Definitions - pure]
+    Loader[LabRepositoryLoader 732 l]
+    Schemas[SchemaCatalog&lt;br/&gt;embedded JSON Schemas]
+    Policy[PolicyResolver]
+    Inputs[ProvisionInputs&lt;br/&gt;inputs hash, TreeHash]
+  end
+
+  subgraph Server[Octopushy.Server]
+    Program[Program.cs&lt;br/&gt;DI, Kestrel, port split, startup]
+    subgraph Api
+      Endpoints[Endpoints 598 l&lt;br/&gt;handlers + domain rules]
+      Views[Views 500 l&lt;br/&gt;read models + GuestStatus]
+      Account[AccountEndpoints]
+    end
+    subgraph Orchestration
+      Engine[RunEngine 913 l&lt;br/&gt;gate, state machine, approval,&lt;br/&gt;effects, dispatch, leases]
+      Factory[RunFactory]
+      Builder[AssignmentBuilder]
+      Bindings[CredentialBindings static]
+    end
+    subgraph Agents
+      Grpc[EnrollmentService&lt;br/&gt;AgentChannelService]
+      Conns[AgentConnections&lt;br/&gt;in-memory sessions]
+      CAx[AgentCertificateAuthority]
+      Files[AttemptLogStore / ArtifactStore]
+    end
+    subgraph Git
+      Sync[RepositorySync]
+      Mirror[RepositoryMirror]
+      Cache[RevisionCache]
+      Cli[GitCli]
+    end
+    subgraph Inventory
+      Updater[InventoryUpdater]
+      Planner[Planner]
+    end
+    subgraph Store
+      VS[VariableStore]
+      Env[Envelope + KEK]
+    end
+    Db[(OctopushyDb / Entities)]
+  end
+
+  Endpoints --&gt; Engine
+  Endpoints --&gt; VS
+  Endpoints --&gt; Db
+  Endpoints --&gt; Planner
+  Views --&gt; Db
+  Views --&gt; Mirror
+  Engine --&gt; Builder
+  Engine --&gt; Bindings
+  Engine --&gt; Conns
+  Engine --&gt; Files
+  Engine --&gt; Db
+  Builder --&gt; VS
+  Builder --&gt; Mirror
+  Builder --&gt; Files
+  Bindings --&gt; Db
+  Grpc --&gt; Engine
+  Grpc --&gt; CAx
+  Grpc --&gt; Conns
+  CAx --&gt; VS
+  Sync --&gt; Mirror --&gt; Cli
+  Sync --&gt; Cache --&gt; Loader
+  Sync --&gt;|ExecuteAsync under gate| Updater
+  Updater --&gt; Factory --&gt; Inputs
+  Factory --&gt; Policy
+  Updater --&gt; Engine
+  Planner --&gt; Engine
+  VS --&gt; Env
+  VS --&gt; Db
+  Loader --&gt; Schemas
+</pre></section><section><h3>A run's life</h3><p>Provision: plan → approval → apply → verify. Retire: plan(destroy) → approval → unprotect → apply → verify-absent.</p><pre class="mermaid">stateDiagram-v2
+  [*] --&gt; queued
+  queued --&gt; running: no earlier unfinished run on this resource
+  running --&gt; blocked: credential binding missing or revoked
+  blocked --&gt; running: binding fixed
+  running --&gt; awaiting_approval: plan needs manual approval
+  awaiting_approval --&gt; running: approve (plan sha must match)
+  awaiting_approval --&gt; cancelled: reject
+  running --&gt; succeeded: all steps succeeded or skipped
+  running --&gt; failed: a step failed
+  running --&gt; uncertain: mutating attempt lost its lease
+  uncertain --&gt; running: late result accepted
+  uncertain --&gt; failed: operator closes
+  failed --&gt; running: retry-filesystem (grow-root / verify-root only)
+  queued --&gt; cancelled: superseded or cancelled
+  running --&gt; cancelled: cancel (no active mutating attempt)
+  succeeded --&gt; [*]
+  failed --&gt; [*]
+  cancelled --&gt; [*]
+</pre></section><section><h3>Agent protocol</h3><p>Results sit in a durable outbox until the server acknowledges them; every reconnect replays what is unacknowledged.</p><pre class="mermaid">sequenceDiagram
+  autonumber
+  participant Op as Operator (UI)
+  participant API as Backend API
+  participant AG as Agent
+  participant GW as Agent port (gRPC mTLS)
+  participant Eng as RunEngine
+  Op-&gt;&gt;API: POST /api/agents/tokens
+  API--&gt;&gt;Op: opy1.&lt;secret&gt;.&lt;ca-sha256&gt; (hash stored)
+  Note over AG: octopushy agent enroll
+  AG-&gt;&gt;GW: GET /agent/ca.pem (unverified TLS)
+  AG-&gt;&gt;AG: sha256(CA) == fingerprint from token
+  AG-&gt;&gt;AG: generate P-256 key + CSR
+  AG-&gt;&gt;GW: Enrollment.Enroll(secret, name, CSR)  [TLS pinned to CA]
+  GW-&gt;&gt;GW: claim token (UPDATE ... WHERE used_at IS NULL)
+  GW--&gt;&gt;AG: agent_id, certificate, CA
+  Note over AG: octopushy agent run
+  AG-&gt;&gt;GW: Connect stream (client cert)
+  AG-&gt;&gt;GW: Hello(executors, running ids, tool runtime)
+  GW--&gt;&gt;AG: Welcome(max_concurrency, heartbeat)
+  GW-&gt;&gt;Eng: OnHelloAsync (renew leases / requeue)
+  loop every heartbeat
+    AG-&gt;&gt;GW: Heartbeat(active ids) → lease renewed
+  end
+  Eng-&gt;&gt;GW: Assignment(input_json, secrets map, files_tar_gz, artifacts)
+  GW--&gt;&gt;AG: Assignment
+  AG-&gt;&gt;AG: workspace + queued marker, wait for limiter
+  AG-&gt;&gt;GW: AttemptStarted, AttemptLog batches (masked)
+  AG-&gt;&gt;AG: result written durably to outbox
+  AG-&gt;&gt;GW: AttemptResult(outcome, outputs_json, artifacts)
+  GW-&gt;&gt;Eng: OnResultAsync (verify sha, store encrypted)
+  GW--&gt;&gt;AG: ResultAck → delete outbox, workspace
+  opt cert past 2/3 of lifetime
+    AG-&gt;&gt;GW: RenewCertificate(new CSR)
+    GW--&gt;&gt;AG: new certificate (old serial kept as previous)
+  end
+</pre></section><section><h3>Token handling: what the reviews found</h3><p>The crypto is sound; the trust model is not. The lab repo, and anyone with a web session, decide where secrets go.</p><table><thead><tr><th>ID</th><th>Sev</th><th>Finding</th><th>Affects</th></tr></thead><tbody><tr><td class="mono">F1/F17</td><td><span class="sev sev-high">High</span></td><td>Repo-chosen code runs at plan time with the privileged token, before any approval; default approval is automatic</td><td class="muted">Proxmox token, backend secrets</td></tr><tr><td class="mono">F18</td><td><span class="sev sev-high">High</span></td><td>Observe runs (~288/day per installation) send the token to the repo-chosen endpoint with no approval</td><td class="muted">Proxmox token</td></tr><tr><td class="mono">F2</td><td><span class="sev sev-high">High</span></td><td>Any web session can repoint the repo; the Git credential follows the new URL</td><td class="muted">All secrets, Git credential</td></tr><tr><td class="mono">F22</td><td><span class="sev sev-med">Med</span></td><td>One data-dir backup plus the DB decrypts everything: KEK, cookie key ring, CA key</td><td class="muted">Everything</td></tr><tr><td class="mono">F3</td><td><span class="sev sev-med">Med</span></td><td>Token over http:// or unverified TLS; the CA never reaches OpenTofu</td><td class="muted">Proxmox token</td></tr><tr><td class="mono">F4</td><td><span class="sev sev-med">Med</span></td><td>The planning agent&#x27;s own change count decides whether approval is needed</td><td class="muted">Everything apply uses</td></tr><tr><td class="mono">F5/F19/F20</td><td><span class="sev sev-med">Med</span></td><td>Any agent, any store key, even a local runtime can receive the token</td><td class="muted">Proxmox token, future SSH keys</td></tr><tr><td class="mono">F6/F21</td><td><span class="sev sev-med">Med</span></td><td>Sessions can&#x27;t be revoked; a missing CA is silently re-created</td><td class="muted">Session, agent trust</td></tr><tr><td class="mono">F7</td><td><span class="sev sev-low">Low</span></td><td>Agent outputs unmasked; server masking is memory-only; literal matching</td><td class="muted">Attempt secrets</td></tr><tr><td class="mono">F8–F16</td><td><span class="sev sev-low">Low</span></td><td>Token in argv, unbounded renewal, env in podman metadata, Git http/accept-new, setup race</td><td class="muted">Various</td></tr></tbody></table></section><section><h3>Long-term shape</h3><p>Direction only. Before roadmap step 2 the plan schedules just the step catalog, agent registry, contract fixtures, container spec, and purpose bindings.</p><pre class="mermaid">flowchart TB
+  subgraph API[Api · thin handlers per area]
+    H1[Runs] --- H2[Inventory] --- H3[Agents] --- H4[Variables] --- H5[Repository]
+  end
+  subgraph APP[Application]
+    COORD[RunCoordinator&lt;br/&gt;gate + transaction]
+    CMDS[RunCommands&lt;br/&gt;approve · reject · cancel · retry · close]
+    DISP[Dispatcher&lt;br/&gt;I/O outside the gate]
+  end
+  subgraph DOM[Runs domain · pure, unit-tested]
+    CAT[StepCatalog&lt;br/&gt;executor · action · mutating · secrets · effects]
+    SM[RunStateMachine]
+    AP[ApprovalPolicy&lt;br/&gt;typed PlanOutputs]
+    LP[AttemptPolicy&lt;br/&gt;lease · retry · restart grace]
+    SEL[AgentSelector]
+  end
+  subgraph SEC[Secrets]
+    GR[Purpose bindings&lt;br/&gt;endpoint + CA · labels · guests]
+    VS[VariableStore + Envelope]
+  end
+  subgraph GW[AgentGateway]
+    GRPC[gRPC + CA + enrollment]
+    EV[IAgentEvents port]
+  end
+  subgraph INF[Infrastructure ports]
+    SRC[IRepositorySource]
+    BLOB[IArtifactStore · IAttemptLogStore]
+    DB[(Postgres&lt;br/&gt;FKs · xmin tokens)]
+  end
+  CONTRACT[[contracts/executors/*.schema.json&lt;br/&gt;+ golden fixtures]]
+  API --&gt; CMDS --&gt; COORD --&gt; SM
+  SM --&gt; CAT
+  SM --&gt; AP
+  COORD --&gt; LP
+  DISP --&gt; SEL
+  DISP --&gt; GR --&gt; VS
+  DISP --&gt; SRC
+  GRPC --&gt; EV --&gt; COORD
+  DISP --&gt; GRPC
+  COORD --&gt; DB
+  DISP --&gt; BLOB
+  CAT -.validated by.-&gt; CONTRACT
+  subgraph AGENT[Agent]
+    REG[Executor registry&lt;br/&gt;trait Executor + ActionSpec]
+    CS[ContainerSpec&lt;br/&gt;mounts · secret files]
+    CORE[core types&lt;br/&gt;no proto]
+  end
+  REG -.validated by.-&gt; CONTRACT
+  GRPC &lt;--&gt;|mTLS| REG
+  REG --&gt; CS
+</pre></section><section><h3>Plan (revision 2)</h3><p>Trust controls land before the upgrade; only the refactoring that roadmap steps 1–2 need comes before them.</p><pre class="mermaid">flowchart TB
+  subgraph W0[Wave 0 · publish and protect]
+    P1[P1 commit scopes] --&gt; P2[P2 CI]
+    P2 --&gt; P3[P3 KEK out, CA guard, restore drill]
+    P2 --&gt; P4[P4 retention]
+    BUG[concrete bug fixes]
+  end
+  subgraph W1[Wave 1 · trust]
+    T1[T1 trusted revisions] --&gt; T2[T2 split Proxmox tokens]
+    T2 --&gt; T3[T3 approval floor]
+    T4[T4 purpose bindings] --- T5[T5 no http + CA to OpenTofu]
+    T6[T6 repo settings] --- T7[T7 masking] --- T8[T8 small fixes]
+    T9[T9 key ring]
+  end
+  subgraph W2[Wave 2 · executor foundations]
+    E0[E0 safety net] --&gt; E1[E1 step catalog]
+    E0 --&gt; E2[E2 agent registry]
+    E1 --&gt; E3[E3 contract fixtures]
+    E2 --&gt; E3
+    E2 --&gt; E4[E4 container spec + secret files]
+    E3 --&gt; E5[E5 protocol versions]
+    E6[E6 drain + upgrade runbook] --- E7[E7 restart grace]
+  end
+  subgraph W3[Wave 3 · operability]
+    O1[O1 observability] --&gt; O2[O2 gate relief]
+  end
+  R0[Roadmap 0&lt;br/&gt;upgrade test env]
+  R1[Roadmap 1&lt;br/&gt;managed guest access]
+  R2[Roadmap 2&lt;br/&gt;setup / service executors]
+  R3[Roadmap 3&lt;br/&gt;staged SSH rotation]
+  R4[Roadmap 4&lt;br/&gt;remote acceptance]
+  W0 --&gt; W1 --&gt; R0 --&gt; W2
+  P3 --&gt; T9
+  E4 --&gt; R1
+  T4 --&gt; R1
+  E5 --&gt; R2
+  R1 --&gt; R2 --&gt; R3 --&gt; R4
+  E6 --&gt; R4
+  W3 --&gt; R4
+</pre></section>
+<script>
+(function(){const c=document.createElement('canvas').getContext('2d');c.fillStyle=getComputedStyle(document.documentElement).backgroundColor||'#fff';c.fillRect(0,0,1,1);const d=c.getImageData(0,0,1,1).data;const dark=d[3]>0&&(0.2126*d[0]+0.7152*d[1]+0.0722*d[2])<128;
+mermaid.initialize({startOnLoad:false, theme: dark?'dark':'neutral', securityLevel:'loose', flowchart:{htmlLabels:true,useMaxWidth:false}, sequence:{useMaxWidth:false}, state:{useMaxWidth:false}});
+mermaid.run({querySelector:'.mermaid', suppressErrors:true}).then(()=>{document.querySelectorAll('.mermaid').forEach((m,i)=>{if(!m.querySelector('svg'))console.error('diagram failed',i)});console.log('svgs', document.querySelectorAll('.mermaid svg').length);});})();
+</script></body></html>

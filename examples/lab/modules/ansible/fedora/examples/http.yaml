@@ -1,0 +1,11 @@
+# Workflow input, not an Octopushy service.yaml: the controller does not read it.
+service:
+  id: http-demo
+  address: 192.0.2.10
+  port: 8080
+  container_port: 5678
+  sources: [192.0.2.0/24]
+  image: docker.io/hashicorp/http-echo@sha256:fcb75f691c8b0414d670ae570240cbf95502cc18a9ba57e982ecac589760a186
+  command: ["-listen=:5678", "-text=Octopushy Fedora workflow"]
+  verify_path: /
+  expect: Octopushy Fedora workflow

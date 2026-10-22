@@ -18,8 +18,8 @@ public enum ResourceKind
     Guest,
 }
 
-/// <summary>A key in the variable store, referenced from a definition as <c>{ store: key }</c>.</summary>
-public sealed record StoreReference(string Key);
+/// <summary>A variable-store key with an optional exact version, written as <c>{ store: key, version: 2 }</c>.</summary>
+public sealed record StoreReference(string Key, int? Version = null);
 
 /// <summary>Policy settings as written on one resource; unset fields flow down from above.</summary>
 public sealed record PolicySettings(string? Approval, string? Destructive);
@@ -135,7 +135,8 @@ public sealed record RecipeDefinition(
     string Root,
     string? InputsSchema,
     string Verify,
-    string? Image);
+    string? Image,
+    string? GuestFilesystem = null);
 
-/// <summary>A store key and the resource whose definition uses it.</summary>
-public sealed record StoreUse(string Key, string Consumer, string File);
+/// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
+public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);

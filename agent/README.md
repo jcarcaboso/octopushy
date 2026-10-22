@@ -75,10 +75,18 @@ Logs go to stderr; set the level with `OCTOPUSHY_LOG` (or `RUST_LOG`), such as
 attempts stop, running applies finish, results are flushed; a second signal exits
 at once.
 
+At startup the enrolled state directory, work directory and provider cache are
+resolved to canonical absolute paths, including relative paths and symlinks.
+Container mounts and OpenTofu's repository root therefore use the same paths.
+The runtime is probed once: if that probe fails, the agent warns and omits
+`opentofu` from `Hello`, while native `proxmox` and `nixos-rootfs` remain advertised.
+Fix the tool/runtime and restart the agent to advertise OpenTofu again. A successful
+version probe does not prove image pulls, provider access or backend connectivity.
+
 What the agent does on the channel:
 
 - Connects with mutual TLS (its key and certificate; the stored CA as the only root),
-  sends `Hello` (version, executors `opentofu` and `proxmox`, attempts still running,
+  sends `Hello` (version, available executors, attempts still running,
   tool runtime), and waits for `Welcome` (`max_concurrency`, `heartbeat_seconds`).
 - Heartbeats every `heartbeat_seconds` with the running attempt IDs.
 - Runs assignments concurrently up to `max_concurrency` (extra ones wait), sends
@@ -152,6 +160,12 @@ verification. Before concluding that a VM is absent, the token's `VM.Audit` on
   `LOG_STREAM_AGENT`.
 
 ## Tool runtimes
+
+On a separately hosted worker, use routable controller, Proxmox and OpenTofu
+backend addresses. Loopback refers to the worker (or the tool container), not the
+controller. The controller sends source files/artifacts with assignments, so no
+shared checkout is required. See the opt-in
+[remote-worker acceptance prerequisites](../tests/remote-worker/README.md).
 
 - **podman** (default, rootless): `podman run --rm` with the attempt workspace at
   `/work` (`:Z`, private SELinux label) and the provider cache at

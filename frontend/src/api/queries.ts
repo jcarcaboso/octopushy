@@ -6,6 +6,9 @@ import type {
   RepositoryUpdate,
   RunDetail,
   TokenRequest,
+  VariableCandidate,
+  VariablePromotion,
+  VariableRevocation,
   VariableUpdate,
 } from "./types";
 
@@ -20,6 +23,7 @@ export const keys = {
   agents: ["agents"] as const,
   tokens: ["tokens"] as const,
   variables: ["variables"] as const,
+  variableVersions: (key: string) => ["variables", "versions", key] as const,
   repository: ["repository"] as const,
   revisions: ["revisions"] as const,
   revision: (id: string) => ["revision", id] as const,
@@ -118,6 +122,14 @@ export function useVariables() {
   return useQuery({
     queryKey: keys.variables,
     queryFn: () => unwrap(api.GET("/api/variables")),
+  });
+}
+
+export function useVariableVersions(key: string) {
+  return useQuery({
+    queryKey: keys.variableVersions(key),
+    queryFn: () => unwrap(api.GET("/api/variables/versions", { params: { query: { key } } })),
+    enabled: !key.startsWith("system/"),
   });
 }
 
@@ -257,6 +269,14 @@ export function useCloseRun() {
   });
 }
 
+export function useRetryFilesystem() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/retry-filesystem", { params: { path: { id } } })),
+    onSettled: () => refresh(),
+  });
+}
+
 export function useUpdateAgent() {
   const client = useQueryClient();
   return useMutation({
@@ -303,10 +323,42 @@ export function useDeleteToken() {
 export function useSetVariable() {
   const client = useQueryClient();
   return useMutation({
+    gcTime: 0,
     mutationFn: (body: VariableUpdate) => unwrap(api.PUT("/api/variables", { body })),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: keys.variables });
       // A blocked step may continue now.
+      void client.invalidateQueries({ queryKey: ["run"] });
+    },
+  });
+}
+
+export function useStageVariable() {
+  const client = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (body: VariableCandidate) => unwrap(api.POST("/api/variables/candidates", { body })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.variables }),
+  });
+}
+
+export function usePromoteVariable() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: VariablePromotion) => unwrap(api.POST("/api/variables/promote", { body })),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: keys.variables });
+      void client.invalidateQueries({ queryKey: ["run"] });
+    },
+  });
+}
+
+export function useRevokeVariable() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: VariableRevocation) => unwrap(api.POST("/api/variables/revoke", { body })),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: keys.variables });
       void client.invalidateQueries({ queryKey: ["run"] });
     },
   });

@@ -1,0 +1,45 @@
+---
+- name: Require the workflow's explicit ownership marker
+  ansible.builtin.slurp:
+    src: /etc/octopushy-fedora-workflow
+  register: ownership
+- name: Require this workflow version and the exact runtime identity
+  ansible.builtin.assert:
+    that:
+      - (ownership.content | b64decode | from_json).version == 1
+      - (ownership.content | b64decode | from_json).user == runtime_user
+      - (ownership.content | b64decode | from_json).home == runtime_home
+    fail_msg: Run the explicit setup operation on a dedicated guest first.
+- name: Read the dedicated runtime user's uid
+  ansible.builtin.command:
+    argv: [id, -u, "{{ runtime_user }}"]
+  register: runtime_uid
+  changed_when: false
+- name: Set the per-user Docker connection
+  ansible.builtin.set_fact:
+    runtime_environment:
+      HOME: "{{ runtime_home }}"
+      XDG_RUNTIME_DIR: "/run/user/{{ runtime_uid.stdout }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ runtime_uid.stdout }}/bus"
+      DOCKER_HOST: "unix:///run/user/{{ runtime_uid.stdout }}/docker.sock"
+- name: Verify Docker is reachable and actually rootless
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{json .SecurityOptions}}' }}"]
+  become_user: "{{ runtime_user }}"
+  environment: "{{ runtime_environment }}"
+  register: docker_security
+  changed_when: false
+  until: docker_security.rc == 0
+  retries: 15
+  delay: 2
+- name: Require a rootless daemon
+  ansible.builtin.assert:
+    that: "'name=rootless' in (docker_security.stdout | from_json)"
+- name: Check the guest's SELinux enforcement
+  ansible.builtin.command:
+    argv: [getenforce]
+  register: selinux_enforcement
+  changed_when: false
+- name: Require SELinux to remain enforcing
+  ansible.builtin.assert:
+    that: selinux_enforcement.stdout == 'Enforcing'

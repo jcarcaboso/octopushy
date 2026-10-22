@@ -16,6 +16,8 @@ public sealed record StepAction(string Executor, string Action, bool Mutating);
 
 public sealed class AssignmentException(string message) : Exception(message);
 
+public sealed class CredentialUnavailableException(string message) : Exception(message);
+
 /// <summary>Builds the assignment an agent receives for an attempt.</summary>
 public sealed class AssignmentBuilder(
     OctopushyDb db,
@@ -34,6 +36,8 @@ public sealed class AssignmentBuilder(
         StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
         StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
         StepNames.Observe => new StepAction("proxmox", "observe", false),
+        StepNames.GrowRoot => new StepAction("nixos-rootfs", "grow", true),
+        StepNames.VerifyRoot => new StepAction("nixos-rootfs", "verify", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -50,14 +54,21 @@ public sealed class AssignmentBuilder(
     {
         var action = ActionFor(step.Name);
         var names = SecretsFor(step.Name, context);
+        var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
+        if (problems.Count > 0)
+        {
+            throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
+        }
+
         var (values, missing) = await store.ResolveForAttemptAsync(
-            names.ToDictionary(n => n, n => context.Secrets[n], StringComparer.Ordinal),
+            names.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
+            names.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
             attempt.Id,
             agentId,
             cancellationToken);
         if (missing.Count > 0)
         {
-            throw new AssignmentException($"Missing secret: {string.Join(", ", missing)}");
+            throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
 
         var assignment = new Assignment
@@ -114,6 +125,11 @@ public sealed class AssignmentBuilder(
                 ["waitSeconds"] = step.Name == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = false,
             };
+            if (action.Executor == "nixos-rootfs")
+            {
+                input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");
+                input["address"] = context.Address;
+            }
         }
 
         assignment.InputJson = input.ToJsonString();

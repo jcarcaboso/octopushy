@@ -30,10 +30,19 @@ podman compose up -d                      # or: docker compose up -d
 ## What to keep safe
 
 - `secrets/kek`: without it, the values in the variable store, including the agent CA's
-  key, cannot be read. Keep a copy apart from any database backup.
-- There are no backups yet (decided October 20, 2026). Losing the database loses the
-  stored secrets, run history, and enrolled agents; the definitions in Git and the
-  OpenTofu state in its backend are not affected.
+  key, cannot be read. Keep a copy apart from any database backup **and** from any copy
+  of the `data` volume. Anyone holding the key plus the database can decrypt every stored
+  secret and the agent CA key, and sign certificates that agents accept.
+- The `data` volume holds the setup code, the Git mirror, artifacts, logs, and the
+  session-signing key ring (`data-protection/`, unencrypted: whoever has it can forge a
+  web session). Treat a copy of it as sensitive. The compose file keeps the key
+  outside it with `Octopushy__Store__KeyFile`. Without that setting the server puts the key
+  at `keys/kek` inside the data directory and logs a warning at every start; do not run a
+  retained environment that way.
+- If the agent CA entries (`system/agent-ca/key`, `system/agent-ca/certificate`) are missing
+  or do not belong together in a database that already has agents or enrollment tokens, the
+  server refuses to start rather than create a new CA, which would leave every enrolled
+  agent untrusted. Restore the entries from a database backup.
 
 ## Updating
 

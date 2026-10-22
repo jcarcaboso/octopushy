@@ -111,13 +111,13 @@ public sealed record ProvisionInputs(
     public static string EndpointFor(InstallationDefinition installation, HostDefinition host) =>
         host.Endpoint ?? installation.Connection.Endpoint;
 
-    /// <summary>The address a static guest is expected to answer on, without its prefix length.</summary>
+    /// <summary>The expected static or reserved DHCP address, without a prefix; null for plain DHCP.</summary>
     public static string? ExpectedIpv4(GuestDefinition guest)
     {
         var network = guest.Json["network"] as JsonObject;
         if (network?["mode"]?.GetValue<string>() is "dhcp")
         {
-            return null;
+            return network["reservedAddress"]?.GetValue<string>();
         }
 
         return network?["address"] is JsonValue address && address.TryGetValue<string>(out var text)

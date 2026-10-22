@@ -1,0 +1,16 @@
+services:
+  app:
+    image: {{ service.image | to_json }}
+    command: {{ service.command | default([]) | to_json }}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - target: {{ service.container_port }}
+        published: {{ (service.port | string) | to_json }}
+        host_ip: {{ service.address | to_json }}
+        protocol: tcp
+    labels:
+      io.octopushy.workflow: fedora-native-v1
+      io.octopushy.service: {{ service.id | to_json }}

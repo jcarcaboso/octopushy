@@ -22,9 +22,18 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         {
             [SecretNames.ProxmoxToken] = connection.Token.Key,
         };
+        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (connection.Token.Version is { } tokenVersion)
+        {
+            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+        }
         if (connection.CaCertificate is { } ca)
         {
             secrets[SecretNames.ProxmoxCa] = ca.Key;
+            if (ca.Version is { } caVersion)
+            {
+                requestedVersions[SecretNames.ProxmoxCa] = caVersion;
+            }
         }
 
         var env = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -41,6 +50,10 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             if (value.Store is { } store)
             {
                 secrets[SecretNames.Backend(name)] = store.Key;
+                if (store.Version is { } version)
+                {
+                    requestedVersions[SecretNames.Backend(name)] = version;
+                }
                 secretEnv[name] = SecretNames.Backend(name);
             }
             else
@@ -74,14 +87,19 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 secretEnv),
             Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest)),
             Secrets = secrets,
+            RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
+            RootDiskBytes = inputs.Recipe.GuestFilesystem is null ? null
+                : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),
         };
 
         var run = NewRun(resource, retire ? Operations.Retire : Operations.Provision, revision, reason, context);
         run.InputsHash = retire ? RetireHash(inputs.Hash) : inputs.Hash;
         var steps = retire
             ? new[] { StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.VerifyAbsent }
-            : [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify];
+            : context.RootDiskBytes is not null
+                ? [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
+                : [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify];
         AddSteps(run, steps);
         if (context.Verify == "none")
         {
@@ -104,9 +122,18 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         {
             [SecretNames.ProxmoxToken] = connection.Token.Key,
         };
+        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (connection.Token.Version is { } tokenVersion)
+        {
+            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+        }
         if (connection.CaCertificate is { } ca)
         {
             secrets[SecretNames.ProxmoxCa] = ca.Key;
+            if (ca.Version is { } caVersion)
+            {
+                requestedVersions[SecretNames.ProxmoxCa] = caVersion;
+            }
         }
 
         var context = new RunContext
@@ -117,6 +144,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             AgentLabelsSetBy = labels.SetBy,
             Proxmox = new ProxmoxContext(connection.Endpoint, connection.VerifyTls, connection.CaCertificate?.Key, null, null, null, null),
             Secrets = secrets,
+            RequestedSecretVersions = requestedVersions,
         };
         var run = NewRun(resource, Operations.Observe, revision, reason, context);
         run.InputsHash = InstallationHash(installation);

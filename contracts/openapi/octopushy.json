@@ -1308,6 +1308,60 @@
         }
       }
     },
+    "/api/runs/{id}/retry-filesystem": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "operationId": "retryFilesystem",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/runs/{id}/close": {
       "post": {
         "tags": [
@@ -1850,6 +1904,235 @@
           }
         }
       }
+    },
+    "/api/variables/candidates": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "stageVariable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableCandidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableCandidateDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/variables/promote": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "promoteVariable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariablePromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/variables/revoke": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "revokeVariable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableRevocationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/variables/versions": {
+      "get": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "listVariableVersions",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VariableVersionDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2029,7 +2312,8 @@
           "finishedAt",
           "error",
           "lateResult",
-          "logLines"
+          "logLines",
+          "mutating"
         ],
         "type": "object",
         "properties": {
@@ -2106,6 +2390,9 @@
           "logLines": {
             "type": "integer",
             "format": "int64"
+          },
+          "mutating": {
+            "type": "boolean"
           }
         }
       },
@@ -3772,6 +4059,40 @@
           }
         }
       },
+      "VariableCandidateDto": {
+        "required": [
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "VariableCandidateRequest": {
+        "required": [
+          "key",
+          "value",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "VariableDto": {
         "required": [
           "key",
@@ -3780,7 +4101,9 @@
           "version",
           "updatedAt",
           "value",
-          "usedBy"
+          "usedBy",
+          "latestVersion",
+          "revoked"
         ],
         "type": "object",
         "properties": {
@@ -3815,6 +4138,58 @@
             "items": {
               "type": "string"
             }
+          },
+          "latestVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VariablePromotionRequest": {
+        "required": [
+          "key",
+          "version",
+          "expectedCurrentVersion",
+          "verificationNote"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "expectedCurrentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "verificationNote": {
+            "type": "string"
+          }
+        }
+      },
+      "VariableRevocationRequest": {
+        "required": [
+          "key",
+          "version",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reason": {
+            "type": "string"
           }
         }
       },
@@ -3847,6 +4222,78 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "VariableVersionDto": {
+        "required": [
+          "version",
+          "status",
+          "createdAt",
+          "activatedAt",
+          "activatedBy",
+          "activationNote",
+          "revokedAt",
+          "revokedBy",
+          "revocationNote",
+          "usedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activatedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "activatedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "activationNote": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "revokedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "revocationNote": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

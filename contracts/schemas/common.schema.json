@@ -10,10 +10,11 @@
     },
     "schemaVersion": { "const": 1 },
     "storeRef": {
-      "description": "A reference to a variable-store entry. Definitions never hold secret values.",
+      "description": "A reference to a variable-store entry, optionally at an exact version. Definitions never hold secret values.",
       "type": "object",
       "properties": {
-        "store": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$" }
+        "store": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$" },
+        "version": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
       },
       "required": ["store"],
       "additionalProperties": false

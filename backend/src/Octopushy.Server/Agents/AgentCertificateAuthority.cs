@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Server.Data;
 using Octopushy.Server.Options;
@@ -40,8 +41,21 @@ public sealed class AgentCertificateAuthority(
         var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
         var key = await store.GetAsync(KeyEntry, cancellationToken);
         var certificate = await store.GetAsync(CertificateEntry, cancellationToken);
-        if (key is null || certificate is null)
+        if (key is null || certificate is null || !PairMatches(key.Value.Value, certificate.Value.Value))
         {
+            // A new CA is only safe while nothing pins the old one: every enrolled agent and every issued
+            // enrollment token does, so replacing it silently orphans them all. A half-written first
+            // start (the key and certificate are separate writes) has nothing to orphan and is redone.
+            var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+            if (await db.Agents.AnyAsync(cancellationToken) || await db.EnrollmentTokens.AnyAsync(cancellationToken))
+            {
+                var problem = key is null && certificate is null ? $"{KeyEntry} and {CertificateEntry} are missing or unavailable"
+                    : key is null ? $"{KeyEntry} is missing or unavailable"
+                    : certificate is null ? $"{CertificateEntry} is missing or unavailable"
+                    : $"{KeyEntry} does not belong to {CertificateEntry}";
+                throw new InvalidOperationException($"The agent CA is unusable on an existing installation: {problem}. Restore them from a backup; a new CA would make every enrolled agent and enrollment token untrusted.");
+            }
+
             using var newKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             var request = new CertificateRequest("CN=Octopushy agent CA", newKey, HashAlgorithmName.SHA256);
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
@@ -61,6 +75,23 @@ public sealed class AgentCertificateAuthority(
         _ca = X509Certificate2.CreateFromPem(certificate!.Value.Value);
         _server = IssueServerCertificate();
         logger.LogInformation("Agent CA fingerprint: {Fingerprint}", Fingerprint);
+    }
+
+    /// <summary>Whether the private key is the one the certificate certifies; false for anything unparseable.</summary>
+    private static bool PairMatches(string keyPem, string certificatePem)
+    {
+        try
+        {
+            using var privateKey = ECDsa.Create();
+            privateKey.ImportFromPem(keyPem);
+            using var certificate = X509Certificate2.CreateFromPem(certificatePem);
+            using var publicKey = certificate.GetECDsaPublicKey();
+            return publicKey is not null && privateKey.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(publicKey.ExportSubjectPublicKeyInfo());
+        }
+        catch (Exception e) when (e is CryptographicException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The agent endpoint's TLS certificate, reissued when less than 30 days remain.</summary>

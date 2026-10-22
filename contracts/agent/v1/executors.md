@@ -84,9 +84,12 @@ Input:
 }
 ```
 
-`expectIpv4` is null when the guest uses DHCP; then any non-loopback IPv4 address
+`expectIpv4` is null for plain DHCP without a declared reservation; then any non-loopback IPv4 address
 reported by the QEMU guest agent satisfies the address check. The executor polls
 every 5 seconds until every check passes or `waitSeconds` runs out.
+For DHCP with a declared `network.reservedAddress`, that address is required,
+just as the address without its prefix is required for static configuration.
+The reservation itself remains externally managed.
 
 Checks, in order: `present` (the VMID exists), `placement` (it is on `node`),
 `name`, `running` (when `expectRunning`), and `address` (the guest agent reports
@@ -216,3 +219,39 @@ Sensitive outputs are listed by name in `sensitiveOutputs` and left out of
 `outputs`. A failed apply is `failed`; OpenTofu's state records what it did, and the
 next plan shows what is left. An apply interrupted by an agent restart is reported
 as `uncertain` once the agent is back.
+
+## `nixos-rootfs`
+
+An explicitly advertised capability, selected only by recipes opting into
+`guestFilesystem: nixos-ext4-root`. See
+[supported layout and recovery](../../../docs/guest-filesystem-growth.md).
+
+Actions: `grow` (mutating), `verify` (read-only). Uses only `proxmox.token`
+and the existing connection TLS/CA policy, never OpenTofu backend credentials.
+Both actions take:
+
+```json
+{
+  "connection": { "endpoint": "https://pve.example:8006/", "verifyTls": true },
+  "node": "pve",
+  "vmid": 9210,
+  "name": "opy-service-01",
+  "address": "home/pve/opy-service-01",
+  "diskBytes": 27917287424,
+  "waitSeconds": 180
+}
+```
+
+The VM name, Octopushy tag, and exact managed-by description must match before
+any guest command is submitted. A fixed argument-array command uses QEMU
+guest-agent execution and the native NixOS operation lock. No caller-supplied
+script or path is accepted. Its stdout reports `diskBytes`, `partitionBytes`,
+`filesystemBytes` (ext4 block count × block size), `usableBytes` (filesystem
+statistics), `uuid`, and `changed`. Verification must report `changed: false`.
+
+There is one command submission per attempt; status is polled by PID.
+Lost submission/status responses, deadline expiry, or signals after a growth
+submission are `uncertain`. Native lock contention and completed nonzero
+commands are known failures; capacity checks still run on a retry. A completed
+growth process and a successful infrastructure apply are not substitutes for
+the subsequent independent `verify` step.

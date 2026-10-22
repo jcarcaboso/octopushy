@@ -37,8 +37,18 @@ public sealed record RunContext
     /// <summary>Secret names used in assignments, mapped to store keys.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
+    /// <summary>Optional versions declared in Git; candidates require promotion before use.</summary>
+    public Dictionary<string, int> RequestedSecretVersions { get; init; } = [];
+
+    /// <summary>Exact versions fixed before the first attempt. Never contains secret values.</summary>
+    public Dictionary<string, int> SecretVersions { get; init; } = [];
+
+    public bool SecretBindingsPinned { get; set; }
+
     /// <summary><c>proxmox</c> or <c>none</c>.</summary>
     public string Verify { get; init; } = "proxmox";
+
+    public long? RootDiskBytes { get; init; }
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
 
@@ -78,6 +88,8 @@ public static class StepNames
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";
+    public const string GrowRoot = "grow-root";
+    public const string VerifyRoot = "verify-root";
 }
 
 /// <summary>The secret names executors look for.</summary>

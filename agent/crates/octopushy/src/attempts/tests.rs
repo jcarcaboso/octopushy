@@ -278,3 +278,19 @@ async fn drain_cancels_and_refuses_new_work() {
     assert!(agent_lines);
     assert!(h.manager.is_idle());
 }
+
+#[tokio::test]
+async fn a_lost_stored_result_of_a_recovered_attempt_is_uncertain_not_failed() {
+    let h = harness();
+    let ws = workspace::create(&h.work, "apply-1", "opentofu", "apply").unwrap();
+    workspace::mark_running(&ws).unwrap();
+    assert_eq!(h.manager.recover().unwrap(), 1);
+
+    // The stored result becomes unreadable before it is sent: the agent no longer knows what the
+    // attempt was, so it must not guess a failure for what may have been an apply.
+    std::fs::write(h.outbox_dir.join("apply-1.json"), b"{ not json").unwrap();
+    let mut c = Collector::default();
+    c.poll(&h.manager);
+    let result = c.find("apply-1").expect("a result is still reported");
+    assert_eq!(result.outcome(), Outcome::Uncertain);
+}

@@ -13,6 +13,7 @@ public sealed class ApiExceptionHandler(IProblemDetailsService problems) : IExce
         var status = exception switch
         {
             RunException => StatusCodes.Status409Conflict,
+            StoreConflictException => StatusCodes.Status409Conflict,
             StoreException => StatusCodes.Status400BadRequest,
             GitException => StatusCodes.Status502BadGateway,
             BadHttpRequestException => StatusCodes.Status400BadRequest,

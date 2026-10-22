@@ -160,6 +160,7 @@ if (!generatingDocument)
         throw new InvalidOperationException("The database schema is out of date; run 'octopushy-server migrate' first.");
     }
 
+    await KeyEncryptionKey.InitializeAsync(db, settings, app.Logger, CancellationToken.None);
     await app.Services.GetRequiredService<AgentCertificateAuthority>().InitializeAsync(CancellationToken.None);
     await app.Services.GetRequiredService<SetupCode>().EnsureAsync(db, CancellationToken.None);
 }

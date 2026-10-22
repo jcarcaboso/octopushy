@@ -790,12 +790,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnName("created_at");
 
                     b.Property<int>("CurrentVersion")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer")
                         .HasColumnName("current_version");
 
                     b.Property<string>("Description")
                         .HasColumnType("text")
                         .HasColumnName("description");
+
+                    b.Property<int>("LatestVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer")
+                        .HasColumnName("latest_version");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -822,6 +828,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("version");
 
+                    b.Property<DateTimeOffset?>("ActivatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("activated_at");
+
+                    b.Property<string>("ActivatedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("activated_by");
+
+                    b.Property<string>("ActivationNote")
+                        .HasColumnType("text")
+                        .HasColumnName("activation_note");
+
                     b.Property<byte[]>("Ciphertext")
                         .IsRequired()
                         .HasColumnType("bytea")
@@ -830,6 +848,19 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<string>("RevocationNote")
+                        .HasColumnType("text")
+                        .HasColumnName("revocation_note");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .IsConcurrencyToken()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("RevokedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("revoked_by");
 
                     b.Property<byte[]>("WrappedKey")
                         .IsRequired()

@@ -1,0 +1,130 @@
+---
+- name: Require explicit bootstrap authorization
+  ansible.builtin.assert:
+    that: allow_bootstrap | bool
+    fail_msg: Setup is only for a dedicated new guest; set allow_bootstrap=true deliberately.
+- name: Check for a rootful Docker socket
+  ansible.builtin.stat:
+    path: /var/run/docker.sock
+  register: rootful_socket
+- name: Check the workflow's previous ownership
+  ansible.builtin.stat:
+    path: /etc/octopushy-fedora-workflow
+  register: previous_ownership
+- name: Check whether the proposed runtime user already exists
+  ansible.builtin.command:
+    argv: [id, -u, "{{ runtime_user }}"]
+  failed_when: false
+  changed_when: false
+  register: existing_user
+- name: Refuse to take over an existing Docker socket or unrelated user
+  ansible.builtin.assert:
+    that:
+      - not rootful_socket.stat.exists
+      - previous_ownership.stat.exists or existing_user.rc != 0
+- name: Read the previous ownership marker
+  ansible.builtin.slurp:
+    src: /etc/octopushy-fedora-workflow
+  register: old_marker
+  when: previous_ownership.stat.exists
+- name: Refuse to change the identity of an existing workflow runtime
+  ansible.builtin.assert:
+    that:
+      - (old_marker.content | b64decode | from_json).user == runtime_user
+      - (old_marker.content | b64decode | from_json).home == runtime_home
+  when: previous_ownership.stat.exists
+- name: Record bootstrap ownership before creating the runtime
+  ansible.builtin.copy:
+    dest: /etc/octopushy-fedora-workflow
+    content: "{{ {'version': 1, 'user': runtime_user, 'home': runtime_home} | to_json }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+- name: Create the workflow-owned state parent and helper directory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [/var/lib/octopushy, /usr/local/libexec]
+- name: Install Fedora prerequisites
+  ansible.builtin.dnf:
+    name: [firewalld, gnupg2, slirp4netns, fuse-overlayfs, shadow-utils, dbus-daemon, acl]
+    state: present
+- name: Initialize the guest firewall before rootless Docker checks its networking requirements
+  ansible.builtin.systemd_service:
+    name: firewalld.service
+    state: started
+    enabled: true
+- name: Verify Docker's RPM signing key
+  ansible.builtin.rpm_key:
+    key: https://download.docker.com/linux/fedora/gpg
+    fingerprint: 060A61C51B558A7F742B77AAC52FEB6B621E9F35
+    state: present
+- name: Configure the signed Docker stable repository
+  ansible.builtin.yum_repository:
+    name: docker-ce-stable
+    description: Docker CE stable
+    baseurl: https://download.docker.com/linux/fedora/$releasever/$basearch/stable
+    gpgcheck: true
+    gpgkey: https://download.docker.com/linux/fedora/gpg
+    enabled: true
+- name: Install Docker and its rootless and Compose components
+  ansible.builtin.dnf:
+    name: [docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin]
+    state: present
+- name: Keep rootful Docker disabled on this dedicated guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: [docker.service, docker.socket]
+- name: Create the dedicated unprivileged runtime user
+  ansible.builtin.user:
+    name: "{{ runtime_user }}"
+    home: "{{ runtime_home }}"
+    create_home: true
+    shell: /bin/bash
+    password_lock: true
+- name: Enable a persistent user manager
+  ansible.builtin.command:
+    argv: [loginctl, enable-linger, "{{ runtime_user }}"]
+    creates: "/var/lib/systemd/linger/{{ runtime_user }}"
+- name: Read the runtime uid
+  ansible.builtin.command:
+    argv: [id, -u, "{{ runtime_user }}"]
+  changed_when: false
+  register: setup_uid
+- name: Start the user manager
+  ansible.builtin.systemd_service:
+    name: "user@{{ setup_uid.stdout }}.service"
+    state: started
+- name: Set up rootless Docker's user service
+  ansible.builtin.command:
+    argv: [dockerd-rootless-setuptool.sh, install]
+    creates: "{{ runtime_home }}/.config/systemd/user/docker.service"
+  become_user: "{{ runtime_user }}"
+  environment:
+    HOME: "{{ runtime_home }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ setup_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ setup_uid.stdout }}/bus"
+- name: Enable the rootless Docker user service
+  ansible.builtin.systemd_service:
+    name: docker.service
+    scope: user
+    enabled: true
+    state: started
+  become_user: "{{ runtime_user }}"
+  environment:
+    HOME: "{{ runtime_home }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ setup_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ setup_uid.stdout }}/bus"
+- name: Install the narrowly owned exposure helper
+  ansible.builtin.copy:
+    src: files/exposure.py
+    dest: /usr/local/libexec/octopushy-exposure
+    owner: root
+    group: root
+    mode: "0755"

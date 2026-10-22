@@ -78,7 +78,8 @@ public sealed record AttemptDto(
     DateTimeOffset? FinishedAt,
     string? Error,
     bool LateResult,
-    long LogLines);
+    long LogLines,
+    bool Mutating);
 
 public sealed record StepDto(
     Guid Id,
@@ -277,7 +278,9 @@ public sealed record VariableDto(
     int Version,
     DateTimeOffset UpdatedAt,
     string? Value,
-    IReadOnlyList<string> UsedBy);
+    IReadOnlyList<string> UsedBy,
+    int LatestVersion,
+    bool Revoked);
 
 public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy);
 
@@ -286,3 +289,17 @@ public sealed record SystemVariableDto(string Key, string Visibility, DateTimeOf
 public sealed record VariablesDto(IReadOnlyList<VariableDto> Entries, IReadOnlyList<MissingVariableDto> Missing, IReadOnlyList<SystemVariableDto> System);
 
 public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description);
+
+public sealed record VariableCandidateRequest(string Key, string Value, string? Description);
+
+public sealed record VariableCandidateDto(int Version);
+
+public sealed record VariablePromotionRequest(string Key, int Version, int ExpectedCurrentVersion, string VerificationNote);
+
+public sealed record VariableRevocationRequest(string Key, int Version, string Reason);
+
+public sealed record VariableVersionDto(
+    int Version, string Status, DateTimeOffset CreatedAt,
+    DateTimeOffset? ActivatedAt, string? ActivatedBy, string? ActivationNote,
+    DateTimeOffset? RevokedAt, string? RevokedBy, string? RevocationNote,
+    IReadOnlyList<string> UsedBy);
