@@ -7,12 +7,13 @@ browser sees a single origin and the session cookie needs no CORS.
 
 ## Develop
 
-Requirements: Node 24 and npm; the backend running on `127.0.0.1:8080` (see the
+Requirements: Node 24 and pnpm 12.14.0 (pinned in `package.json`; use Corepack
+where available); the backend running on `127.0.0.1:8080` (see the
 repository's `justfile`: `just dev-db`, then `just backend`).
 
 ```sh
-npm ci
-npm run dev        # http://127.0.0.1:5173, /api is proxied to http://127.0.0.1:8080
+pnpm install --frozen-lockfile
+pnpm run dev       # http://127.0.0.1:5173, /api is proxied to http://127.0.0.1:8080
 ```
 
 On a fresh install the app shows the setup page; the one-time setup code is in the
@@ -25,7 +26,7 @@ committed, so builds never need the contracts directory. After the backend's API
 changes:
 
 ```sh
-npm run gen:api    # or `just openapi` from the repository root, which rebuilds the document first
+pnpm run gen:api   # or `just openapi` from the repository root, which rebuilds the document first
 ```
 
 Calls go through `openapi-fetch` (`src/api/client.ts`); TanStack Query hooks are in
@@ -35,12 +36,18 @@ the problem's title.
 ## Check and build
 
 ```sh
-npm run typecheck  # tsc -b
-npm run lint       # eslint
-npm test           # vitest (jsdom + Testing Library)
-npm run build      # typecheck, then vite build into dist/
-npm run preview    # serve dist/ locally (no /api proxy)
+pnpm run typecheck # tsc -b
+pnpm run lint      # eslint
+pnpm test          # vitest (jsdom + Testing Library)
+pnpm run build     # typecheck, then vite build into dist/
+pnpm run preview   # serve dist/ locally (no /api proxy)
+pnpm audit        # reports/fails on known vulnerabilities, including dev dependencies
 ```
+
+`pnpm-lock.yaml` was imported from the existing npm lock without upgrading
+application dependencies; it is the sole frontend lockfile. CI and the Containerfile
+both use the pinned pnpm release and frozen installs. Tests use jsdom and mocks;
+they do not need a running backend or homelab credentials.
 
 ## Container
 

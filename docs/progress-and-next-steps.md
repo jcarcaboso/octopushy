@@ -1,6 +1,7 @@
 # Progress and next steps
 
-Snapshot: **October 21, 2026**. The plan below is a proposed implementation sequence,
+Baseline-check update: **October 22, 2026**; lifecycle snapshot: **October 21, 2026**.
+The plan below is a proposed implementation sequence,
 not authorization to deploy, rotate credentials, or change existing machines.
 
 ## Where we are
@@ -12,12 +13,12 @@ running the guest setup externally after controller-driven provisioning.
 
 ### Publication boundary
 
-This is a documentation-only checkpoint on `proxmox-e2e`, based on committed
-implementation `ccacdb0`. It does **not** commit or deploy the outstanding code.
-At this snapshot, networking extensions, Fedora/NixOS examples, filesystem
-growth, worker-readiness fixes, and credential-lifecycle changes are present in
-the local working tree but remain uncommitted. A checkout of this documentation
-commit therefore does not contain all the capabilities described below.
+The current source baseline is `main` merge `893b19a1808114d8e2ce7e5ca23cb13f2f6332aa`
+(foundations-review-and-fixes PR #1). It includes the previously unpublished
+networking, guest examples, filesystem growth, worker readiness, and credential
+lifecycle work. The earlier documentation-only checkpoint on `proxmox-e2e`
+described those changes before publication. The repository's default branch is
+still `proxmox-e2e`; baseline CI explicitly targets `main`.
 
 The most recent worker/credential slice has not been installed into the retained
 running environment. Its migration has only been exercised against isolated test
@@ -33,7 +34,7 @@ progress without replacing those documents or changing the
 
 ## Progress by area
 
-| Area | What exists in the reviewed working tree | Boundary |
+| Area | What exists in the reviewed baseline | Boundary |
 | --- | --- | --- |
 | Control plane | .NET 10 backend, PostgreSQL, React/TypeScript UI, Git definition loading, run/step/attempt history and logs | One trusted administrator and one controller process; not controller HA or tenant isolation |
 | Workers | Rust worker, outbound mTLS channel, enrollment/renewal, labels/capabilities, bounded concurrency, durable result outbox | An Octopushy worker is not the QEMU guest agent and need not run inside every managed VM |
@@ -67,7 +68,55 @@ progress without replacing those documents or changing the
 
 ## What has been tested
 
-### Latest implementation validation
+### Reproducible baseline slice — October 22, 2026
+
+The workflow and pnpm consistency changes, including the authorized corrective
+pass after the first independent reviews, were checked locally against the
+baseline above. **GitHub Actions has not run for this change.** The corrective
+pass is limited to the strict SDK pin, Rust formatting, one equivalent input
+guard expression, and the two targeted security patch updates below.
+
+| Local check | Result |
+| --- | --- |
+| `dotnet --version` from repository root and `backend/` | Both select 10.0.112; root `global.json` disables roll-forward and prereleases, and setup-dotnet reads that file |
+| `just test` and `just check` | Both passed in the corrective pass; no bypassed formatting, lint, build, or drift gates |
+| `dotnet test backend/Octopushy.slnx` | 159 passed, using Testcontainers on a separately rooted, disposable Podman engine; no development/deployment DB |
+| `cd agent && cargo test --workspace --locked` (Rust 1.98.1) | 88 passed including doctest; 2 optional Podman/OpenTofu tests ignored |
+| Frozen pnpm install; frontend test/typecheck/lint/build | Passed; 53 frontend tests |
+| `podman build -f frontend/Containerfile -t localhost/octopushy-ci-frontend .` (isolated engine) | Passed in the initial implementation pass; unchanged and not rebuilt in the corrective pass; image built only, not deployed |
+| `bash scripts/checks/offline.sh` | 48 Python tests passed; 3 optional evaluated-output checks and 2 real-OpenTofu checks skipped; tracked shell syntax passed |
+| OpenAPI rebuild + typed-client regeneration, then `git diff --exit-code` on both outputs | Passed, no drift |
+| Locked `nix flake check --no-update-lock-file --no-build` | Passed with user-local nix-portable/Nix 2.20.6; no image build, boot, or activation |
+| NuGet audited restore and `pnpm audit` | Passed; no known vulnerabilities reported at this check |
+| `cargo audit` (cargo-audit 0.22.2) | Passed; 276 crate dependencies scanned, no vulnerability or yanked-package findings |
+| `cargo fmt --all -- --check` | Passed after the authorized Rust 1.98.1 formatting sweep of 10 existing Rust source/test files |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed; `nixos_rootfs.rs` uses the equivalent `!input.disk_bytes.is_multiple_of(1024u64.pow(3))` guard |
+| Standalone guard compatibility probe under Rust 1.88.0 | Compiled and passed 200 boundary combinations; original disk, identity, and wait bounds preserved; not a full workspace MSRV build |
+| Workflow syntax (`actionlint` 1.7.12), recipe parsing, whitespace | Passed |
+
+The former failing baseline gates are now locally passing, without audit ignores.
+The only Cargo package record changes are versions/checksums for rustls-webpki
+0.103.15 → 0.103.16 (RUSTSEC-2026-0382) and Tokio 1.54.0 → 1.54.1
+(RUSTSEC-2026-0384). Cargo's avoidable Windows dependency-edge rewrites were
+reverted and the minimal lockfile verified with locked metadata and tests; all
+other package records and dependency edges remain unchanged. The frontend
+lockfile is unchanged in this pass. The backend Containerfile also remains
+unchanged: its separate SDK 10.0 stage does not copy root `global.json`.
+
+The initial implementation pass also verified that the NuGet gate rejects a
+known-vulnerable package in a throwaway project outside the checkout. Its first
+PostgreSQL attempt hit rootless Pasta PID-file permissions; subsequent checks,
+including this corrective pass, used isolated runtime directories and slirp4netns,
+without changing host configuration or touching retained services. Offline mocks
+do not establish real Proxmox, Portainer, remote-worker, SSH, or packet-path acceptance.
+
+Optional follow-ups remain deferred: NuGet graph locking and expanded evaluation
+of `tests/portainer/eval.nix` and `tests/technitium/{eval,cluster-eval}.nix`.
+The Nix result above covers the existing locked flake only; the three optional
+Python evaluated-output cases still skip. The first hosted Actions run remains
+unverified.
+
+### Earlier implementation validation
 
 The completed worker/credential implementation run reported:
 
@@ -79,8 +128,8 @@ The completed worker/credential implementation run reported:
 | Offline remote-harness configuration | 6 passed |
 | Frontend build, TypeScript, lint; shell syntax; whitespace checks | Passed |
 
-These are recorded implementation results, not new test executions performed
-for this documentation checkpoint. `cargo fmt` was unavailable and was not run.
+These are previously recorded implementation results, separate from the new
+baseline executions above. `cargo fmt` was unavailable during that earlier run.
 The database tests used isolated databases and fake workers, not retained
 deployment state.
 
@@ -110,11 +159,11 @@ production security audit.
   separate from runtime DNS, kernel packet-path, or failover verification.
   Passing those checks alone is not evidence of a remotely managed DNS service.
 
-Local working-tree detail lives in `docs/credential-lifecycle.md`,
+Implementation detail lives in `docs/credential-lifecycle.md`,
 `docs/vm-networking.md`, `docs/guest-filesystem-growth.md`,
 `tests/remote-worker/README.md`, `tests/portainer/README.md`, and
-`tests/technitium/README.md`. Those files are **not included in this
-documentation-only checkpoint**. Private runtime evidence stays outside Git;
+`tests/technitium/README.md`. These files are included in the current baseline,
+unlike the earlier documentation-only checkpoint. Private runtime evidence stays outside Git;
 no credentials or deployment-state files should be added when publishing code.
 
 ## Rules the next work must preserve

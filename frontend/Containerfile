@@ -5,12 +5,12 @@
 
 FROM docker.io/library/node:24-alpine AS build
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
 COPY frontend/index.html frontend/vite.config.ts frontend/tsconfig.json frontend/tsconfig.app.json frontend/tsconfig.node.json ./
 COPY frontend/public ./public
 COPY frontend/src ./src
-RUN npm run build
+RUN pnpm run build
 
 FROM docker.io/library/caddy:2-alpine
 # Port 8081 needs no privileges, so drop the binary's file capability (it would fail to
