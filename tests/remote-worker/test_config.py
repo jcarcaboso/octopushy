@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -223,6 +224,11 @@ class RemoteConfigTests(unittest.TestCase):
                                  '{"tokenKey":"proxmox/umbrel/api-token","revision":"historical"}\n')
 
     def test_retained_fixture_requires_the_exact_split_keys_not_an_alias(self):
+        # Hosted runners need no ripgrep installation for this offline preflight.
+        tools = self.root / "tools"
+        tools.mkdir()
+        for name in ("bash", "dirname", "python3"):
+            (tools / name).symlink_to(shutil.which(name))
         fixture = self.root / "fixture"
         installation = fixture / "lab/labs/home/proxmox/umbrel/installation.yaml"
         installation.parent.mkdir(parents=True)
@@ -236,7 +242,7 @@ class RemoteConfigTests(unittest.TestCase):
         ):
             installation.write_text(source)
             with self.subTest(source=source):
-                result = self.harness_preflight({**self.env, "CLEANUP": "1"})
+                result = self.harness_preflight({**self.env, "CLEANUP": "1", "PATH": str(tools)})
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 self.assertEqual(installation.read_text(), source)
 

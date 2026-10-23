@@ -245,6 +245,10 @@ Local `cargo-fmt` and `cargo-clippy` are unavailable; no tools were installed.
 Formatting, Clippy, audits and locked Nix evaluation remain hosted CI gates.
 The empty disposable database engine was stopped and its dedicated runtime and
 storage removed. No retained database or development container was touched.
+The first hosted run exposed an undeclared `rg` dependency in retained-fixture
+preflight. A restricted-PATH regression reproduced it; that check now uses the
+already-required Python standard library without weakening credential validation
+or adding a CI installation step.
 The mock accepts the two explicit synthetic identities but shares its existing
 permissions between them; it is not an ACL enforcement simulator. Full mock and
 live Proxmox harnesses were not run.

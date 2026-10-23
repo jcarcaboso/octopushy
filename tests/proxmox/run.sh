@@ -125,11 +125,25 @@ fi
 if [[ ${CLEANUP:-0} == 1 || ${RESUME_SERVICE:-0} == 1 ]]; then
   # Accept only this harness's split fixture; never rewrite legacy definitions or run contexts.
   installation_file=$lab/labs/home/proxmox/$node/installation.yaml
-  [[ -f $installation_file ]] &&
-    rg -Fqx "  readOnlyToken: { store: proxmox/$node/read-only-token }" "$installation_file" &&
-    rg -Fqx "  privilegedToken: { store: proxmox/$node/privileged-token }" "$installation_file" &&
-    ! rg -q '^[[:space:]]+token:' "$installation_file" ||
+  if [[ ! -f $installation_file ]] || ! python3 - "$installation_file" "$node" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+try:
+    lines = Path(sys.argv[1]).read_text().splitlines()
+except (OSError, UnicodeError):
+    sys.exit(1)
+node = sys.argv[2]
+sys.exit(not (
+    f"  readOnlyToken: {{ store: proxmox/{node}/read-only-token }}" in lines
+    and f"  privilegedToken: {{ store: proxmox/{node}/privileged-token }}" in lines
+    and not any(re.match(r"^\s+token:", line) for line in lines)
+))
+PY
+  then
     fail "Retained fixture requires explicit split-credential migration; preserve its definitions, state and historical run contexts. Nothing was rebound."
+  fi
 fi
 
 # Offline preflight boundary: all controller/local side effects start below.
