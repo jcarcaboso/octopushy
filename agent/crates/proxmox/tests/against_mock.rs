@@ -139,7 +139,11 @@ async fn split_credential_fixture_accepts_both_identities_but_not_an_unknown_tok
     .unwrap();
     let tls = || Tls::CustomCa(mock.ca_pem().unwrap().to_owned());
     assert_eq!(
-        client(&mock, reader, tls()).version().await.unwrap().version,
+        client(&mock, reader, tls())
+            .version()
+            .await
+            .unwrap()
+            .version,
         "8.4.1"
     );
     client(&mock, writer, tls())
