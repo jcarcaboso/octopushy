@@ -20,12 +20,17 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
 
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [SecretNames.ProxmoxToken] = connection.Token.Key,
+            [SecretNames.ProxmoxReadOnlyToken] = connection.ReadOnlyToken.Key,
+            [SecretNames.ProxmoxPrivilegedToken] = connection.PrivilegedToken.Key,
         };
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (connection.Token.Version is { } tokenVersion)
+        if (connection.ReadOnlyToken.Version is { } tokenVersion)
         {
-            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+            requestedVersions[SecretNames.ProxmoxReadOnlyToken] = tokenVersion;
+        }
+        if (connection.PrivilegedToken.Version is { } privilegedVersion)
+        {
+            requestedVersions[SecretNames.ProxmoxPrivilegedToken] = privilegedVersion;
         }
         if (connection.CaCertificate is { } ca)
         {
@@ -120,12 +125,12 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var connection = installation.Connection;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [SecretNames.ProxmoxToken] = connection.Token.Key,
+            [SecretNames.ProxmoxReadOnlyToken] = connection.ReadOnlyToken.Key,
         };
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (connection.Token.Version is { } tokenVersion)
+        if (connection.ReadOnlyToken.Version is { } tokenVersion)
         {
-            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+            requestedVersions[SecretNames.ProxmoxReadOnlyToken] = tokenVersion;
         }
         if (connection.CaCertificate is { } ca)
         {

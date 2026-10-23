@@ -34,10 +34,14 @@ Emergency revocation of the active version is allowed; there is no fallback.
 Git can use either form:
 
 ```yaml
-token: { store: proxmox/home/api-token }
+readOnlyToken: { store: proxmox/home/read-only-token }
 # Or deliberately select a previously promoted, non-revoked version:
-token: { store: proxmox/home/api-token, version: 2 }
+readOnlyToken: { store: proxmox/home/read-only-token, version: 2 }
 ```
+
+The same version syntax applies to `privilegedToken`; installations require both
+roles with distinct keys. See [Proxmox credential roles](proxmox-credentials.md)
+for approval, legacy-run handling and read-only provider compatibility limits.
 
 Before the first attempt is queued, a run resolves all of its bindings as one
 metadata snapshot. An unversioned reference selects the active version; an

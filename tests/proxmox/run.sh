@@ -8,7 +8,8 @@
 #
 # Defaults target the `umbrel` host from the nodes repository. Override with:
 #   PVE_ENDPOINT PVE_NODE PVE_IMAGES PVE_DISKS PVE_BRIDGE
-#   PVE_TOKEN_FILE   the API token, USER@REALM!ID=SECRET (default .dev/secrets/umbrel-proxmox-token)
+#   PVE_READ_ONLY_TOKEN_FILE PVE_PRIVILEGED_TOKEN_FILE
+#                    required distinct private files, each USER@REALM!ID=SECRET (no legacy fallback)
 #   TEST_VMID        default: the first VMID from 9900 to 9999 that Proxmox does not report
 #   TEST_NAME        default opy-e2e-01
 #   UI=1             also serve the web interface at http://127.0.0.1:5174 while it runs
@@ -50,19 +51,22 @@ if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
 fi
 agent_label=proxmox-e2e
 if [[ $remote == 1 ]]; then
-  # Validate before touching fixtures, credentials, databases, or starting processes.
+  # Validate supplied credentials before DNS, fixtures, databases, or starting processes.
   work=${REMOTE_WORK_DIR:-$root/.dev/remote-worker-e2e}
   export REMOTE_WORK_DIR=$work
   python3 "$root/tests/remote-worker/config.py" --preflight
   api=${REMOTE_API_URL%/}
   agent_label=$REMOTE_AGENT_LABEL
+else
+  python3 "$root/tests/remote-worker/config.py" --credentials-only
 fi
 endpoint=${PVE_ENDPOINT:-https://10.1.0.85:8006/}
 node=${PVE_NODE:-umbrel}
 images=${PVE_IMAGES:-local}
 disks=${PVE_DISKS:-local-lvm}
 bridge=${PVE_BRIDGE:-vmbr0}
-token_file=${PVE_TOKEN_FILE:-$root/.dev/secrets/umbrel-proxmox-token}
+read_only_token_file=$PVE_READ_ONLY_TOKEN_FILE
+privileged_token_file=$PVE_PRIVILEGED_TOKEN_FILE
 name=${TEST_NAME:-opy-e2e-01}
 if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then name=${TEST_NAME:-opy-service-01}; fi
 lab=$work/lab
@@ -97,9 +101,16 @@ if [[ $remote == 1 ]]; then jar=$REMOTE_COOKIE_FILE; fi
 cookies=(-b "$jar")
 if [[ $remote == 0 ]]; then cookies+=(-c "$jar"); fi
 call() { curl -sS -f "${cookies[@]}" -H 'Content-Type: application/json' "$@"; }
+import_proxmox_credentials() {
+  # Values travel only from explicit files to the store on stdin, never in argv/output.
+  jq -cn --arg key "proxmox/$node/read-only-token" --rawfile token "$read_only_token_file" \
+    '{key:$key,value:($token | rtrimstr("\n")),visibility:"secret",description:"Proxmox read-only token"}' |
+    call -X PUT "$api/api/variables" --data-binary @- >/dev/null
+  jq -cn --arg key "proxmox/$node/privileged-token" --rawfile token "$privileged_token_file" \
+    '{key:$key,value:($token | rtrimstr("\n")),visibility:"secret",description:"Proxmox privileged token"}' |
+    call -X PUT "$api/api/variables" --data-binary @- >/dev/null
+}
 
-[[ -s $token_file ]] || fail "No API token in $token_file (see tests/proxmox/README.md)."
-[[ $(stat -c %a "$token_file") =~ ^[46]00$ ]] || fail "$token_file must be readable by you only (chmod 600)."
 [[ $name =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "TEST_NAME must be a valid id."
 if [[ ${RESUME_SERVICE:-0} == 1 ]]; then
   [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${KEEP_GUEST:-0} == 1 && ${CLEANUP:-0} != 1 ]] ||
@@ -111,6 +122,17 @@ if [[ ${FEDORA_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
     fail "The Fedora test needs TEST_SSH_KNOWN_HOSTS or explicit ALLOW_TEST_SSH_TOFU=1 (disposable trusted-LAN test only)."
 fi
 
+if [[ ${CLEANUP:-0} == 1 || ${RESUME_SERVICE:-0} == 1 ]]; then
+  # Accept only this harness's split fixture; never rewrite legacy definitions or run contexts.
+  installation_file=$lab/labs/home/proxmox/$node/installation.yaml
+  [[ -f $installation_file ]] &&
+    rg -Fqx "  readOnlyToken: { store: proxmox/$node/read-only-token }" "$installation_file" &&
+    rg -Fqx "  privilegedToken: { store: proxmox/$node/privileged-token }" "$installation_file" &&
+    ! rg -q '^[[:space:]]+token:' "$installation_file" ||
+    fail "Retained fixture requires explicit split-credential migration; preserve its definitions, state and historical run contexts. Nothing was rebound."
+fi
+
+# Offline preflight boundary: all controller/local side effects start below.
 if [[ $remote == 1 ]]; then
   log "Existing controller and remote worker (no local processes or enrollment)"
   curl -sf "$api/api/health" >/dev/null || fail "The configured controller is not healthy."
@@ -121,12 +143,12 @@ if [[ $remote == 1 ]]; then
   ' >/dev/null || fail "Require exactly the selected connected, idle, enabled worker with the exclusive label and opentofu/proxmox capabilities."
   fixture=$(jq -n --arg api "$api" --arg agent "$REMOTE_AGENT_ID" --arg channel "$REMOTE_AGENT_URL" \
     --arg label "$agent_label" --arg endpoint "$endpoint" --arg node "$node" --arg name "$name" \
-    '{api:$api,agent:$agent,channel:$channel,label:$label,endpoint:$endpoint,node:$node,name:$name}')
+    '{api:$api,agent:$agent,channel:$channel,label:$label,endpoint:$endpoint,node:$node,name:$name,credentialSchema:"split-v1"}')
   repository=$(call "$api/api/repository")
   if [[ ${CLEANUP:-0} == 1 ]]; then
     [[ -s $work/remote-fixture.json && -s $work/vmid ]] || fail "No retained remote fixture to retire."
     jq -e --argjson expected "$fixture" '. == $expected' "$work/remote-fixture.json" >/dev/null ||
-      fail "Remote inputs differ from the retained fixture; preserve it and use its original inputs."
+      fail "Remote inputs or credential schema differ from the retained fixture; preserve it and inspect its original inputs. No automatic migration is performed."
     jq -e --arg lab "$lab" '.url == $lab' <<<"$repository" >/dev/null ||
       fail "The controller no longer uses this retained fixture repository."
   else
@@ -182,9 +204,7 @@ if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
     code=$(tr -d '\n' <"$work/server/setup-code")
     call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"e2e\",\"password\":\"proxmox-e2e-password\"}" >/dev/null
   fi
-  # The token goes from its file to the store on standard input; it is never printed.
-  jq -n --rawfile token "$token_file" '{key: "proxmox/umbrel/api-token", value: ($token | rtrimstr("\n")), visibility: "secret", description: "Proxmox API token for umbrel"}' |
-    call -X PUT "$api/api/variables" --data-binary @- >/dev/null
+  import_proxmox_credentials
   if [[ $remote == 1 ]]; then
     jq -n --rawfile pg "$REMOTE_TOFU_PG_FILE" \
       '{key:"opentofu/pg",value:($pg | rtrimstr("\n")),visibility:"secret",description:"Remote acceptance OpenTofu state"}' |
@@ -225,7 +245,8 @@ type: standalone
 connection:
   endpoint: $endpoint
   tls: { verify: false }
-  token: { store: proxmox/umbrel/api-token }
+  readOnlyToken: { store: proxmox/$node/read-only-token }
+  privilegedToken: { store: proxmox/$node/privileged-token }
 hosts:
   $node:
     datastores: { images: $images, disks: $disks }
@@ -366,7 +387,7 @@ call -X POST "$api/api/repository/sync" >/dev/null
 trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
 for _ in $(seq 1 60); do installation=$(installation_id); [[ -n $installation ]] && break; sleep 2; done
 [[ -n ${installation:-} ]] || fail "The installation never appeared; see $work/backend.log."
-wait_run "$installation" observe succeeded 3 >/dev/null || fail "Octopushy could not observe $node with this token."
+wait_run "$installation" observe succeeded 3 >/dev/null || fail "Octopushy could not observe $node with the read-only token."
 summary=$(call "$api/api/installations/$installation")
 jq -r '"  Proxmox \(.installation.proxmoxVersion), \(.observedGuests | length) VMs visible"' <<<"$summary"
 jq -r '.installation.hosts[] | "  host \(.name): online=\(.online), memory \((.memoryBytes // 0) / 1073741824 | floor)/\((.maxMemoryBytes // 0) / 1073741824 | floor) GiB"' <<<"$summary"
@@ -420,14 +441,14 @@ fi
 
 if [[ ${FEDORA_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
   log "Fedora service workflow on the disposable VM"
-  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$token_file TEST_NAME=$name \
+  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$read_only_token_file TEST_NAME=$name \
     "$root/tests/fedora/run.sh" "$work" ||
     fail "The Fedora service workflow failed. Logs are in $work/fedora."
 fi
 
 if [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
   log "Native NixOS/Docker Portainer workflow on the controller-provisioned VM"
-  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$token_file TEST_NAME=$name \
+  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$privileged_token_file TEST_NAME=$name \
     python3 "$root/tests/portainer/live.py" "$work" "$PORTAINER_CONFIG_DIR" ||
     fail "The Portainer workflow failed; preserve the VM/state and inspect $work/portainer."
   log "VM no-op plan after native service configuration"

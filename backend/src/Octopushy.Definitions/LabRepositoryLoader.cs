@@ -57,6 +57,30 @@ public sealed partial class LabRepositoryLoader
         {
             CheckInstallation(installation, guests.Where(g => g.InstallationAddress == installation.Address).ToList());
         }
+        // Backend env is available at preview time: it must not be another route to
+        // a configured writer, including a writer from a different installation.
+        var privilegedKeys = installations.Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var installation in installations)
+        {
+            if (privilegedKeys.Contains(installation.Connection.ReadOnlyToken.Key))
+                Error(installation.File, LineOf(installation.File, "/connection/readOnlyToken"),
+                    "Read-only and privileged Proxmox tokens require distinct store keys across installations.", installation.Address);
+            if (installation.Connection.CaCertificate is { } ca && privilegedKeys.Contains(ca.Key))
+                Error(installation.File, LineOf(installation.File, "/connection/tls/caCertificate"),
+                    "A privileged Proxmox token cannot be used as a CA certificate.", installation.Address);
+        }
+        foreach (var backend in settings?.StateBackends.Values ?? [])
+        {
+            foreach (var (name, value) in backend.Env)
+            {
+                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal))
+                    Error(settings!.File, LineOf(settings.File, $"/stateBackends/{backend.Id}/env/{name}"),
+                        $"The Proxmox provider environment '{name}' is reserved.");
+                if (value.Store is { } reference && privilegedKeys.Contains(reference.Key))
+                    Error(settings!.File, LineOf(settings.File, $"/stateBackends/{backend.Id}/env/{name}"),
+                        $"A privileged Proxmox token cannot be used as backend environment '{name}'.");
+            }
+        }
 
         foreach (var guest in guests)
         {
@@ -422,7 +446,8 @@ public sealed partial class LabRepositoryLoader
                 new ConnectionDefinition(
                     connection["endpoint"]!.GetValue<string>(),
                     connection["tls"]?["verify"]?.GetValue<bool>() ?? true,
-                    ParseStoreReference(connection["token"]!),
+                    ParseStoreReference(connection["readOnlyToken"]!),
+                    ParseStoreReference(connection["privilegedToken"]!),
                     connection["tls"]?["caCertificate"] is JsonObject ca ? ParseStoreReference(ca) : null),
                 hosts,
                 ParsePolicy(json["policy"]),
@@ -601,6 +626,12 @@ public sealed partial class LabRepositoryLoader
             return (null, null);
         }
 
+        if (kind == DefinitionKind.Installation && json["connection"] is JsonObject connection && connection.ContainsKey("token"))
+        {
+            Error(file, document.LineOf("/connection/token"),
+                "connection.token is no longer supported. Configure distinct readOnlyToken and privilegedToken store references; credentials are not copied automatically.", address);
+            return (null, null);
+        }
         var errors = SchemaCatalog.Instance.Validate(kind, json);
         foreach (var error in errors)
         {

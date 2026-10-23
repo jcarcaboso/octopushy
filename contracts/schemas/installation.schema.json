@@ -13,9 +13,10 @@
       "properties": {
         "endpoint": { "type": "string", "pattern": "^https?://" },
         "tls": { "$ref": "common.schema.json#/$defs/tls" },
-        "token": { "$ref": "common.schema.json#/$defs/storeRef" }
+        "readOnlyToken": { "$ref": "common.schema.json#/$defs/storeRef" },
+        "privilegedToken": { "$ref": "common.schema.json#/$defs/storeRef" }
       },
-      "required": ["endpoint", "token"],
+      "required": ["endpoint", "readOnlyToken", "privilegedToken"],
       "additionalProperties": false
     },
     "hosts": {

@@ -3,7 +3,8 @@ type: standalone
 connection:
   endpoint: https://10.1.0.50:8006/
   tls: { verify: false }
-  token: { store: proxmox/moraband/api-token }
+  readOnlyToken: { store: proxmox/moraband/read-only-token }
+  privilegedToken: { store: proxmox/moraband/privileged-token }
 hosts:
   moraband:
     datastores: { images: local, disks: local-lvm }

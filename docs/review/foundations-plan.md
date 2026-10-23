@@ -9,8 +9,11 @@ the six rules in *progress and next steps* and adds the rules in section 2.
 **Progress note (October 23, 2026):** this review snapshot remains historical.
 The fixes/implementation were published in PR #1, hosted baseline CI in PR #3,
 and the synthetic matched-recovery rehearsal in PR #4; all three are merged.
-The current [trusted-revision slice](../trusted-revisions.md) implements manual
-T1, not signed-commit automation or the whole trust wave. The remaining trust,
+PR #5 is also merged and implements manual [T1](../trusted-revisions.md), not
+signed-commit automation or the whole trust wave. The current
+[T2 routing foundation](../proxmox-credentials.md) separates credential roles,
+but source inspection found a provider refresh permission blocker; live/full
+read-only lifecycle acceptance remains blocked. The remaining trust,
 transport and secret-delivery prerequisites still precede guest SSH expansion
 and a retained-environment upgrade.
 
@@ -130,13 +133,19 @@ the working tree and not yet committed; each has a test that fails without the f
   trusted revision), or when its commit signature matches a server-side allowed key list.
   Observe and plan use the newest trusted revision. Untrusted revisions still load,
   validate, and show their proposed runs as *waiting for trust*.
-- **T2 Split Proxmox credentials.** Installation `connection` gains a read-only token
-  reference (observe, verify, plan) and a privileged one (apply, unprotect, grow). The
-  privileged token is released only after approval. Ship a documented least-privilege
-  role: privilege-separated tokens, pool-scoped ACLs, no `Permissions.Modify`/`Sys.Modify`,
-  one token per installation. *Open question to test first:* that `tofu plan` with the
-  bpg provider works with a read-only token. The state-backend credential is still needed
-  at plan time (state locking), so T1 remains the control for it.
+- **T2 Split Proxmox credentials.** Installation `connection` requires distinct
+  `readOnlyToken` (observe, native verify, plan) and `privilegedToken` (apply,
+  unprotect, grow-root **and verify-root**) references. The privileged role is
+  released only after the existing approval gate; manual no-op rootfs runs retain
+  a saved plan for that gate. No automatic legacy-role conversion or privileged
+  planning fallback. **Source blocker found:** bpg 0.117.0 disk/EFI refresh can
+  require mutation-capable storage/VM permissions; strict read-only
+  update/destroy planning is not universally supported. Do not “fix” that by
+  widening the planner role. Resolve provider compatibility before live acceptance.
+  [Research and candidate scopes](../research/proxmox-credential-split.md) are
+  not a certified ACL recipe; pool-only scopes do not cover every phase.
+  State-backend credentials remain necessary at plan time and can permit writes
+  during initialization/workspace creation, so T1 remains essential.
 - **T3 Approval floor.** A server-side minimum policy the repository can only tighten
   (stored in the database, changed only after password re-authentication). Under a
   manual policy, approval is required whenever `hasChanges` is true or a plan artifact

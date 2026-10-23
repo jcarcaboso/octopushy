@@ -134,7 +134,7 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(http);
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
         await agent.ReportAsync(await agent.NextAsync("grow"), Outcome.Failed, error: "unit unavailable");
         await server.TickAsync();

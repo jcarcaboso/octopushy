@@ -122,6 +122,40 @@ async fn vm_status_config_protection_and_guest_agent() {
 }
 
 #[tokio::test]
+async fn split_credential_fixture_accepts_both_identities_but_not_an_unknown_token() {
+    let json = include_str!("../../../../tests/e2e/proxmox.json");
+    let values: serde_json::Value = serde_json::from_str(json).unwrap();
+    let reader = values["token"].as_str().unwrap();
+    let writer = values["additionalTokens"][0].as_str().unwrap();
+    assert_ne!(reader, writer);
+    let mock = mock_proxmox::start(
+        Fixture::from_json(json).unwrap(),
+        Options {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            tls: true,
+        },
+    )
+    .await
+    .unwrap();
+    let tls = || Tls::CustomCa(mock.ca_pem().unwrap().to_owned());
+    assert_eq!(
+        client(&mock, reader, tls()).version().await.unwrap().version,
+        "8.4.1"
+    );
+    client(&mock, writer, tls())
+        .set_vm_protection("korriban", 310, false)
+        .await
+        .unwrap();
+    assert!(!mock.vm(310).unwrap().protection);
+    assert!(matches!(
+        client(&mock, "unknown@pve!token=not-accepted", tls())
+            .version()
+            .await,
+        Err(Error::Unauthorized)
+    ));
+}
+
+#[tokio::test]
 async fn wrong_token_is_unauthorized() {
     let mock = start_mock().await;
     let c = client(

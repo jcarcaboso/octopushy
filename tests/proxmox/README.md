@@ -1,6 +1,19 @@
 # Real Proxmox end to end
 
-`run.sh` takes one VM through its whole life on a real Proxmox host, through Octopushy:
+**Live/full-lifecycle acceptance is blocked with strictly read-only planning.**
+In bpg/proxmox v0.117.0, VM refresh discovers missing disk formats (especially
+EFI/raw volumes) through `storage/content/{volume}`. Upstream PVE requires
+`Datastore.Audit` plus `VM.Config.Disk` on the owning VM, or the broader
+`Datastore.Allocate` on storage, for that lookup. A strictly read-only identity
+therefore cannot universally refresh or plan updates/destroys. Fresh-create
+planning has no existing VM to refresh; it does not establish full-lifecycle
+support. Do not add mutation permissions to the read-only identity, fall back to
+privileged credentials, or use `-refresh=false` to bypass this blocker. See the
+[credential roles guide](../../docs/proxmox-credentials.md) and
+[pinned research](../../docs/research/proxmox-credential-split.md).
+
+The split fixtures and offline preflight checks below are readiness work, not
+live acceptance. The intended `run.sh` lifecycle on a disposable Proxmox host is:
 
 1. **Observe** the host and pick a free VMID (the first from 9900 to 9999 that Proxmox
    does not report, or `TEST_VMID`), after checking there are 3 GiB of free memory.
@@ -31,21 +44,57 @@ live Proxmox harness.
 The image (about 580 MB) is downloaded by the Proxmox host into its `local` storage and
 removed with the VM.
 
-## The token
+## Two explicit credentials
 
-The host's API token goes in `.dev/secrets/umbrel-proxmox-token` (mode 0600), formatted
-`USER@REALM!ID=SECRET`. The script copies it into Octopushy's variable store without
-printing it. The `nodes` automation keeps it in Jenkins as `homelab-proxmox-token-umbrel`;
-to copy it from there, put `user:api-token` of a Jenkins administrator in a file only you
-can read, then:
+Supply two independently provisioned API-token files, each formatted
+`USER@REALM!ID=SECRET`, with mode `0600` or `0400`:
 
 ```sh
-JENKINS_AUTH_FILE=~/.config/octopushy/jenkins-auth \
-JENKINS_URL=https://jenkins.hlab.alpetxino.com \
-  tests/proxmox/token-from-jenkins.sh
+export PVE_READ_ONLY_TOKEN_FILE=/private/disposable-proxmox-read-only-token
+export PVE_PRIVILEGED_TOKEN_FILE=/private/disposable-proxmox-privileged-token
 ```
 
-## Running
+Both files must be nonempty private regular files. The shared local/remote
+preflight validates both before DNS, fixture/database changes or process startup.
+The same file (including symlinks/hardlinks) or equal credential contents after
+trimming surrounding whitespace are refused without printing values.
+`PVE_TOKEN_FILE` is **not** a fallback; neither file has a default, and the harness
+never reads the retained `.dev/secrets/umbrel-proxmox-token` path by default.
+
+Fresh fixtures import the read-only and privileged values over stdin into
+`proxmox/<PVE_NODE>/read-only-token` and `proxmox/<PVE_NODE>/privileged-token`.
+Their `connection.readOnlyToken` and `connection.privilegedToken` reference those
+distinct store keys. Observe/inventory and planning use read-only credentials;
+apply uses privileged credentials. The executor wire alias remains `proxmox.token`;
+it does not imply a legacy definition alias or a credential fallback.
+
+Legacy `connection.token` definitions are intentionally invalid until explicit,
+reviewed migration. Cleanup/resume refuses old or mismatched fixture credential
+references before controller calls/builds. It never rewrites definitions,
+copies an old token into two keys, reimports credentials, or rebinds historical
+run contexts. Preserve retained state and inspect its original context rather
+than editing old run records to bypass the guard.
+
+## Offline checks
+
+These need Python 3 and, for the shell import/preflight tests, Bash, jq and rg;
+they do not start services, resolve DNS or contact Proxmox:
+
+```sh
+python3 tests/remote-worker/config.py --credentials-only
+python3 -m unittest discover -s tests/remote-worker -p 'test_*.py'
+python3 -m unittest discover -s tests/e2e -p 'test_*.py'
+bash -n tests/proxmox/run.sh
+```
+
+Mock fixtures use distinct synthetic identities, but their API does not prove
+upstream PVE privilege separation. Offline wiring checks do not establish that
+the provider can refresh with a strictly read-only identity.
+
+## Intended running mode (currently blocked)
+
+Do not run this as passing split-credential lifecycle acceptance until the
+provider/PVE blocker above is resolved and a separate live run is authorized:
 
 ```sh
 just dev-db
@@ -53,9 +102,12 @@ just proxmox-e2e                 # or: UI=1 tests/proxmox/run.sh to watch at :51
 ```
 
 Other hosts: `PVE_ENDPOINT`, `PVE_NODE`, `PVE_IMAGES`, `PVE_DISKS`, `PVE_BRIDGE`,
-`PVE_TOKEN_FILE`. If a run stops after the VM was created, the script says so; then
-`CLEANUP=1 tests/proxmox/run.sh` retires the VM through Octopushy, reusing the stopped
-run's state. Logs are in `.dev/proxmox-e2e`.
+and both explicit token-file variables. If a run stops after the VM was created,
+preserve its fixture/state. `CLEANUP=1 tests/proxmox/run.sh` is intended to retire
+it through Octopushy using the stopped run's state, but refresh/destroy planning
+is subject to the same blocker; do not assume cleanup can complete. Logs are in
+`.dev/proxmox-e2e`. Local mode also needs Python 3 for credential preflight and rg
+for retained-fixture checks.
 
 ## Opt-in existing remote worker
 
@@ -79,6 +131,13 @@ also exercises the reusable native
 [Fedora workflow](../../examples/lab/modules/ansible/fedora/README.md) on the fresh
 VM after resizing it, before retiring it. Install its pinned Ansible requirement
 into `.dev/ansible` first.
+
+The unchanged Fedora helper's `PVE_TOKEN_FILE` interface receives the explicit
+read-only file for its GET/config/network checks. The opt-in Portainer helper
+uses guest-agent execution and receives the privileged file through that same
+existing interface only when its workflow is selected. Neither helper was
+converted to a new credential interface; the surrounding real lifecycle remains
+blocked as described above.
 
 This checks reusable setup, two independent rootless Compose projects and owned
 firewall bindings, external HTTP verification, reboot persistence, source

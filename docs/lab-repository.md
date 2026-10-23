@@ -202,7 +202,8 @@ Anywhere a store reference is accepted, use `{ store: <key> }` or
 `{ store: <key>, version: <positive integer> }`. For example:
 
 ```yaml
-token: { store: proxmox/korriban/api-token, version: 2 }
+readOnlyToken: { store: proxmox/korriban/read-only-token, version: 2 }
+privilegedToken: { store: proxmox/korriban/privileged-token, version: 1 }
 tls:
   caCertificate: { store: proxmox/korriban/ca, version: 1 }
 ```
@@ -282,7 +283,8 @@ type: standalone                  # standalone | cluster
 connection:
   endpoint: https://10.1.0.50:8006/
   tls: { verify: false }          # or caCertificate: { store: <key> }
-  token: { store: proxmox/moraband/api-token }
+  readOnlyToken: { store: proxmox/moraband/read-only-token }
+  privilegedToken: { store: proxmox/moraband/privileged-token }
 hosts:
   moraband:
     datastores: { images: local, disks: local-lvm }
@@ -296,6 +298,11 @@ folders, because guests are not nested under hosts (rule 2). Each host keeps its
 datastores, bridges, and capacity limits, and is its own failure domain. A cluster
 lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
+
+`readOnlyToken` and `privilegedToken` are required, distinct store references.
+The old `token` field is not an alias. See [credential roles](proxmox-credentials.md)
+for routing, approval, legacy-run handling, and the pinned provider's read-only
+refresh blocker; these examples do not certify live ACL sufficiency.
 
 ### Guest
 

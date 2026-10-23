@@ -14,7 +14,8 @@ public class StoreReferenceTests
     private static readonly (DefinitionKind Kind, string File, string Consumer, string[] Path)[] ReferenceLocations =
     [
         (DefinitionKind.Repository, "octopushy.yaml", "octopushy.yaml", ["stateBackends", "postgres", "env", "PG_CONN_STR"]),
-        (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "token"]),
+        (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "readOnlyToken"]),
+        (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "privilegedToken"]),
         (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "tls", "caCertificate"]),
         (DefinitionKind.Guest, GuestFile, "home/korriban/krb-app-01", ["access", "sshKey"]),
     ];
@@ -50,7 +51,8 @@ public class StoreReferenceTests
         Assert.Empty(repository.Issues);
         Assert.All(repository.Resources, resource => Assert.True(resource.Valid));
         var connection = Assert.Single(repository.Installations).Connection;
-        Assert.Equal(new StoreReference("credentials/token", version), connection.Token);
+        Assert.Equal(new StoreReference("credentials/readOnlyToken", version), connection.ReadOnlyToken);
+        Assert.Equal(new StoreReference("credentials/privilegedToken", version), connection.PrivilegedToken);
         Assert.Equal(new StoreReference("credentials/caCertificate", version), connection.CaCertificate);
         var env = repository.Settings!.StateBackends["postgres"].Env;
         Assert.Equal(new StoreReference("credentials/PG_CONN_STR", version), env["PG_CONN_STR"].Store);
@@ -153,7 +155,7 @@ public class StoreReferenceTests
 
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
-        Assert.Equal(8, repository.StoreUses.Count);
+        Assert.Equal(9, repository.StoreUses.Count);
         Assert.Contains(new StoreUse("integrations/first", "home", LabFile, 2), repository.StoreUses);
         Assert.Contains(new StoreUse("integrations/second", "home", LabFile), repository.StoreUses);
         Assert.Contains(new StoreUse("dns/token", "home", LabFile, 3), repository.StoreUses);

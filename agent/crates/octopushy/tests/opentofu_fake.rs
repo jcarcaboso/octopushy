@@ -395,6 +395,47 @@ async fn preview_with_changes_then_apply() {
 }
 
 #[tokio::test]
+async fn no_changes_plan_can_be_retained_for_later_privileged_guest_approval() {
+    let fx = Fixture::new();
+    let mut request = input(false, json!({ "FAKE_PLAN_EXIT": "0" }));
+    request["retainNoChangesPlan"] = json!(true);
+    let r = run(
+        &fx,
+        "retain-no-change",
+        "preview",
+        &request,
+        repo_tar(Some("# reviewed lock")),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let success = r.result.as_ref().unwrap();
+    assert_eq!(success.outputs["hasChanges"], false);
+    assert_eq!(success.outputs["changes"], json!([]));
+    assert_eq!(success.artifacts.len(), 1);
+    let artifact = &success.artifacts[0];
+    assert_eq!(artifact.name, "plan.tar.gz");
+    assert_eq!(
+        artifact.sha256,
+        octopushy::tls::sha256_hex(&artifact.content)
+    );
+    let extracted = fx.dir.path().join("retained");
+    std::fs::create_dir_all(&extracted).unwrap();
+    archive::extract_tar_gz(&artifact.content, &extracted, archive::Limits::default()).unwrap();
+    assert_eq!(
+        std::fs::read(extracted.join("plan.bin")).unwrap(),
+        b"PLAN destroy=0\n"
+    );
+    assert_eq!(
+        std::fs::read(extracted.join(".terraform.lock.hcl")).unwrap(),
+        b"# reviewed lock"
+    );
+    assert!(!fx.read("args.log").contains("show"));
+    assert!(!fx.read("args.log").contains("apply"));
+    assert_no_secrets(&fx, &r);
+}
+
+#[tokio::test]
 async fn destroy_no_changes_and_errors() {
     let fx = Fixture::new();
 
