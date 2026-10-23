@@ -1,6 +1,6 @@
 # Progress and next steps
 
-Baseline-check update: **October 22, 2026**; lifecycle snapshot: **October 21, 2026**.
+Baseline/recovery update: **October 22, 2026**; lifecycle snapshot: **October 21, 2026**.
 The plan below is a proposed implementation sequence,
 not authorization to deploy, rotate credentials, or change existing machines.
 
@@ -13,10 +13,10 @@ running the guest setup externally after controller-driven provisioning.
 
 ### Publication boundary
 
-The current source baseline is `main` merge `893b19a1808114d8e2ce7e5ca23cb13f2f6332aa`
-(foundations-review-and-fixes PR #1). It includes the previously unpublished
-networking, guest examples, filesystem growth, worker readiness, and credential
-lifecycle work. The earlier documentation-only checkpoint on `proxmox-e2e`
+The current source baseline is `main` merge `f72770befd689baa7abedba06ea3b29cd45aed81`
+(baseline CI PR #3, merged October 22, 2026). It preserves the foundations work
+from PR #1 (`893b19a`): networking, guest examples, filesystem growth, worker
+readiness, and credential lifecycle. The earlier documentation-only checkpoint on `proxmox-e2e`
 described those changes before publication. The repository's default branch is
 still `proxmox-e2e`; baseline CI explicitly targets `main`.
 
@@ -72,8 +72,12 @@ progress without replacing those documents or changing the
 
 The workflow and pnpm consistency changes, including the authorized corrective
 pass after the first independent reviews, were checked locally against the
-baseline above. **GitHub Actions has not run for this change.** The corrective
-pass is limited to the strict SDK pin, Rust formatting, one equivalent input
+baseline above. **Hosted CI passed for PR #3 at `ad20d6f`**: Actions run
+`39843529091` completed on October 22, 2026, with all five jobs (backend, Rust,
+frontend, offline checks and Nix evaluation) successful, including the audit and
+contract-drift steps. PR #3 subsequently merged without rewriting that history;
+neither event is a deployment. The corrective pass is limited to the strict SDK
+pin, Rust formatting, one equivalent input
 guard expression, and the two targeted security patch updates below.
 
 | Local check | Result |
@@ -113,8 +117,38 @@ do not establish real Proxmox, Portainer, remote-worker, SSH, or packet-path acc
 Optional follow-ups remain deferred: NuGet graph locking and expanded evaluation
 of `tests/portainer/eval.nix` and `tests/technitium/{eval,cluster-eval}.nix`.
 The Nix result above covers the existing locked flake only; the three optional
-Python evaluated-output cases still skip. The first hosted Actions run remains
-unverified.
+Python evaluated-output cases still skip. The first hosted run is now verified
+at the exact head recorded above; this does not extend coverage to those skips.
+
+### Isolated recovery slice — October 22, 2026
+
+Based on the green `ad20d6f` baseline, a separately rooted disposable Podman
+engine ran native PostgreSQL 18 dumps/restores with generated fixtures only.
+The slice adds ten recovery cases and extends the existing migration case:
+
+- Full backend suite: **169 passed**, including **14 recovery/migration cases**.
+- Offline checks: **48 Python tests passed**, five previously optional cases
+  skipped, and tracked shell syntax passed.
+- Matched restore preserved encrypted credential history, run pins, uncertain
+  mutation evidence, approved-plan digest, artifacts/logs, and CA identity.
+- Missing/wrong keys, damaged CA state, invalid archives, and missing/tampered
+  artifacts failed the relevant checks. The pre-upgrade archive restored into
+  a fresh database while an in-place downgrade was refused.
+
+No production code, dependencies, schema, or live state changed in this slice.
+The [recovery checklist and test boundaries](recovery-rehearsal.md) distinguish
+these results from full retained-installation recovery or remote-worker
+reconnection. Restoring an older backup loses later revocations and certificate
+registrations; reconcile those before dispatch, rather than treating a restored
+database as current authorization.
+
+Recovery PR #4 now targets `main` after PR #3 merged; its diff remains limited
+to the seven recovery test/documentation files. **Hosted recovery CI passed at
+`2f27df3`**: Actions run `39849581578` completed on October 22, 2026, with all five
+jobs successful, including 169 backend tests, vulnerability audits and
+generated-contract drift checks. This is independent of PR #3's baseline
+evidence. PR #4 remains unmerged; this synthetic acceptance is not authorization
+to restore or upgrade a retained installation.
 
 ### Earlier implementation validation
 

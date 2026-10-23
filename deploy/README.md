@@ -46,13 +46,23 @@ podman compose up -d                      # or: docker compose up -d
 
 ## Updating
 
-Build the images for the new version, set `OCTOPUSHY_BACKEND_IMAGE` and
-`OCTOPUSHY_FRONTEND_IMAGE` in `.env`, then `podman compose up -d`. The `migrate` service
-runs first. Dump the database before an update that changes the schema:
+Before updating a retained installation, follow the
+[matched database/key recovery checklist](../docs/recovery-rehearsal.md).
+Quiesce writers and resolve the disposition of worker mutations; preserve a
+matched database/data snapshot and separately escrowed original KEK. Rehearse
+recovery in an isolated destination. A database dump alone does not include
+artifact files, session keys, worker journals, or external OpenTofu state.
 
-```sh
-podman compose exec postgres pg_dump -U octopushy octopushy > octopushy-$(date +%F).sql
-```
+The credential-lifecycle migration is forward-only. An old binary cannot safely
+interpret the new candidate/revocation state; rollback requires a matched
+pre-upgrade backup and binary, not a schema downgrade or regenerated KEK.
 
-The supervisor that will run these steps for you, with a journal and agent updates,
-comes in a later milestone.
+After those gates and explicit upgrade approval, build/pin the new images, set
+`OCTOPUSHY_BACKEND_IMAGE` and `OCTOPUSHY_FRONTEND_IMAGE` in `.env`, and start the
+selected Compose project. Its `migrate` service runs before the backend. Keep
+automatic work/worker ingress isolated until post-upgrade checks and any
+post-backup reconciliation are complete.
+
+The synthetic recovery tests validate storage/service boundaries only. A
+retained-installation restore, remote-worker reconnect, automated drain and the
+supervisor with an upgrade journal remain future work.
