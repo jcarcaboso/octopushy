@@ -9,6 +9,9 @@ public sealed class RepositorySettings
 
     public string Branch { get; set; } = "main";
 
+    /// <summary>Rotates whenever the configured URL or branch changes, including disconnects.</summary>
+    public Guid SourceId { get; set; } = Guid.NewGuid();
+
     public int PollSeconds { get; set; } = 60;
 
     /// <summary><c>none</c>, <c>token</c> (HTTPS), or <c>ssh</c>; the secret is the store key <c>system/git/credential</c>.</summary>
@@ -30,6 +33,13 @@ public sealed class RepositorySettings
 public sealed class DefinitionRevision
 {
     public Guid Id { get; set; }
+
+    /// <summary>Null for legacy revisions whose configured source cannot be established.</summary>
+    public Guid? SourceId { get; set; }
+
+    public DateTimeOffset? TrustedAt { get; set; }
+
+    public string? TrustedBy { get; set; }
 
     /// <summary>Increases with every revision loaded, for ordering.</summary>
     public long Sequence { get; set; }

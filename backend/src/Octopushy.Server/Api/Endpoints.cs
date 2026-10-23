@@ -45,7 +45,7 @@ public static partial class Endpoints
             .WithName("getRepository");
 
         group.MapPut("", async Task<Results<Ok<RepositoryDto>, ProblemHttpResult>> (
-            RepositoryUpdate update, OctopushyDb db, Views views, VariableStore store, RepositorySync sync, TimeProvider clock, CancellationToken ct) =>
+            RepositoryUpdate update, RunEngine engine, RepositorySync sync, TimeProvider clock, CancellationToken ct) =>
         {
             if (update.CredentialKind is not ("none" or "token" or "ssh"))
             {
@@ -57,34 +57,41 @@ public static partial class Endpoints
                 return TypedResults.Problem(title: "Poll between every 10 seconds and once a day.", statusCode: 400);
             }
 
-            var settings = await db.RepositorySettings.Where(r => r.Id == 1).FirstOrDefaultAsync(ct);
-            if (settings is null)
+            return await engine.ExecuteAsync(async (db, services) =>
             {
-                settings = new RepositorySettings();
-                db.RepositorySettings.Add(settings);
-            }
+                var store = services.GetRequiredService<VariableStore>();
+                var views = services.GetRequiredService<Views>();
+                var settings = await db.RepositorySettings.Where(r => r.Id == 1).FirstOrDefaultAsync(ct);
+                if (settings is null)
+                {
+                    settings = new RepositorySettings();
+                    db.RepositorySettings.Add(settings);
+                }
 
-            var url = string.IsNullOrWhiteSpace(update.Url) ? null : update.Url.Trim();
-            if (settings.Url != url || settings.Branch != update.Branch.Trim())
-            {
-                settings.HeadCommit = null;
-                settings.LastFetchError = null;
-            }
+                var url = string.IsNullOrWhiteSpace(update.Url) ? null : update.Url.Trim();
+                if (settings.Url != url || settings.Branch != update.Branch.Trim())
+                {
+                    settings.SourceId = Guid.NewGuid();
+                    settings.HeadCommit = null;
+                    settings.LastFetchAt = null;
+                    settings.LastFetchError = null;
+                }
 
-            settings.Url = url;
-            settings.Branch = update.Branch.Trim();
-            settings.PollSeconds = update.PollSeconds;
-            settings.CredentialKind = update.CredentialKind;
-            settings.CredentialUsername = string.IsNullOrWhiteSpace(update.CredentialUsername) ? null : update.CredentialUsername.Trim();
-            settings.UpdatedAt = clock.GetUtcNow();
-            await db.SaveChangesAsync(ct);
-            if (!string.IsNullOrEmpty(update.CredentialSecret))
-            {
-                await store.SetInternalAsync(RepositorySync.CredentialKey, update.CredentialSecret, Visibilities.Secret, "Credential for reading the lab repository.", ct);
-            }
+                settings.Url = url;
+                settings.Branch = update.Branch.Trim();
+                settings.PollSeconds = update.PollSeconds;
+                settings.CredentialKind = update.CredentialKind;
+                settings.CredentialUsername = string.IsNullOrWhiteSpace(update.CredentialUsername) ? null : update.CredentialUsername.Trim();
+                settings.UpdatedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(ct);
+                if (!string.IsNullOrEmpty(update.CredentialSecret))
+                {
+                    await store.SetInternalAsync(RepositorySync.CredentialKey, update.CredentialSecret, Visibilities.Secret, "Credential for reading the lab repository.", ct);
+                }
 
-            sync.Trigger();
-            return TypedResults.Ok(await RepositoryAsync(db, views, ct));
+                sync.Trigger();
+                return TypedResults.Ok(await RepositoryAsync(db, views, ct));
+            }, ct);
         })
         .WithName("updateRepository");
 
@@ -96,15 +103,62 @@ public static partial class Endpoints
         .WithName("syncRepository");
 
         group.MapGet("/revisions", async (OctopushyDb db, int? limit, CancellationToken ct) =>
-            TypedResults.Ok((await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).Take(Math.Clamp(limit ?? 30, 1, 200)).ToListAsync(ct))
-                .Select(Views.Revision).ToList()))
-            .WithName("listRevisions");
+        {
+            var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
+            return TypedResults.Ok((await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).Take(Math.Clamp(limit ?? 30, 1, 200)).ToListAsync(ct))
+                .Select(r => Views.Revision(r, RepositoryTrust.IsCurrentSource(r, settings))).ToList());
+        })
+        .WithName("listRevisions");
 
         group.MapGet("/revisions/{id:guid}", async Task<Results<Ok<RevisionDetailDto>, NotFound>> (Guid id, OctopushyDb db, CancellationToken ct) =>
-            await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct) is { } revision
-                ? TypedResults.Ok(new RevisionDetailDto(Views.Revision(revision), Views.Issues(revision.Issues)))
-                : TypedResults.NotFound())
-            .WithName("getRevision");
+        {
+            var revision = await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+            if (revision is null) return TypedResults.NotFound();
+            var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
+            return TypedResults.Ok(new RevisionDetailDto(Views.Revision(revision, RepositoryTrust.IsCurrentSource(revision, settings)), Views.Issues(revision.Issues)));
+        })
+        .WithName("getRevision");
+
+        group.MapGet("/revisions/{id:guid}/review", async (Guid id, RunEngine engine, RepositoryMirror mirror, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync((db, _) => RepositoryTrust.ReviewAsync(db, mirror, id, ct), ct)))
+            .WithName("reviewRevision");
+
+        group.MapPost("/revisions/{id:guid}/trust", async (Guid id, TrustRevisionRequest request, HttpContext http,
+            RunEngine engine, RepositoryMirror mirror, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
+            {
+                var review = await RepositoryTrust.ReviewAsync(db, mirror, id, ct);
+                if (!review.CanTrust || !string.Equals(request.Commit, review.Revision.Commit, StringComparison.Ordinal)
+                    || !string.Equals(request.BaseCommit, review.BaseCommit, StringComparison.Ordinal))
+                {
+                    throw new RunException(review.BlockedReason ?? "The review changed. Review the exact revision and its current base again.");
+                }
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                var revision = await db.Revisions.SingleAsync(r => r.Id == id, ct);
+                revision.TrustedAt = clock.GetUtcNow();
+                revision.TrustedBy = actor;
+                await db.SaveChangesAsync(ct);
+                // Promoting the discovered head can now supersede older prepared work;
+                // merely discovering it could not. Trusting an older pinned revision
+                // never rolls the visible inventory back.
+                var settings = await db.RepositorySettings.SingleAsync(s => s.Id == 1, ct);
+                if (settings.HeadCommit == revision.Commit)
+                {
+                    var repository = await services.GetRequiredService<RevisionCache>().GetAsync(revision.Commit, ct);
+                    await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, ct);
+                }
+                foreach (var run in await db.Runs.Where(r => r.RevisionId == id && r.Commit == revision.Commit
+                    && r.Status == RunStatuses.Blocked && r.Detail != null && r.Detail.StartsWith("Waiting for trust")).ToListAsync(ct))
+                {
+                    run.Status = run.StartedAt is null ? RunStatuses.Queued : RunStatuses.Running;
+                    run.Detail = null;
+                }
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return Views.Revision(revision, true);
+            }, ct)))
+            .WithName("trustRevision");
     }
 
     private static void MapInventory(RouteGroupBuilder api)

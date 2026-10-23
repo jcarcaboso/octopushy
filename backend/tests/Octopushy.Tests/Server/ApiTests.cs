@@ -31,7 +31,7 @@ public class ApiTests(PostgresFixture postgres)
         Assert.Equal("Home", lab["name"]!.GetValue<string>());
         var guest = lab["installations"]![0]!["guests"]![0]!;
         Assert.Equal("home/korriban/krb-app-01", guest["address"]!.GetValue<string>());
-        Assert.Equal("queued", guest["status"]!.GetValue<string>());
+        Assert.Equal("blocked", guest["status"]!.GetValue<string>());
 
         var detail = await client.GetFromJsonAsync<JsonObject>($"/api/guests/{guest["id"]}");
         Assert.Contains("vmid: 310", detail!["definitionText"]!.GetValue<string>());

@@ -17,6 +17,17 @@ resizing must update without replacing or deleting, and deleting must delete. An
 plan is rejected and the test stops. After each step it asks Proxmox, through an observe
 run, whether the VM is there with the expected size.
 
+The harness explicitly grants execution trust to each **exact local fixture
+commit** it creates, using the normal authenticated review/trust API. It checks
+the configured repository path, branch and full commit before granting trust;
+it never trusts an arbitrary fetched head. Running this harness therefore
+authorizes its fixture code to receive execution credentials, separately from
+the plan checks above. Review the harness and fixture before running it; do not
+point it at an ordinary lab repository. Incomplete reviews, source changes and
+stale confirmations stop the harness rather than bypassing the trust gate.
+These trust-helper checks are tested offline; this milestone did not rerun the
+live Proxmox harness.
+
 The image (about 580 MB) is downloaded by the Proxmox host into its `local` storage and
 removed with the VM.
 

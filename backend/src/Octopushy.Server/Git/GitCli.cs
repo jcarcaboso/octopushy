@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Octopushy.Server.Git;
 
-public sealed class GitException(string message) : Exception(message);
+public class GitException(string message) : Exception(message);
 
 /// <summary>Runs the Git CLI without a shell, without prompts, and only over allowed transports.</summary>
 public sealed class GitCli(ILogger<GitCli> logger)
@@ -76,9 +76,15 @@ public sealed class GitCli(ILogger<GitCli> logger)
             await process.StandardOutput.BaseStream.CopyToAsync(output, timeout.Token);
             await process.WaitForExitAsync(timeout.Token);
         }
-        catch (OperationCanceledException)
+        catch
         {
-            process.Kill(entireProcessTree: true);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            await process.WaitForExitAsync(CancellationToken.None);
+            // Observe the stderr task even when a bounded output stream refuses more data.
+            try { await stderrTask; } catch (OperationCanceledException) { }
             throw;
         }
 

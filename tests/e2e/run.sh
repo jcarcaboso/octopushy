@@ -58,6 +58,7 @@ curl -sf "$api/api/health" >/dev/null || { echo "The backend did not start; see 
 
 jar=$work/cookies
 call() { curl -sf -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$@"; }
+source "$root/tests/revision-trust/fixture.sh"
 
 log "Account, repository, variables"
 code=$(tr -d '\n' <"$work/server/setup-code")
@@ -94,6 +95,7 @@ wait_for() {
 
 log "Provisioning"
 call -X POST "$api/api/repository/sync" >/dev/null
+trust_fixture_revision "$work/lab" "$(git -C "$work/lab" rev-parse HEAD)"
 wait_for in-sync
 run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision")][0].id')
 call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
@@ -110,6 +112,7 @@ git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q 
 # The mock does not run OpenTofu's provider, so the VM disappears by hand.
 curl -sk -X DELETE https://127.0.0.1:18006/mock/vms/310 >/dev/null
 call -X POST "$api/api/repository/sync" >/dev/null
+trust_fixture_revision "$work/lab" "$(git -C "$work/lab" rev-parse HEAD)"
 wait_for retired
 run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="retire")][0].id')
 call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'

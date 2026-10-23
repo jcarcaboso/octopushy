@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Orchestration;
@@ -75,7 +76,15 @@ public sealed partial class RunEngine(
     /// <summary>Adds runs built elsewhere and starts them.</summary>
     public async Task AddRunsAsync(OctopushyDb db, IEnumerable<Run> runs, CancellationToken cancellationToken)
     {
-        db.Runs.AddRange(runs);
+        foreach (var run in runs)
+        {
+            if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+            {
+                run.Status = RunStatuses.Blocked;
+                run.Detail = reason;
+            }
+            db.Runs.Add(run);
+        }
         await db.SaveChangesAsync(cancellationToken);
         signal.Wake();
     }
@@ -131,6 +140,9 @@ public sealed partial class RunEngine(
             {
                 throw new RunException("Only a known failed guest filesystem step can be retried. Inspect uncertain outcomes and plan again.");
             }
+
+            if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
+                throw new RunException(trustReason);
 
             var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
             if (!resource.Valid || resource.MissingSince is not null || resource.RetiredAt is not null
@@ -196,7 +208,7 @@ public sealed partial class RunEngine(
             throw new RunException("A change is being applied; it cannot be interrupted. Wait for it to finish.");
         }
 
-        if (run.Status == RunStatuses.Uncertain)
+        if (run.Status == RunStatuses.Uncertain || attempts.Any(a => a.Mutating && a.Status == AttemptStatuses.Uncertain))
         {
             throw new RunException("The run's outcome is uncertain; close it instead.");
         }
@@ -225,11 +237,33 @@ public sealed partial class RunEngine(
             return;
         }
 
-        if (run.Status == RunStatuses.Queued)
+        // Dispatched work may already have changed infrastructure. Keep accepting its
+        // evidence; only prevent the next advancement/release, never cancel or replay it.
+        var inFlight = run.Steps.SelectMany(s => s.Attempts)
+            .Any(a => a.Status is AttemptStatuses.Assigned or AttemptStatuses.Running);
+        var next = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => !StepStatuses.IsDone(s.Status));
+        // Outcome reconciliation is not a new operation. In particular, never hide an
+        // uncertain mutation behind a trust wait: it must retain its serialization lock
+        // and the explicit close workflow. Known failures/completion also settle normally.
+        var reconcilingOutcome = next is null || next.Status is StepStatuses.Uncertain or StepStatuses.Failed or StepStatuses.Cancelled;
+        if (!inFlight && !reconcilingOutcome && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
         {
+            run.Status = RunStatuses.Blocked;
+            run.Detail = trustReason;
+            foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
+                attempt.WaitingReason = trustReason;
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        if (run.Status == RunStatuses.Queued || run.Status == RunStatuses.Blocked && run.StartedAt is null)
+        {
+            var eligible = RepositoryTrust.EligibleRevisions(db);
             var earlier = await db.Runs.AsNoTracking()
                 .Where(r => r.ResourceId == run.ResourceId && r.Id != run.Id && r.CreatedAt < run.CreatedAt
-                            && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                            && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
+                            && (eligible.Any(v => v.Id == r.RevisionId && v.Commit == r.Commit)
+                                || db.Attempts.Any(a => a.RunId == r.Id && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Mutating && a.Status == AttemptStatuses.Uncertain))))
                 .OrderBy(r => r.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken);
             if (earlier is not null)

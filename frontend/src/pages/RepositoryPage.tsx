@@ -13,6 +13,7 @@ import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton, Skeleton } from "../components/States";
 import { EmptyRow, Table } from "../components/Table";
+import { RevisionReviewDialog } from "./repository/RevisionReviewDialog";
 
 type Kind = "none" | "token" | "ssh";
 
@@ -167,13 +168,11 @@ function RevisionSummary({ revision }: { revision: Revision }) {
       items={[
         {
           term: "Commit",
-          value: (
-            <span className="inline-group">
-              <Commit commit={revision.commit} length={10} />
-              {revision.valid ? <Badge tone="success">Valid</Badge> : <Badge tone="danger">Has errors</Badge>}
-            </span>
-          ),
+          value: <Commit commit={revision.commit} length={10} />,
         },
+        { term: "Definition validity", value: revision.valid ? <Badge tone="success">Valid</Badge> : <Badge tone="danger">Has errors</Badge> },
+        { term: "Execution trust", value: <ExecutionTrust revision={revision} /> },
+        { term: "Apply approval", value: "Separate decision for each proposed infrastructure apply." },
         { term: "Subject", value: revision.subject ?? <span className="muted">—</span> },
         { term: "Author", value: revision.author ?? <span className="muted">—</span> },
         { term: "Committed", value: <RelativeTime value={revision.committedAt} /> },
@@ -191,14 +190,38 @@ function RevisionSummary({ revision }: { revision: Revision }) {
   );
 }
 
-function RevisionIssues({ id }: { id: string }) {
+function ExecutionTrust({ revision }: { revision: Revision }) {
+  return (
+    <div className="stack stack--small">
+      <div>
+        <Badge tone={revision.trustedAt ? "success" : "warning"}>{revision.trustedAt ? "Trusted" : "Untrusted"}</Badge>
+        {revision.trustedAt ? (
+          <> by {revision.trustedBy ?? "Unknown operator"} · <RelativeTime value={revision.trustedAt} /></>
+        ) : null}
+      </div>
+      <span className="muted small">{revision.isCurrentSource ? "Current repository source" : "Not current repository source"}</span>
+      {revision.trustedAt && !revision.isCurrentSource ? (
+        <span className="muted small">Trust does not apply to the current repository source.</span>
+      ) : !revision.trustedAt ? (
+        <span className="muted small">{revision.valid && revision.isCurrentSource ? "Eligible for trust review" : "Not eligible for trust"}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function RevisionIssues({ id, summary = false }: { id: string; summary?: boolean }) {
   const { data, error, isPending } = useRevision(id);
   if (isPending) return <Skeleton height={48} />;
   if (!data) return <ErrorMessage error={error} />;
-  return <IssueList issues={data.issues} emptyText="This revision has no issues." />;
+  return (
+    <div className="stack">
+      {summary ? <RevisionSummary revision={data.revision} /> : null}
+      <IssueList issues={data.issues} emptyText="This revision has no issues." />
+    </div>
+  );
 }
 
-function History({ latestId }: { latestId: string | null }) {
+function History({ latestId, onReview }: { latestId: string | null; onReview: (id: string) => void }) {
   const { data, error, isPending } = useRevisions();
   const [params, setParams] = useSearchParams();
   const selected = params.get("revision");
@@ -216,14 +239,15 @@ function History({ latestId }: { latestId: string | null }) {
             <th scope="col">Subject</th>
             <th scope="col">Author</th>
             <th scope="col">Loaded</th>
-            <th scope="col">Issues</th>
+            <th scope="col">Definition validity</th>
+            <th scope="col">Execution trust</th>
             <th scope="col">
               <span className="visually-hidden">Actions</span>
             </th>
           </tr>
         </thead>
         <tbody>
-          {data.length === 0 ? <EmptyRow colSpan={6}>No revisions loaded yet.</EmptyRow> : null}
+          {data.length === 0 ? <EmptyRow colSpan={7}>No revisions loaded yet.</EmptyRow> : null}
           {data.map((r) => (
             <tr key={r.id} className={r.id === selected ? "row--selected" : undefined}>
               <td>
@@ -249,7 +273,11 @@ function History({ latestId }: { latestId: string | null }) {
                   </>
                 ) : null}
               </td>
+              <td><ExecutionTrust revision={r} /></td>
               <td className="cell-actions">
+                <button type="button" className="button button--small" onClick={() => onReview(r.id)}>
+                  Review revision
+                </button>
                 <button
                   type="button"
                   className="button button--small"
@@ -264,12 +292,12 @@ function History({ latestId }: { latestId: string | null }) {
         </tbody>
       </Table>
       {chosen ? (
-        <div className="revision-issues">
+        <section className="revision-issues" aria-label="Selected revision">
           <h3 className="subhead">
             Issues in <Commit commit={chosen.commit} /> {chosen.subject}
           </h3>
-          <RevisionIssues id={chosen.id} />
-        </div>
+          <RevisionIssues id={chosen.id} summary />
+        </section>
       ) : null}
     </div>
   );
@@ -277,6 +305,7 @@ function History({ latestId }: { latestId: string | null }) {
 
 export function RepositoryPage() {
   const [watching, setWatching] = useState(false);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const { data, error, isPending } = useRepository({ fast: watching });
   const sync = useSyncRepository();
 
@@ -328,10 +357,13 @@ export function RepositoryPage() {
                 ]}
               />
             </Card>
-            <Card title="Current revision">
+            <Card title="Current revision" id="current-revision">
               {revision ? (
                 <div className="stack">
                   <RevisionSummary revision={revision} />
+                  <button type="button" className="button" onClick={() => setReviewId(revision.id)}>
+                    Review revision
+                  </button>
                   <h3 className="subhead">Issues</h3>
                   <RevisionIssues id={revision.id} />
                 </div>
@@ -344,9 +376,10 @@ export function RepositoryPage() {
           </div>
         </div>
         <Card title="History">
-          <History latestId={revision?.id ?? null} />
+          <History latestId={revision?.id ?? null} onReview={setReviewId} />
         </Card>
       </div>
+      {reviewId ? <RevisionReviewDialog key={reviewId} id={reviewId} onClose={() => setReviewId(null)} /> : null}
     </>
   );
 }

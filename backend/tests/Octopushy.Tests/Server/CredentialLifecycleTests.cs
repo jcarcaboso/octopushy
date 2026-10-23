@@ -58,7 +58,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         var plan = await agent.NextAsync("preview");
         (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "replacement" })).EnsureSuccessStatusCode();
         (await PromoteAsync(client, 2, 1)).EnsureSuccessStatusCode();
@@ -90,7 +90,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         using var client = await SignInAsync(server);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
@@ -114,7 +114,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
         server.Services.GetRequiredService<AgentConnections>().Add(new AgentSession(agent.Id, "native-only", ["proxmox", "nixos-rootfs"]));
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         var attempt = Assert.Single(run.Steps.Single(s => s.Name == StepNames.Plan).Attempts);
@@ -134,7 +134,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             Assert.True(session.TrySend(new ServerMessage()));
         }
         Assert.False(session.TrySend(new ServerMessage()));
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await server.TickAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         var attempt = Assert.Single(run.Steps.Single(s => s.Name == StepNames.Plan).Attempts);
@@ -154,7 +154,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
         (await client.PostAsJsonAsync("/api/variables/revoke", new { key = "opentofu/pg", version = 1, reason = "Retiring the state credential" })).EnsureSuccessStatusCode();
@@ -189,7 +189,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await server.TickAsync(); // Pins v1, but there is no connected worker.
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.True(RunContext.Parse(run.Context).SecretBindingsPinned);
@@ -215,7 +215,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         using var client = await SignInAsync(server);
         (await client.PostAsJsonAsync("/api/variables/revoke", new { key = Token, version = 1, reason = "Emergency revoke" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await server.TickAsync();
         Assert.Empty(agent.TakeAssignments());
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -235,7 +235,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         }
         await server.SetSecretAsync("opentofu/pg", "postgres://fixture");
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await server.TickAsync();
         Assert.Empty(agent.TakeAssignments());
         Assert.Contains("must be stored as secret", (await server.LatestRunAsync(Guest, Operations.Provision)).Detail);
@@ -251,7 +251,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         using var client = await SignInAsync(server);
         (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "candidate" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         await server.TickAsync();
         Assert.Empty(agent.TakeAssignments());
         Assert.Contains("candidate not promoted", (await server.LatestRunAsync(Guest, Operations.Provision)).Detail);
@@ -267,7 +267,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(client);
         var plan = await agent.NextAsync("preview");
         await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -284,7 +284,11 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             {
                 db.SecretResolutions.Add(new SecretResolution
                 {
-                    Key = Token, Version = 2, AttemptId = Guid.Parse(plan.AttemptId), AgentId = agent.Id, ResolvedAt = DateTimeOffset.UtcNow,
+                    Key = Token,
+                    Version = 2,
+                    AttemptId = Guid.Parse(plan.AttemptId),
+                    AgentId = agent.Id,
+                    ResolvedAt = DateTimeOffset.UtcNow,
                 });
             }
             await db.SaveChangesAsync();
@@ -313,7 +317,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
         await store.SetAsync(caKey, "old-public-CA-fixture", Visibilities.Plain, null, CancellationToken.None);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.NextAsync("preview"); // Token and backend resolved; CA was not released to OpenTofu.
         await server.Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         var run = await server.LatestRunAsync(Guest, Operations.Provision);

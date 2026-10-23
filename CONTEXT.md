@@ -152,6 +152,17 @@ _Avoid_: Failure isolation when referring only to limiting simultaneous work
 **Definition revision**:
 An immutable snapshot of the homelab's declared configuration at a Git revision.
 
+**Execution trust**:
+An operator's decision to permit a specific definition revision from a specific
+repository source to request credential-bearing work.
+_Avoid_: Apply approval, a guarantee that code is safe, or permission for future revisions
+
+**Repository source**:
+The configured origin and branch from which definition revisions are discovered.
+Reconnecting or changing that source does not carry execution trust into the new
+connection.
+_Avoid_: Commit hash alone when identifying the source of trusted configuration
+
 **Lab repository**:
 The Git repository holding Octopushy's definitions and the tool-native files for
 one or more labs, nested by lab, Proxmox installation, guest, and service instance.

@@ -143,12 +143,12 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
     public async Task<RevisionDto?> LatestRevisionAsync(CancellationToken cancellationToken)
     {
-        var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-        return revision is null ? null : Revision(revision);
+        var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        return revision is null ? null : Revision(revision, true);
     }
 
-    public static RevisionDto Revision(DefinitionRevision r) =>
-        new(r.Id, r.Commit, r.Subject, r.Author, r.CommittedAt, r.LoadedAt, r.RepositoryValid, r.ErrorCount, r.WarningCount);
+    public static RevisionDto Revision(DefinitionRevision r, bool isCurrentSource) =>
+        new(r.Id, r.Commit, r.Subject, r.Author, r.CommittedAt, r.LoadedAt, r.RepositoryValid, r.ErrorCount, r.WarningCount, r.TrustedAt, r.TrustedBy, isCurrentSource);
 
     public static IReadOnlyList<IssueDto> Issues(string json) =>
         JsonSerializer.Deserialize<List<DefinitionIssue>>(json, InventoryUpdater.IssueJson)?
@@ -193,7 +193,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var observations = await LatestObservationsAsync(cancellationToken);
         var summary = GuestSummary(resource, runs, installation is null ? null : observations.GetValueOrDefault(installation.Id));
 
-        var latest = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
         PolicyDto? policy = null;
         ResolvedSetting<IReadOnlyList<string>>? labels = null;
         string? text = null;
@@ -253,7 +253,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             ? observed.OfType<JsonObject>().Select(g => ObservedGuest(g, guests)).OrderBy(g => g.Vmid).ToList()
             : [];
 
-        var latest = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
         var text = latest is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken);
         var definition = resource.Definition is null ? null : JsonNode.Parse(resource.Definition);
         var installationRuns = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)

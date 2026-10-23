@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using DotNet.Testcontainers.Configurations;
 using Google.Protobuf;
@@ -85,7 +86,9 @@ public sealed class PostgresFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
         await command.ExecuteNonQueryAsync();
-        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name }.ConnectionString;
+        // Each test owns a unique database; retaining an idle pool per database
+        // exhausts this shared disposable server as the suite grows.
+        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name, Pooling = false }.ConnectionString;
         _databases.Add(connectionString);
         return connectionString;
     }
@@ -97,22 +100,28 @@ public sealed class PostgresFixture : IAsyncLifetime
 /// </summary>
 public sealed class ServerHarness : IAsyncDisposable
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private WebApplicationFactory<Program> _factory;
+    private readonly string _connectionString;
     private readonly string _dataDirectory;
+    private HttpClient? _trustClient;
 
     private ServerHarness(string connectionString, TestRepository repository)
     {
         Repository = repository;
+        _connectionString = connectionString;
         _dataDirectory = Path.Combine(Path.GetTempPath(), "octopushy-server-" + Guid.NewGuid().ToString("N"));
-        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        _factory = CreateFactory();
+    }
+
+    private WebApplicationFactory<Program> CreateFactory() =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting("ConnectionStrings:Octopushy", connectionString);
+            builder.UseSetting("ConnectionStrings:Octopushy", _connectionString);
             builder.UseSetting("Octopushy:DataDirectory", _dataDirectory);
             builder.UseSetting("Octopushy:MigrateOnStart", "true");
             builder.UseSetting("Octopushy:RunBackgroundServices", "false");
             builder.UseSetting("Octopushy:AgentChannel:PublicUrl", "https://octopushy.test:8443");
         });
-    }
 
     public TestRepository Repository { get; }
 
@@ -153,7 +162,44 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public async Task SyncAsync() => await Services.GetRequiredService<RepositorySync>().SyncOnceAsync(CancellationToken.None);
 
+    /// <summary>Execution fixtures explicitly review and grant authority through the authenticated API.</summary>
+    public async Task SyncAndTrustAsync(HttpClient? client = null)
+    {
+        await SyncAsync();
+        if (client is null)
+        {
+            if (_trustClient is null)
+            {
+                _trustClient = CreateClient();
+                var code = (await File.ReadAllTextAsync(Path.Combine(DataDirectory, "setup-code"))).Trim();
+                (await _trustClient.PostAsJsonAsync("/api/auth/setup",
+                    new { setupCode = code, username = "fixture-trust", password = "synthetic trust password" })).EnsureSuccessStatusCode();
+            }
+            client = _trustClient;
+        }
+        var repository = (await client.GetFromJsonAsync<JsonObject>("/api/repository"))!;
+        var revision = repository["revision"]!;
+        if (revision["trustedAt"] is not null) return;
+        var path = $"/api/repository/revisions/{revision["id"]}";
+        var review = (await client.GetFromJsonAsync<JsonObject>(path + "/review"))!;
+        (await client.PostAsJsonAsync(path + "/trust", new
+        {
+            commit = revision["commit"]!.GetValue<string>(),
+            baseCommit = review["baseCommit"]?.GetValue<string>(),
+        })).EnsureSuccessStatusCode();
+    }
+
     public Task TickAsync() => Engine.TickAsync(CancellationToken.None);
+
+    /// <summary>Restarts only this disposable in-process test server, retaining its fixture DB/files.</summary>
+    public async Task RestartFixtureAsync()
+    {
+        _trustClient?.Dispose();
+        _trustClient = null;
+        await _factory.DisposeAsync();
+        _factory = CreateFactory();
+        _ = _factory.Server;
+    }
 
     public async Task SetSecretAsync(string key, string value)
     {
@@ -212,6 +258,7 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _trustClient?.Dispose();
         await _factory.DisposeAsync();
         Repository.Dispose();
         if (Directory.Exists(_dataDirectory))

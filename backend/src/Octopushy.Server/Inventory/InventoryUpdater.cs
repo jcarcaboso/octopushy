@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Inventory;
@@ -89,13 +90,14 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         var activeRuns = await db.Runs.Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
             .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
             .ToListAsync(cancellationToken);
+        var currentSourceIds = await RepositoryTrust.CurrentRevisions(db).Select(r => r.Id).ToListAsync(cancellationToken);
 
         if (repository.RepositoryValid)
         {
             foreach (var resource in byAddress.Values.Where(r => !seen.Contains(r.Id) && r.RetiredAt is null))
             {
                 resource.MissingSince ??= now;
-                await SupersedeAsync(db, activeRuns, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}; nothing runs until it is restored or retired.", cancellationToken);
+                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}; nothing runs until it is restored or retired.", cancellationToken);
             }
         }
 
@@ -104,21 +106,25 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         {
             if (!resource.Valid)
             {
-                await SupersedeAsync(db, activeRuns, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
+                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
                 continue;
             }
 
             var guest = repository.Guest(resource.Address)!;
             var inputs = ProvisionInputs.Build(repository, guest, revision.Commit);
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
-            if (resource.DesiredInputsHash == desired)
+            if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
             {
+                // Only promote a real replacement already proposed by discovery. Metadata
+                // or policy-only revisions leave the older pinned plan/approval intact.
+                if (revision.TrustedAt is not null && activeRuns.Any(r => r.ResourceId == resource.Id && r.RevisionId == revision.Id))
+                    await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
                 continue;
             }
 
             resource.DesiredInputsHash = desired;
             resource.DesiredRevisionId = revision.Id;
-            await SupersedeAsync(db, activeRuns, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
             runs.Add(factory.Guest(repository, guest, resource, revision, "revision"));
         }
 
@@ -126,14 +132,14 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         {
             var installation = repository.Installation(resource.Address)!;
             var hash = RunFactory.InstallationHash(installation);
-            if (resource.DesiredInputsHash == hash)
+            if (resource.DesiredInputsHash == hash && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
             {
                 continue;
             }
 
             resource.DesiredInputsHash = hash;
             resource.DesiredRevisionId = revision.Id;
-            if (!activeRuns.Any(r => r.ResourceId == resource.Id))
+            if (!activeRuns.Any(r => r.ResourceId == resource.Id && currentSourceIds.Contains(r.RevisionId ?? Guid.Empty)))
             {
                 runs.Add(factory.Observe(repository, installation, resource, revision, "revision"));
             }
@@ -158,10 +164,13 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
     }
 
-    private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, Resource resource, string reason, CancellationToken cancellationToken)
+    private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason, CancellationToken cancellationToken)
     {
-        foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.Operation != Operations.Observe).ToList())
+        foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id && r.Operation != Operations.Observe).ToList())
         {
+            // Discovery must not discard a prepared, trusted plan for an untrusted head.
+            if (revision.TrustedAt is null && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is null)
+                continue;
             if (RunEngine.CanSupersede(run))
             {
                 await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken);

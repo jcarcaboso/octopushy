@@ -6,6 +6,7 @@ import type {
   RepositoryUpdate,
   RunDetail,
   TokenRequest,
+  TrustRevisionRequest,
   VariableCandidate,
   VariablePromotion,
   VariableRevocation,
@@ -27,6 +28,7 @@ export const keys = {
   repository: ["repository"] as const,
   revisions: ["revisions"] as const,
   revision: (id: string) => ["revision", id] as const,
+  revisionReview: (id: string) => ["revision-review", id] as const,
 };
 
 export const signedOut: AuthState = { setupRequired: false, authenticated: false, username: null };
@@ -155,7 +157,21 @@ export function useRevision(id: string | null) {
     queryFn: () =>
       unwrap(api.GET("/api/repository/revisions/{id}", { params: { path: { id: id! } } })),
     enabled: Boolean(id),
-    staleTime: Infinity,
+    // Definitions are immutable, but execution trust and source eligibility can change.
+    refetchInterval: 30_000,
+  });
+}
+
+export function useRevisionReview(id: string) {
+  return useQuery({
+    queryKey: keys.revisionReview(id),
+    queryFn: () =>
+      unwrap(api.GET("/api/repository/revisions/{id}/review", { params: { path: { id } } })),
+    // Keep the displayed review fixed until the operator explicitly refreshes it.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: "always",
+    gcTime: 0,
   });
 }
 
@@ -397,5 +413,22 @@ export function useSyncRepository() {
         }, delay);
       }
     },
+  });
+}
+
+export function useTrustRevision() {
+  const client = useQueryClient();
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, ...body }: TrustRevisionRequest & { id: string }) =>
+      unwrap(api.POST("/api/repository/revisions/{id}/trust", { params: { path: { id } }, body })),
+    onSuccess: (_revision, { id }) =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: keys.repository }),
+        client.invalidateQueries({ queryKey: keys.revisions }),
+        client.invalidateQueries({ queryKey: keys.revision(id) }),
+        refreshRuns(),
+      ]),
   });
 }

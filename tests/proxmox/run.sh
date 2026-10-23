@@ -28,6 +28,7 @@ set -euo pipefail
 umask 077
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
+source "$root/tests/revision-trust/fixture.sh"
 remote=${REMOTE_WORKER:-0}
 [[ $remote == 0 || $remote == 1 ]] || { echo "REMOTE_WORKER must be 0 or 1." >&2; exit 1; }
 work=$root/.dev/proxmox-e2e
@@ -172,6 +173,7 @@ commit() {
   git -C "$lab" add -A
   git -C "$lab" -c user.name=octopushy-e2e -c user.email=e2e@example.invalid commit -q --allow-empty -m "$1"
   call -X POST "$api/api/repository/sync" >/dev/null
+  trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
 }
 
 if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
@@ -231,7 +233,8 @@ hosts:
     limits: { concurrentOperations: 1 }
 YAML
   git -C "$lab" init -q -b main
-  commit "The $node installation"
+  git -C "$lab" add -A
+  git -C "$lab" -c user.name=octopushy-e2e -c user.email=e2e@example.invalid commit -q -m "The $node installation"
   jq -n --arg url "$lab" '{url:$url,branch:"main",pollSeconds:10,credentialKind:"none"}' |
     call -X PUT "$api/api/repository" --data-binary @- >/dev/null
 
@@ -359,6 +362,8 @@ YAML
 }
 
 log "Observing $node"
+call -X POST "$api/api/repository/sync" >/dev/null
+trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
 for _ in $(seq 1 60); do installation=$(installation_id); [[ -n $installation ]] && break; sleep 2; done
 [[ -n ${installation:-} ]] || fail "The installation never appeared; see $work/backend.log."
 wait_run "$installation" observe succeeded 3 >/dev/null || fail "Octopushy could not observe $node with this token."

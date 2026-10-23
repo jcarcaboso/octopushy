@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Octopushy.Server.Options;
@@ -7,6 +8,8 @@ using Octopushy.Server.Options;
 namespace Octopushy.Server.Git;
 
 public sealed record CommitInfo(string Commit, string Subject, string Author, DateTimeOffset CommittedAt);
+
+public sealed class ReviewTooLargeException() : GitException("The diff exceeds the 512 KiB review limit. Reduce the change and sync again.");
 
 /// <summary>How to authenticate to the lab repository's remote.</summary>
 public sealed record GitCredential(string Kind, string? Username, string? Secret)
@@ -32,9 +35,10 @@ public sealed partial class RepositoryMirror
         _mirror = Path.Combine(_directory, "mirror.git");
     }
 
-    private string SnapshotsDirectory => Path.Combine(_directory, "snapshots");
+    // v3 also invalidates pre-publication v2 caches that honored checkout conversions.
+    private string SnapshotsDirectory => Path.Combine(_directory, "snapshots-literal-v3");
 
-    private string BundlesDirectory => Path.Combine(_directory, "bundles");
+    private string BundlesDirectory => Path.Combine(_directory, "bundles-literal-v3");
 
     /// <summary>Fetches the branch and returns the commit it points at.</summary>
     public async Task<string> FetchAsync(string url, string branch, GitCredential credential, CancellationToken cancellationToken)
@@ -78,11 +82,71 @@ public sealed partial class RepositoryMirror
 
     public async Task<CommitInfo> CommitInfoAsync(string commit, CancellationToken cancellationToken)
     {
+        CheckCommit(commit);
         var text = await _git.RunAsync(
             ["-C", _mirror, "log", "-1", "--format=%H%x00%s%x00%an%x00%cI", commit, "--"],
             cancellationToken: cancellationToken);
         var parts = text.TrimEnd('\n').Split('\0');
         return new CommitInfo(parts[0], parts[1], parts[2], DateTimeOffset.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>A bounded native Git diff; never invokes repository external diffs or text converters.</summary>
+    public async Task<string> ReviewDiffAsync(string? baseCommit, string commit, CancellationToken cancellationToken)
+    {
+        CheckCommit(commit);
+        if (baseCommit is not null)
+        {
+            CheckCommit(baseCommit);
+        }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            // Materialize the empty tree in this mirror, also supporting SHA-256 repositories.
+            var basis = baseCommit ?? (await _git.RunAsync(
+                ["-C", _mirror, "hash-object", "-w", "-t", "tree", "--", "/dev/null"], cancellationToken: timeout.Token)).Trim();
+            using var output = new ReviewOutput();
+            var error = await _git.RunToStreamAsync(
+                ["-C", _mirror, "-c", "core.attributesFile=/dev/null", "-c", "diff.external=",
+                    "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--binary", "--full-index",
+                    "--ignore-submodules=none", "--submodule=short",
+                    "--src-prefix=a/", "--dst-prefix=b/", basis, commit, "--"],
+                output, cancellationToken: timeout.Token);
+            if (error is not null)
+            {
+                throw new GitException(error);
+            }
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(output.ToArray());
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new GitException("The review diff is not valid UTF-8. Normalize the source encoding before requesting trust.");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GitException("The review diff exceeded its 10 second time limit.");
+        }
+    }
+
+    private sealed class ReviewOutput : MemoryStream
+    {
+        private void CheckLength(int count)
+        {
+            if (Length + count > 512 * 1024)
+            {
+                throw new ReviewTooLargeException();
+            }
+        }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            CheckLength(count);
+            base.Write(buffer, offset, count);
+        }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            CheckLength(buffer.Length);
+            return base.WriteAsync(buffer, cancellationToken);
+        }
     }
 
     /// <summary>The directory holding the files of <paramref name="commit"/>, extracted on first use.</summary>
@@ -110,6 +174,14 @@ public sealed partial class RepositoryMirror
             }
 
             Directory.CreateDirectory(staging);
+            // info/attributes outranks every repository .gitattributes file. The native
+            // archive must materialize the literal reviewed blobs, not commit-message
+            // substitutions, checkout conversions or an export-ignore subset.
+            var attributes = Path.Combine(_mirror, "info", "attributes");
+            Directory.CreateDirectory(Path.GetDirectoryName(attributes)!);
+            await File.WriteAllTextAsync(attributes,
+                "* -export-subst -export-ignore -text -eol -crlf -ident -filter -working-tree-encoding\n",
+                cancellationToken);
             var archive = new MemoryStream();
             var error = await _git.RunToStreamAsync(["-C", _mirror, "archive", "--format=tar", commit], archive, cancellationToken: cancellationToken);
             if (error is not null)
@@ -234,31 +306,31 @@ public sealed partial class RepositoryMirror
         switch (credential.Kind)
         {
             case "token" when credential.Secret is not null:
-            {
-                var askPass = Path.Combine(_directory, "askpass.sh");
-                if (!File.Exists(askPass))
                 {
-                    File.WriteAllText(askPass, "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s' \"$OCTOPUSHY_GIT_USERNAME\" ;;\n  *) printf '%s' \"$OCTOPUSHY_GIT_PASSWORD\" ;;\nesac\n");
-                    File.SetUnixFileMode(askPass, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-                }
+                    var askPass = Path.Combine(_directory, "askpass.sh");
+                    if (!File.Exists(askPass))
+                    {
+                        File.WriteAllText(askPass, "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s' \"$OCTOPUSHY_GIT_USERNAME\" ;;\n  *) printf '%s' \"$OCTOPUSHY_GIT_PASSWORD\" ;;\nesac\n");
+                        File.SetUnixFileMode(askPass, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+                    }
 
-                environment["GIT_ASKPASS"] = askPass;
-                environment["OCTOPUSHY_GIT_USERNAME"] = credential.Username ?? "git";
-                environment["OCTOPUSHY_GIT_PASSWORD"] = credential.Secret;
-                secrets.Add(credential.Secret);
-                break;
-            }
+                    environment["GIT_ASKPASS"] = askPass;
+                    environment["OCTOPUSHY_GIT_USERNAME"] = credential.Username ?? "git";
+                    environment["OCTOPUSHY_GIT_PASSWORD"] = credential.Secret;
+                    secrets.Add(credential.Secret);
+                    break;
+                }
             case "ssh" when credential.Secret is not null:
-            {
-                var keyFile = Path.Combine(_directory, $"ssh-key-{Guid.NewGuid():N}");
-                File.WriteAllText(keyFile, credential.Secret.ReplaceLineEndings("\n").TrimEnd('\n') + "\n");
-                File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                files.Add(keyFile);
-                var knownHosts = Path.Combine(_directory, "known_hosts");
-                environment["GIT_SSH_COMMAND"] =
-                    $"ssh -i '{keyFile}' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='{knownHosts}'";
-                break;
-            }
+                {
+                    var keyFile = Path.Combine(_directory, $"ssh-key-{Guid.NewGuid():N}");
+                    File.WriteAllText(keyFile, credential.Secret.ReplaceLineEndings("\n").TrimEnd('\n') + "\n");
+                    File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                    files.Add(keyFile);
+                    var knownHosts = Path.Combine(_directory, "known_hosts");
+                    environment["GIT_SSH_COMMAND"] =
+                        $"ssh -i '{keyFile}' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='{knownHosts}'";
+                    break;
+                }
         }
 
         return (environment, secrets, () =>
@@ -267,7 +339,8 @@ public sealed partial class RepositoryMirror
             {
                 File.Delete(file);
             }
-        });
+        }
+        );
     }
 
     private static void ValidateUrl(string url)
