@@ -25,7 +25,7 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(http);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
@@ -82,7 +82,7 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(http);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
@@ -133,7 +133,7 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(http);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
         await agent.ReportAsync(await agent.NextAsync("grow"), Outcome.Failed, error: "unit unavailable");
@@ -144,7 +144,7 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
         const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
         repo.Write(file, File.ReadAllText(Path.Combine(repo.Root, file)).Replace("size: 26", "size: 27"));
         server.Commit("Different desired capacity");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync(http);
         Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).StatusCode);
     }
 }

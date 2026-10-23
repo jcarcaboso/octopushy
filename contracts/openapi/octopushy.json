@@ -966,6 +966,138 @@
         }
       }
     },
+    "/api/repository/revisions/{id}/review": {
+      "get": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "reviewRevision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionReviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repository/revisions/{id}/trust": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "trustRevision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs": {
       "get": {
         "tags": [
@@ -3618,7 +3750,10 @@
           "loadedAt",
           "valid",
           "errorCount",
-          "warningCount"
+          "warningCount",
+          "trustedAt",
+          "trustedBy",
+          "isCurrentSource"
         ],
         "type": "object",
         "properties": {
@@ -3662,6 +3797,59 @@
           "warningCount": {
             "type": "integer",
             "format": "int32"
+          },
+          "trustedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "trustedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "isCurrentSource": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RevisionReviewDto": {
+        "required": [
+          "revision",
+          "baseCommit",
+          "diff",
+          "truncated",
+          "canTrust",
+          "blockedReason"
+        ],
+        "type": "object",
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/RevisionDto"
+          },
+          "baseCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "diff": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "canTrust": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4056,6 +4244,24 @@
               "integer"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "TrustRevisionRequest": {
+        "required": [
+          "commit",
+          "baseCommit"
+        ],
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

@@ -67,90 +67,95 @@ public sealed class RepositorySync(
     /// <summary>Fetches once and loads the head commit if it is new; returns the poll interval.</summary>
     public async Task<TimeSpan> SyncOnceAsync(CancellationToken cancellationToken)
     {
-        await using var scope = scopes.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
-        var settings = await db.RepositorySettings.Where(r => r.Id == 1).FirstOrDefaultAsync(cancellationToken);
-        if (settings is null)
+        // Fetch and parse outside the controller gate. Only the captured source may persist
+        // their result: a settings change during either phase discards the stale discovery.
+        var settings = await engine.ExecuteAsync(async (db, _) =>
         {
-            settings = new RepositorySettings { UpdatedAt = clock.GetUtcNow() };
-            db.RepositorySettings.Add(settings);
+            var current = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, cancellationToken);
+            if (current is not null) return current;
+            current = new RepositorySettings { UpdatedAt = clock.GetUtcNow() };
+            db.RepositorySettings.Add(current);
             await db.SaveChangesAsync(cancellationToken);
-        }
-
+            return current;
+        }, cancellationToken);
         var poll = TimeSpan.FromSeconds(Math.Max(10, settings.PollSeconds));
-        if (settings.Url is null)
-        {
-            return poll;
-        }
+        if (settings.Url is null) return poll;
 
-        string head;
         try
         {
+            await using var scope = scopes.CreateAsyncScope();
             var credential = await CredentialAsync(scope.ServiceProvider.GetRequiredService<VariableStore>(), settings, cancellationToken);
-            head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
-            settings.LastFetchError = null;
-            settings.HeadCommit = head;
+            var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
+            var info = await mirror.CommitInfoAsync(head, cancellationToken);
+            var repository = await revisions.GetAsync(head, cancellationToken);
+            await engine.ExecuteAsync(async (db, services) =>
+            {
+                var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
+                if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch)
+                    return false;
+                var alreadyLoadedHead = current.HeadCommit == head;
+                current.LastFetchAt = clock.GetUtcNow();
+                current.LastFetchError = null;
+                current.HeadCommit = head;
+                // A return to an already loaded exact commit of this source reuses its authority.
+                var loaded = await RepositoryTrust.CurrentRevisions(db).AnyAsync(r => r.Commit == head, cancellationToken);
+                if (alreadyLoadedHead && loaded)
+                {
+                    await db.SaveChangesAsync(cancellationToken);
+                    return false;
+                }
+                var revision = loaded
+                    ? await RepositoryTrust.CurrentRevisions(db).Where(r => r.Commit == head).OrderByDescending(r => r.Sequence).FirstAsync(cancellationToken)
+                    : new DefinitionRevision
+                    {
+                        Id = Guid.CreateVersion7(),
+                        SourceId = settings.SourceId,
+                        Commit = head,
+                        Subject = info.Subject,
+                        Author = info.Author,
+                        CommittedAt = info.CommittedAt,
+                        LoadedAt = clock.GetUtcNow(),
+                        RepositoryValid = repository.RepositoryValid,
+                        ErrorCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Error),
+                        WarningCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Warning),
+                        Issues = JsonSerializer.Serialize(repository.Issues, InventoryUpdater.IssueJson),
+                    };
+                if (!loaded) db.Revisions.Add(revision);
+                await db.SaveChangesAsync(cancellationToken);
+                await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, cancellationToken);
+                return true;
+            }, cancellationToken);
+            await PruneAsync(cancellationToken);
         }
         catch (GitException e)
         {
-            settings.LastFetchError = e.Message;
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
+                if (current.SourceId == settings.SourceId && current.Url == settings.Url && current.Branch == settings.Branch)
+                {
+                    current.LastFetchAt = clock.GetUtcNow();
+                    current.LastFetchError = e.Message;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+                return false;
+            }, cancellationToken);
             logger.LogWarning("Fetching the lab repository failed: {Error}", e.Message);
-            return poll;
         }
-        finally
-        {
-            settings.LastFetchAt = clock.GetUtcNow();
-            await db.SaveChangesAsync(cancellationToken);
-        }
-
-        var latest = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-        if (latest?.Commit != head)
-        {
-            await LoadRevisionAsync(head, cancellationToken);
-        }
-
         return poll;
-    }
-
-    private async Task LoadRevisionAsync(string commit, CancellationToken cancellationToken)
-    {
-        var info = await mirror.CommitInfoAsync(commit, cancellationToken);
-        var repository = await revisions.GetAsync(commit, cancellationToken);
-        var revision = new DefinitionRevision
-        {
-            Id = Guid.CreateVersion7(),
-            Commit = commit,
-            Subject = info.Subject,
-            Author = info.Author,
-            CommittedAt = info.CommittedAt,
-            LoadedAt = clock.GetUtcNow(),
-            RepositoryValid = repository.RepositoryValid,
-            ErrorCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Error),
-            WarningCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Warning),
-            Issues = JsonSerializer.Serialize(repository.Issues, InventoryUpdater.IssueJson),
-        };
-
-        await engine.ExecuteAsync(async (db, services) =>
-        {
-            db.Revisions.Add(revision);
-            await db.SaveChangesAsync(cancellationToken);
-            await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, cancellationToken);
-            return true;
-        }, cancellationToken);
-        logger.LogInformation("Loaded revision {Commit}: {Errors} errors, {Warnings} warnings.", commit[..10], revision.ErrorCount, revision.WarningCount);
-        await PruneAsync(cancellationToken);
     }
 
     private async Task PruneAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var trusted = await db.Revisions.AsNoTracking().Where(r => r.TrustedAt != null).Select(r => r.Commit).ToListAsync(cancellationToken);
         var recent = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).Take(10).Select(r => r.Commit).ToListAsync(cancellationToken);
         var inUse = await db.Runs.AsNoTracking()
             .Where(r => r.Commit != null && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
             .Select(r => r.Commit!)
             .ToListAsync(cancellationToken);
-        mirror.Prune(recent.Concat(inUse).ToHashSet(StringComparer.Ordinal));
+        mirror.Prune(recent.Concat(inUse).Concat(trusted).ToHashSet(StringComparer.Ordinal));
     }
 
     private static async Task<GitCredential> CredentialAsync(VariableStore store, RepositorySettings settings, CancellationToken cancellationToken)

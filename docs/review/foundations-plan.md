@@ -6,6 +6,14 @@ Inputs: [current architecture](current-architecture.md), [security review](secur
 sequence, not authorization to deploy, rotate credentials, or change machines. It keeps
 the six rules in *progress and next steps* and adds the rules in section 2.
 
+**Progress note (October 23, 2026):** this review snapshot remains historical.
+The fixes/implementation were published in PR #1, hosted baseline CI in PR #3,
+and the synthetic matched-recovery rehearsal in PR #4; all three are merged.
+The current [trusted-revision slice](../trusted-revisions.md) implements manual
+T1, not signed-commit automation or the whole trust wave. The remaining trust,
+transport and secret-delivery prerequisites still precede guest SSH expansion
+and a retained-environment upgrade.
+
 **What changed from revision 1.** The review showed that revision 1's "Wave 1" did not
 close the main exfiltration path: the plan step already runs repository-chosen code with
 the token before any approval, and observe runs send the token automatically. Revision 2

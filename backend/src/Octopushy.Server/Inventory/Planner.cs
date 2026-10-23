@@ -34,26 +34,25 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     public Task ScheduleObservesAsync(CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
-            var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-            if (revision is null || !revision.RepositoryValid)
-            {
-                return 0;
-            }
+            var eligible = RepositoryTrust.EligibleRevisions(db);
+            var revision = await eligible.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+            if (revision is null) return 0;
 
             var cutoff = clock.GetUtcNow().AddMinutes(-options.Value.Scheduling.ObserveMinutes);
             var due = await db.Resources
-                .Where(r => r.Kind == ResourceKinds.Installation && r.Valid && r.MissingSince == null)
+                .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null)
                 .Where(r => !db.Runs.Any(run => run.ResourceId == r.Id
-                                                && (run.CreatedAt > cutoff
-                                                    || (run.Status != RunStatuses.Succeeded && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled))))
+                    && (eligible.Any(v => v.Id == run.RevisionId && v.Commit == run.Commit)
+                        && (run.CreatedAt > cutoff || (run.Status != RunStatuses.Succeeded && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled))
+                        || db.Attempts.Any(a => a.RunId == run.Id && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Mutating && a.Status == AttemptStatuses.Uncertain)))))
                 .ToListAsync(cancellationToken);
-            if (due.Count == 0)
-            {
-                return 0;
-            }
+            if (due.Count == 0) return 0;
 
             var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
             var runs = due
+                // Discovery may have invalidated/removed an installation in an untrusted head.
+                // Scheduled work uses the definition and validity of the eligible snapshot only.
+                .Where(r => repository.Resource(r.Address)?.Valid == true)
                 .Select(r => (Resource: r, Definition: repository.Installation(r.Address)))
                 .Where(x => x.Definition is not null)
                 .Select(x => factory.Observe(repository, x.Definition!, x.Resource, revision, "schedule"))
@@ -94,7 +93,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             throw new RunException($"Run #{running.Number} is still {running.Status}.");
         }
 
-        var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstAsync(cancellationToken);
+        var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
+            ?? throw new RunException("Sync the current repository source before planning.");
         var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
         return (resource, revision, repository);
     }

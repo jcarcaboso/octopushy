@@ -13,9 +13,16 @@ public sealed record RevisionDto(
     DateTimeOffset LoadedAt,
     bool Valid,
     int ErrorCount,
-    int WarningCount);
+    int WarningCount,
+    DateTimeOffset? TrustedAt,
+    string? TrustedBy,
+    bool IsCurrentSource);
 
 public sealed record RevisionDetailDto(RevisionDto Revision, IReadOnlyList<IssueDto> Issues);
+
+public sealed record RevisionReviewDto(RevisionDto Revision, string? BaseCommit, string Diff, bool Truncated, bool CanTrust, string? BlockedReason);
+
+public sealed record TrustRevisionRequest(string Commit, string? BaseCommit);
 
 public sealed record RepositoryDto(
     string? Url,

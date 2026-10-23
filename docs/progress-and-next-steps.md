@@ -1,6 +1,6 @@
 # Progress and next steps
 
-Baseline/recovery update: **October 22, 2026**; lifecycle snapshot: **October 21, 2026**.
+Trust/recovery update: **October 23, 2026**; lifecycle snapshot: **October 21, 2026**.
 The plan below is a proposed implementation sequence,
 not authorization to deploy, rotate credentials, or change existing machines.
 
@@ -13,8 +13,9 @@ running the guest setup externally after controller-driven provisioning.
 
 ### Publication boundary
 
-The current source baseline is `main` merge `f72770befd689baa7abedba06ea3b29cd45aed81`
-(baseline CI PR #3, merged October 22, 2026). It preserves the foundations work
+The source baseline for the trust milestone is `main` merge
+`5a0fb1daf689382bf7225897651b2e47db91057b` (recovery PR #4, merged October 23,
+2026), following baseline CI PR #3 (`f72770b`). It preserves the foundations work
 from PR #1 (`893b19a`): networking, guest examples, filesystem growth, worker
 readiness, and credential lifecycle. The earlier documentation-only checkpoint on `proxmox-e2e`
 described those changes before publication. The repository's default branch is
@@ -34,7 +35,7 @@ progress without replacing those documents or changing the
 
 ## Progress by area
 
-| Area | What exists in the reviewed baseline | Boundary |
+| Area | What exists in this source snapshot | Boundary |
 | --- | --- | --- |
 | Control plane | .NET 10 backend, PostgreSQL, React/TypeScript UI, Git definition loading, run/step/attempt history and logs | One trusted administrator and one controller process; not controller HA or tenant isolation |
 | Workers | Rust worker, outbound mTLS channel, enrollment/renewal, labels/capabilities, bounded concurrency, durable result outbox | An Octopushy worker is not the QEMU guest agent and need not run inside every managed VM |
@@ -46,6 +47,7 @@ progress without replacing those documents or changing the
 | Guest disk growth | Opt-in `nixos-rootfs` executor, separate growth/capacity verification, targeted retry preserving successful infrastructure work | Only the documented NixOS GPT/ext4 layout via QEMU guest-agent execution; not generic disks, filesystems, or scripts |
 | Remote-worker readiness | Canonical paths, truthful OpenTofu capability advertisement, clearer queue reasons, opt-in remote acceptance harness | Harness configuration is tested; an actual remote run remains pending |
 | Credentials | Encrypted candidate versions, explicit promotion/revocation, pinned run bindings, API/UI controls and migration tests | Not automatic credential verification, guest SSH management, upstream revocation, or master-key rotation |
+| Execution trust | Explicit exact-revision review/trust, repository-source binding, blocked execution before trust, and operator attribution | Separate from apply approval; not signed-commit automation, a sandbox, or purpose/destination credential restrictions |
 
 ### Credential milestone in practical terms
 
@@ -142,13 +144,73 @@ reconnection. Restoring an older backup loses later revocations and certificate
 registrations; reconcile those before dispatch, rather than treating a restored
 database as current authorization.
 
-Recovery PR #4 now targets `main` after PR #3 merged; its diff remains limited
-to the seven recovery test/documentation files. **Hosted recovery CI passed at
+Recovery PR #4 contained seven recovery test/documentation files.
+**Hosted recovery CI passed at
 `2f27df3`**: Actions run `39849581578` completed on October 22, 2026, with all five
 jobs successful, including 169 backend tests, vulnerability audits and
 generated-contract drift checks. This is independent of PR #3's baseline
-evidence. PR #4 remains unmerged; this synthetic acceptance is not authorization
-to restore or upgrade a retained installation.
+evidence. Documentation follow-up `4bf2205` also passed all five jobs in run
+`39850626319`; PR #4 merged on October 23, 2026. This synthetic acceptance is not
+authorization to restore or upgrade a retained installation.
+
+### Trusted-revision slice — October 23, 2026
+
+This bounded change implements the manual execution-trust part of T1 in the
+[foundations plan](review/foundations-plan.md). It separates revision discovery
+and validation from eligibility for credential-bearing execution. Trust records
+the exact loaded revision, repository-source generation, operator and time;
+apply approval remains separate.
+
+The [operator guide](trusted-revisions.md) covers review, blocked work,
+source changes and upgrade limits. Historical revisions are not automatically
+trusted, and missing legacy provenance is not reconstructed from current settings.
+Already delivered work retains its existing mutation/uncertainty rules.
+
+Independent Sol reviews identified and drove regressions for:
+
+- Metadata-only trust discarding an existing prepared plan without a replacement.
+- Source changes hiding uncertain mutations behind a trust wait.
+- Incomplete binary diffs and archive transformations changing reviewed bytes.
+- Lossy UTF-8 decoding of textual patches.
+- More than one dispatch batch of previous-source observations starving eligible
+  current-source work.
+
+The fixes preserve plan/artifact identity and uncertainty, enforce bounded
+complete reviews and literal regular-file materialization, fail closed on
+non-UTF-8 textual diffs, and filter execution eligibility before the dispatch
+batch limit. Pre-change derived archive caches are not reused.
+
+The final independent review reported no remaining concrete finding in those
+paths and independently exercised native Git byte-preservation and binary-patch
+fixtures. This is a bounded review, not a claim of execution sandboxing or a
+complete security audit.
+
+Final local validation on October 23, 2026:
+
+| Check | Result |
+| --- | --- |
+| Full backend suite on a separately rooted disposable Podman/PostgreSQL fixture | **200 passed** |
+| Frontend tests | **68 passed** across 11 files |
+| Frontend TypeScript, ESLint and production build | Passed |
+| Offline Python checks | **53 passed**, five existing optional cases skipped |
+| OpenAPI rebuild and frontend API regeneration | Both generated files unchanged after regeneration; build had zero warnings/errors |
+| Changed C# whitespace, shell syntax, local documentation links and `git diff --check` | Passed |
+
+The larger backend suite exposed idle connection pools accumulating across
+unique fixture databases. Those test-only connections now disable pooling;
+production connection settings and PostgreSQL limits are unchanged.
+
+Hosted CI for this trust slice is still a publication gate, not yet claimed here.
+Rust and Nix sources/dependencies were unchanged and were not rerun locally in
+this slice. No full remote-worker or live Proxmox harness was run; automated
+fixture trust was checked at its mocked API boundary, and the controller tests
+use fake workers. The existing five-job workflow remains the hosted gate.
+
+This milestone does not deliver the rest of the trust wave: purpose/destination
+bindings, worker/runtime restrictions, split Proxmox credentials, controller
+approval floors and verified TLS remain prerequisites before expanding secret
+delivery or upgrading the retained environment. No live infrastructure or
+retained-installation upgrade is part of this change.
 
 ### Earlier implementation validation
 
@@ -244,6 +306,10 @@ environment runs that revision without losing credential/run history. This
 documentation push is not that upgrade.
 
 ### 1. Establish managed guest access
+
+**Prerequisite:** complete the remaining bounded trust controls described above.
+The list below is not permission to skip them simply because revision trust and
+the synthetic recovery rehearsal are available.
 
 Start with access to one disposable NixOS guest, not a generic SSH job runner.
 

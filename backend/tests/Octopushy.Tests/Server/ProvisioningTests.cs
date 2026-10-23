@@ -19,7 +19,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
 
         var plan = await agent.NextAsync("preview");
         Assert.Equal("opentofu", plan.Executor);
@@ -67,7 +67,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
         await server.TickAsync();
@@ -88,7 +88,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var artifact = FakeAgent.PlanArtifact();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: artifact);
         await server.TickAsync();
@@ -115,14 +115,14 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { destructive: manual }\n");
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(replace: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.NextAsync("apply");
 
         repository.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml",
             File.ReadAllText(Path.Combine(repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml")).Replace("cores: 2", "cores: 4"));
         server.Commit("More cores");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var second = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Queued, second.Status);
     }
@@ -134,7 +134,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { destructive: manual }\n");
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1, delete: 1), artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
 
@@ -150,7 +150,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(hasChanges: true), artifacts: FakeAgent.PlanArtifact());
 
         Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
@@ -164,7 +164,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await server.TickAsync();
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -184,7 +184,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.ConnectAgentAsync("office");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await server.TickAsync();
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -200,7 +200,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
         var first = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -209,7 +209,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         repository.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml",
             File.ReadAllText(Path.Combine(repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml")).Replace("memory: 2048", "memory: 4096"));
         server.Commit("More memory");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
 
         var runs = await server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.Operation == Operations.Provision).OrderBy(r => r.CreatedAt).ToListAsync());
         Assert.Equal(2, runs.Count);
@@ -223,7 +223,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         var apply = await agent.NextAsync("apply");
         await server.Engine.OnStartedAsync(agent.Id, Guid.Parse(apply.AttemptId), CancellationToken.None);
@@ -248,7 +248,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var plan = await agent.NextAsync("preview");
         await server.WithDbAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(plan.AttemptId))
             .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, DateTimeOffset.UtcNow.AddMinutes(-1))));
@@ -266,7 +266,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Failed, error: "Error: Unsupported argument");
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
@@ -280,7 +280,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
@@ -288,7 +288,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         var path = Path.Combine(server.Repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml");
         server.Repository.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", File.ReadAllText(path) + "lifecycle: retired\n");
         server.Commit("Retire");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
 
         var plan = await agent.NextAsync("preview");
         Assert.True(JsonNode.Parse(plan.InputJson)!["destroy"]!.GetValue<bool>());
@@ -305,7 +305,7 @@ public class ProvisioningTests(PostgresFixture postgres)
 
         // Later revisions still recognize the retired guest and propose nothing.
         server.Commit("Unrelated");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var runs = await server.QueryAsync(db => db.Runs.CountAsync(r => r.Operation != Operations.Observe));
         Assert.Equal(2, runs);
     }
@@ -315,7 +315,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
@@ -323,7 +323,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         var path = Path.Combine(server.Repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml");
         server.Repository.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", File.ReadAllText(path).Replace("vmid: 310", "vmid: 311"));
         server.Commit("Other VMID");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
 
         var resource = await server.ResourceAsync(Guest);
         Assert.False(resource.Valid);
@@ -335,10 +335,10 @@ public class ProvisioningTests(PostgresFixture postgres)
     public async Task A_deleted_folder_marks_the_guest_missing_and_runs_nothing()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         server.Repository.Delete("labs/home/proxmox/korriban/guests/krb-app-01");
         server.Commit("Remove the folder");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
 
         var resource = await server.ResourceAsync(Guest);
         Assert.NotNull(resource.MissingSince);
@@ -352,7 +352,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var observe = await agent.NextAsync("observe");
         Assert.Equal("proxmox", observe.Executor);
         Assert.Equal("https://10.1.0.10:8006/", JsonNode.Parse(observe.InputJson)!["connection"]!["endpoint"]!.GetValue<string>());
@@ -371,7 +371,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var corrupted = FakeAgent.PlanArtifact();
         corrupted.Sha256 = new string('a', 64);
         Assert.True(await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: corrupted));
@@ -387,7 +387,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAsync();
+        await server.SyncAndTrustAsync();
         var plan = await agent.NextAsync("preview");
         var attemptId = Guid.Parse(plan.AttemptId);
         var logs = server.Services.GetRequiredService<Octopushy.Server.Agents.AttemptLogStore>();

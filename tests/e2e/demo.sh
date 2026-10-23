@@ -58,7 +58,9 @@ pids+=($!)
 cat <<INFO
 
 Octopushy demo: http://127.0.0.1:5174  (user demo, password octopushy-demo)
-The first plan waits for your approval. The lab repository is $work/lab:
-edit and commit there to see new plans; Ctrl-C stops everything.
+First review and trust the exact revision on the Repository page; this permits
+planning, not apply. The first plan then waits for your separate approval.
+The lab repository is $work/lab: edit and commit there to see new proposed work,
+then review/trust each new revision. Ctrl-C stops everything.
 INFO
 wait

@@ -18,6 +18,8 @@ public sealed class AssignmentException(string message) : Exception(message);
 
 public sealed class CredentialUnavailableException(string message) : Exception(message);
 
+public sealed class RevisionUntrustedException(string message) : Exception(message);
+
 /// <summary>Builds the assignment an agent receives for an attempt.</summary>
 public sealed class AssignmentBuilder(
     OctopushyDb db,
@@ -52,6 +54,10 @@ public sealed class AssignmentBuilder(
 
     public async Task<Assignment> BuildAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
+        if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+        {
+            throw new RevisionUntrustedException(reason);
+        }
         var action = ActionFor(step.Name);
         var names = SecretsFor(step.Name, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);

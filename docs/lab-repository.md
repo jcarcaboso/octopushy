@@ -62,6 +62,12 @@ migration plan for that repository.
 
 ## What the repository holds
 
+**Execution boundary (October 23, 2026):** syncing and validating definitions does
+not authorize their execution. An operator must [review and trust the exact
+revision](trusted-revisions.md) before it can receive worker execution
+credentials. This is separate from the per-resource apply policy described
+below, and cannot be enabled or weakened by a setting in the lab repository.
+
 The lab repository is the desired configuration Octopushy reads. It is separate from
 Octopushy's own source code and holds two kinds of files:
 

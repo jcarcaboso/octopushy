@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -14,11 +15,20 @@ public sealed partial class RunEngine
     {
         await WithDbAsync(async (db, services) =>
         {
-            var queued = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
-                .Where(a => a.Status == AttemptStatuses.Queued)
+            var eligible = RepositoryTrust.EligibleRevisions(db);
+            var pending = db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+                .Where(a => a.Status == AttemptStatuses.Queued);
+            var queued = await pending
+                .Where(a => eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken);
+            // Keep trust-wait reporting bounded without spending eligible execution slots.
+            queued.AddRange(await pending
+                .Where(a => !eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
+                .OrderBy(a => a.CreatedAt)
+                .Take(200)
+                .ToListAsync(cancellationToken));
             var result = new List<(AgentSession Session, ServerMessage Message, Guid AttemptId)>();
             if (queued.Count == 0)
             {
@@ -39,6 +49,13 @@ public sealed partial class RunEngine
 
             foreach (var attempt in queued)
             {
+                if (await RepositoryTrust.BlockedReasonAsync(db, attempt.Step!.Run!, cancellationToken) is { } trustReason)
+                {
+                    attempt.WaitingReason = trustReason;
+                    attempt.Step.Run!.Status = RunStatuses.Blocked;
+                    attempt.Step.Run.Detail = trustReason;
+                    continue;
+                }
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains))
@@ -85,7 +102,7 @@ public sealed partial class RunEngine
                 {
                     assignment = await builder.BuildAsync(attempt, step, run, RunContext.Parse(run.Context), agent.Id, cancellationToken);
                 }
-                catch (CredentialUnavailableException e)
+                catch (Exception e) when (e is CredentialUnavailableException or RevisionUntrustedException)
                 {
                     attempt.WaitingReason = e.Message;
                     run.Status = RunStatuses.Blocked;
