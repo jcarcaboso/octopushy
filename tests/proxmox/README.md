@@ -1,5 +1,8 @@
 # Real Proxmox end to end
 
+This harness exercises optional **split-token mode**, not the product's simpler
+one-token setup. See [credentials](../../docs/proxmox-credentials.md) for both modes.
+
 **Live/full-lifecycle acceptance is blocked with strictly read-only planning.**
 In bpg/proxmox v0.117.0, VM refresh discovers missing disk formats (especially
 EFI/raw volumes) through `storage/content/{volume}`. Upstream PVE requires

@@ -47,7 +47,7 @@ public sealed class AssignmentBuilder(
     public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
         var action = ActionFor(stepName);
-        var token = TokenFor(stepName);
+        var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
             ? context.OpenTofu!.SecretEnv.Values
                 .Select(n => n == SecretNames.ProxmoxToken ? token : n).Distinct(StringComparer.Ordinal).ToList()
@@ -58,6 +58,9 @@ public sealed class AssignmentBuilder(
     public static string TokenFor(string stepName) => stepName is
         StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
+
+    private static string TokenFor(string stepName, RunContext context) =>
+        context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
 
     public async Task<Assignment> BuildAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
@@ -92,8 +95,9 @@ public sealed class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
-        values[SecretNames.ProxmoxToken] = values[TokenFor(step.Name)];
-        values.Remove(TokenFor(step.Name));
+        var token = TokenFor(step.Name, context);
+        values[SecretNames.ProxmoxToken] = values[token];
+        values.Remove(token);
 
         var assignment = new Assignment
         {

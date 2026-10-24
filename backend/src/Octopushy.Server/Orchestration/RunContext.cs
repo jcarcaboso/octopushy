@@ -95,6 +95,7 @@ public static class StepNames
 /// <summary>The secret names executors look for.</summary>
 public static class SecretNames
 {
+    public const string ProxmoxSharedToken = "proxmox.shared-token";
     public const string ProxmoxReadOnlyToken = "proxmox.read-only-token";
     public const string ProxmoxPrivilegedToken = "proxmox.privileged-token";
     /// <summary>Executor wire alias only; never a persisted role in new runs.</summary>

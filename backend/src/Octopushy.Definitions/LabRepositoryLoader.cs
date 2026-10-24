@@ -60,11 +60,16 @@ public sealed partial class LabRepositoryLoader
         // Backend env is available at preview time: it must not be another route to
         // a configured writer, including a writer from a different installation.
         var privilegedKeys = installations.Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
+        var splitPrivilegedKeys = installations.Where(i => !i.Connection.SharedToken)
+            .Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
         foreach (var installation in installations)
         {
-            if (privilegedKeys.Contains(installation.Connection.ReadOnlyToken.Key))
+            if (!installation.Connection.SharedToken && privilegedKeys.Contains(installation.Connection.ReadOnlyToken.Key))
                 Error(installation.File, LineOf(installation.File, "/connection/readOnlyToken"),
                     "Read-only and privileged Proxmox tokens require distinct store keys across installations.", installation.Address);
+            if (installation.Connection.SharedToken && splitPrivilegedKeys.Contains(installation.Connection.PrivilegedToken.Key))
+                Error(installation.File, LineOf(installation.File, "/connection/token"),
+                    "A shared Proxmox token cannot alias another installation's split privileged token.", installation.Address);
             if (installation.Connection.CaCertificate is { } ca && privilegedKeys.Contains(ca.Key))
                 Error(installation.File, LineOf(installation.File, "/connection/tls/caCertificate"),
                     "A privileged Proxmox token cannot be used as a CA certificate.", installation.Address);
@@ -446,9 +451,10 @@ public sealed partial class LabRepositoryLoader
                 new ConnectionDefinition(
                     connection["endpoint"]!.GetValue<string>(),
                     connection["tls"]?["verify"]?.GetValue<bool>() ?? true,
-                    ParseStoreReference(connection["readOnlyToken"]!),
-                    ParseStoreReference(connection["privilegedToken"]!),
-                    connection["tls"]?["caCertificate"] is JsonObject ca ? ParseStoreReference(ca) : null),
+                    ParseStoreReference(connection["token"] ?? connection["readOnlyToken"]!),
+                    ParseStoreReference(connection["token"] ?? connection["privilegedToken"]!),
+                    connection["tls"]?["caCertificate"] is JsonObject ca ? ParseStoreReference(ca) : null,
+                    connection.ContainsKey("token")),
                 hosts,
                 ParsePolicy(json["policy"]),
                 ParseLabels(json["execution"])));
@@ -626,12 +632,6 @@ public sealed partial class LabRepositoryLoader
             return (null, null);
         }
 
-        if (kind == DefinitionKind.Installation && json["connection"] is JsonObject connection && connection.ContainsKey("token"))
-        {
-            Error(file, document.LineOf("/connection/token"),
-                "connection.token is no longer supported. Configure distinct readOnlyToken and privilegedToken store references; credentials are not copied automatically.", address);
-            return (null, null);
-        }
         var errors = SchemaCatalog.Instance.Validate(kind, json);
         foreach (var error in errors)
         {

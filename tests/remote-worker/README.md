@@ -1,5 +1,9 @@
 # Remote-worker acceptance readiness
 
+This acceptance harness exercises optional **split-token mode**. A normal
+installation can instead use one [shared token](../../docs/proxmox-credentials.md);
+the harness does not silently switch modes when its reader lacks permissions.
+
 This is an **opt-in mode of `tests/proxmox/run.sh`**, not a new deployment script.
 It reuses a running dedicated controller and an already enrolled worker on another
 machine. Its intended lifecycle creates, resizes and retires a disposable Proxmox VM, with the same

@@ -15,12 +15,20 @@ internal static class CredentialBindings
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
-            return ["Legacy Proxmox token context cannot be upgraded automatically; inspect and replan with explicit read-only and privileged credentials"];
+            return ["Legacy Proxmox token context cannot be upgraded automatically; inspect and replan with a shared token or explicit read-only and privileged credentials"];
 
         var problems = new List<string>();
-        if (!context.Secrets.ContainsKey(SecretNames.ProxmoxReadOnlyToken))
+        var roles = context.Secrets.Keys.Concat(context.SecretVersions.Keys).Concat(context.RequestedSecretVersions.Keys).ToHashSet(StringComparer.Ordinal);
+        if (roles.Contains(SecretNames.ProxmoxSharedToken)
+            && (roles.Contains(SecretNames.ProxmoxReadOnlyToken) || roles.Contains(SecretNames.ProxmoxPrivilegedToken)))
+            problems.Add("Shared and split Proxmox roles cannot be mixed; inspect and replan");
+        var shared = context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken);
+        if (context.Secrets.TryGetValue(SecretNames.ProxmoxSharedToken, out var sharedKey)
+            && context.Secrets.Any(s => s.Key != SecretNames.ProxmoxSharedToken && s.Value == sharedKey))
+            problems.Add("A shared Proxmox token requires a distinct store key and cannot be aliased to another role");
+        if (!shared && !context.Secrets.ContainsKey(SecretNames.ProxmoxReadOnlyToken))
             problems.Add("Missing read-only Proxmox role; inspect and replan");
-        if (context.OpenTofu is not null && !context.Secrets.ContainsKey(SecretNames.ProxmoxPrivilegedToken))
+        if (!shared && context.OpenTofu is not null && !context.Secrets.ContainsKey(SecretNames.ProxmoxPrivilegedToken))
             problems.Add("Missing privileged Proxmox role; inspect and replan");
         if (context.Secrets.TryGetValue(SecretNames.ProxmoxPrivilegedToken, out var writer)
             && context.Secrets.Any(s => s.Key != SecretNames.ProxmoxPrivilegedToken && s.Value == writer))

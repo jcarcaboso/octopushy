@@ -133,7 +133,11 @@ the working tree and not yet committed; each has a test that fails without the f
   trusted revision), or when its commit signature matches a server-side allowed key list.
   Observe and plan use the newest trusted revision. Untrusted revisions still load,
   validate, and show their proposed runs as *waiting for trust*.
-- **T2 Split Proxmox credentials.** Installation `connection` requires distinct
+- **T2 Optional split Proxmox credentials.** Updated October 24, 2026: installation
+  `connection.token` explicitly selects one shared token. This homelab option
+  releases its full upstream permissions during planning; trust/apply approval
+  is not a sandbox and does not provide the credential separation proposed here.
+  Alternatively, omit `token` and configure distinct
   `readOnlyToken` (observe, native verify, plan) and `privilegedToken` (apply,
   unprotect, grow-root **and verify-root**) references. The privileged role is
   released only after the existing approval gate; manual no-op rootfs runs retain

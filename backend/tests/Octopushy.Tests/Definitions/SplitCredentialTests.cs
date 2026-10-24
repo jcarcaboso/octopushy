@@ -10,7 +10,7 @@ public class SplitCredentialTests
     private const string File = "labs/home/proxmox/korriban/installation.yaml";
 
     [Fact]
-    public void Installation_requires_explicit_split_references_and_rejects_the_legacy_token()
+    public void Split_mode_requires_both_references_and_rejects_mixed_modes()
     {
         using var repo = TestRepository.Minimal();
         var json = YamlDocumentReader.Read(System.IO.File.ReadAllText(Path.Combine(repo.Root, File))).Root!.AsObject();
@@ -28,7 +28,7 @@ public class SplitCredentialTests
         connection["token"] = new JsonObject { ["store"] = "proxmox/legacy" };
         Assert.NotEmpty(SchemaCatalog.Instance.Validate(DefinitionKind.Installation, json));
         repo.Write(File, json.ToJsonString());
-        Assert.Contains(LabRepositoryLoader.Load(repo.Root).Issues, i => i.Message.Contains("connection.token is no longer supported"));
+        Assert.False(LabRepositoryLoader.Load(repo.Root).IsValid("home/korriban/krb-app-01"));
         connection.Remove("token");
         connection.Remove("privilegedToken");
         Assert.NotEmpty(SchemaCatalog.Instance.Validate(DefinitionKind.Installation, json));

@@ -1,9 +1,11 @@
 # Mock Proxmox fixtures
 
-The installation requires two distinct store references:
+This fixture deliberately tests the optional **split-token mode**. The product
+also supports one `connection.token`; see [credentials](../../docs/proxmox-credentials.md).
+The fixture installation requires two distinct store references:
 `proxmox/korriban/read-only-token` and `proxmox/korriban/privileged-token`.
 `run.sh` and `demo.sh` import different synthetic identities at those exact
-keys. There is no legacy `connection.token` alias or automatic credential copy.
+keys. These scripts have no shared-token fallback or automatic credential copy.
 The executor wire alias is still `proxmox.token`; the controller chooses its role.
 
 `proxmox.json` declares the read-only identity in `token` and the privileged

@@ -202,8 +202,7 @@ Anywhere a store reference is accepted, use `{ store: <key> }` or
 `{ store: <key>, version: <positive integer> }`. For example:
 
 ```yaml
-readOnlyToken: { store: proxmox/korriban/read-only-token, version: 2 }
-privilegedToken: { store: proxmox/korriban/privileged-token, version: 1 }
+token: { store: proxmox/korriban/api-token, version: 2 }
 tls:
   caCertificate: { store: proxmox/korriban/ca, version: 1 }
 ```
@@ -283,8 +282,7 @@ type: standalone                  # standalone | cluster
 connection:
   endpoint: https://10.1.0.50:8006/
   tls: { verify: false }          # or caCertificate: { store: <key> }
-  readOnlyToken: { store: proxmox/moraband/read-only-token }
-  privilegedToken: { store: proxmox/moraband/privileged-token }
+  token: { store: proxmox/moraband/api-token }
 hosts:
   moraband:
     datastores: { images: local, disks: local-lvm }
@@ -299,9 +297,11 @@ datastores, bridges, and capacity limits, and is its own failure domain. A clust
 lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
 
-`readOnlyToken` and `privilegedToken` are required, distinct store references.
-The old `token` field is not an alias. See [credential roles](proxmox-credentials.md)
-for routing, approval, legacy-run handling, and the pinned provider's read-only
+One `token` reference is sufficient. Alternatively, omit it and configure both
+`readOnlyToken` and `privilegedToken` with distinct store keys; mixed modes are
+invalid. Shared mode deliberately gives planning the same token as apply, so
+approval does not make planning read-only. See [credentials](proxmox-credentials.md)
+for routing, approval, legacy-run handling, and the optional split mode's provider
 refresh blocker; these examples do not certify live ACL sufficiency.
 
 ### Guest
