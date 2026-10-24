@@ -16,8 +16,11 @@ pub const DEFAULT_PRIVILEGES: &[&str] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fixture {
-    /// The only accepted API token, `USER@REALM!TOKENID=SECRET`.
+    /// The primary accepted API token, `USER@REALM!TOKENID=SECRET`.
     pub token: String,
+    /// Additional explicit identities; all share the fixture's permissions.
+    #[serde(default)]
+    pub additional_tokens: Vec<String>,
     #[serde(default = "default_version")]
     pub version: String,
     /// The cluster, or null for a standalone host.

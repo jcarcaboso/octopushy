@@ -34,7 +34,7 @@ public sealed record RunContext
 
     public required ProxmoxContext Proxmox { get; init; }
 
-    /// <summary>Secret names used in assignments, mapped to store keys.</summary>
+    /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
     /// <summary>Optional versions declared in Git; candidates require promotion before use.</summary>
@@ -95,6 +95,10 @@ public static class StepNames
 /// <summary>The secret names executors look for.</summary>
 public static class SecretNames
 {
+    public const string ProxmoxSharedToken = "proxmox.shared-token";
+    public const string ProxmoxReadOnlyToken = "proxmox.read-only-token";
+    public const string ProxmoxPrivilegedToken = "proxmox.privileged-token";
+    /// <summary>Executor wire alias only; never a persisted role in new runs.</summary>
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
 

@@ -1,6 +1,6 @@
 # Progress and next steps
 
-Trust/recovery update: **October 23, 2026**; lifecycle snapshot: **October 21, 2026**.
+Trust/credential-routing update: **October 23, 2026**; lifecycle snapshot: **October 21, 2026**.
 The plan below is a proposed implementation sequence,
 not authorization to deploy, rotate credentials, or change existing machines.
 
@@ -13,9 +13,10 @@ running the guest setup externally after controller-driven provisioning.
 
 ### Publication boundary
 
-The source baseline for the trust milestone is `main` merge
-`5a0fb1daf689382bf7225897651b2e47db91057b` (recovery PR #4, merged October 23,
-2026), following baseline CI PR #3 (`f72770b`). It preserves the foundations work
+The source baseline for the credential-routing milestone is `main` merge
+`13b953897bf20207eb61aa8dee7f4f89b45543cd` (trusted revisions PR #5, merged
+October 23, 2026), following recovery PR #4 (`5a0fb1d`) and baseline CI PR #3
+(`f72770b`). It preserves the foundations work
 from PR #1 (`893b19a`): networking, guest examples, filesystem growth, worker
 readiness, and credential lifecycle. The earlier documentation-only checkpoint on `proxmox-e2e`
 described those changes before publication. The repository's default branch is
@@ -200,17 +201,68 @@ The larger backend suite exposed idle connection pools accumulating across
 unique fixture databases. Those test-only connections now disable pooling;
 production connection settings and PostgreSQL limits are unchanged.
 
-Hosted CI for this trust slice is still a publication gate, not yet claimed here.
+Hosted CI for PR #5 passed at exact head `04e8275` in Actions run
+`39931945172`: all five jobs passed, including 200 backend tests, 88 Rust tests
+(two optional smoke tests ignored), 68 frontend tests, 53 Python tests (five
+optional skips), locked Nix evaluation, audits and generated-contract checks.
 Rust and Nix sources/dependencies were unchanged and were not rerun locally in
-this slice. No full remote-worker or live Proxmox harness was run; automated
+that slice. No full remote-worker or live Proxmox harness was run; automated
 fixture trust was checked at its mocked API boundary, and the controller tests
 use fake workers. The existing five-job workflow remains the hosted gate.
 
-This milestone does not deliver the rest of the trust wave: purpose/destination
+That milestone did not deliver the rest of the trust wave: purpose/destination
 bindings, worker/runtime restrictions, split Proxmox credentials, controller
 approval floors and verified TLS remain prerequisites before expanding secret
 delivery or upgrading the retained environment. No live infrastructure or
 retained-installation upgrade is part of this change.
+
+### T2 credential routing — October 23, 2026
+
+The [credential-role guide](proxmox-credentials.md) records the bounded change:
+explicit, distinct read-only/privileged references; role-specific release through
+the existing pinned-version store and single worker alias; privileged approval
+checks before plaintext resolution; and no legacy-role inference or fallback.
+Root verification remains privileged because it executes a guest command.
+No-change rootfs plans retain an artifact so manual approval cannot be skipped.
+
+The independent Sol source review found and closed cross-installation aliasing
+of a configured privileged key into another installation's reader/CA role.
+Its final reread reported no unresolved actionable findings. That is a bounded
+source review, not upstream ACL certification or execution sandboxing.
+
+Final local validation:
+
+| Check | Result |
+| --- | --- |
+| Parent full backend suite on a separately rooted disposable PostgreSQL engine | **234 passed**; after whitespace-only formatting, all **34 split-credential cases** passed again |
+| Changed C# whitespace, backend build and generated OpenAPI/TypeScript client drift | Passed; build had zero warnings/errors; both generated contracts remained unchanged |
+| Rust workspace, offline and locked | **90 passed**, two optional container smoke tests ignored; includes no-op artifact retention and actual split-fixture HTTPS authentication |
+| Frontend tests, TypeScript, ESLint and production build | **68 tests passed**; all checks passed |
+| Offline Python checks and tracked shell syntax | **63 passed**, five existing optional cases skipped |
+| Changed Markdown local links and `git diff --check` | Passed |
+
+Local `cargo-fmt` and `cargo-clippy` are unavailable; no tools were installed.
+Formatting, Clippy, audits and locked Nix evaluation remain hosted CI gates.
+The empty disposable database engine was stopped and its dedicated runtime and
+storage removed. No retained database or development container was touched.
+The first hosted run exposed an undeclared `rg` dependency in retained-fixture
+preflight. A restricted-PATH regression reproduced it; that check now uses the
+already-required Python standard library without weakening credential validation
+or adding a CI installation step.
+The mock accepts the two explicit synthetic identities but shares its existing
+permissions between them; it is not an ACL enforcement simulator. Full mock and
+live Proxmox harnesses were not run.
+
+**Live rollout remains blocked.** [Pinned provider research](research/proxmox-credential-split.md)
+found that bpg 0.117.0's existing-VM disk/EFI refresh conditionally requires
+mutation-capable Proxmox permissions. A fresh create preview does not prove
+read-only update/destroy planning works. The routing change deliberately does
+not broaden the read-only identity, disable refresh, or retry planning with
+the privileged credential. Resolve provider compatibility before live acceptance.
+
+This is not the controller-owned approval floor (T3), general purpose/destination
+bindings, or a deployment. The retained controller, database, credentials and
+infrastructure are unchanged.
 
 ### Earlier implementation validation
 

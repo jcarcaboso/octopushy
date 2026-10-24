@@ -38,7 +38,7 @@ public class ApiTests(PostgresFixture postgres)
         Assert.Equal("automatic", detail["policy"]!["approval"]!.GetValue<string>());
 
         var variables = await client.GetFromJsonAsync<JsonObject>("/api/variables");
-        var token = variables!["entries"]!.AsArray().Single(e => e!["key"]!.GetValue<string>() == "proxmox/korriban/api-token")!;
+        var token = variables!["entries"]!.AsArray().Single(e => e!["key"]!.GetValue<string>() == "proxmox/korriban/read-only-token")!;
         Assert.Null(token["value"]);
         Assert.Contains("home/korriban", token["usedBy"]!.AsArray().Select(u => u!.GetValue<string>()));
 

@@ -77,12 +77,18 @@ fn flag(b: bool) -> u8 {
 }
 
 async fn require_token(State(state): State<SharedFixture>, req: Request, next: Next) -> Response {
-    let expected = format!("PVEAPIToken={}", state.lock().unwrap().token);
     let given = req
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if given != Some(expected.as_str()) {
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("PVEAPIToken="));
+    let authorized = {
+        let fixture = state.lock().unwrap();
+        given.is_some_and(|token| {
+            token == fixture.token || fixture.additional_tokens.iter().any(|t| t == token)
+        })
+    };
+    if !authorized {
         return pve_error(StatusCode::UNAUTHORIZED, "authentication failure");
     }
     next.run(req).await

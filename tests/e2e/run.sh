@@ -63,7 +63,8 @@ source "$root/tests/revision-trust/fixture.sh"
 log "Account, repository, variables"
 code=$(tr -d '\n' <"$work/server/setup-code")
 call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"e2e\",\"password\":\"an end-to-end password\"}" >/dev/null
-call -X PUT "$api/api/variables" -d '{"key":"e2e/proxmox-token","value":"octopushy@pve!e2e=00000000-0000-4000-8000-0000000000e2","visibility":"secret"}'
+call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/read-only-token","value":"octopushy-reader@pve!e2e-read-only=00000000-0000-4000-8000-0000000000e1","visibility":"secret"}'
+call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/privileged-token","value":"octopushy-writer@pve!e2e-privileged=00000000-0000-4000-8000-0000000000e2","visibility":"secret"}'
 call -X PUT "$api/api/variables" -d '{"key":"e2e/pg-conn","value":"postgres://octopushy:octopushy@127.0.0.1:55432/e2e_state?sslmode=disable","visibility":"secret"}'
 call -X PUT "$api/api/repository" -d "{\"url\":\"$work/lab\",\"branch\":\"main\",\"pollSeconds\":10,\"credentialKind\":\"none\"}" >/dev/null
 

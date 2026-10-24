@@ -10,10 +10,64 @@ internal static class CredentialBindings
     // CA certificates are public trust material. Other current bindings feed credential channels.
     internal static bool RequiresSecret(string name) => name != SecretNames.ProxmoxCa;
 
+    internal static List<string> Validate(RunContext context)
+    {
+        if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
+            || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
+            || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
+            return ["Legacy Proxmox token context cannot be upgraded automatically; inspect and replan with a shared token or explicit read-only and privileged credentials"];
+
+        var problems = new List<string>();
+        var roles = context.Secrets.Keys.Concat(context.SecretVersions.Keys).Concat(context.RequestedSecretVersions.Keys).ToHashSet(StringComparer.Ordinal);
+        if (roles.Contains(SecretNames.ProxmoxSharedToken)
+            && (roles.Contains(SecretNames.ProxmoxReadOnlyToken) || roles.Contains(SecretNames.ProxmoxPrivilegedToken)))
+            problems.Add("Shared and split Proxmox roles cannot be mixed; inspect and replan");
+        var shared = context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken);
+        if (context.Secrets.TryGetValue(SecretNames.ProxmoxSharedToken, out var sharedKey)
+            && context.Secrets.Any(s => s.Key != SecretNames.ProxmoxSharedToken && s.Value == sharedKey))
+            problems.Add("A shared Proxmox token requires a distinct store key and cannot be aliased to another role");
+        if (!shared && !context.Secrets.ContainsKey(SecretNames.ProxmoxReadOnlyToken))
+            problems.Add("Missing read-only Proxmox role; inspect and replan");
+        if (!shared && context.OpenTofu is not null && !context.Secrets.ContainsKey(SecretNames.ProxmoxPrivilegedToken))
+            problems.Add("Missing privileged Proxmox role; inspect and replan");
+        if (context.Secrets.TryGetValue(SecretNames.ProxmoxPrivilegedToken, out var writer)
+            && context.Secrets.Any(s => s.Key != SecretNames.ProxmoxPrivilegedToken && s.Value == writer))
+            problems.Add("A privileged Proxmox token requires a distinct store key and cannot be aliased to another role");
+
+        if (context.OpenTofu is { } tofu)
+        {
+            foreach (var (name, value) in tofu.Env)
+            {
+                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) && !(name switch
+                {
+                    "PROXMOX_VE_ENDPOINT" => value == context.Proxmox.Endpoint,
+                    "PROXMOX_VE_INSECURE" => value == (context.Proxmox.VerifyTls ? "false" : "true"),
+                    _ => false,
+                }))
+                    problems.Add($"Proxmox provider environment '{name}' is reserved; inspect and replan");
+            }
+            if (tofu.SecretEnv.GetValueOrDefault("PROXMOX_VE_API_TOKEN") != SecretNames.ProxmoxToken)
+                problems.Add("Proxmox provider token mapping is reserved; inspect and replan");
+            foreach (var (name, role) in tofu.SecretEnv)
+            {
+                if (name == "PROXMOX_VE_API_TOKEN" && role == SecretNames.ProxmoxToken)
+                    continue;
+                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) || role != SecretNames.Backend(name)
+                    || !context.Secrets.ContainsKey(role))
+                    problems.Add($"Backend environment '{name}' cannot override reserved Proxmox roles; inspect and replan");
+            }
+        }
+        return problems;
+    }
+
     internal static async Task<List<string>> CheckAsync(
         OctopushyDb db, Run run, RunContext context, CancellationToken ct, IReadOnlyCollection<string>? neededNames = null)
     {
-        var problems = new List<string>();
+        var problems = Validate(context);
+        if (neededNames is not null)
+            problems.AddRange(neededNames.Where(n => !context.Secrets.ContainsKey(n)).Select(n => $"Missing credential role {n}; inspect and replan"));
+        if (problems.Count > 0)
+            return problems;
         // Pin every binding initially, but later steps need only their own credentials:
         // revoking a completed apply's backend credential must not prevent guest verification.
         var bindings = context.Secrets.Where(s => !context.SecretBindingsPinned || neededNames is null || neededNames.Contains(s.Key)).ToList();

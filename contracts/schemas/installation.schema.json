@@ -13,9 +13,21 @@
       "properties": {
         "endpoint": { "type": "string", "pattern": "^https?://" },
         "tls": { "$ref": "common.schema.json#/$defs/tls" },
-        "token": { "$ref": "common.schema.json#/$defs/storeRef" }
+        "token": { "$ref": "common.schema.json#/$defs/storeRef" },
+        "readOnlyToken": { "$ref": "common.schema.json#/$defs/storeRef" },
+        "privilegedToken": { "$ref": "common.schema.json#/$defs/storeRef" }
       },
-      "required": ["endpoint", "token"],
+      "required": ["endpoint"],
+      "oneOf": [
+        {
+          "required": ["token"],
+          "not": { "anyOf": [{ "required": ["readOnlyToken"] }, { "required": ["privilegedToken"] }] }
+        },
+        {
+          "required": ["readOnlyToken", "privilegedToken"],
+          "not": { "required": ["token"] }
+        }
+      ],
       "additionalProperties": false
     },
     "hosts": {

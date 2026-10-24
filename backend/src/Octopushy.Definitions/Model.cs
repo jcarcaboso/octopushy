@@ -63,7 +63,9 @@ public sealed record LabDefinition(
     public string Address => Id;
 }
 
-public sealed record ConnectionDefinition(string Endpoint, bool VerifyTls, StoreReference Token, StoreReference? CaCertificate);
+public sealed record ConnectionDefinition(
+    string Endpoint, bool VerifyTls, StoreReference ReadOnlyToken, StoreReference PrivilegedToken, StoreReference? CaCertificate,
+    bool SharedToken = false);
 
 public sealed record HostDefinition(
     string Id,

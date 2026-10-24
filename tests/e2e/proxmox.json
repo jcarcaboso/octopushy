@@ -1,5 +1,8 @@
 {
-  "token": "octopushy@pve!e2e=00000000-0000-4000-8000-0000000000e2",
+  "token": "octopushy-reader@pve!e2e-read-only=00000000-0000-4000-8000-0000000000e1",
+  "additionalTokens": [
+    "octopushy-writer@pve!e2e-privileged=00000000-0000-4000-8000-0000000000e2"
+  ],
   "version": "8.4.1",
   "cluster": null,
   "nodes": [

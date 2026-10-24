@@ -43,7 +43,8 @@ jar=$work/cookies
 call() { curl -sf -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$@"; }
 code=$(tr -d '\n' <"$work/server/setup-code")
 call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"demo\",\"password\":\"octopushy-demo\"}" >/dev/null
-call -X PUT "$api/api/variables" -d '{"key":"e2e/proxmox-token","value":"octopushy@pve!e2e=00000000-0000-4000-8000-0000000000e2","visibility":"secret","description":"API token for the mock Proxmox"}'
+call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/read-only-token","value":"octopushy-reader@pve!e2e-read-only=00000000-0000-4000-8000-0000000000e1","visibility":"secret","description":"Read-only identity for the mock Proxmox"}'
+call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/privileged-token","value":"octopushy-writer@pve!e2e-privileged=00000000-0000-4000-8000-0000000000e2","visibility":"secret","description":"Privileged identity for the mock Proxmox"}'
 call -X PUT "$api/api/variables" -d '{"key":"e2e/pg-conn","value":"postgres://octopushy:octopushy@127.0.0.1:55432/demo_state?sslmode=disable","visibility":"secret","description":"OpenTofu state in PostgreSQL"}'
 call -X PUT "$api/api/repository" -d "{\"url\":\"$work/lab\",\"branch\":\"main\",\"pollSeconds\":10,\"credentialKind\":\"none\"}" >/dev/null
 token=$(call -X POST "$api/api/agents/tokens" -d '{"name":"demo-agent","labels":["e2e"]}' | jq -r .token)
