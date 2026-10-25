@@ -10,6 +10,32 @@ namespace Octopushy.Tests.Server;
 
 public class RevisionReviewTests
 {
+    [Theory]
+    [InlineData("2026-10-25T19:20:01+01:00")]
+    [InlineData("2026-10-25T11:20:01-07:00")]
+    [InlineData("2026-10-26T00:05:01+05:45")]
+    [InlineData("2026-10-25T18:20:01+00:00")]
+    public async Task Commit_metadata_normalizes_git_timezone_to_utc_without_changing_the_instant(string date)
+    {
+        using var repository = new TestRepository();
+        using var data = new TestRepository();
+        var git = new GitCli(NullLogger<GitCli>.Instance);
+        await git.RunAsync(["init", "--quiet", "-b", "main"], repository.Root);
+        await git.RunAsync(
+            ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "--quiet", "--allow-empty", "-m", "Offset fixture"],
+            repository.Root,
+            environment: new Dictionary<string, string> { ["GIT_AUTHOR_DATE"] = date, ["GIT_COMMITTER_DATE"] = date });
+        var mirror = new RepositoryMirror(git, Options.Create(new OctopushyOptions { DataDirectory = data.Root }));
+        var commit = await mirror.FetchAsync(repository.Root, "main", GitCredential.None, CancellationToken.None);
+
+        var info = await mirror.CommitInfoAsync(commit, CancellationToken.None);
+
+        Assert.Equal(commit, info.Commit);
+        Assert.Equal(TimeSpan.Zero, info.CommittedAt.Offset);
+        Assert.Equal(new DateTimeOffset(2026, 10, 25, 18, 20, 1, TimeSpan.Zero), info.CommittedAt);
+    }
+
     [Fact]
     public async Task Same_tree_commits_bundle_literal_blobs_without_export_substitution_or_ignored_files_and_ignore_old_derived_caches()
     {
