@@ -22,6 +22,7 @@ using Octopushy.Server.Store;
 var generatingDocument = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
 var builder = WebApplication.CreateBuilder(args);
 var settings = builder.Configuration.GetSection(OctopushyOptions.Section).Get<OctopushyOptions>() ?? new OctopushyOptions();
+settings.DiskReporter.Validate();
 // A relative data directory is relative to the server's content root, not the working directory.
 settings.DataDirectory = Path.GetFullPath(settings.DataDirectory, builder.Environment.ContentRootPath);
 builder.Services.Configure<OctopushyOptions>(builder.Configuration.GetSection(OctopushyOptions.Section));
@@ -103,6 +104,9 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy(AccountEndpoints.LoginRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+    options.AddPolicy(GuestDiskUsageEndpoints.RateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1) }));
 });
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict);

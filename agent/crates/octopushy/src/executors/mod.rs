@@ -2,6 +2,7 @@
 //!
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
+pub mod guest;
 pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
@@ -19,14 +20,17 @@ use crate::attempts::logs::AttemptLogger;
 use crate::tools::ToolRuntime;
 
 /// Executors this binary provides, as announced in `Hello`.
-pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "nixos-rootfs"];
+pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "nixos-rootfs", "guest"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
 /// interruption by a restart makes their outcome uncertain.
 pub fn is_mutating(executor: &str, action: &str) -> bool {
     matches!(
         (executor, action),
-        ("opentofu", "apply") | ("proxmox", "set-protection") | ("nixos-rootfs", "grow")
+        ("opentofu", "apply")
+            | ("proxmox", "set-protection")
+            | ("nixos-rootfs", "grow")
+            | ("guest", "install-disk-reporter")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -125,6 +129,7 @@ impl Success {
 /// agent.
 #[derive(Debug)]
 pub enum Failure {
+    /// A remote mutation may still be running; it must not be automatically retried.
     Uncertain(String),
     Failed {
         message: String,
@@ -168,6 +173,7 @@ pub type ExecResult = Result<Success, Failure>;
 pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> ExecResult {
     match executor {
         "proxmox" => proxmox::run(cfg, ctx).await,
+        "guest" => guest::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
         "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         #[cfg(test)]

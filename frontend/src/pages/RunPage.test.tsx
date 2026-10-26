@@ -183,6 +183,27 @@ describe("RunPage", () => {
     expect(await screen.findByText("The plan changed since it was shown; review the current plan.")).toBeInTheDocument();
   });
 
+  it("approves setup-only runs without claiming to apply a saved infrastructure plan", async () => {
+    const user = userEvent.setup();
+    const detail = runDetail();
+    detail.steps[0].plan = {
+      hasChanges: false, planSha256: null, toolVersion: "1.13.1", changes: [],
+      counts: { create: 0, update: 0, delete: 0, replace: 0 },
+    };
+    detail.steps[1].detail = "This run installs the disk reporter inside the VM after verification.";
+    const { requests } = mockApi({
+      "GET /api/runs/run-1": () => detail,
+      "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
+    });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    expect(await screen.findByText("Setup approval fingerprint")).toBeInTheDocument();
+    expect(screen.getByText(/Approving authorizes the pending guest setup/)).toBeInTheDocument();
+    expect(screen.queryByText(/Approving applies exactly this saved plan/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+    expect(requests.find((r) => r.method === "POST")!.body).toEqual({ planSha256: sha, note: null });
+  });
+
   it("rejects without a plan hash", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({

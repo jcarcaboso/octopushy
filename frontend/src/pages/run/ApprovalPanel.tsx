@@ -15,7 +15,7 @@ interface Props {
   plan: PlanSummary | null;
 }
 
-function Decided({ step }: { step: Step }) {
+function Decided({ step, setupOnly }: { step: Step; setupOnly: boolean }) {
   const approval = step.approval!;
   const byPolicy = approval.decidedBy === "policy";
   const rejected = approval.decision === "rejected";
@@ -34,7 +34,7 @@ function Decided({ step }: { step: Step }) {
       {approval.note ? <p className="decision__note">{approval.note}</p> : null}
       {approval.planSha256 ? (
         <div className="small muted inline-group">
-          Plan SHA-256 <Hash value={approval.planSha256} label="Copy the plan's SHA-256" />
+          {setupOnly ? "Setup approval fingerprint" : "Plan SHA-256"} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
         </div>
       ) : null}
     </div>
@@ -47,8 +47,9 @@ export function ApprovalPanel({ runId, step, plan }: Props) {
   const [note, setNote] = useState("");
   const noteId = useId();
   const approval = step.approval;
+  const setupOnly = plan?.hasChanges === false;
 
-  if (approval?.decision) return <Decided step={step} />;
+  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} />;
   if (step.status !== "awaiting-approval") return null;
 
   const planSha256 = approval?.planSha256 ?? null;
@@ -67,13 +68,15 @@ export function ApprovalPanel({ runId, step, plan }: Props) {
   return (
     <div className="approval">
       <Callout kind="info" title="Your approval is needed">
-        {step.detail ?? "This guest's policy asks for approval before applying."} Approving applies exactly this
-        saved plan; if anything changes, a new plan needs a new approval.
+        {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
+        {setupOnly
+          ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."
+          : "Approving applies exactly this saved plan and any guest setup recorded in this run; if anything changes, a new plan needs a new approval."}
       </Callout>
       {plan ? <PlanCountsLine counts={plan.counts} /> : null}
       <div className="inline-group">
-        <span className="muted">Plan SHA-256</span>
-        {planSha256 ? <Hash value={planSha256} label="Copy the plan's SHA-256" /> : <span className="muted">not recorded</span>}
+        <span className="muted">{setupOnly ? "Setup approval fingerprint" : "Plan SHA-256"}</span>
+        {planSha256 ? <Hash value={planSha256} label="Copy the approval fingerprint" /> : <span className="muted">not recorded</span>}
       </div>
       <div className="field">
         <label htmlFor={noteId}>
@@ -82,7 +85,7 @@ export function ApprovalPanel({ runId, step, plan }: Props) {
         <textarea id={noteId} rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} />
       </div>
       {!planSha256 ? (
-        <Callout kind="warning">The plan's hash is missing, so it cannot be approved. Plan again.</Callout>
+        <Callout kind="warning">The approval fingerprint is missing, so this run cannot be approved. Plan again.</Callout>
       ) : null}
       <ErrorMessage error={approve.error ?? reject.error} />
       <div className="button-row">

@@ -356,7 +356,9 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe ? "The plan has no changes." : null);
+        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe
+            ? context.DiskReporter is null ? "The plan has no changes." : "Infrastructure unchanged; disk reporter setup completed."
+            : null);
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -367,7 +369,7 @@ public sealed partial class RunEngine(
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
         // Output-only plans can still need privileged apply, and a no-op rootfs
-        // run still has privileged guest-agent work. Manual means manual for both.
+        // run or reporter setup still has privileged guest-agent work. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
         var privilegedRemains = run.Steps.Any(s => s.Kind == StepKinds.Agent && !StepStatuses.IsDone(s.Status)
@@ -404,6 +406,10 @@ public sealed partial class RunEngine(
         step.Detail = destructiveManual && !manual
             ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
+        if (context.DiskReporter is not null)
+        {
+            step.Detail += " This run also installs the disk reporter inside the VM after verification.";
+        }
         return false;
     }
 
@@ -455,7 +461,9 @@ public sealed partial class RunEngine(
                         resource.SyncedInputsHash = run.InputsHash;
                     }
 
-                    var needsGuestApproval = run.Operation == Operations.Provision && RunContext.Parse(run.Context).RootDiskBytes is not null;
+                    var planContext = RunContext.Parse(run.Context);
+                    var needsGuestApproval = run.Operation == Operations.Provision
+                        && (planContext.RootDiskBytes is not null || planContext.DiskReporter is not null);
                     foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
                         || s.Name == StepNames.Approval && !needsGuestApproval))
                     {

@@ -115,6 +115,7 @@ impl Client {
             .connect_timeout(config.timeout.min(Duration::from_secs(15)))
             .user_agent(concat!("octopushy-proxmox/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .build()
             .map_err(|e| Error::Config(format!("cannot build the HTTP client: {e}")))?;
         let mut auth = HeaderValue::from_str(&format!("PVEAPIToken={}", config.token.expose()))
@@ -271,13 +272,26 @@ impl Client {
     }
 
     /// Executes an argument array through QEMU's guest agent; never retries a POST.
-    pub async fn guest_exec(&self, node: &str, vmid: u32, command: &[String]) -> Result<u64> {
+    /// Input is plain stdin: Proxmox handles base64 encoding for QGA. Never log it.
+    pub async fn guest_exec(
+        &self,
+        node: &str,
+        vmid: u32,
+        command: &[String],
+        input: Option<&str>,
+    ) -> Result<u64> {
+        if input.is_some_and(|input| input.len() > 64 * 1024) {
+            return Err(Error::Config("guest exec input exceeds 64 KiB".into()));
+        }
         #[derive(serde::Deserialize)]
         struct Started {
             pid: u64,
         }
         let id = vmid.to_string();
-        let body = serde_json::json!({ "command": command });
+        let mut body = serde_json::json!({ "command": command });
+        if let Some(input) = input {
+            body["input-data"] = input.into();
+        }
         let started: Started = self
             .request(
                 Method::POST,

@@ -35,6 +35,21 @@ public class LabRepositoryLoaderTests
         Assert.Equal(["home", "home/korriban", "home/korriban/krb-app-01"], repository.Resources.Select(r => r.Address));
     }
 
+    [Theory]
+    [InlineData("intervalSeconds: 59")]
+    [InlineData("intervalSeconds: 604801")]
+    [InlineData("enabled: 'yes'")]
+    [InlineData("binaryUrl: https://untrusted.example/binary")]
+    public void Invalid_reporter_overrides_are_rejected(string settings)
+    {
+        using var test = TestRepository.Minimal();
+        const string path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        test.Write(path, File.ReadAllText(Path.Combine(test.Root, path)) + $"\nsetup: {{ diskReporter: {{ {settings} }} }}\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.False(repository.IsValid("home/korriban/krb-app-01"));
+        Assert.Contains(repository.Issues, i => i.Message.Contains("diskReporter"));
+    }
+
     [Fact]
     public void Without_octopushy_yaml_nothing_is_valid()
     {

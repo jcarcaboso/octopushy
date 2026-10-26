@@ -77,6 +77,25 @@ public class PolicyAndInputsTests
         Assert.Equal(inputs.Hash, ProvisionInputs.Build(repository, repository.Guests[0], "def").Hash);
     }
 
+    [Fact]
+    public void Reporter_setup_changes_the_run_hash_but_never_the_infrastructure_variables()
+    {
+        using var test = TestRepository.Minimal();
+        const string path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var guest = File.ReadAllText(Path.Combine(test.Root, path));
+        var before = Hash(test);
+        test.Write(path, guest + "\nsetup: { otherFutureSetting: true }\n");
+        Assert.Equal(before, Hash(test));
+        test.Write(path, guest + "\nsetup: { diskReporter: { intervalSeconds: 1800 } }\n");
+        var reporterHash = Hash(test);
+        Assert.NotEqual(before, reporterHash);
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var inputs = ProvisionInputs.Build(repository, repository.Guests[0], "rev");
+        Assert.Null(inputs.Variables["guest"]!["setup"]);
+        test.Write(path, guest + "\nsetup: { diskReporter: { enabled: false } }\n");
+        Assert.NotEqual(reporterHash, Hash(test));
+    }
+
     private static string Hash(TestRepository test)
     {
         var repository = LabRepositoryLoader.Load(test.Root);
