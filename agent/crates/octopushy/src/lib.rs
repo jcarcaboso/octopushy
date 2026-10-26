@@ -27,3 +27,5 @@ pub mod tools;
 
 /// This binary's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod managed_identity;

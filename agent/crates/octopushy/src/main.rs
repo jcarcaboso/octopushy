@@ -44,6 +44,30 @@ fn handle_signals(token: CancellationToken) {
 
 async fn agent(command: AgentCommand) -> anyhow::Result<()> {
     match command {
+        AgentCommand::ManagedIdentity { command } => {
+            use base64::Engine;
+            use octopushy::{cli::ManagedIdentityCommand, managed_identity};
+            let report = match command {
+                ManagedIdentityCommand::Prepare(a) => {
+                    managed_identity::prepare(&StatePaths::new(a.state_dir), &a.generation)?
+                }
+                ManagedIdentityCommand::Install(a) => {
+                    anyhow::ensure!(
+                        a.payload_base64.len() <= 45000,
+                        "public payload is too large"
+                    );
+                    let public =
+                        base64::engine::general_purpose::STANDARD.decode(a.payload_base64)?;
+                    managed_identity::install(
+                        &StatePaths::new(a.state_dir),
+                        &a.generation,
+                        std::str::from_utf8(&public)?,
+                    )?
+                }
+            };
+            println!("{report}");
+            Ok(())
+        }
         AgentCommand::Enroll(args) => {
             let token = EnrollmentToken::parse(&args.token)?;
             let state_dir = args.state_dir.unwrap_or_else(default_state_dir);

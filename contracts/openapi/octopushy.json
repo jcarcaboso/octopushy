@@ -1885,6 +1885,234 @@
         }
       }
     },
+    "/api/managed-worker-preparation": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "getWorkerPreparation",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerPreparationDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "prepareWorkerDraft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerDraftDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/managed-worker-preparation/review": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "reviewWorkerDeployment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerReviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/managed-worker-preparation/publish": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "publishWorkerDeployment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerPublishedDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variables": {
       "get": {
         "tags": [
@@ -4528,6 +4756,383 @@
             "items": {
               "$ref": "#/components/schemas/SystemVariableDto"
             }
+          }
+        }
+      },
+      "WorkerDeploymentRequest": {
+        "required": [
+          "selection",
+          "stateBackend"
+        ],
+        "type": "object",
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/WorkerDraftRequest"
+          },
+          "stateBackend": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerDraftDto": {
+        "required": [
+          "fileName",
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkerDraftRequest": {
+        "required": [
+          "revisionId",
+          "installation",
+          "host",
+          "name",
+          "vmid",
+          "sockets",
+          "cores",
+          "memoryMiB",
+          "bootDiskGiB",
+          "stateDiskGiB",
+          "datastore",
+          "bridge",
+          "vlan"
+        ],
+        "type": "object",
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "installation": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sockets": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cores": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "memoryMiB": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "bootDiskGiB": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stateDiskGiB": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "datastore": {
+            "type": "string"
+          },
+          "bridge": {
+            "type": "string"
+          },
+          "vlan": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerExistingDto": {
+        "required": [
+          "address",
+          "host",
+          "vmid",
+          "generation"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "runId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "agentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "default": "Declared"
+          }
+        }
+      },
+      "WorkerHostOption": {
+        "required": [
+          "id",
+          "endpoint",
+          "datastores",
+          "bridges"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "datastores": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "bridges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "WorkerInstallationOption": {
+        "required": [
+          "address",
+          "name",
+          "verifyTls",
+          "sharedToken",
+          "hosts"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "verifyTls": {
+            "type": "boolean"
+          },
+          "sharedToken": {
+            "type": "boolean"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerHostOption"
+            }
+          }
+        }
+      },
+      "WorkerPreparationDto": {
+        "required": [
+          "sourceUrl",
+          "branch",
+          "headCommit",
+          "lastFetchError",
+          "revision",
+          "preparationBlockedReason",
+          "installations",
+          "deploymentGates",
+          "stateBackends",
+          "deploymentBlockedReason",
+          "existingWorkers"
+        ],
+        "type": "object",
+        "properties": {
+          "sourceUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "branch": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "headCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "lastFetchError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "revision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionDto"
+              }
+            ]
+          },
+          "preparationBlockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerInstallationOption"
+            }
+          },
+          "deploymentGates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stateBackends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deploymentBlockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "existingWorkers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerExistingDto"
+            }
+          }
+        }
+      },
+      "WorkerPublishRequest": {
+        "required": [
+          "draft",
+          "reviewSha256",
+          "confirmRepositoryWrite"
+        ],
+        "type": "object",
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/WorkerDeploymentRequest"
+          },
+          "reviewSha256": {
+            "type": "string"
+          },
+          "confirmRepositoryWrite": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerPublishedDto": {
+        "required": [
+          "address",
+          "commit",
+          "alreadyPresent"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "alreadyPresent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WorkerReviewDto": {
+        "required": [
+          "address",
+          "generation",
+          "branch",
+          "baseCommit",
+          "reviewSha256",
+          "files",
+          "alreadyExists"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "reviewSha256": {
+            "type": "string"
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "alreadyExists": {
+            "type": "boolean"
           }
         }
       }

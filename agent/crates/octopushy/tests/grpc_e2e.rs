@@ -129,9 +129,9 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             })
             .await;
         let expected = if available {
-            vec!["opentofu", "proxmox", "nixos-rootfs"]
+            vec!["opentofu", "proxmox", "nixos-rootfs", "managed-worker"]
         } else {
-            vec!["proxmox", "nixos-rootfs"]
+            vec!["proxmox", "nixos-rootfs", "managed-worker"]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
         shutdown.cancel();
@@ -202,7 +202,10 @@ async fn enroll_connect_observe_ack() {
         })
         .await;
     // /bin/false fails the runtime probe; native executors remain available.
-    assert_eq!(hello.executors, ["proxmox", "nixos-rootfs"]);
+    assert_eq!(
+        hello.executors,
+        ["proxmox", "nixos-rootfs", "managed-worker"]
+    );
     assert_eq!(hello.tool_runtime, "local");
     assert!(hello.running_attempt_ids.is_empty());
     assert_eq!(hello.agent_version, octopushy::VERSION);

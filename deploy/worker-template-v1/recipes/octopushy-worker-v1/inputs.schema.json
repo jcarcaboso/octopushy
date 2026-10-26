@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Address and MAC patterns end with a negative lookahead because $ alone can accept a trailing newline.",
+  "title": "proxmox-vm inputs",
+  "type": "object",
+  "properties": {
+    "hardware": {
+      "type": "object",
+      "properties": {
+        "cores": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "memory": {
+          "description": "MiB",
+          "type": "integer",
+          "minimum": 512
+        },
+        "cpuType": {
+          "type": "string"
+        },
+        "disks": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "description": "GiB",
+                "type": "integer",
+                "minimum": 1
+              },
+              "datastore": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 2
+        },
+        "sockets": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "required": [
+        "cores",
+        "memory",
+        "disks",
+        "sockets"
+      ],
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "bridge": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "static",
+            "dhcp"
+          ]
+        },
+        "address": {
+          "$ref": "#/$defs/ipv4Cidr"
+        },
+        "gateway": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "reservedAddress": {
+          "$ref": "#/$defs/ipv4",
+          "description": "Expected IPv4 address of an externally configured DHCP reservation; does not configure the DHCP server or a static guest address."
+        },
+        "vlan": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4094
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f][02468AaCcEe](:[0-9A-Fa-f]{2}){5}(?![\\s\\S])",
+          "not": {
+            "const": "00:00:00:00:00:00"
+          }
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "bridge",
+        "mode"
+      ],
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "static"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "address",
+          "gateway"
+        ]
+      },
+      "else": {
+        "properties": {
+          "address": false,
+          "gateway": false
+        }
+      },
+      "dependentSchemas": {
+        "reservedAddress": {
+          "properties": {
+            "mode": {
+              "const": "dhcp"
+            }
+          },
+          "required": [
+            "mac"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "hardware",
+    "network"
+  ],
+  "$defs": {
+    "ipv4": {
+      "type": "string",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?![\\s\\S])"
+    },
+    "ipv4Cidr": {
+      "type": "string",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(?:[0-9]|[12][0-9]|3[0-2])(?![\\s\\S])"
+    }
+  }
+}

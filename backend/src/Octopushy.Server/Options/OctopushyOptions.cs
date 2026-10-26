@@ -30,6 +30,17 @@ public sealed class OctopushyOptions
     public ToolOptions Tools { get; set; } = new();
 
     public SchedulingOptions Scheduling { get; set; } = new();
+
+    public WorkerDeploymentOptions WorkerDeployment { get; set; } = new();
+}
+
+/// <summary>Operator-published, tested worker image. Never selected from an untrusted request.</summary>
+public sealed class WorkerDeploymentOptions
+{
+    public string? ImageUrl { get; set; }
+    public string? ImageSha256 { get; set; }
+    /// <summary>Explicitly enable authenticated Git additions using the configured repository credential.</summary>
+    public bool RepositoryWritesEnabled { get; set; }
 }
 
 public sealed class AgentChannelOptions

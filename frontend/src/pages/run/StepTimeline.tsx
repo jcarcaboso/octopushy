@@ -24,6 +24,9 @@ const stepNames: Record<string, string> = {
   observe: "Observe",
   "grow-root": "Expand guest root filesystem",
   "verify-root": "Verify guest capacity",
+  "prepare-worker": "Create worker identity",
+  "install-worker": "Install public worker identity",
+  "wait-worker": "Wait for authenticated worker",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -48,6 +51,12 @@ function describe(step: Step, operation: string): string | null {
       return "Checks the supported NixOS layout and expands its root partition and ext4 filesystem online if needed.";
     case "verify-root":
       return "Independently measures guest disk, partition, and filesystem capacity.";
+    case "prepare-worker":
+      return "The fixed guest helper creates a private key on its state disk and returns only a public signing request.";
+    case "install-worker":
+      return "Installs the controller-issued public certificate and pinned CA for this exact worker generation.";
+    case "wait-worker":
+      return "Waits for this worker's authenticated mTLS connection and runtime capabilities. VM existence is not enrollment.";
     default:
       return null;
   }
@@ -56,7 +65,7 @@ function describe(step: Step, operation: string): string | null {
 function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const retry = useRetryFilesystem();
   const canRetry = detail.run.status === "failed" && step.status === "failed"
-    && (step.name === "grow-root" || step.name === "verify-root")
+    && ["grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
     && !detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {

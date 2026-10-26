@@ -2,6 +2,7 @@
 //!
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
+pub mod managed_worker;
 pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
@@ -19,14 +20,17 @@ use crate::attempts::logs::AttemptLogger;
 use crate::tools::ToolRuntime;
 
 /// Executors this binary provides, as announced in `Hello`.
-pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "nixos-rootfs"];
+pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "nixos-rootfs", "managed-worker"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
 /// interruption by a restart makes their outcome uncertain.
 pub fn is_mutating(executor: &str, action: &str) -> bool {
     matches!(
         (executor, action),
-        ("opentofu", "apply") | ("proxmox", "set-protection") | ("nixos-rootfs", "grow")
+        ("opentofu", "apply")
+            | ("proxmox", "set-protection")
+            | ("nixos-rootfs", "grow")
+            | ("managed-worker", "prepare" | "install")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -169,6 +173,7 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
     match executor {
         "proxmox" => proxmox::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
+        "managed-worker" => managed_worker::run(cfg, ctx).await,
         "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,

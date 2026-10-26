@@ -452,6 +452,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/managed-worker-preparation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWorkerPreparation"];
+        put?: never;
+        post: operations["prepareWorkerDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/managed-worker-preparation/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reviewWorkerDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/managed-worker-preparation/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["publishWorkerDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables": {
         parameters: {
             query?: never;
@@ -1061,6 +1109,103 @@ export interface components {
             entries: components["schemas"]["VariableDto"][];
             missing: components["schemas"]["MissingVariableDto"][];
             system: components["schemas"]["SystemVariableDto"][];
+        };
+        WorkerDeploymentRequest: {
+            selection: components["schemas"]["WorkerDraftRequest"];
+            stateBackend: string;
+        };
+        WorkerDraftDto: {
+            fileName: string;
+            content: string;
+        };
+        WorkerDraftRequest: {
+            /** Format: uuid */
+            revisionId: string;
+            installation: string;
+            host: string;
+            name: string;
+            /** Format: int32 */
+            vmid: number;
+            /** Format: int32 */
+            sockets: number;
+            /** Format: int32 */
+            cores: number;
+            /** Format: int32 */
+            memoryMiB: number;
+            /** Format: int32 */
+            bootDiskGiB: number;
+            /** Format: int32 */
+            stateDiskGiB: number;
+            datastore: string;
+            bridge: string;
+            /** Format: int32 */
+            vlan: null | number;
+        };
+        WorkerExistingDto: {
+            address: string;
+            host: string;
+            /** Format: int32 */
+            vmid: number;
+            /** Format: uuid */
+            generation: string;
+            /** Format: uuid */
+            resourceId?: null | string;
+            /** Format: uuid */
+            runId?: null | string;
+            /** Format: uuid */
+            agentId?: null | string;
+            /** @default Declared */
+            status: string;
+        };
+        WorkerHostOption: {
+            id: string;
+            endpoint: string;
+            datastores: {
+                [key: string]: string;
+            };
+            bridges: string[];
+        };
+        WorkerInstallationOption: {
+            address: string;
+            name: string;
+            verifyTls: boolean;
+            sharedToken: boolean;
+            hosts: components["schemas"]["WorkerHostOption"][];
+        };
+        WorkerPreparationDto: {
+            sourceUrl: null | string;
+            branch: null | string;
+            headCommit: null | string;
+            lastFetchError: null | string;
+            revision: null | components["schemas"]["RevisionDto"];
+            preparationBlockedReason: null | string;
+            installations: components["schemas"]["WorkerInstallationOption"][];
+            deploymentGates: string[];
+            stateBackends: string[];
+            deploymentBlockedReason: null | string;
+            existingWorkers: components["schemas"]["WorkerExistingDto"][];
+        };
+        WorkerPublishRequest: {
+            draft: components["schemas"]["WorkerDeploymentRequest"];
+            reviewSha256: string;
+            confirmRepositoryWrite: boolean;
+        };
+        WorkerPublishedDto: {
+            address: string;
+            commit: string;
+            alreadyPresent: boolean;
+        };
+        WorkerReviewDto: {
+            address: string;
+            /** Format: uuid */
+            generation: string;
+            branch: string;
+            baseCommit: string;
+            reviewSha256: string;
+            files: {
+                [key: string]: string;
+            };
+            alreadyExists: boolean;
         };
     };
     responses: never;
@@ -2633,6 +2778,206 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getWorkerPreparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerPreparationDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    prepareWorkerDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerDraftDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    reviewWorkerDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerDeploymentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerReviewDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    publishWorkerDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerPublishedDto"];
+                };
             };
             /** @description Bad Request */
             400: {

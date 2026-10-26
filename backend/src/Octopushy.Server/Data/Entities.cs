@@ -141,6 +141,8 @@ public sealed class Resource
     public int? BoundVmid { get; set; }
 
     public DateTimeOffset? BoundAt { get; set; }
+
+    public ManagedWorkerBinding? ManagedWorker { get; set; }
 }
 
 public static class Operations
@@ -499,4 +501,27 @@ public sealed class User
     public required string PasswordHash { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>Immutable guest/generation ownership and public bootstrap evidence. Never stores a private key or enrollment token.</summary>
+public sealed class ManagedWorkerBinding
+{
+    public Guid ResourceId { get; set; }
+    public Guid Generation { get; set; }
+    public required string Installation { get; set; }
+    public required string Host { get; set; }
+    public int Vmid { get; set; }
+    public Guid RevisionId { get; set; }
+    public Guid RunId { get; set; }
+    public Guid? PrepareAttemptId { get; set; }
+    public Guid? AgentId { get; set; }
+    public string? CsrDer { get; set; }
+    public string? CertificatePem { get; set; }
+    public string? CaCertificatePem { get; set; }
+    public required string ServerUrl { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? PreparedAt { get; set; }
+    public DateTimeOffset? InstalledAt { get; set; }
+    public DateTimeOffset? AuthenticatedAt { get; set; }
+    public DateTimeOffset? ReadyAt { get; set; }
 }

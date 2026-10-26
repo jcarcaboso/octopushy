@@ -32,6 +32,8 @@ public sealed class AssignmentBuilder(
 
     public static StepAction ActionFor(string stepName) => stepName switch
     {
+        StepNames.PrepareWorker => new StepAction("managed-worker", "prepare", true),
+        StepNames.InstallWorker => new StepAction("managed-worker", "install", true),
         StepNames.Plan => new StepAction("opentofu", "preview", false),
         StepNames.Apply => new StepAction("opentofu", "apply", true),
         StepNames.Unprotect => new StepAction("proxmox", "set-protection", true),
@@ -56,7 +58,7 @@ public sealed class AssignmentBuilder(
 
     // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
     public static string TokenFor(string stepName) => stepName is
-        StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot
+        StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
@@ -68,6 +70,7 @@ public sealed class AssignmentBuilder(
         {
             throw new RevisionUntrustedException(reason);
         }
+        await ManagedWorkerSafety.ValidateDispatchAsync(db, run, context, agentId, cancellationToken);
         var invalid = CredentialBindings.Validate(context);
         if (invalid.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
@@ -127,7 +130,7 @@ public sealed class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
-            if (run.Operation == Operations.Provision && context.RootDiskBytes is not null)
+            if (run.Operation == Operations.Provision && (context.RootDiskBytes is not null || context.ManagedWorker is not null))
                 input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (step.Name == StepNames.Apply)
@@ -159,9 +162,32 @@ public sealed class AssignmentBuilder(
             {
                 input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");
                 input["address"] = context.Address;
+                input["workerGeneration"] = context.ManagedWorker?.Generation.ToString();
             }
         }
 
+        if (action.Executor == "managed-worker")
+        {
+            var worker = context.ManagedWorker ?? throw new AssignmentException("Missing managed worker context.");
+            input["address"] = context.Address;
+            input["generation"] = worker.Generation.ToString();
+            if (step.Name == StepNames.InstallWorker)
+            {
+                var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, cancellationToken);
+                if (binding.AgentId is null || binding.CertificatePem is null || binding.CaCertificatePem is null)
+                    throw new AssignmentException("Managed worker has no issued public identity.");
+                input["identity"] = new JsonObject
+                {
+                    ["protocolVersion"] = 1,
+                    ["generation"] = worker.Generation.ToString(),
+                    ["agentId"] = binding.AgentId.ToString(),
+                    ["name"] = context.Proxmox.Name,
+                    ["serverUrl"] = binding.ServerUrl,
+                    ["certificatePem"] = binding.CertificatePem,
+                    ["caCertificatePem"] = binding.CaCertificatePem,
+                };
+            }
+        }
         assignment.InputJson = input.ToJsonString();
         foreach (var (name, value) in values)
         {
@@ -181,6 +207,9 @@ public sealed class AssignmentBuilder(
         {
             throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
         }
+        if (RunContext.Parse(run.Context).ManagedWorker is not null
+            && ManagedWorkerSafety.DestructivePlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
+            throw new AssignmentException("Managed worker deletion/replacement is not supported, even with saved-plan approval.");
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)

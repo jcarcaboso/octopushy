@@ -1,11 +1,10 @@
 name: Baseline checks
 
-# main is intentional: the repository's default branch is still proxmox-e2e.
+# Push CI targets main; PR checks also cover stacked feature branches.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read

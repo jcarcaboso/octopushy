@@ -48,6 +48,8 @@ public sealed record RunContext
     /// <summary><c>proxmox</c> or <c>none</c>.</summary>
     public string Verify { get; init; } = "proxmox";
 
+    public ManagedWorkerContext? ManagedWorker { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
@@ -55,6 +57,8 @@ public sealed record RunContext
     public static RunContext Parse(string json) =>
         JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
 }
+
+public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
 
 public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy);
 
@@ -90,6 +94,9 @@ public static class StepNames
     public const string Observe = "observe";
     public const string GrowRoot = "grow-root";
     public const string VerifyRoot = "verify-root";
+    public const string PrepareWorker = "prepare-worker";
+    public const string InstallWorker = "install-worker";
+    public const string WaitWorker = "wait-worker";
 }
 
 /// <summary>The secret names executors look for.</summary>
