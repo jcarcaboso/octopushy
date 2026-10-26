@@ -12,8 +12,9 @@ sequence, see [Progress and next steps](docs/progress-and-next-steps.md).
 
 **Status:** milestone 1, Proxmox and virtual machines
 ([scope and contracts](docs/milestone-1.md)). Guests are planned, approved, applied,
-verified, and retired; installations are observed through the Proxmox API. Guest setup,
-services, DNS, and the editor come later. The first Python proof of concept is archived
+verified, and retired; installations are observed through the Proxmox API. Optional
+post-provision setup installs the disk reporter; general guest setup, services, DNS,
+and the editor come later. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)
@@ -41,7 +42,7 @@ or completed service orchestration.
 2. A guest whose inputs changed gets a provision run: **plan** (OpenTofu, on an agent),
    **approval** (automatic or manual, per the guest's policy; deletes follow the
    destructive setting), **apply** of exactly the approved plan, and **verify** through
-   the Proxmox API. A retired guest gets a destroy plan, protection lifted, apply, and a
+   the Proxmox API, followed by **install-disk-reporter** when configured. A retired guest gets a destroy plan, protection lifted, apply, and a
    check that the VM is gone.
 3. Agents connect outbound, enroll with a one-time token, and run each attempt with only
    the secrets that attempt needs. OpenTofu runs in a rootless container on the agent.
@@ -154,3 +155,11 @@ packet paths, remote access, or deployment success.
 Releases are built by hand for now: `just images <version>` builds the backend and
 frontend images, and [`deploy/`](deploy/README.md) runs them with PostgreSQL on one
 host. Agents run where they can reach the labs; one agent can serve every lab.
+
+For guest disk usage, the separate [disk reporter](agent/packaging/disk-reporter/README.md)
+pushes root-filesystem used bytes on a configurable hourly systemd timer and exits.
+Enable [automatic installation](deploy/README.md#automatic-guest-disk-reporting)
+once on the control host; provision runs then install it through the QEMU guest
+agent after verification, without SSH or inbound ports. Manual installation from
+the guest page remains available. The page compares usage against
+the first disk's configured capacity, not measured filesystem-available space.

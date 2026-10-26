@@ -38,6 +38,13 @@ services:
       # The name or address agents use to reach this host; it goes into the agent endpoint's certificate.
       Octopushy__AgentChannel__Hostnames__0: ${OCTOPUSHY_AGENT_HOST:?set OCTOPUSHY_AGENT_HOST in .env}
       Octopushy__AgentChannel__PublicUrl: https://${OCTOPUSHY_AGENT_HOST}:${OCTOPUSHY_AGENT_PORT:-8443}
+      # Post-provision one-shot guest reporter; publish a compatible, pinned binary first.
+      Octopushy__DiskReporter__Enabled: ${OCTOPUSHY_DISK_REPORTER_ENABLED:-false}
+      Octopushy__DiskReporter__PublicUrl: ${OCTOPUSHY_DISK_REPORTER_PUBLIC_URL:-}
+      Octopushy__DiskReporter__BinaryUrl: ${OCTOPUSHY_DISK_REPORTER_BINARY_URL:-}
+      Octopushy__DiskReporter__BinarySha256: ${OCTOPUSHY_DISK_REPORTER_BINARY_SHA256:-}
+      Octopushy__DiskReporter__IntervalSeconds: ${OCTOPUSHY_DISK_REPORTER_INTERVAL_SECONDS:-3600}
+      Octopushy__DiskReporter__CaCertificatePem: ${OCTOPUSHY_DISK_REPORTER_CA_PEM:-}
     secrets:
       - kek
     volumes:

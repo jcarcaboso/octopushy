@@ -1,0 +1,29 @@
+[Unit]
+Description=Report Octopushy guest root filesystem usage
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/octopushy-disk-reporter/config.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/octopushy-disk-reporter report /etc/octopushy-disk-reporter/config.json
+DynamicUser=yes
+LoadCredential=token:/etc/octopushy-disk-reporter/token
+TimeoutStartSec=20s
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=5%
+MemoryMax=64M
+TasksMax=8
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077

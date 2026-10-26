@@ -9,6 +9,7 @@ import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionView } from "../components/DefinitionView";
 import { IssueList } from "../components/IssueList";
+import { GuestDiskUsage } from "../components/GuestDiskUsage";
 import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
 import { Commit } from "../components/Mono";
@@ -179,6 +180,7 @@ export function GuestPage() {
             <Card title="Observed VM">
               <ObservedVm vm={guest.observed} />
             </Card>
+            <GuestDiskUsage key={guest.id} id={guest.id} usage={data.diskUsage} inactive={Boolean(data.retiredAt || data.missingSince)} />
             <Card title="Outputs">
               {data.outputs === null || data.outputs === undefined ? (
                 <p className="muted">No outputs recorded yet. They appear after a successful apply.</p>

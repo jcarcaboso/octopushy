@@ -11,6 +11,7 @@ export type InstallationSummary = Schemas["InstallationSummaryDto"];
 export type InstallationDetail = Schemas["InstallationDetailDto"];
 export type GuestSummary = Schemas["GuestSummaryDto"];
 export type GuestDetail = Schemas["GuestDetailDto"];
+export type GuestDiskUsage = Schemas["GuestDiskUsageDto"];
 export type ObservedHost = Schemas["ObservedHostDto"];
 export type ObservedGuest = Schemas["ObservedGuestDto"];
 export type Issue = Schemas["IssueDto"];

@@ -6,7 +6,7 @@ appear in `input_json`; the input names them, and their values arrive in the
 assignment's `secrets` map. The agent replaces every secret value with `***` in log
 lines and error messages.
 
-Unknown input fields are ignored, so the server can add fields without breaking
+Unknown top-level input fields are ignored, so the server can add fields without breaking
 older agents. An executor that cannot parse its input fails the attempt. Outputs are
 `{}` when an action has none.
 
@@ -26,6 +26,57 @@ with that CA as its only trust root.
 
 The agent's certificate subject CN is its agent ID. The certificate is valid for
 30 days; the agent renews it when less than a third of its validity remains.
+
+## `guest`
+
+Advertised separately from `proxmox`, so older workers cannot receive guest setup.
+
+### `install-disk-reporter`
+
+Runs after VM verification on provision runs only, including no-change plans.
+Takes the same `connection` object as `proxmox` and secrets `proxmox.token` and
+`disk-reporter.token` (64 hexadecimal characters). No repository bundle or plan
+artifact is needed.
+
+```json
+{
+  "connection": { "endpoint": "https://10.1.0.10:8006/", "verifyTls": true },
+  "node": "korriban",
+  "vmid": 310,
+  "name": "krb-app-01",
+  "reporter": {
+    "endpoint": "https://octopushy.example/api/guests/RESOURCE-UUID/disk-usage",
+    "binaryUrl": "https://releases.example/disk-reporter-v1",
+    "binarySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "intervalSeconds": 3600,
+    "caCertificatePem": null
+  }
+}
+```
+
+`reporter` is a strict object: HTTPS URLs without userinfo/query/fragment, a SHA-256
+digest, interval 60–604800 seconds, and an optional public CA bundle (at most
+16 KiB) for both download and reporting.
+
+The executor confirms a running, non-template QEMU VM with matching name/node
+and checks guest-exec privileges. It sends the installer as plain `input-data`
+to `POST /nodes/{node}/qemu/{vmid}/agent/exec`, then polls `agent/exec-status`
+with the returned PID. The guest command is
+`/usr/bin/timeout --kill-after=5s 240s /bin/sh`; credentials are on stdin, not in
+command arguments. Guest output is discarded, including on failure.
+
+The installer downloads a pinned binary, checks its digest, installs the systemd
+oneshot/timer, and starts a first report. Successful output:
+
+```json
+{ "installed": true, "firstReportSent": true, "binarySha256": "…", "intervalSeconds": 3600 }
+```
+
+This action is **mutating and not cancellable**. A known nonzero exit fails;
+ambiguous dispatch or lost status returns `OUTCOME_UNCERTAIN`. No automatic
+remote-execution retries. Server-side no-change approvals use the immutable setup
+configuration's fingerprint in the existing `planSha256` field when there is no
+saved infrastructure plan.
 
 ## `proxmox`
 

@@ -199,7 +199,7 @@ pub struct VmConfig {
 }
 
 /// A polled QEMU guest execution result. No output is assumed until `exited`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct GuestExecStatus {
     #[serde(default, deserialize_with = "de::bool_or_false")]
     pub exited: bool,
@@ -221,6 +221,17 @@ pub struct GuestExecStatus {
         deserialize_with = "de::bool_or_false"
     )]
     pub stderr_truncated: bool,
+}
+
+impl std::fmt::Debug for GuestExecStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Guest commands may echo credentials or their encoded forms.
+        f.debug_struct("GuestExecStatus")
+            .field("exited", &self.exited)
+            .field("exitcode", &self.exitcode)
+            .field("signal", &self.signal)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One interface from the guest agent's `network-get-interfaces`.
