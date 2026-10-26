@@ -32,6 +32,37 @@ podman compose up -d                      # or: docker compose up -d
   `podman compose exec backend cat /var/lib/octopushy/setup-code` and enter it in the
   web interface to create the account.
 
+## Automatic guest disk reporting
+
+Build and publish `octopushy-disk-reporter` for your guests' architecture/libc,
+then set these values in `.env` and recreate the backend:
+
+```dotenv
+OCTOPUSHY_DISK_REPORTER_ENABLED=true
+OCTOPUSHY_DISK_REPORTER_PUBLIC_URL=https://octopushy.example
+OCTOPUSHY_DISK_REPORTER_BINARY_URL=https://releases.example/disk-reporter-v1
+OCTOPUSHY_DISK_REPORTER_BINARY_SHA256=<sha256sum of the published binary>
+OCTOPUSHY_DISK_REPORTER_INTERVAL_SECONDS=3600
+```
+
+The web/API origin and direct binary URL must be reachable over HTTPS **from the
+VM**. No redirect-following or insecure TLS fallback is allowed. For a private CA,
+set `OCTOPUSHY_DISK_REPORTER_CA_PEM` to its public PEM (never the private key);
+it becomes the trust bundle for **both** endpoints.
+
+Upgrade the execution agents too: they must advertise the new `guest` executor.
+The VM needs Linux/systemd and a running QEMU guest agent with guest execution
+enabled. The Proxmox token needs guest-exec privileges on each managed VM.
+The [reporter guide](../agent/packaging/disk-reporter/README.md) lists prerequisites,
+per-guest overrides, and recovery steps.
+
+Once enabled, provision runs append **install-disk-reporter** after verification,
+enable the hourly timer, and attempt the first report immediately. Existing VMs
+can be installed or repaired with **Plan now**, even if OpenTofu has no changes.
+Manual-approval policy still applies. No SSH key or inbound VM port is required.
+Installation is disabled until deployment URLs and the checksum are configured;
+the server refuses invalid enabled configuration.
+
 ## What to keep safe
 
 - `secrets/kek`: without it, the values in the variable store, including the agent CA's

@@ -83,7 +83,7 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         }
     };
     let pid = c
-        .guest_exec(&input.node, input.vmid, &command)
+        .guest_exec(&input.node, input.vmid, &command, None)
         .await
         .map_err(|e| {
             unknown(format!(

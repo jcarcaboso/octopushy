@@ -5,6 +5,7 @@ members = [
     "crates/proxmox",
     "crates/octopushy",
     "crates/mock-proxmox",
+    "crates/disk-reporter",
 ]
 
 [workspace.package]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Report Octopushy guest disk usage hourly
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+RandomizedDelaySec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

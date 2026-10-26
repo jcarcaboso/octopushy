@@ -376,6 +376,35 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("enrollment_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<int>("IntervalSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("interval_seconds");
+
+                    b.Property<DateTimeOffset?>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("TokenHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token_hash");
+
+                    b.Property<long?>("UsedBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("used_bytes");
+
+                    b.HasKey("ResourceId")
+                        .HasName("pk_guest_disk_usages");
+
+                    b.ToTable("guest_disk_usages", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -1023,6 +1052,16 @@ namespace Octopushy.Server.Data.Migrations
                         .HasConstraintName("fk_attempts_steps_step_id");
 
                     b.Navigation("Step");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithOne()
+                        .HasForeignKey("Octopushy.Server.Data.GuestDiskUsage", "ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_guest_disk_usages_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>

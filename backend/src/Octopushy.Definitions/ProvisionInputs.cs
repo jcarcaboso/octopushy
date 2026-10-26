@@ -6,8 +6,9 @@ namespace Octopushy.Definitions;
 
 /// <summary>
 /// Everything a guest's provisioning run is built from, and a hash of it that changes exactly
-/// when a new plan could differ: the guest's definition, its host and installation settings,
-/// its template, its recipe and the files of the recipe's root, and its state backend.
+/// when a new plan or reporter setup could differ: the guest's definition, its host and
+/// installation settings, its template, its recipe and root files, its state backend,
+/// and its disk reporter overrides.
 /// </summary>
 public sealed record ProvisionInputs(
     GuestDefinition Guest,
@@ -19,7 +20,7 @@ public sealed record ProvisionInputs(
     JsonObject Variables,
     string Hash)
 {
-    /// <summary>Guest fields that do not change what provisioning does.</summary>
+    /// <summary>Guest fields excluded from the infrastructure hash; reporter setup is hashed separately.</summary>
     private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
@@ -105,6 +106,12 @@ public sealed record ProvisionInputs(
             ["rootFiles"] = TreeHash(repository.Root, recipe.Root),
             ["backend"] = backend.Json.DeepClone(),
         };
+        // Reporter setup changes need a new run, but never become OpenTofu inputs.
+        // Omit the key entirely for existing definitions to preserve their hashes.
+        if (guest.Json["setup"]?["diskReporter"] is { } diskReporter)
+        {
+            hashed["diskReporter"] = diskReporter.DeepClone();
+        }
 
         return new ProvisionInputs(guest, installation, host, recipe, template, backend, variables, Canonical.Hash(hashed));
     }

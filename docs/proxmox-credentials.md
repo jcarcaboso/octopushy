@@ -74,6 +74,7 @@ in this milestone is a tested, universally sufficient role, including in shared 
 | `observe`, `verify`, `verify-absent` | Shared | Read-only |
 | `apply`, `unprotect` | Shared, after approval | Privileged, after approval |
 | `grow-root`, `verify-root` | Shared, after approval | Privileged, after approval |
+| `install-disk-reporter` | Shared, after approval | Privileged, after approval |
 
 Root verification runs a QEMU guest-agent command as guest root. Its
 non-mutating retry classification is **not** a read-only credential grant.
@@ -93,9 +94,10 @@ plan's identity before decrypting credentials, including native guest actions.
 The existing manual/automatic policy still applies: **this is not T3's proposed
 controller-owned approval floor**, and automatic policy is not human approval.
 
-For root-filesystem-enabled provisioning, a no-change infrastructure plan still
-retains a saved artifact for the approval gate. Manual approval is not skipped
-just because `hasChanges` is false when privileged guest work remains. OpenTofu
+For provisioning with root filesystem work or disk reporter installation, a
+no-change infrastructure plan still retains a saved artifact for the approval
+gate. Manual approval is not skipped just because `hasChanges` is false when
+privileged guest work remains. OpenTofu
 apply remains skipped for that no-op plan. An older worker that omits the required
 artifact cannot advance the privileged guest work.
 

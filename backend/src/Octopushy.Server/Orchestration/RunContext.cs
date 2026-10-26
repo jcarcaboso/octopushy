@@ -34,6 +34,8 @@ public sealed record RunContext
 
     public required ProxmoxContext Proxmox { get; init; }
 
+    public DiskReporterContext? DiskReporter { get; init; }
+
     /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
@@ -82,6 +84,13 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4);
 
+public sealed record DiskReporterContext(
+    string Endpoint,
+    string BinaryUrl,
+    string BinarySha256,
+    int IntervalSeconds,
+    string? CaCertificatePem);
+
 /// <summary>Step names, shared with the API.</summary>
 public static class StepNames
 {
@@ -97,6 +106,7 @@ public static class StepNames
     public const string PrepareWorker = "prepare-worker";
     public const string InstallWorker = "install-worker";
     public const string WaitWorker = "wait-worker";
+    public const string InstallDiskReporter = "install-disk-reporter";
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -108,6 +118,7 @@ public static class SecretNames
     /// <summary>Executor wire alias only; never a persisted role in new runs.</summary>
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
+    public const string DiskReporterToken = "disk-reporter.token";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
 }

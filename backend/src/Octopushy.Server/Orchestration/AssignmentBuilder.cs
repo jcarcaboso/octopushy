@@ -26,6 +26,7 @@ public sealed class AssignmentBuilder(
     VariableStore store,
     RepositoryMirror mirror,
     ArtifactStore artifacts,
+    TimeProvider clock,
     IOptions<OctopushyOptions> options)
 {
     public const string PlanArtifact = "plan.tar.gz";
@@ -42,6 +43,7 @@ public sealed class AssignmentBuilder(
         StepNames.Observe => new StepAction("proxmox", "observe", false),
         StepNames.GrowRoot => new StepAction("nixos-rootfs", "grow", true),
         StepNames.VerifyRoot => new StepAction("nixos-rootfs", "verify", false),
+        StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -59,6 +61,7 @@ public sealed class AssignmentBuilder(
     // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
     public static string TokenFor(string stepName) => stepName is
         StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
+        or StepNames.InstallDiskReporter
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
@@ -130,7 +133,8 @@ public sealed class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
-            if (run.Operation == Operations.Provision && (context.RootDiskBytes is not null || context.ManagedWorker is not null))
+            if (run.Operation == Operations.Provision
+                && (context.RootDiskBytes is not null || context.ManagedWorker is not null || context.DiskReporter is not null))
                 input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (step.Name == StepNames.Apply)
@@ -163,6 +167,33 @@ public sealed class AssignmentBuilder(
                 input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");
                 input["address"] = context.Address;
                 input["workerGeneration"] = context.ManagedWorker?.Generation.ToString();
+            }
+            if (step.Name == StepNames.InstallDiskReporter)
+            {
+                var reporter = context.DiskReporter
+                    ?? throw new AssignmentException("The run has no disk reporter configuration.");
+                if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
+                {
+                    throw new AssignmentException("The guest is missing or retired.");
+                }
+                await GuestReporterCredentials.EnsureAsync(
+                    db, store, run.ResourceId, reporter.IntervalSeconds, rotate: false, cancellationToken);
+                // Only this server-owned credential may leave system/. The general
+                // variable resolver must keep rejecting internal keys from definitions.
+                var key = GuestReporterCredentials.Key(run.ResourceId);
+                var credential = await store.GetAsync(key, cancellationToken)
+                    ?? throw new AssignmentException("The reporting credential is unavailable.");
+                db.SecretResolutions.Add(new SecretResolution
+                {
+                    Key = key,
+                    Version = credential.Version,
+                    AttemptId = attempt.Id,
+                    AgentId = agentId,
+                    ResolvedAt = clock.GetUtcNow(),
+                });
+                await db.SaveChangesAsync(cancellationToken);
+                values[SecretNames.DiskReporterToken] = credential.Value;
+                input["reporter"] = System.Text.Json.JsonSerializer.SerializeToNode(reporter, RunContext.Json);
             }
         }
 

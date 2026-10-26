@@ -36,11 +36,19 @@ public class ManagedWorkerLifecycleTests(PostgresFixture postgres)
         ["agentVersion"] = "test",
     };
 
-    [Fact]
-    public async Task A_noop_plan_needs_approval_and_readiness_requires_the_correlated_authenticated_worker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_noop_plan_needs_approval_and_readiness_requires_the_correlated_authenticated_worker(bool diskReporter)
     {
         using var repo = Definitions.ManagedWorkerDefinitionTests.Repository();
-        await using var server = await ServerHarness.StartAsync(postgres, repo);
+        await using var server = await ServerHarness.StartAsync(postgres, repo, settings: diskReporter ? new()
+        {
+            ["Octopushy:DiskReporter:Enabled"] = "true",
+            ["Octopushy:DiskReporter:PublicUrl"] = "https://octopushy.test",
+            ["Octopushy:DiskReporter:BinaryUrl"] = "https://releases.test/disk-reporter",
+            ["Octopushy:DiskReporter:BinarySha256"] = new string('a', 64),
+        } : null);
         var control = await server.ConnectAgentAsync("home");
         await TrustAsync(server);
         var preview = await control.NextAsync("preview");
@@ -75,6 +83,7 @@ public class ManagedWorkerLifecycleTests(PostgresFixture postgres)
         run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Running, run.Status); // VM existence / QGA success is not ready.
         Assert.Equal(StepStatuses.Running, run.Steps.Single(s => s.Name == StepNames.WaitWorker).Status);
+        Assert.Equal(0, await server.QueryAsync(db => db.GuestDiskUsages.CountAsync()));
         var connections = server.Services.GetRequiredService<AgentConnections>();
         var session = new AgentSession(agentId, "worker", ["opentofu", "proxmox"]);
         connections.Add(session);
@@ -83,6 +92,16 @@ public class ManagedWorkerLifecycleTests(PostgresFixture postgres)
         var hello = new Hello { AgentVersion = "test" }; hello.Executors.AddRange(new[] { "opentofu", "proxmox" });
         await server.Engine.OnHelloAsync(agentId, hello, CancellationToken.None);
         await server.TickAsync();
+        if (diskReporter)
+        {
+            Assert.Equal(RunStatuses.Running, (await server.LatestRunAsync(Guest)).Status);
+            var reporter = await control.NextAsync("install-disk-reporter");
+            Assert.Equal("guest", reporter.Executor);
+            Assert.Equal(install.Secrets["proxmox.token"], reporter.Secrets["proxmox.token"]);
+            Assert.Contains("disk-reporter.token", reporter.Secrets.Keys);
+            await control.ReportAsync(reporter, Outcome.Succeeded);
+            await server.TickAsync();
+        }
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest)).Status);
         await server.WithDbAsync(async db =>
         {

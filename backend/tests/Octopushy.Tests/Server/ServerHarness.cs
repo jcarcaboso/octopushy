@@ -103,12 +103,14 @@ public sealed class ServerHarness : IAsyncDisposable
     private WebApplicationFactory<Program> _factory;
     private readonly string _connectionString;
     private readonly string _dataDirectory;
+    private readonly Dictionary<string, string>? _settings;
     private HttpClient? _trustClient;
 
-    private ServerHarness(string connectionString, TestRepository repository)
+    private ServerHarness(string connectionString, TestRepository repository, Dictionary<string, string>? settings)
     {
         Repository = repository;
         _connectionString = connectionString;
+        _settings = settings;
         _dataDirectory = Path.Combine(Path.GetTempPath(), "octopushy-server-" + Guid.NewGuid().ToString("N"));
         _factory = CreateFactory();
     }
@@ -121,6 +123,10 @@ public sealed class ServerHarness : IAsyncDisposable
             builder.UseSetting("Octopushy:MigrateOnStart", "true");
             builder.UseSetting("Octopushy:RunBackgroundServices", "false");
             builder.UseSetting("Octopushy:AgentChannel:PublicUrl", "https://octopushy.test:8443");
+            foreach (var (key, value) in _settings ?? [])
+            {
+                builder.UseSetting(key, value);
+            }
         });
 
     public TestRepository Repository { get; }
@@ -131,9 +137,9 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public string DataDirectory => _dataDirectory;
 
-    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true)
+    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null)
     {
-        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal());
+        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings);
         _ = harness._factory.Server;
         harness.Commit("Initial definitions");
         await harness.WithDbAsync(async db =>
@@ -242,7 +248,7 @@ public sealed class ServerHarness : IAsyncDisposable
             Labels = labels,
             MaxConcurrency = 4,
             EnrolledAt = DateTimeOffset.UtcNow,
-            Executors = ["opentofu", "proxmox", "nixos-rootfs", "managed-worker"],
+            Executors = ["opentofu", "proxmox", "nixos-rootfs", "guest", "managed-worker"],
             CertificateSerial = Guid.NewGuid().ToString("N"),
             CertificateExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
         };

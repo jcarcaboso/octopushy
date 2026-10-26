@@ -74,7 +74,7 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         Failure::Uncertain("Managed identity command outcome unknown; inspect before retrying (never automatically replay).".into())
     };
     let pid = client
-        .guest_exec(&input.node, input.vmid, &command)
+        .guest_exec(&input.node, input.vmid, &command, None)
         .await
         .map_err(|_| unknown())?;
     let deadline = Instant::now() + Duration::from_secs(input.wait_seconds);

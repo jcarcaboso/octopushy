@@ -1260,7 +1260,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wiremock",
  "x509-parser",
+]
+
+[[package]]
+name = "octopushy-disk-reporter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

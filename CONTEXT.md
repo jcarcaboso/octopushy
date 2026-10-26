@@ -214,6 +214,11 @@ A registered execution worker permitted to act on specified targets through the
 appropriate network access; it is not required on every managed machine.
 _Avoid_: Node, runner when naming the Octopushy worker
 
+**Guest reporter**:
+A guest-local source of resource-usage measurements for its own machine, without
+permission to execute operations against targets.
+_Avoid_: Agent when referring to the execution worker
+
 **Operation**:
 A supported action on explicitly selected resources, such as provisioning,
 setup, maintenance, tool updates, service deployment, or verification.
