@@ -215,7 +215,8 @@ public sealed record GuestDetailDto(
     JsonNode? Outputs,
     DateTimeOffset? MissingSince,
     DateTimeOffset? RetiredAt,
-    IReadOnlyList<RunSummaryDto> Runs);
+    IReadOnlyList<RunSummaryDto> Runs,
+    GuestDiskUsageDto DiskUsage);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

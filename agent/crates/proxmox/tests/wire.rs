@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use octopushy_proxmox::{ApiToken, Client, ClientConfig, Error, Tls};
 use serde_json::json;
-use wiremock::matchers::{body_string, header, method, path, query_param};
+use wiremock::matchers::{body_json, body_string, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TOKEN: &str = "octopushy@pve!agent=11111111-2222-3333-4444-555555555555";
@@ -31,7 +31,7 @@ async fn guest_exec_sends_an_argument_array_and_decodes_completed_status() {
         .await;
     let c = client(&server);
     let pid = c
-        .guest_exec("node", 310, &["/bin/echo".into(), "a b".into()])
+        .guest_exec("node", 310, &["/bin/echo".into(), "a b".into()], None)
         .await
         .unwrap();
     assert_eq!(pid, 123);
@@ -53,6 +53,50 @@ fn client(server: &MockServer) -> Client {
 
 fn data(v: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({ "data": v }))
+}
+
+#[tokio::test]
+async fn guest_exec_sends_plain_stdin_and_polls_pid_without_returning_output() {
+    let server = MockServer::start().await;
+    let command = ["/usr/bin/timeout", "240s", "/bin/sh"].map(String::from);
+    let script = "set -eu\nprintf '%s' 'private-input'\n";
+    Mock::given(method("POST"))
+        .and(path("/api2/json/nodes/n1/qemu/310/agent/exec"))
+        .and(header(
+            "authorization",
+            format!("PVEAPIToken={TOKEN}").as_str(),
+        ))
+        .and(body_json(
+            json!({ "command": command, "input-data": script }),
+        ))
+        .respond_with(data(json!({ "pid": 42 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/n1/qemu/310/agent/exec-status"))
+        .and(query_param("pid", "42"))
+        .respond_with(data(json!({
+            "exited": 1, "exitcode": 0, "out-data": "secret", "err-data": "secret"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    let pid = c
+        .guest_exec("n1", 310, &command, Some(script))
+        .await
+        .unwrap();
+    assert_eq!(pid, 42);
+    let status = c.guest_exec_status("n1", 310, pid).await.unwrap();
+    assert!(status.exited);
+    assert_eq!(status.exitcode, Some(0));
+    assert!(!format!("{status:?}").contains("secret"));
+    assert!(matches!(
+        c.guest_exec("n1", 310, &command, Some(&"x".repeat(65537)))
+            .await,
+        Err(Error::Config(_))
+    ));
 }
 
 #[tokio::test]

@@ -1,7 +1,9 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -344,7 +346,9 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe ? "The plan has no changes." : null);
+        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe
+            ? context.DiskReporter is null ? "The plan has no changes." : "Infrastructure unchanged; disk reporter setup completed."
+            : null);
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -358,16 +362,22 @@ public sealed partial class RunEngine(
         // or a destroy plan over a state that holds nothing. There is nothing to approve then.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
-        var manual = policy.Approval == "manual" && resourceChanges > 0;
+        var manual = policy.Approval == "manual" && (resourceChanges > 0 || context.DiskReporter is not null);
         var destructiveManual = deletes > 0 && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
         step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();
+        if (step.PlanSha256 is null && context.DiskReporter is { } reporter)
+        {
+            // No infrastructure plan file needs applying. Bind approval to the
+            // immutable setup specification instead, including the pinned binary.
+            step.PlanSha256 = Canonical.Hash(JsonSerializer.SerializeToNode(reporter, RunContext.Json)!);
+        }
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
             step.DecidedBy = "policy";
             step.DecidedAt = clock.GetUtcNow();
-            step.DecisionNote = resourceChanges == 0
+            step.DecisionNote = resourceChanges == 0 && context.DiskReporter is null
                 ? "The plan changes no resources, so it needs no approval."
                 : deletes > 0
                     ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
@@ -382,6 +392,10 @@ public sealed partial class RunEngine(
         step.Detail = destructiveManual && !manual
             ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
+        if (context.DiskReporter is not null)
+        {
+            step.Detail += " This run also installs the disk reporter inside the VM after verification.";
+        }
         return false;
     }
 
@@ -433,7 +447,9 @@ public sealed partial class RunEngine(
                         resource.SyncedInputsHash = run.InputsHash;
                     }
 
-                    foreach (var later in run.Steps.Where(s => s.Name is StepNames.Approval or StepNames.Unprotect or StepNames.Apply))
+                    var reporterSetup = RunContext.Parse(run.Context).DiskReporter is not null;
+                    foreach (var later in run.Steps.Where(s =>
+                        s.Name is StepNames.Unprotect or StepNames.Apply || s.Name == StepNames.Approval && !reporterSetup))
                     {
                         later.Status = StepStatuses.Skipped;
                         later.Detail = "The plan has no changes.";

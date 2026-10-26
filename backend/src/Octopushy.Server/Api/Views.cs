@@ -230,7 +230,9 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.Outputs is null ? null : JsonNode.Parse(resource.Outputs),
             resource.MissingSince,
             resource.RetiredAt,
-            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList());
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
+            GuestDiskUsageEndpoints.View(resource,
+                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)));
     }
 
     public async Task<InstallationDetailDto?> InstallationAsync(Guid id, CancellationToken cancellationToken)

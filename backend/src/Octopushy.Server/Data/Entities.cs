@@ -143,6 +143,21 @@ public sealed class Resource
     public DateTimeOffset? BoundAt { get; set; }
 }
 
+/// <summary>One scoped reporting credential and the latest root-filesystem reading per guest.</summary>
+public sealed class GuestDiskUsage
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>SHA-256 of the reporting token. Null disables reporting without erasing the last reading.</summary>
+    public string? TokenHash { get; set; }
+
+    public int IntervalSeconds { get; set; } = 3600;
+
+    public long? UsedBytes { get; set; }
+
+    public DateTimeOffset? ReceivedAt { get; set; }
+}
+
 public static class Operations
 {
     public const string Provision = "provision";

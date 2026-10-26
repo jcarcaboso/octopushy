@@ -26,6 +26,7 @@ public sealed class AssignmentBuilder(
     VariableStore store,
     RepositoryMirror mirror,
     ArtifactStore artifacts,
+    TimeProvider clock,
     IOptions<OctopushyOptions> options)
 {
     public const string PlanArtifact = "plan.tar.gz";
@@ -40,6 +41,7 @@ public sealed class AssignmentBuilder(
         StepNames.Observe => new StepAction("proxmox", "observe", false),
         StepNames.GrowRoot => new StepAction("nixos-rootfs", "grow", true),
         StepNames.VerifyRoot => new StepAction("nixos-rootfs", "verify", false),
+        StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -135,6 +137,33 @@ public sealed class AssignmentBuilder(
             {
                 input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");
                 input["address"] = context.Address;
+            }
+            if (step.Name == StepNames.InstallDiskReporter)
+            {
+                var reporter = context.DiskReporter
+                    ?? throw new AssignmentException("The run has no disk reporter configuration.");
+                if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
+                {
+                    throw new AssignmentException("The guest is missing or retired.");
+                }
+                await GuestReporterCredentials.EnsureAsync(
+                    db, store, run.ResourceId, reporter.IntervalSeconds, rotate: false, cancellationToken);
+                // Only this server-owned credential may leave system/. The general
+                // variable resolver must keep rejecting internal keys from definitions.
+                var key = GuestReporterCredentials.Key(run.ResourceId);
+                var credential = await store.GetAsync(key, cancellationToken)
+                    ?? throw new AssignmentException("The reporting credential is unavailable.");
+                db.SecretResolutions.Add(new SecretResolution
+                {
+                    Key = key,
+                    Version = credential.Version,
+                    AttemptId = attempt.Id,
+                    AgentId = agentId,
+                    ResolvedAt = clock.GetUtcNow(),
+                });
+                await db.SaveChangesAsync(cancellationToken);
+                values[SecretNames.DiskReporterToken] = credential.Value;
+                input["reporter"] = System.Text.Json.JsonSerializer.SerializeToNode(reporter, RunContext.Json);
             }
         }
 

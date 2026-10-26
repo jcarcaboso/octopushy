@@ -30,6 +30,48 @@ public sealed class OctopushyOptions
     public ToolOptions Tools { get; set; } = new();
 
     public SchedulingOptions Scheduling { get; set; } = new();
+
+    public DiskReporterOptions DiskReporter { get; set; } = new();
+}
+
+/// <summary>One pinned Linux reporter release, installed on guests after provisioning.</summary>
+public sealed class DiskReporterOptions
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>HTTPS web/API origin reachable from the VM, not the execution-agent endpoint.</summary>
+    public string PublicUrl { get; set; } = "";
+
+    public string BinaryUrl { get; set; } = "";
+
+    public string BinarySha256 { get; set; } = "";
+
+    public int IntervalSeconds { get; set; } = 3600;
+
+    /// <summary>Optional private CA PEM for the reporting and download endpoints; never a private key.</summary>
+    public string? CaCertificatePem { get; set; }
+
+    public void Validate()
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        if (!HttpsUrl(PublicUrl) || new Uri(PublicUrl).AbsolutePath != "/" || !HttpsUrl(BinaryUrl)
+            || BinarySha256.Length != 64 || BinarySha256.AsSpan().IndexOfAnyExcept("0123456789abcdefABCDEF") >= 0
+            || IntervalSeconds is < 60 or > 604800 || CaCertificatePem?.Length > 16384
+            || CaCertificatePem?.Contains("PRIVATE KEY", StringComparison.Ordinal) == true)
+        {
+            throw new InvalidOperationException(
+                "DiskReporter requires an HTTPS PublicUrl origin, an HTTPS BinaryUrl without credentials/query/fragment, "
+                + "a 64-character BinarySha256, and IntervalSeconds between 60 and 604800. "
+                + "CaCertificatePem may contain only a public CA certificate (at most 16 KiB).");
+        }
+    }
+
+    private static bool HttpsUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && uri.Scheme == "https" && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0;
 }
 
 public sealed class AgentChannelOptions

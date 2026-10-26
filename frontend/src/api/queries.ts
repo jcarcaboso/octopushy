@@ -73,6 +73,26 @@ export function useGuest(id: string) {
   });
 }
 
+export function useCreateDiskReporter(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (intervalSeconds: number) => unwrap(api.POST("/api/guests/{id}/disk-usage/token", {
+      params: { path: { id } },
+      body: { intervalSeconds },
+    })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.guest(id) }),
+  });
+}
+
+export function useRevokeDiskReporter(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/api/guests/{id}/disk-usage/token", { params: { path: { id } } })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.guest(id) }),
+  });
+}
+
 export function useInstallation(id: string) {
   return useQuery({
     queryKey: keys.installation(id),

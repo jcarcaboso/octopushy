@@ -34,6 +34,8 @@ public sealed record RunContext
 
     public required ProxmoxContext Proxmox { get; init; }
 
+    public DiskReporterContext? DiskReporter { get; init; }
+
     /// <summary>Secret names used in assignments, mapped to store keys.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
@@ -78,6 +80,13 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4);
 
+public sealed record DiskReporterContext(
+    string Endpoint,
+    string BinaryUrl,
+    string BinarySha256,
+    int IntervalSeconds,
+    string? CaCertificatePem);
+
 /// <summary>Step names, shared with the API.</summary>
 public static class StepNames
 {
@@ -90,6 +99,7 @@ public static class StepNames
     public const string Observe = "observe";
     public const string GrowRoot = "grow-root";
     public const string VerifyRoot = "verify-root";
+    public const string InstallDiskReporter = "install-disk-reporter";
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -97,6 +107,7 @@ public static class SecretNames
 {
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
+    public const string DiskReporterToken = "disk-reporter.token";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
 }

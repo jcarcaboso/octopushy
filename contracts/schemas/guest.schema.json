@@ -29,7 +29,21 @@
       "required": ["recipe", "state"],
       "additionalProperties": false
     },
-    "setup": { "description": "Accepted, not acted on until the setup milestone.", "type": "object" },
+    "setup": {
+      "description": "Post-provision guest setup. Only diskReporter is currently acted on.",
+      "type": "object",
+      "properties": {
+        "diskReporter": {
+          "description": "Overrides automatic disk reporting when it is enabled on the control plane.",
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "intervalSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
     "access": {
       "type": "object",
       "properties": {
