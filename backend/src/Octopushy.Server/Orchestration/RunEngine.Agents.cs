@@ -45,6 +45,7 @@ public sealed partial class RunEngine
             var agents = await db.Agents.AsNoTracking()
                 .Where(a => !a.Disabled && connectedIds.Contains(a.Id))
                 .ToListAsync(cancellationToken);
+            var managed = await db.ManagedWorkers.AsNoTracking().Where(w => w.AgentId != null).ToListAsync(cancellationToken);
             var builder = services.GetRequiredService<AssignmentBuilder>();
 
             foreach (var attempt in queued)
@@ -56,9 +57,13 @@ public sealed partial class RunEngine
                     attempt.Step.Run.Detail = trustReason;
                     continue;
                 }
+                var context = RunContext.Parse(attempt.Step!.Run!.Context);
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
-                                && attempt.RequiredLabels.All(a.Labels.Contains))
+                                && attempt.RequiredLabels.All(a.Labels.Contains)
+                                && !managed.Any(w => w.AgentId == a.Id && (w.ReadyAt is null || context.AgentLabels.Count == 0
+                                    || w.ResourceId == attempt.Step!.Run!.ResourceId
+                                    || context.Proxmox.Vmid == w.Vmid && context.Proxmox.Node == w.Host)))
                     .ToList();
                 string? waiting = null;
                 if (candidates.Count == 0)
@@ -159,6 +164,12 @@ public sealed partial class RunEngine
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
+            var worker = await db.ManagedWorkers.SingleOrDefaultAsync(w => w.AgentId == agentId, cancellationToken);
+            if (worker is not null && connections.Get(agentId) is { } session
+                && hello.Executors.Contains("opentofu") && hello.Executors.Contains("proxmox")
+                && session.Executors.Contains("opentofu") && session.Executors.Contains("proxmox")
+                && !string.IsNullOrWhiteSpace(hello.AgentVersion))
+                worker.AuthenticatedAt = clock.GetUtcNow();
             var running = hello.RunningAttemptIds.Select(Guid.Parse).ToHashSet();
             var mine = await db.Attempts
                 .Where(a => a.AgentId == agentId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
@@ -310,7 +321,20 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Succeeded;
                         step.Detail = late ? "The result arrived after the agent had stopped reporting." : null;
                         step.Outputs = outputs?.ToJsonString();
-                        await ApplyEffectsAsync(db, run, step, outputs, cancellationToken);
+                        if (step.Name is StepNames.PrepareWorker or StepNames.InstallWorker)
+                        {
+                            try { await ApplyWorkerEffectsAsync(db, run, step, attempt, outputs, cancellationToken); }
+                            catch (Exception e) when (e is RunException or ArgumentException or System.Security.Cryptography.CryptographicException or FormatException or InvalidOperationException)
+                            {
+                                attempt.Status = AttemptStatuses.Failed;
+                                attempt.Error = "Managed worker evidence was refused: " + e.Message;
+                                step.Status = StepStatuses.Failed;
+                                step.Detail = attempt.Error;
+                                step.Outputs = attempt.Outputs = null;
+                            }
+                        }
+                        if (step.Status == StepStatuses.Succeeded)
+                            await ApplyEffectsAsync(db, run, step, outputs, cancellationToken);
                         break;
                     case AttemptStatuses.Cancelled:
                         step.Status = StepStatuses.Cancelled;

@@ -29,6 +29,8 @@ public static partial class Endpoints
         api.MapGuestDiskUsage();
         MapRuns(api);
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));
+        api.MapWorkerPreparation();
+        api.MapWorkerRepositoryDeployment();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
 

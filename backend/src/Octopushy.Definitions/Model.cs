@@ -116,7 +116,15 @@ public sealed record GuestDefinition(
     public string Stack => Address.Replace('/', '.');
 
     public bool Retired => Lifecycle == "retired";
+
+    public ManagedWorkerSettings? ManagedWorker => Json["worker"] is JsonObject worker
+        ? new(worker["templateVersion"]!.GetValue<int>(), Guid.Parse(worker["generation"]!.GetValue<string>()),
+            worker["labels"]!.AsArray().Select(label => label!.GetValue<string>()).ToArray(),
+            worker["maxConcurrency"]!.GetValue<int>())
+        : null;
 }
+
+public sealed record ManagedWorkerSettings(int TemplateVersion, Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency);
 
 public sealed record ImageSource(string Url, string ChecksumAlgorithm, string Checksum, string FileName);
 

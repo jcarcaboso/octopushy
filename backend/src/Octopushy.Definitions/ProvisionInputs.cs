@@ -82,6 +82,8 @@ public sealed record ProvisionInputs(
                 }
                 : null,
         };
+        if (guest.ManagedWorker is { } worker)
+            variables["guest"]!["workerGeneration"] = worker.Generation.ToString();
 
         var guestJson = guest.Json.DeepClone().AsObject();
         foreach (var field in NotProvisioned)

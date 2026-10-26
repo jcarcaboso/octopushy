@@ -240,3 +240,13 @@ describe("RunPage", () => {
     expect(screen.queryByRole("button", { name: /Cancel run/ })).not.toBeInTheDocument();
   });
 });
+
+it.each(["prepare-worker", "install-worker", "wait-worker"])("retries known failed %s without another VM apply", async (name) => {
+  const detail = runDetail({ status: "failed", currentStep: name });
+  detail.steps = [{ ...detail.steps[0], name, kind: "agent", status: "failed", plan: null, approval: null }];
+  const { requests } = mockApi({ "GET /api/runs/run-1": () => detail, "POST /api/runs/run-1/retry-filesystem": () => undefined });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await userEvent.click(await screen.findByRole("button", { name: "Retry guest step" }));
+  await waitFor(() => expect(requests.filter((r) => r.method === "POST")).toHaveLength(1));
+  expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/retry-filesystem");
+});

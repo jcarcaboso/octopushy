@@ -248,7 +248,7 @@ public sealed class ServerHarness : IAsyncDisposable
             Labels = labels,
             MaxConcurrency = 4,
             EnrolledAt = DateTimeOffset.UtcNow,
-            Executors = ["opentofu", "proxmox", "nixos-rootfs", "guest"],
+            Executors = ["opentofu", "proxmox", "nixos-rootfs", "guest", "managed-worker"],
             CertificateSerial = Guid.NewGuid().ToString("N"),
             CertificateExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
         };

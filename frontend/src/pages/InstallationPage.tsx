@@ -112,15 +112,20 @@ export function InstallationPage() {
           </span>
         }
         actions={
-          <button
-            type="button"
-            className="button button--primary"
-            disabled={observe.isPending}
-            onClick={() => observe.mutate(id, { onSuccess: (started) => setStartedRun(started.runId) })}
-          >
-            <Eye size={15} aria-hidden="true" />
-            {observe.isPending ? "Starting…" : "Observe now"}
-          </button>
+          <>
+            <Link className="button" to={`/agents/prepare?installation=${encodeURIComponent(installation.address)}`}>
+              Prepare worker deployment
+            </Link>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={observe.isPending}
+              onClick={() => observe.mutate(id, { onSuccess: (started) => setStartedRun(started.runId) })}
+            >
+              <Eye size={15} aria-hidden="true" />
+              {observe.isPending ? "Starting…" : "Observe now"}
+            </button>
+          </>
         }
       />
       <div className="stack stack--large">

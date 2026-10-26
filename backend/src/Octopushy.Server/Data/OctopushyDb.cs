@@ -20,6 +20,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ArtifactRecord> Artifacts => Set<ArtifactRecord>();
 
+    public DbSet<ManagedWorkerBinding> ManagedWorkers => Set<ManagedWorkerBinding>();
+
     public DbSet<AgentRecord> Agents => Set<AgentRecord>();
 
     public DbSet<EnrollmentToken> EnrollmentTokens => Set<EnrollmentToken>();
@@ -61,6 +63,15 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Issues).HasColumnType("jsonb");
             e.Property(x => x.Outputs).HasColumnType("jsonb");
         });
+
+        model.Entity<ManagedWorkerBinding>(e =>
+        {
+            e.HasKey(x => x.ResourceId);
+            e.HasIndex(x => x.Generation).IsUnique();
+            e.HasIndex(x => x.AgentId).IsUnique();
+            e.HasOne<Resource>().WithOne(x => x.ManagedWorker).HasForeignKey<ManagedWorkerBinding>(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        model.Entity<Resource>().Navigation(x => x.ManagedWorker).AutoInclude();
 
         model.Entity<Run>(e =>
         {

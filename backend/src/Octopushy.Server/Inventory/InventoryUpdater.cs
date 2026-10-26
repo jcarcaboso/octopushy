@@ -23,12 +23,14 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         var active = await db.Resources.Where(r => r.RetiredAt == null).ToListAsync(cancellationToken);
         var byAddress = active.ToDictionary(r => r.Address, StringComparer.Ordinal);
 
-        foreach (var guest in repository.Guests.Where(g => g.RenamedFrom is not null))
+        foreach (var guest in repository.Guests.Where(g => g.RenamedFrom is not null && repository.IsValid(g.Address)))
         {
             var previous = $"{guest.InstallationAddress}/{guest.RenamedFrom}";
-            if (!byAddress.ContainsKey(guest.Address) && byAddress.Remove(previous, out var renamed) && repository.Resource(previous) is null)
+            if (!byAddress.ContainsKey(guest.Address) && byAddress.TryGetValue(previous, out var renamed)
+                && renamed.ManagedWorker is null && repository.Resource(previous) is null)
             {
                 logger.LogInformation("{Previous} was renamed to {Address}.", previous, guest.Address);
+                byAddress.Remove(previous);
                 renamed.Address = guest.Address;
                 byAddress[guest.Address] = renamed;
             }
@@ -39,7 +41,17 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         {
             if (!byAddress.TryGetValue(entry.Address, out var resource))
             {
-                if (entry.Kind == ResourceKind.Guest && repository.Guest(entry.Address)?.Retired == true)
+                if (!entry.Valid && repository.Guest(entry.Address)?.RenamedFrom is { } renamedFrom
+                    && repository.Resource($"{entry.ParentAddress}/{renamedFrom}") is null
+                    && byAddress.TryGetValue($"{entry.ParentAddress}/{renamedFrom}", out var pendingRename)
+                    && pendingRename.ManagedWorker is null)
+                {
+                    // Keep an ordinary guest's identity at its old address while
+                    // displaying the invalid proposed definition. Do not create a
+                    // competing row that would block the rename after correction.
+                    resource = pendingRename;
+                }
+                if (resource is null && entry.Kind == ResourceKind.Guest && repository.Guest(entry.Address)?.Retired == true)
                 {
                     // A retired guest whose removal is done keeps pointing at its old resource.
                     resource = await db.Resources
@@ -76,7 +88,9 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         var guests = byAddress.Values.Where(r => r.Kind == ResourceKinds.Guest && seen.Contains(r.Id) && r.RetiredAt is null).ToList();
         foreach (var resource in guests.Where(r => r.Valid))
         {
-            var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, guests);
+            // Missing definitions still retain durable ownership. In particular,
+            // an invalid rename must not let a second row claim a worker's VM.
+            var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, byAddress.Values);
             if (problem is not null)
             {
                 resource.Valid = false;
@@ -155,6 +169,17 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
     /// </summary>
     private static string? IdentityProblem(Resource resource, GuestDefinition guest, IEnumerable<Resource> guests)
     {
+        if (resource.ManagedWorker is { } worker && (guest.Retired || guest.ManagedWorker?.Generation != worker.Generation
+            || guest.Host != worker.Host || guest.Vmid != worker.Vmid || guest.InstallationAddress != worker.Installation))
+            return "Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding.";
+
+        var managedOwner = guests.FirstOrDefault(r => r.Id != resource.Id && r.ManagedWorker is { } bound
+            && (bound.Installation == guest.InstallationAddress && bound.Vmid == guest.Vmid
+                || bound.Generation == guest.ManagedWorker?.Generation
+                || guest.RenamedFrom is not null && r.Address == $"{guest.InstallationAddress}/{guest.RenamedFrom}"));
+        if (managedOwner is not null)
+            return $"Managed worker identity is bound to {managedOwner.Address}; renaming or adopting its generation/VM is not supported.";
+
         if (resource.BoundVmid is { } bound && (bound != guest.Vmid || resource.BoundInstallation != guest.InstallationAddress))
         {
             return $"This guest is bound to VMID {bound} on {resource.BoundInstallation}. Changing it would make a different VM; retire this guest and add a new one instead.";

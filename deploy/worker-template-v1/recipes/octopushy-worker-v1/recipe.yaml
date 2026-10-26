@@ -1,0 +1,8 @@
+schemaVersion: 1
+description: Version 1 managed NixOS worker; bootstrap uses fixed native actions after saved-plan approval.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/octopushy-worker-v1
+inputs: inputs.schema.json
+verify: proxmox
+guestFilesystem: nixos-ext4-root

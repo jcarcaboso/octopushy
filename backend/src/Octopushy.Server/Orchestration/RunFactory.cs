@@ -12,6 +12,11 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     /// <summary>A provision run (plan, approval, apply, verify) or, for a retired guest, a retire run.</summary>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason)
     {
+        if (resource.ManagedWorker is { } bound && (guest.Retired || guest.ManagedWorker?.Generation != bound.Generation
+            || guest.Host != bound.Host || guest.Vmid != bound.Vmid || guest.InstallationAddress != bound.Installation))
+            throw new RunException("Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding.");
+        if (guest.ManagedWorker is not null && guest.Retired)
+            throw new RunException("Managed worker retirement is not supported.");
         var inputs = ProvisionInputs.Build(repository, guest, revision.Commit);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -87,7 +92,10 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             AgentLabelsSetBy = labels.SetBy,
             HostKey = $"{inputs.Installation.Address}/{inputs.Host.Id}",
             HostLimit = inputs.Host.ConcurrentOperations,
-            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
+            Policy = new PolicyContext(guest.ManagedWorker is null ? policy.Approval.Value : "manual",
+                guest.ManagedWorker is null ? policy.Approval.SetBy : "managed-worker safety", policy.Destructive.Value, policy.Destructive.SetBy),
+            ManagedWorker = guest.ManagedWorker is { } worker ? new ManagedWorkerContext(worker.Generation, worker.Labels,
+                worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,
@@ -117,7 +125,15 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             : context.RootDiskBytes is not null
                 ? [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
                 : [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify];
+        if (context.ManagedWorker is not null)
+            steps = [.. steps, StepNames.PrepareWorker, StepNames.InstallWorker, StepNames.WaitWorker];
         AddSteps(run, steps);
+        if (resource.ManagedWorker?.ReadyAt is not null)
+            foreach (var step in run.Steps.Where(s => s.Name is StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker))
+            {
+                step.Status = StepStatuses.Skipped;
+                step.Detail = "This generation already completed authenticated bootstrap.";
+            }
         if (context.DiskReporter is { } setup)
         {
             run.Steps.Add(new Step

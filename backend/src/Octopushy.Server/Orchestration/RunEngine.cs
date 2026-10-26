@@ -83,6 +83,8 @@ public sealed partial class RunEngine(
                 run.Status = RunStatuses.Blocked;
                 run.Detail = reason;
             }
+            else
+                await BindManagedWorkerAsync(db, run, cancellationToken);
             db.Runs.Add(run);
         }
         await db.SaveChangesAsync(cancellationToken);
@@ -134,11 +136,11 @@ public sealed partial class RunEngine(
         {
             var run = await LoadRunAsync(db, runId, cancellationToken);
             var failed = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => s.Status == StepStatuses.Failed);
-            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.GrowRoot or StepNames.VerifyRoot)
+            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker)
                 // Only a mutating attempt can leave an unknown change behind; a read-only one that lost its agent changed nothing.
                 || run.Steps.SelectMany(s => s.Attempts).Any(a => a.Status == AttemptStatuses.Uncertain && a.Mutating))
             {
-                throw new RunException("Only a known failed guest filesystem step can be retried. Inspect uncertain outcomes and plan again.");
+                throw new RunException("Only a known failed guest filesystem or managed bootstrap step can be retried. Inspect uncertain outcomes and plan again.");
             }
 
             if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
@@ -279,6 +281,16 @@ public sealed partial class RunEngine(
         }
 
         var context = RunContext.Parse(run.Context);
+        if (!inFlight && !reconcilingOutcome)
+        {
+            try { await BindManagedWorkerAsync(db, run, cancellationToken); }
+            catch (RunException e)
+            {
+                Finish(run, RunStatuses.Failed, e.Message);
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
+        }
         if (!inFlight && !reconcilingOutcome && CredentialBindings.Validate(context) is { Count: > 0 } invalid)
         {
             run.Status = RunStatuses.Blocked;
@@ -295,6 +307,12 @@ public sealed partial class RunEngine(
                 continue;
             }
 
+            if (step.Name == StepNames.WaitWorker)
+            {
+                if (await WorkerReadyAsync(db, run, step, cancellationToken)) continue;
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
@@ -372,6 +390,13 @@ public sealed partial class RunEngine(
         // run or reporter setup still has privileged guest-agent work. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
+        if (context.ManagedWorker is not null && ManagedWorkerSafety.DestructivePlan(outputs))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "Managed worker deletion/replacement is not supported; preserve the state disk and binding.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
         var privilegedRemains = run.Steps.Any(s => s.Kind == StepKinds.Agent && !StepStatuses.IsDone(s.Status)
             && AssignmentBuilder.TokenFor(s.Name) == SecretNames.ProxmoxPrivilegedToken);
         step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();
@@ -382,7 +407,7 @@ public sealed partial class RunEngine(
             Finish(run, RunStatuses.Failed, step.Detail);
             return false;
         }
-        var manual = policy.Approval == "manual" && (resourceChanges > 0
+        var manual = (context.ManagedWorker is not null || policy.Approval == "manual") && (resourceChanges > 0
             || outputs?["hasChanges"]?.GetValue<bool>() == true || privilegedRemains);
         var destructiveManual = deletes > 0 && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
@@ -463,7 +488,7 @@ public sealed partial class RunEngine(
 
                     var planContext = RunContext.Parse(run.Context);
                     var needsGuestApproval = run.Operation == Operations.Provision
-                        && (planContext.RootDiskBytes is not null || planContext.DiskReporter is not null);
+                        && (planContext.RootDiskBytes is not null || planContext.ManagedWorker is not null || planContext.DiskReporter is not null);
                     foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
                         || s.Name == StepNames.Approval && !needsGuestApproval))
                     {
@@ -496,7 +521,8 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyRoot:
-                resource.SyncedInputsHash = run.InputsHash;
+                if (RunContext.Parse(run.Context).ManagedWorker is null || resource.ManagedWorker?.ReadyAt is not null)
+                    resource.SyncedInputsHash = run.InputsHash;
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:

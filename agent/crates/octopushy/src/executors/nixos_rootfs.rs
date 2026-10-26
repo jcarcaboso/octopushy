@@ -13,6 +13,7 @@ struct Input {
     name: String,
     address: String,
     disk_bytes: u64,
+    worker_generation: Option<String>,
     wait_seconds: u64,
 }
 
@@ -20,6 +21,7 @@ struct Input {
 #[serde(rename_all = "camelCase")]
 struct Report {
     disk_bytes: u64,
+    worker_generation: Option<String>,
     partition_bytes: u64,
     filesystem_bytes: u64,
     usable_bytes: u64,
@@ -42,7 +44,13 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
     let c = proxmox::client(cfg, ctx, &input.connection)?;
     let vm = c.vm_config(&input.node, input.vmid).await?;
-    let description = format!("Managed by Octopushy as {}.", input.address);
+    let mut description = format!("Managed by Octopushy as {}.", input.address);
+    if let Some(generation) = &input.worker_generation {
+        if !crate::managed_identity::valid_uuid(generation) {
+            return Err(Failure::msg("Invalid worker generation"));
+        }
+        description.push_str(&format!("\nworker-generation: {generation}"));
+    }
     if vm.name.as_deref() != Some(&input.name)
         || vm.template
         || !vm.tags.iter().any(|t| t == "octopushy")

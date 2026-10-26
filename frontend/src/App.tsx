@@ -18,6 +18,7 @@ import { RunPage } from "./pages/RunPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
+import { WorkerPreparationPage } from "./pages/WorkerPreparationPage";
 
 export function AppRoutes() {
   return (
@@ -38,6 +39,7 @@ export function AppRoutes() {
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunPage />} />
         <Route path="agents" element={<AgentsPage />} />
+        <Route path="agents/prepare" element={<WorkerPreparationPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="repository" element={<RepositoryPage />} />
         <Route path="*" element={<NotFoundPage />} />

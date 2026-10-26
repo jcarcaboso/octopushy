@@ -5,6 +5,11 @@ Agents run separately (see [`agent/`](../agent)). Any Linux host with Podman (th
 Docker-compatible API, or `podman compose`) or Docker Engine with the Compose plugin
 works.
 
+For repository-backed NixOS worker VMs, see the
+[managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
+It reuses an independent control worker; publishing a definition does not grant
+revision trust or infrastructure approval.
+
 ## First start
 
 ```sh
