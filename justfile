@@ -63,7 +63,8 @@ demo: dev-db
     tests/e2e/demo.sh
 
 # The VM lifecycle on a real Proxmox host (umbrel by default): create, resize, delete.
-# Needs the host's API token in .dev/secrets/umbrel-proxmox-token; see tests/proxmox/README.md.
+# Needs explicit PVE_READ_ONLY_TOKEN_FILE and PVE_PRIVILEGED_TOKEN_FILE.
+# Live rollout is blocked on read-only provider refresh; see tests/proxmox/README.md.
 proxmox-e2e: dev-db
     tests/proxmox/run.sh
 

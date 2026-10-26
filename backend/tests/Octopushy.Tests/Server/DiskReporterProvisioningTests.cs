@@ -97,6 +97,8 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.True(await server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(install.AttemptId)).Select(a => a.Mutating).SingleAsync()));
         Assert.Equal(2, install.Secrets.Count);
         Assert.Contains("proxmox.token", install.Secrets.Keys);
+        Assert.Equal("octopushy@pve!writer=writer-token", install.Secrets["proxmox.token"]);
+        Assert.DoesNotContain(plan.Secrets["proxmox.token"], install.Secrets.Values);
         var token = install.Secrets["disk-reporter.token"];
         Assert.Equal(64, token.Length);
         var resource = await server.ResourceAsync(Guest);
@@ -132,7 +134,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres, settings: Settings);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
         var install = await agent.NextAsync("install-disk-reporter");
         await agent.ReportAsync(install, Outcome.Failed, error: "guest prerequisites missing");
@@ -143,7 +145,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
         var before = await store.GetAsync(GuestReporterCredentials.Key(resource.Id), CancellationToken.None);
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource.Id, CancellationToken.None);
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
         var retry = await agent.NextAsync("install-disk-reporter");
         Assert.Equal(install.Secrets["disk-reporter.token"], retry.Secrets["disk-reporter.token"]);
@@ -156,26 +158,52 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.Contains("setup completed", run.Detail);
     }
 
-    [Fact]
-    public async Task Setup_only_runs_still_require_manual_approval_before_creating_credentials()
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task Setup_only_runs_require_manual_approval_and_a_saved_plan_before_creating_credentials(bool shared, bool artifact)
     {
         using var repository = TestRepository.Minimal();
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
+        if (shared)
+        {
+            const string installation = "labs/home/proxmox/korriban/installation.yaml";
+            repository.Write(installation, File.ReadAllText(Path.Combine(repository.Root, installation))
+                .Replace("readOnlyToken: { store: proxmox/korriban/read-only-token }\n  privilegedToken: { store: proxmox/korriban/privileged-token }",
+                    "token: { store: proxmox/korriban/shared-token }"));
+        }
         await using var server = await ServerHarness.StartAsync(postgres, repository, settings: Settings);
+        if (shared)
+            await server.SetSecretAsync("proxmox/korriban/shared-token", "shared-token");
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        var preview = await agent.NextAsync("preview");
+        Assert.True(JsonNode.Parse(preview.InputJson)!["retainNoChangesPlan"]!.GetValue<bool>());
+        await agent.ReportAsync(preview, Outcome.Succeeded, FakeAgent.Plan(),
+            artifacts: artifact ? [FakeAgent.PlanArtifact()] : []);
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
         Assert.Equal(0, await server.QueryAsync(db => db.GuestDiskUsages.CountAsync()));
+        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == "proxmox/korriban/privileged-token")));
+        Assert.Empty(agent.TakeAssignments());
+        if (!artifact)
+        {
+            Assert.Equal(RunStatuses.Failed, run.Status);
+            Assert.Contains("no saved plan file", run.Detail);
+            return;
+        }
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
         var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
-        Assert.Equal(64, approval.PlanSha256?.Length);
+        Assert.Equal(FakeAgent.PlanArtifact().Sha256, approval.PlanSha256);
         Assert.Contains("inside the VM", approval.Detail);
         await Assert.ThrowsAsync<RunException>(() => server.Engine.ApproveAsync(run.Id, approval.Id, new string('0', 64), "ops", null, CancellationToken.None));
         await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
-        await agent.NextAsync("install-disk-reporter");
+        var install = await agent.NextAsync("install-disk-reporter");
+        Assert.Equal(shared ? "shared-token" : "octopushy@pve!writer=writer-token", install.Secrets["proxmox.token"]);
+        Assert.Contains(SecretNames.DiskReporterToken, install.Secrets.Keys);
     }
 
     [Fact]
@@ -184,7 +212,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres, settings: Settings);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "guest agent unavailable");
         await server.TickAsync();
         Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
@@ -217,7 +245,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres, settings: Settings);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
         var install = await agent.NextAsync("install-disk-reporter");
         await server.WithDbAsync(async db =>

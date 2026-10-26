@@ -1,9 +1,10 @@
 //! A fake Proxmox VE API for tests and end-to-end runs.
 //!
 //! It serves the endpoints Octopushy's Proxmox client uses from an in-memory
-//! [`Fixture`], accepts exactly one API token, and can serve HTTPS with a
+//! [`Fixture`], accepts its explicitly listed API tokens, and can serve HTTPS with a
 //! certificate issued by a freshly generated CA (like Proxmox's own
 //! `pve-root-ca`), so clients can test custom-CA verification.
+//! Tokens share fixture permissions; this mock does not simulate role-specific ACLs.
 //!
 //! Admin routes (no token needed) change the fixture at runtime:
 //! `GET /mock/vms`, `POST /mock/vms` (add or replace a VM), and
@@ -55,7 +56,7 @@ impl RunningMock {
         self.ca_pem.as_deref()
     }
 
-    /// The accepted API token.
+    /// The primary accepted API token.
     pub fn token(&self) -> String {
         self.state.lock().unwrap().token.clone()
     }

@@ -144,7 +144,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_plan_that_changes_no_resources_needs_no_approval()
+    public async Task An_output_only_plan_requires_manual_approval_before_privileged_apply()
     {
         using var repository = TestRepository.Minimal();
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
@@ -153,10 +153,14 @@ public class ProvisioningTests(PostgresFixture postgres)
         await server.SyncAndTrustAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(hasChanges: true), artifacts: FakeAgent.PlanArtifact());
 
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        Assert.True(approval.ApprovalRequired);
+        Assert.Empty(agent.TakeAssignments());
+        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
         Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
-        var approval = (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Approval);
-        Assert.Equal(("approved", "policy"), (approval.Decision, approval.DecidedBy));
-        Assert.Equal("The plan changes no resources, so it needs no approval.", approval.DecisionNote);
     }
 
     [Fact]
@@ -169,10 +173,11 @@ public class ProvisioningTests(PostgresFixture postgres)
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
-        Assert.Contains("proxmox/korriban/api-token", run.Detail);
+        Assert.Contains("proxmox/korriban/read-only-token", run.Detail);
         Assert.Contains("opentofu/pg", run.Detail);
 
-        await server.SetSecretAsync("proxmox/korriban/api-token", "t");
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "t");
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "writer");
         await server.SetSecretAsync("opentofu/pg", "c");
         Assert.Equal("opentofu", (await agent.NextAsync("preview")).Executor);
         var audit = await server.QueryAsync(db => db.SecretResolutions.AsNoTracking().Select(r => r.Key).ToListAsync());
@@ -292,12 +297,16 @@ public class ProvisioningTests(PostgresFixture postgres)
 
         var plan = await agent.NextAsync("preview");
         Assert.True(JsonNode.Parse(plan.InputJson)!["destroy"]!.GetValue<bool>());
+        Assert.Equal("octopushy@pve!agent=secret-token", plan.Secrets["proxmox.token"]);
         await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("destroy"));
         var unprotect = await agent.NextAsync("set-protection");
         Assert.False(JsonNode.Parse(unprotect.InputJson)!["protection"]!.GetValue<bool>());
+        Assert.Equal("octopushy@pve!writer=writer-token", Assert.Single(unprotect.Secrets).Value);
         await agent.ReportAsync(unprotect, Outcome.Succeeded, new JsonObject { ["previous"] = true, ["protection"] = false, ["absent"] = false });
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
-        await agent.ReportAsync(await agent.NextAsync("verify-absent"), Outcome.Succeeded, new JsonObject { ["present"] = false });
+        var absent = await agent.NextAsync("verify-absent");
+        Assert.Equal("octopushy@pve!agent=secret-token", Assert.Single(absent.Secrets).Value);
+        await agent.ReportAsync(absent, Outcome.Succeeded, new JsonObject { ["present"] = false });
 
         var resource = await server.ResourceAsync(Guest);
         Assert.NotNull(resource.RetiredAt);

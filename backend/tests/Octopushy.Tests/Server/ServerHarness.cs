@@ -149,7 +149,8 @@ public sealed class ServerHarness : IAsyncDisposable
         });
         if (withSecrets)
         {
-            await harness.SetSecretAsync("proxmox/korriban/api-token", "octopushy@pve!agent=secret-token");
+            await harness.SetSecretAsync("proxmox/korriban/read-only-token", "octopushy@pve!agent=secret-token");
+            await harness.SetSecretAsync("proxmox/korriban/privileged-token", "octopushy@pve!writer=writer-token");
             await harness.SetSecretAsync("opentofu/pg", "postgres://state");
         }
 

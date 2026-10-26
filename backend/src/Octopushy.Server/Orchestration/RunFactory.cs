@@ -18,14 +18,21 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var connection = inputs.Installation.Connection;
         var endpoint = ProvisionInputs.EndpointFor(inputs.Installation, inputs.Host);
 
+        var readRole = connection.SharedToken ? SecretNames.ProxmoxSharedToken : SecretNames.ProxmoxReadOnlyToken;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [SecretNames.ProxmoxToken] = connection.Token.Key,
+            [readRole] = connection.ReadOnlyToken.Key,
         };
+        if (!connection.SharedToken)
+            secrets[SecretNames.ProxmoxPrivilegedToken] = connection.PrivilegedToken.Key;
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (connection.Token.Version is { } tokenVersion)
+        if (connection.ReadOnlyToken.Version is { } tokenVersion)
         {
-            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+            requestedVersions[readRole] = tokenVersion;
+        }
+        if (!connection.SharedToken && connection.PrivilegedToken.Version is { } privilegedVersion)
+        {
+            requestedVersions[SecretNames.ProxmoxPrivilegedToken] = privilegedVersion;
         }
         if (connection.CaCertificate is { } ca)
         {
@@ -140,14 +147,15 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     {
         var labels = PolicyResolver.AgentLabels(repository, installation);
         var connection = installation.Connection;
+        var readRole = connection.SharedToken ? SecretNames.ProxmoxSharedToken : SecretNames.ProxmoxReadOnlyToken;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [SecretNames.ProxmoxToken] = connection.Token.Key,
+            [readRole] = connection.ReadOnlyToken.Key,
         };
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (connection.Token.Version is { } tokenVersion)
+        if (connection.ReadOnlyToken.Version is { } tokenVersion)
         {
-            requestedVersions[SecretNames.ProxmoxToken] = tokenVersion;
+            requestedVersions[readRole] = tokenVersion;
         }
         if (connection.CaCertificate is { } ca)
         {

@@ -49,10 +49,20 @@ public sealed class AssignmentBuilder(
     public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
         var action = ActionFor(stepName);
+        var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
-            ? context.OpenTofu!.SecretEnv.Values.Distinct(StringComparer.Ordinal).ToList()
-            : context.Secrets.Keys.Where(k => k is SecretNames.ProxmoxToken or SecretNames.ProxmoxCa).ToList();
+            ? context.OpenTofu!.SecretEnv.Values
+                .Select(n => n == SecretNames.ProxmoxToken ? token : n).Distinct(StringComparer.Ordinal).ToList()
+            : new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList();
     }
+
+    // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
+    public static string TokenFor(string stepName) => stepName is
+        StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.InstallDiskReporter
+        ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
+
+    private static string TokenFor(string stepName, RunContext context) =>
+        context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
 
     public async Task<Assignment> BuildAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
@@ -60,7 +70,16 @@ public sealed class AssignmentBuilder(
         {
             throw new RevisionUntrustedException(reason);
         }
+        var invalid = CredentialBindings.Validate(context);
+        if (invalid.Count > 0)
+            throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
+        if (attempt.RunId != run.Id || step.RunId != run.Id || attempt.StepId != step.Id)
+            throw new AssignmentException("The attempt, step and run do not match.");
         var action = ActionFor(step.Name);
+        // Check authority and artifact integrity BEFORE resolving any plaintext, even
+        // for native actions or callers that bypass normal engine advancement.
+        var approvedPlan = TokenFor(step.Name) == SecretNames.ProxmoxPrivilegedToken
+            ? await ApprovedPlanAsync(run, cancellationToken) : null;
         var names = SecretsFor(step.Name, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
         if (problems.Count > 0)
@@ -78,6 +97,9 @@ public sealed class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
+        var token = TokenFor(step.Name, context);
+        values[SecretNames.ProxmoxToken] = values[token];
+        values.Remove(token);
 
         var assignment = new Assignment
         {
@@ -107,10 +129,12 @@ public sealed class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
+            if (run.Operation == Operations.Provision && (context.RootDiskBytes is not null || context.DiskReporter is not null))
+                input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (step.Name == StepNames.Apply)
             {
-                assignment.Artifacts.Add(await ApprovedPlanAsync(run, cancellationToken));
+                assignment.Artifacts.Add(approvedPlan!);
             }
         }
         else
@@ -180,8 +204,12 @@ public sealed class AssignmentBuilder(
     private async Task<Artifact> ApprovedPlanAsync(Run run, CancellationToken cancellationToken)
     {
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
-        var plan = steps.Single(s => s.Name == StepNames.Plan);
-        var approval = steps.Single(s => s.Name == StepNames.Approval);
+        var plan = steps.SingleOrDefault(s => s.Name == StepNames.Plan);
+        var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
+        if (plan?.Status != StepStatuses.Succeeded || approval?.Status != StepStatuses.Succeeded || approval.Decision != "approved")
+        {
+            throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
+        }
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)
@@ -190,7 +218,8 @@ public sealed class AssignmentBuilder(
         var record = await db.Artifacts.AsNoTracking()
             .FirstOrDefaultAsync(a => a.AttemptId == planAttempt.Id && a.Name == PlanArtifact, cancellationToken)
             ?? throw new AssignmentException("The plan has no saved plan file.");
-        if (approval.Decision != "approved" || approval.PlanSha256 != record.Sha256)
+        var planDigest = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)?["planSha256"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(record.Sha256) || approval.PlanSha256 != record.Sha256 || planDigest != record.Sha256)
         {
             throw new AssignmentException("The saved plan is not the one that was approved.");
         }

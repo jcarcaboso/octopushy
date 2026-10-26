@@ -74,14 +74,24 @@ oneshot/timer, and starts a first report. Successful output:
 
 This action is **mutating and not cancellable**. A known nonzero exit fails;
 ambiguous dispatch or lost status returns `OUTCOME_UNCERTAIN`. No automatic
-remote-execution retries. Server-side no-change approvals use the immutable setup
-configuration's fingerprint in the existing `planSha256` field when there is no
-saved infrastructure plan.
+remote-execution retries. The controller requests a saved infrastructure plan even
+when it has no changes, binding approval to its `planSha256` before releasing any
+installation credentials. Missing or mismatched plans block installation.
 
 ## `proxmox`
 
 All actions take a `connection` and the secret `proxmox.token`, formatted
 `USER@REALM!TOKENID=SECRET` and sent as `Authorization: PVEAPIToken=<token>`.
+
+`proxmox.token` is a wire alias, not a choice the worker makes. The controller
+selects the pinned read-only credential for `observe`, `verify-guest`, and
+`verify-absent`; `set-protection` receives the pinned privileged credential only
+after the run's approval gate. OpenTofu `preview` also receives read-only, while
+`apply`, **both** `nixos-rootfs` actions, and `guest` / `install-disk-reporter`
+receive privileged. Root verification uses QGA command execution, even though its
+retry classification is read-only. In shared mode, these actions use the same
+pinned token, with the approval gate unchanged for privileged work.
+See [credential roles and rollout limits](../../../docs/proxmox-credentials.md).
 
 ```json
 { "endpoint": "https://10.1.0.10:8006/", "verifyTls": false, "caCertificatePem": null }
@@ -199,7 +209,8 @@ Input (the same for both actions):
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
   "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR" },
-  "destroy": false
+  "destroy": false,
+  "retainNoChangesPlan": false
 }
 ```
 
@@ -248,9 +259,17 @@ Output:
 `["create", "delete"]` and counts as `replace`, not as `delete`. The JSON plan itself
 is not logged or returned, because it can hold configuration values.
 
-When `hasChanges` is true, the result carries the artifact `plan.tar.gz`, holding
+When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
+false), the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers
 has no lock file; then the archive holds only `plan.bin`.
+
+The controller requests retention for provision runs that include privileged
+guest filesystem work or disk reporter installation. This supplies an exact plan
+digest for approval even when infrastructure itself has no changes; it does not
+request `show` or `apply` for a no-change plan. Older workers may ignore the field,
+but a missing required plan artifact blocks subsequent privileged work rather
+than bypassing approval.
 
 ### `apply`
 

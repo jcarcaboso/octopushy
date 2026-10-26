@@ -15,7 +15,7 @@ public class LabRepositoryLoaderTests
         var guest = repository.Guest("home/korriban/krb-app-01")!;
         Assert.Equal(310, guest.Vmid);
         Assert.Equal("home.korriban.krb-app-01", guest.Stack);
-        Assert.Contains(repository.StoreUses, u => u.Key == "proxmox/korriban/api-token" && u.Consumer == "home/korriban");
+        Assert.Contains(repository.StoreUses, u => u.Key == "proxmox/korriban/read-only-token" && u.Consumer == "home/korriban");
     }
 
     [Fact]
@@ -123,7 +123,8 @@ public class LabRepositoryLoaderTests
             type: standalone
             connection:
               endpoint: https://10.1.0.10:8006/
-              token: { store: system/agent-ca/key }
+              readOnlyToken: { store: system/agent-ca/key }
+              privilegedToken: { store: proxmox/korriban/privileged-token }
             hosts:
               korriban: {}
             """);
@@ -164,7 +165,8 @@ public class LabRepositoryLoaderTests
             type: standalone
             connection:
               endpoint: https://10.1.0.10:8006/
-              token: { store: proxmox/korriban/api-token }
+              readOnlyToken: { store: proxmox/korriban/read-only-token }
+              privilegedToken: { store: proxmox/korriban/privileged-token }
             hosts:
               korriban: {}
               other: {}

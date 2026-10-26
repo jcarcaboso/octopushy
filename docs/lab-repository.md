@@ -297,6 +297,13 @@ datastores, bridges, and capacity limits, and is its own failure domain. A clust
 lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
 
+One `token` reference is sufficient. Alternatively, omit it and configure both
+`readOnlyToken` and `privilegedToken` with distinct store keys; mixed modes are
+invalid. Shared mode deliberately gives planning the same token as apply, so
+approval does not make planning read-only. See [credentials](proxmox-credentials.md)
+for routing, approval, legacy-run handling, and the optional split mode's provider
+refresh blocker; these examples do not certify live ACL sufficiency.
+
 ### Guest
 
 ```yaml

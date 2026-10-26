@@ -87,7 +87,7 @@ public sealed partial class RepositoryMirror
             ["-C", _mirror, "log", "-1", "--format=%H%x00%s%x00%an%x00%cI", commit, "--"],
             cancellationToken: cancellationToken);
         var parts = text.TrimEnd('\n').Split('\0');
-        return new CommitInfo(parts[0], parts[1], parts[2], DateTimeOffset.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture));
+        return new CommitInfo(parts[0], parts[1], parts[2], DateTimeOffset.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture).ToUniversalTime());
     }
 
     /// <summary>A bounded native Git diff; never invokes repository external diffs or text converters.</summary>

@@ -20,7 +20,8 @@ namespace Octopushy.Tests.Server;
 [Collection(PostgresCollection.Name)]
 public class CredentialLifecycleTests(PostgresFixture postgres)
 {
-    private const string Token = "proxmox/korriban/api-token";
+    private const string Token = "proxmox/korriban/read-only-token";
+    private const string Writer = "proxmox/korriban/privileged-token";
     private const string Guest = "home/korriban/krb-app-01";
 
     [Fact]
@@ -62,9 +63,12 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         var plan = await agent.NextAsync("preview");
         (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "replacement" })).EnsureSuccessStatusCode();
         (await PromoteAsync(client, 2, 1)).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Writer, value = "replacement-writer" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/promote", new { key = Writer, version = 2, expectedCurrentVersion = 1, verificationNote = "fixture writer rotation" })).EnsureSuccessStatusCode();
         await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         var apply = await agent.NextAsync("apply");
-        Assert.Equal(plan.Secrets["proxmox.token"], apply.Secrets["proxmox.token"]);
+        Assert.Equal("octopushy@pve!writer=writer-token", apply.Secrets["proxmox.token"]);
+        Assert.NotEqual(plan.Secrets["proxmox.token"], apply.Secrets["proxmox.token"]);
         await agent.ReportAsync(apply, Outcome.Succeeded);
         var verify = await agent.NextAsync("verify-guest");
         Assert.Equal(plan.Secrets["proxmox.token"], verify.Secrets["proxmox.token"]);
@@ -72,7 +76,8 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Succeeded, run.Status);
-        Assert.Equal(1, RunContext.Parse(run.Context).SecretVersions["proxmox.token"]);
+        Assert.Equal(1, RunContext.Parse(run.Context).SecretVersions[SecretNames.ProxmoxReadOnlyToken]);
+        Assert.Equal(1, RunContext.Parse(run.Context).SecretVersions[SecretNames.ProxmoxPrivilegedToken]);
         Assert.DoesNotContain("secret-token", run.Context);
         var history = await client.GetStringAsync("/api/variables/versions?key=" + Token);
         Assert.Contains($"run #{run.Number}", history);
@@ -98,8 +103,8 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await agent.ReportAsync(growth, Outcome.Failed, error: "controlled known failure");
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "new-access" })).EnsureSuccessStatusCode();
-        (await PromoteAsync(client, 2, 1)).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Writer, value = "new-access" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/promote", new { key = Writer, version = 2, expectedCurrentVersion = 1, verificationNote = "fixture writer rotation" })).EnsureSuccessStatusCode();
         (await client.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
         var retry = await agent.NextAsync("grow");
         Assert.Equal(growth.Secrets["proxmox.token"], retry.Secrets["proxmox.token"]);
@@ -246,7 +251,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     {
         using var repository = TestRepository.Minimal();
         var path = Path.Combine(repository.Root, "labs/home/proxmox/korriban/installation.yaml");
-        File.WriteAllText(path, File.ReadAllText(path).Replace("{ store: proxmox/korriban/api-token }", "{ store: proxmox/korriban/api-token, version: 2 }"));
+        File.WriteAllText(path, File.ReadAllText(path).Replace("{ store: proxmox/korriban/read-only-token }", "{ store: proxmox/korriban/read-only-token, version: 2 }"));
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         using var client = await SignInAsync(server);
         (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "candidate" })).EnsureSuccessStatusCode();
@@ -262,7 +267,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Legacy_runs_recover_from_unambiguous_release_evidence_or_block(bool ambiguous)
+    public async Task Legacy_single_token_runs_block_even_with_unambiguous_release_evidence(bool ambiguous)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
@@ -279,6 +284,10 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             var json = JsonNode.Parse(persisted.Context)!.AsObject();
             json.Remove("secretBindingsPinned");
             json.Remove("secretVersions");
+            var secrets = json["secrets"]!.AsObject();
+            secrets.Remove(SecretNames.ProxmoxReadOnlyToken);
+            secrets.Remove(SecretNames.ProxmoxPrivilegedToken);
+            secrets[SecretNames.ProxmoxToken] = Token;
             persisted.Context = json.ToJsonString();
             if (ambiguous)
             {
@@ -293,16 +302,11 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             }
             await db.SaveChangesAsync();
         });
-        if (ambiguous)
-        {
-            await server.TickAsync();
-            Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "apply");
-            Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
-        }
-        else
-        {
-            Assert.Equal(plan.Secrets["proxmox.token"], (await agent.NextAsync("apply")).Secrets["proxmox.token"]);
-        }
+        await server.TickAsync();
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "apply");
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("replan", run.Detail);
     }
 
     [Fact]

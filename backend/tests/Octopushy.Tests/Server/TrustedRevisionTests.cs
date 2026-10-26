@@ -18,6 +18,30 @@ public class TrustedRevisionTests(PostgresFixture postgres)
     private const string Guest = "home/korriban/krb-app-01";
 
     [Fact]
+    public async Task Sync_persists_a_non_utc_commit_and_discovers_the_guest_without_granting_trust()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        using var client = await AuthenticateAsync(server);
+        await server.Services.GetRequiredService<GitCli>().RunAsync(
+            ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "--quiet", "--allow-empty", "-m", "Merge with local timezone"],
+            server.Repository.Root,
+            environment: new Dictionary<string, string> { ["GIT_COMMITTER_DATE"] = "2026-10-25T19:20:01+01:00" });
+
+        await server.SyncAsync();
+
+        var repository = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!;
+        var revision = Assert.IsType<RevisionDto>(repository.Revision);
+        Assert.Equal(new DateTimeOffset(2026, 10, 25, 18, 20, 1, TimeSpan.Zero), revision.CommittedAt);
+        Assert.Null(revision.TrustedAt);
+        Assert.True(revision.IsCurrentSource);
+        var run = await server.LatestRunAsync(Guest);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("Waiting for trust", run.Detail);
+        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
+    }
+
+    [Fact]
     public async Task Discovery_waits_for_exact_revision_trust_without_releasing_credentials()
     {
         await using var server = await ServerHarness.StartAsync(postgres);

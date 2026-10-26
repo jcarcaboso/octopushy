@@ -77,7 +77,22 @@ def private_file(env, name):
         raise ValueError(f"{name}: requires a nonempty private regular file (mode 0600 or 0400)") from None
 
 
+def proxmox_credentials(env):
+    """Shared local/remote harness preflight; legacy PVE_TOKEN_FILE is not used."""
+    names = ("PVE_READ_ONLY_TOKEN_FILE", "PVE_PRIVILEGED_TOKEN_FILE")
+    paths = [private_file(env, name) for name in names]
+    try:
+        values = [path.read_bytes().strip() for path in paths]
+        if not all(values):
+            raise ValueError("Proxmox token files must contain nonempty credentials")
+        if paths[0].samefile(paths[1]) or values[0] == values[1]:
+            raise ValueError("Proxmox roles require distinct files and distinct credentials")
+    except OSError:
+        raise ValueError("Proxmox token files could not be read") from None
+
+
 def validate(env, preflight=False):
+    proxmox_credentials(env)
     for name in ("FEDORA_WORKFLOW", "PORTAINER_WORKFLOW", "RESUME_SERVICE", "KEEP_GUEST", "KEEP", "UI"):
         if env.get(name, "0") != "0":
             raise ValueError(f"{name} is not supported in remote-worker mode")
@@ -97,7 +112,6 @@ def validate(env, preflight=False):
     if not Path(require(env, "REMOTE_WORK_DIR")).is_absolute() or Path(env["REMOTE_WORK_DIR"]) == Path("/"):
         raise ValueError("REMOTE_WORK_DIR must be an absolute non-root fixture directory")
     private_file(env, "REMOTE_COOKIE_FILE")
-    private_file(env, "PVE_TOKEN_FILE")
     pg_file = private_file(env, "REMOTE_TOFU_PG_FILE")
     try:
         pg = pg_file.read_text().rstrip("\n")
@@ -109,9 +123,14 @@ def validate(env, preflight=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preflight", action="store_true", help="also resolve endpoint DNS (no provisioning)")
+    parser.add_argument("--credentials-only", action="store_true", help="validate only the two Proxmox token files (offline)")
     args = parser.parse_args()
     try:
-        validate(os.environ, args.preflight)
+        if args.credentials_only:
+            proxmox_credentials(os.environ)
+        else:
+            validate(os.environ, args.preflight)
     except ValueError as error:
-        sys.exit(f"Remote configuration: {error}")
-    print("Remote configuration valid" + ("; endpoint DNS checked" if args.preflight else " (offline)"))
+        sys.exit(f"Harness configuration: {error}")
+    print("Proxmox credentials valid (offline)" if args.credentials_only else
+          "Remote configuration valid" + ("; endpoint DNS checked" if args.preflight else " (offline)"))

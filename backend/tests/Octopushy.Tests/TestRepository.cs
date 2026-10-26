@@ -54,7 +54,8 @@ public sealed class TestRepository : IDisposable
             connection:
               endpoint: https://10.1.0.10:8006/
               tls: { verify: false }
-              token: { store: proxmox/korriban/api-token }
+              readOnlyToken: { store: proxmox/korriban/read-only-token }
+              privilegedToken: { store: proxmox/korriban/privileged-token }
             hosts:
               korriban:
                 datastores: { images: local, disks: local-lvm }

@@ -1,9 +1,7 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
-using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -281,6 +279,15 @@ public sealed partial class RunEngine(
         }
 
         var context = RunContext.Parse(run.Context);
+        if (!inFlight && !reconcilingOutcome && CredentialBindings.Validate(context) is { Count: > 0 } invalid)
+        {
+            run.Status = RunStatuses.Blocked;
+            run.Detail = $"Blocked credentials: {string.Join(", ", invalid)}.";
+            foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
+                attempt.WaitingReason = run.Detail;
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
         foreach (var step in run.Steps.OrderBy(s => s.Ordinal))
         {
             if (StepStatuses.IsDone(step.Status))
@@ -296,8 +303,11 @@ public sealed partial class RunEngine(
                         continue;
                     }
 
-                    run.Status = RunStatuses.AwaitingApproval;
-                    run.Detail = step.Detail;
+                    if (run.Status != RunStatuses.Failed)
+                    {
+                        run.Status = RunStatuses.AwaitingApproval;
+                        run.Detail = step.Detail;
+                    }
                     break;
                 case StepStatuses.Pending or StepStatuses.Blocked:
                     var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
@@ -358,26 +368,30 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
-        // A plan can report changes without changing any resource, for example only outputs,
-        // or a destroy plan over a state that holds nothing. There is nothing to approve then.
+        // Output-only plans can still need privileged apply, and a no-op rootfs
+        // run or reporter setup still has privileged guest-agent work. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
-        var manual = policy.Approval == "manual" && (resourceChanges > 0 || context.DiskReporter is not null);
+        var privilegedRemains = run.Steps.Any(s => s.Kind == StepKinds.Agent && !StepStatuses.IsDone(s.Status)
+            && AssignmentBuilder.TokenFor(s.Name) == SecretNames.ProxmoxPrivilegedToken);
+        step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();
+        if (privilegedRemains && string.IsNullOrWhiteSpace(step.PlanSha256))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "The plan has no saved plan file for privileged work. Inspect and replan with a worker that retains the plan.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
+        var manual = policy.Approval == "manual" && (resourceChanges > 0
+            || outputs?["hasChanges"]?.GetValue<bool>() == true || privilegedRemains);
         var destructiveManual = deletes > 0 && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
-        step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();
-        if (step.PlanSha256 is null && context.DiskReporter is { } reporter)
-        {
-            // No infrastructure plan file needs applying. Bind approval to the
-            // immutable setup specification instead, including the pinned binary.
-            step.PlanSha256 = Canonical.Hash(JsonSerializer.SerializeToNode(reporter, RunContext.Json)!);
-        }
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
             step.DecidedBy = "policy";
             step.DecidedAt = clock.GetUtcNow();
-            step.DecisionNote = resourceChanges == 0 && context.DiskReporter is null
+            step.DecisionNote = resourceChanges == 0 && !privilegedRemains
                 ? "The plan changes no resources, so it needs no approval."
                 : deletes > 0
                     ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
@@ -447,9 +461,11 @@ public sealed partial class RunEngine(
                         resource.SyncedInputsHash = run.InputsHash;
                     }
 
-                    var reporterSetup = RunContext.Parse(run.Context).DiskReporter is not null;
-                    foreach (var later in run.Steps.Where(s =>
-                        s.Name is StepNames.Unprotect or StepNames.Apply || s.Name == StepNames.Approval && !reporterSetup))
+                    var planContext = RunContext.Parse(run.Context);
+                    var needsGuestApproval = run.Operation == Operations.Provision
+                        && (planContext.RootDiskBytes is not null || planContext.DiskReporter is not null);
+                    foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
+                        || s.Name == StepNames.Approval && !needsGuestApproval))
                     {
                         later.Status = StepStatuses.Skipped;
                         later.Detail = "The plan has no changes.";

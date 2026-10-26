@@ -75,7 +75,7 @@ the web interface asks for it to create the account. Then:
 1. Under **Repository**, point Octopushy at a lab repository (a local path works; copy
    `examples/lab` into a Git repository to start).
 2. Under **Variables**, set the store keys the definitions reference, such as the
-   Proxmox API token.
+   distinct read-only and privileged Proxmox API tokens.
 3. Under **Agents**, create an enrollment token, then
    `just agent-enroll <token>` and `just agent`.
 
@@ -84,6 +84,10 @@ changing active credentials. **Variables → Versions** provides explicit
 promotion/revocation and usage history; runs pin exact versions before execution.
 See [credential lifecycle](docs/credential-lifecycle.md) for verification limits,
 upgrade behavior, and encryption-key recovery.
+
+The [Proxmox credential-role guide](docs/proxmox-credentials.md) describes explicit
+role routing, approval gates, legacy-run handling, and the pinned provider's
+read-only refresh blocker. This routing foundation is not live rollout approval.
 
 The [remote-worker acceptance mode](tests/remote-worker/README.md) uses a
 separately enrolled worker and dedicated existing controller/state backend.
