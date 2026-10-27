@@ -347,27 +347,49 @@ review_and_approve() {
   fi
   call -X POST "$api/api/runs/$run/steps/$step/approve" -d "{\"planSha256\":\"$sha\",\"note\":\"Reviewed by the end-to-end test.\"}" >/dev/null
 }
+# Waits for the installation's first observation, which runs in the background after a sync.
+wait_observed() {
+  local installation=$1 summary=""
+  for _ in $(seq 1 90); do
+    summary=$(call "$api/api/installations/$installation")
+    jq -e '.installation.observedAt != null' <<<"$summary" >/dev/null && return 0
+    if jq -e '.installation | .observeError != null and (.observing | not)' <<<"$summary" >/dev/null; then
+      echo "Observing $node failed: $(jq -r .installation.observeError <<<"$summary")" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "Observing $node timed out: $(jq -r '.installation.observeWaiting // .installation.observeError // "no result"' <<<"$summary")" >&2
+  return 1
+}
 # Observes the installation now and prints what Proxmox reports for the test VMID.
 # Fails rather than printing nothing, so an observation that did not happen never reads as "absent".
 observe_vm() {
-  local installation=$1 vmid=$2 run="" status=""
-  for _ in $(seq 1 10); do
-    # Refused while another observe run is active; try again shortly.
-    run=$(call -X POST "$api/api/installations/$installation/observe" 2>/dev/null | jq -r .runId) && break
-    sleep 3
-  done
-  [[ -n $run ]] || { echo "Could not start an observe run." >&2; return 1; }
+  local installation=$1 vmid=$2 summary="" before="" outcome=""
+  # One already under way may have read Proxmox before the change being checked; let it finish.
   for _ in $(seq 1 60); do
-    status=$(call "$api/api/runs/$run" | jq -r .run.status)
-    case $status in
-      succeeded) break ;;
-      failed | blocked | cancelled) show_run "$run" >&2; echo "Observing $node failed." >&2; return 1 ;;
-    esac
+    summary=$(call "$api/api/installations/$installation")
+    [[ $(jq -r .installation.observing <<<"$summary") == false ]] && break
     sleep 2
   done
-  [[ $status == succeeded ]] || { echo "Observing $node timed out." >&2; return 1; }
-  if [[ $remote == 1 ]]; then show_run "$run" >&2; fi
-  call "$api/api/installations/$installation" | jq -c --argjson v "$vmid" '[.observedGuests[] | select(.vmid==$v)][0] // empty'
+  before=$(jq -c '[.installation.observedAt, .installation.observeErrorAt]' <<<"$summary")
+  call -X POST "$api/api/installations/$installation/observe" >/dev/null || { echo "Could not request an observation." >&2; return 1; }
+  for _ in $(seq 1 60); do
+    sleep 2
+    summary=$(call "$api/api/installations/$installation")
+    [[ $(jq -r .installation.observing <<<"$summary") == false ]] || continue
+    outcome=$(jq -r --argjson b "$before" '.installation
+      | if .observedAt != $b[0] then "observed" elif .observeErrorAt != $b[1] then "failed" else "" end' <<<"$summary")
+    case $outcome in
+      observed)
+        jq -c --argjson v "$vmid" '[.observedGuests[] | select(.vmid==$v)][0] // empty' <<<"$summary"
+        return 0
+        ;;
+      failed) echo "Observing $node failed: $(jq -r .installation.observeError <<<"$summary")" >&2; return 1 ;;
+    esac
+  done
+  echo "Observing $node timed out: $(jq -r '.installation.observeWaiting // .installation.observeError // "no result"' <<<"$summary")" >&2
+  return 1
 }
 write_guest() {
   local cores=$1 memory=$2 disk=$3 lifecycle=${4:-active}
@@ -401,7 +423,7 @@ call -X POST "$api/api/repository/sync" >/dev/null
 trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
 for _ in $(seq 1 60); do installation=$(installation_id); [[ -n $installation ]] && break; sleep 2; done
 [[ -n ${installation:-} ]] || fail "The installation never appeared; see $work/backend.log."
-wait_run "$installation" observe succeeded 3 >/dev/null || fail "Octopushy could not observe $node with the read-only token."
+wait_observed "$installation" || fail "Octopushy could not observe $node with the read-only token."
 summary=$(call "$api/api/installations/$installation")
 jq -r '"  Proxmox \(.installation.proxmoxVersion), \(.observedGuests | length) VMs visible"' <<<"$summary"
 jq -r '.installation.hosts[] | "  host \(.name): online=\(.online), memory \((.memoryBytes // 0) / 1073741824 | floor)/\((.maxMemoryBytes // 0) / 1073741824 | floor) GiB"' <<<"$summary"

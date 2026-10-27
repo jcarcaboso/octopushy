@@ -785,7 +785,6 @@ export interface components {
             verifyTls: null | boolean;
             observedGuests: components["schemas"]["ObservedGuestDto"][];
             clusterName: null | string;
-            runs: components["schemas"]["RunSummaryDto"][];
         };
         InstallationSummaryDto: {
             /** Format: uuid */
@@ -800,9 +799,10 @@ export interface components {
             /** Format: date-time */
             observedAt: null | string;
             observeError: null | string;
-            observeState: null | string;
-            /** Format: uuid */
-            observeRunId: null | string;
+            /** Format: date-time */
+            observeErrorAt: null | string;
+            observing: boolean;
+            observeWaiting: null | string;
             proxmoxVersion: null | string;
             hosts: components["schemas"]["ObservedHostDto"][];
             guests: components["schemas"]["GuestSummaryDto"][];
@@ -852,6 +852,15 @@ export interface components {
         MissingVariableDto: {
             key: string;
             usedBy: string[];
+        };
+        ObserveErrorDto: {
+            /** Format: uuid */
+            installationId: string;
+            address: string;
+            name: string;
+            error: string;
+            /** Format: date-time */
+            at: null | string;
         };
         ObservedGuestDto: {
             /** Format: int32 */
@@ -918,6 +927,7 @@ export interface components {
             /** Format: int32 */
             agentsTotal: number;
             attention: components["schemas"]["RunSummaryDto"][];
+            observeErrors: components["schemas"]["ObserveErrorDto"][];
             recent: components["schemas"]["RunSummaryDto"][];
         };
         PlanChangeDto: {
@@ -1775,14 +1785,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description OK */
-            200: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["StartedRun"];
-                };
+                content?: never;
             };
             /** @description Bad Request */
             400: {

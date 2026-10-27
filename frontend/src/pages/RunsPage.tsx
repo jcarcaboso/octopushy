@@ -13,7 +13,7 @@ export function RunsPage() {
 
   return (
     <>
-      <PageHeader title="Runs" meta="Every provision, retire, and observe run, newest first." />
+      <PageHeader title="Runs" meta="Every provision and retire run, newest first." />
       <nav className="segmented" aria-label="Filter runs by status">
         <Link to="/runs" className="segmented__item" aria-current={status === null ? "page" : undefined}>
           All
@@ -34,7 +34,7 @@ export function RunsPage() {
           <RunTable
             runs={data}
             label="Runs"
-            emptyText={status ? `No runs are ${statusStyle(status).label.toLowerCase()}.` : "No runs yet. Runs start when a revision changes a guest, or by hand with Plan now or Observe now."}
+            emptyText={status ? `No runs are ${statusStyle(status).label.toLowerCase()}.` : "No runs yet. Runs start when a revision changes a guest, or by hand with Plan now."}
           />
         </Card>
       )}

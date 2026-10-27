@@ -21,7 +21,6 @@ const stepNames: Record<string, string> = {
   apply: "Apply",
   verify: "Verify",
   "verify-absent": "Verify absent",
-  observe: "Observe",
   "grow-root": "Expand guest root filesystem",
   "verify-root": "Verify guest capacity",
   "prepare-worker": "Create worker identity",
@@ -45,8 +44,6 @@ function describe(step: Step, operation: string): string | null {
       return "Checks the VM through the Proxmox API.";
     case "verify-absent":
       return "Checks through the Proxmox API that the VM is gone.";
-    case "observe":
-      return "Reads hosts and VMs from the Proxmox API.";
     case "grow-root":
       return "Checks the supported NixOS layout and expands its root partition and ext4 filesystem online if needed.";
     case "verify-root":

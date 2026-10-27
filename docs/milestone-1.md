@@ -125,7 +125,12 @@ each with attempts; a retry is a new attempt.
 |---|---|
 | Provision a guest | plan → approval → apply → verify |
 | Retire a guest | plan (destroy) → approval → unprotect → apply → verify absent |
-| Observe an installation | observe |
+
+Observing an installation is not a run: it changes nothing, so an agent does it in the
+background every few minutes, after a revision changes the installation, or on
+"Observe now". It is an attempt that belongs to the installation rather than to a step.
+Only its failures are shown, on the installation and under Needs attention; a missing
+secret is reported the same way and nothing is sent.
 
 - **When runs start.** A new revision starts a provision run for each guest whose
   inputs changed: its definition, its host and installation settings, its template,

@@ -595,15 +595,8 @@
               }
             }
           },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StartedRun"
-                }
-              }
-            }
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -3397,8 +3390,7 @@
           "tokenKey",
           "verifyTls",
           "observedGuests",
-          "clusterName",
-          "runs"
+          "clusterName"
         ],
         "type": "object",
         "properties": {
@@ -3446,12 +3438,6 @@
               "null",
               "string"
             ]
-          },
-          "runs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RunSummaryDto"
-            }
           }
         }
       },
@@ -3466,8 +3452,9 @@
           "issueCount",
           "observedAt",
           "observeError",
-          "observeState",
-          "observeRunId",
+          "observeErrorAt",
+          "observing",
+          "observeWaiting",
           "proxmoxVersion",
           "hosts",
           "guests",
@@ -3517,18 +3504,21 @@
               "string"
             ]
           },
-          "observeState": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "observeRunId": {
+          "observeErrorAt": {
             "type": [
               "null",
               "string"
             ],
-            "format": "uuid"
+            "format": "date-time"
+          },
+          "observing": {
+            "type": "boolean"
+          },
+          "observeWaiting": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "proxmoxVersion": {
             "type": [
@@ -3730,6 +3720,38 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ObserveErrorDto": {
+        "required": [
+          "installationId",
+          "address",
+          "name",
+          "error",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "installationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -3950,6 +3972,7 @@
           "agentsConnected",
           "agentsTotal",
           "attention",
+          "observeErrors",
           "recent"
         ],
         "type": "object",
@@ -3972,6 +3995,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          },
+          "observeErrors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObserveErrorDto"
             }
           },
           "recent": {

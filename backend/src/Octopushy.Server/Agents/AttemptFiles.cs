@@ -104,6 +104,13 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
         _secrets.TryRemove(attemptId, out _);
     }
 
+    /// <summary>Removes a finished attempt's log, for attempts that are not kept.</summary>
+    public void Delete(Guid attemptId)
+    {
+        Close(attemptId);
+        File.Delete(PathFor(attemptId));
+    }
+
     private string PathFor(Guid attemptId) => Path.Combine(_directory, $"{attemptId}.jsonl");
 
     private static long CountLines(string path) => File.Exists(path) ? File.ReadLines(path).LongCount() : 0;

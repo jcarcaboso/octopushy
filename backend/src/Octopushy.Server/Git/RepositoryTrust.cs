@@ -20,10 +20,14 @@ public static class RepositoryTrust
     public static IQueryable<DefinitionRevision> HeadRevisions(OctopushyDb db) =>
         CurrentRevisions(db).Where(r => db.RepositorySettings.Any(s => s.Id == 1 && s.HeadCommit == r.Commit));
 
-    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Run run, CancellationToken ct)
+    public static Task<string?> BlockedReasonAsync(OctopushyDb db, Run run, CancellationToken ct) =>
+        BlockedReasonAsync(db, run.RevisionId, run.Commit, ct);
+
+    /// <summary>Why work built from this revision and commit, such as an observation, may not be sent yet.</summary>
+    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, CancellationToken ct)
     {
-        if (run.RevisionId is not { } id || run.Commit is null
-            || !await EligibleRevisions(db).AnyAsync(r => r.Id == id && r.Commit == run.Commit, ct))
+        if (revisionId is not { } id || commit is null
+            || !await EligibleRevisions(db).AnyAsync(r => r.Id == id && r.Commit == commit, ct))
         {
             return "Waiting for trust: explicitly trust this exact revision of the current repository source. Legacy or previous-source work requires an explicit replan.";
         }

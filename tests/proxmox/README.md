@@ -30,8 +30,8 @@ The backend, a real agent, and OpenTofu (bpg/proxmox in rootless podman) do the 
 the OpenTofu state lives in the development PostgreSQL. The lab asks for approval of every
 plan, and the script reviews each one before approving it: creating must only add,
 resizing must update without replacing or deleting, and deleting must delete. Any other
-plan is rejected and the test stops. After each step it asks Proxmox, through an observe
-run, whether the VM is there with the expected size.
+plan is rejected and the test stops. After each step it asks Proxmox, through an
+observation, whether the VM is there with the expected size.
 
 The harness explicitly grants execution trust to each **exact local fixture
 commit** it creates, using the normal authenticated review/trust API. It checks
