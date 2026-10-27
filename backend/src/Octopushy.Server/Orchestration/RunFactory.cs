@@ -6,7 +6,7 @@ using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Orchestration;
 
-/// <summary>Builds runs and their steps from a revision's definitions.</summary>
+/// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
 public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, apply, verify) or, for a retired guest, a retire run.</summary>
@@ -197,8 +197,8 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         return run;
     }
 
-    /// <summary>An observe run: the installation's hosts and VMs as its Proxmox API reports them.</summary>
-    public Run Observe(LabRepository repository, InstallationDefinition installation, Resource resource, DefinitionRevision revision, string reason)
+    /// <summary>What an observation of the installation's hosts and VMs through its Proxmox API is built from.</summary>
+    public static RunContext Observation(LabRepository repository, InstallationDefinition installation, DefinitionRevision revision)
     {
         var labels = PolicyResolver.AgentLabels(repository, installation);
         var connection = installation.Connection;
@@ -221,7 +221,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             }
         }
 
-        var context = new RunContext
+        return new RunContext
         {
             Address = installation.Address,
             Commit = revision.Commit,
@@ -231,10 +231,6 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
         };
-        var run = NewRun(resource, Operations.Observe, revision, reason, context);
-        run.InputsHash = InstallationHash(installation);
-        AddSteps(run, [StepNames.Observe]);
-        return run;
     }
 
     /// <summary>Verify an explicitly removed worker; never plans, unprotects or destroys infrastructure.</summary>
@@ -248,19 +244,17 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var endpoint = ProvisionInputs.EndpointFor(installation, host);
         if (endpoint != previous.Proxmox.Endpoint || previous.ManagedWorker?.Generation != binding.Generation)
             throw new RunException("The worker's original endpoint or generation is unavailable; retirement cannot be inferred from another installation.");
-        var run = Observe(repository, installation, resource, revision, reason);
-        var context = RunContext.Parse(run.Context);
-        run.Operation = Operations.Retire;
-        run.Context = (context with
+        // A read-only check with the installation's observation credentials.
+        var context = Observation(repository, installation, revision);
+        var run = NewRun(resource, Operations.Retire, revision, reason, context with
         {
             Address = resource.Address,
             HostKey = $"{installation.Address}/{host.Id}",
             HostLimit = host.ConcurrentOperations,
             Proxmox = context.Proxmox with { Endpoint = endpoint, Node = binding.Host, Vmid = binding.Vmid, Name = previous.Proxmox.Name },
             ManagedWorker = previous.ManagedWorker,
-        }).Serialize();
+        });
         run.InputsHash = RetireHash(resource.DesiredInputsHash ?? InstallationHash(installation));
-        run.Steps.Clear();
         AddSteps(run, [StepNames.VerifyAbsent]);
         return run;
     }

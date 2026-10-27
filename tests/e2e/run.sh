@@ -103,6 +103,8 @@ call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
 installation=$(call "$api/api/inventory" | jq '.labs[0].installations[0] | {observedAt, unmanagedCount, hosts: [.hosts[].name]}')
 echo "$installation"
 [[ $(jq -r .unmanagedCount <<<"$installation") == 1 ]] || { echo "Expected one unmanaged VM."; exit 1; }
+[[ $(call "$api/api/runs?limit=500" | jq '[.[] | select(.operation=="observe")] | length') == 0 ]] \
+  || { echo "Observing an installation must not start runs."; exit 1; }
 states=$(podman exec octopushy-dev-pg psql -U octopushy -d e2e_state -tAc "SELECT name FROM octopushy_e2e_state.states")
 echo "OpenTofu states: $states"
 [[ $states == *e2e.korriban.e2e-vm-01* ]] || { echo "The guest's state is missing."; exit 1; }

@@ -9,8 +9,8 @@ namespace Octopushy.Server.Inventory;
 
 /// <summary>
 /// Applies a new revision to the resources Octopushy knows, and proposes the runs it implies:
-/// a provision run for each guest whose inputs changed, a retire run for each guest newly
-/// retired, and an observe run for each installation whose definition changed.
+/// a provision run for each guest whose inputs changed and a retire run for each guest newly
+/// retired. Each installation whose definition changed is observed again.
 /// </summary>
 public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeProvider clock, ILogger<InventoryUpdater> logger)
 {
@@ -116,6 +116,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         }
 
         var runs = new List<Run>();
+        var changedInstallations = new List<(Resource Resource, RunContext Context)>();
         foreach (var resource in guests)
         {
             if (!resource.Valid)
@@ -165,19 +166,23 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
             var hash = RunFactory.InstallationHash(installation);
             if (resource.DesiredInputsHash == hash && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
             {
+                // Trusting the head lets its observation replace a trusted one that discovery kept waiting.
+                if (revision.TrustedAt is not null && resource.DesiredRevisionId == revision.Id)
+                    changedInstallations.Add((resource, RunFactory.Observation(repository, installation, revision)));
                 continue;
             }
 
             resource.DesiredInputsHash = hash;
             resource.DesiredRevisionId = revision.Id;
-            if (!activeRuns.Any(r => r.ResourceId == resource.Id && currentSourceIds.Contains(r.RevisionId ?? Guid.Empty)))
-            {
-                runs.Add(factory.Observe(repository, installation, resource, revision, "revision"));
-            }
+            changedInstallations.Add((resource, RunFactory.Observation(repository, installation, revision)));
         }
 
         await db.SaveChangesAsync(cancellationToken);
         await engine.AddRunsAsync(db, runs, cancellationToken);
+        foreach (var (resource, context) in changedInstallations)
+        {
+            await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
+        }
     }
 
     /// <summary>
@@ -208,7 +213,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
 
     private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason, CancellationToken cancellationToken)
     {
-        foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id && r.Operation != Operations.Observe).ToList())
+        foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id).ToList())
         {
             // Discovery must not discard a prepared, trusted plan for an untrusted head.
             if (revision.TrustedAt is null && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is null)

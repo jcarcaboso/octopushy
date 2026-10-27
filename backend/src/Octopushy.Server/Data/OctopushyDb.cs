@@ -104,7 +104,9 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.HasIndex(x => new { x.Status, x.CreatedAt });
             e.HasIndex(x => x.AgentId);
+            e.HasIndex(x => new { x.ResourceId, x.CreatedAt }).HasFilter("resource_id IS NOT NULL");
             e.Property(x => x.Outputs).HasColumnType("jsonb");
+            e.Property(x => x.Context).HasColumnType("jsonb");
         });
 
         model.Entity<ArtifactRecord>(e =>

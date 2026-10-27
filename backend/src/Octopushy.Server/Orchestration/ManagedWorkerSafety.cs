@@ -40,8 +40,8 @@ public static class ManagedWorkerSafety
         && plan["counts"] is JsonObject counts && new[] { "create", "update", "delete", "replace" }
             .All(key => counts[key] is JsonValue value && value.TryGetValue<int>(out var count) && count == 0);
 
-    public static bool IsRetirementCheck(Run run) =>
-        run.Operation == Operations.Retire && run.Steps.Count == 1
+    public static bool IsRetirementCheck(Run? run) =>
+        run is not null && run.Operation == Operations.Retire && run.Steps.Count == 1
         && run.Steps[0].Name == StepNames.VerifyAbsent
         && run.Steps[0].Attempts.All(a => !a.Mutating);
 
@@ -72,7 +72,7 @@ public static class ManagedWorkerSafety
             && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, ct))
             return "The worker has an unfinished run. Resolve it before verifying retirement.";
         var resourceRuns = db.Runs.Where(r => r.ResourceId == resource.Id && (run == null || r.Id != run.Id)).Select(r => r.Id);
-        if (await db.Attempts.AnyAsync(a => (resourceRuns.Contains(a.RunId) || binding.AgentId != null && a.AgentId == binding.AgentId)
+        if (await db.Attempts.AnyAsync(a => (a.RunId != null && resourceRuns.Contains(a.RunId.Value) || binding.AgentId != null && a.AgentId == binding.AgentId)
             && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
                 || a.Mutating && a.Status == AttemptStatuses.Uncertain && a.Step!.Status == StepStatuses.Uncertain), ct))
             return "The worker has active work or unresolved mutating outcomes. Drain and inspect it first.";
@@ -91,7 +91,8 @@ public static class ManagedWorkerSafety
         return null;
     }
 
-    public static async Task ValidateDispatchAsync(OctopushyDb db, Run run, RunContext context, Guid agentId, CancellationToken ct)
+    /// <summary>Checks work on <paramref name="resourceId"/>: a step of <paramref name="run"/>, or an observation when it is null.</summary>
+    public static async Task ValidateDispatchAsync(OctopushyDb db, Guid resourceId, Run? run, RunContext context, Guid agentId, CancellationToken ct)
     {
         if (await db.Agents.AnyAsync(a => a.Id == agentId && (a.Disabled || a.Draining), ct))
             throw new AssignmentException("This agent is disabled or draining and cannot receive new assignments.");
@@ -100,17 +101,17 @@ public static class ManagedWorkerSafety
             throw new AssignmentException("Only an independent control worker may verify managed-worker retirement.");
         if (own is not null && context.AgentLabels.Count == 0)
             throw new AssignmentException("Managed workers require explicit matching workload labels; unlabeled work stays on independent control workers.");
-        if (own is not null && (own.ReadyAt is null || run.ResourceId == own.ResourceId
+        if (own is not null && (own.ReadyAt is null || resourceId == own.ResourceId
             || context.Proxmox.Vmid == own.Vmid && context.Proxmox.Node == own.Host))
             throw new AssignmentException("A managed worker must be bootstrap-ready and must never operate on its own guest, including preview.");
-        var bound = await db.ManagedWorkers.AsNoTracking().SingleOrDefaultAsync(w => w.ResourceId == run.ResourceId, ct);
-        if (bound is not null && !Matches(bound, run, context))
+        var bound = await db.ManagedWorkers.AsNoTracking().SingleOrDefaultAsync(w => w.ResourceId == resourceId, ct);
+        if (bound is not null && (run is null || !Matches(bound, run, context)))
             throw new AssignmentException("Managed worker retirement, replacement, movement or role removal is not supported.");
         if (context.ManagedWorker is not null && bound is null)
             throw new AssignmentException("Managed worker run has no durable generation binding.");
         if (bound is not null && IsRetirementCheck(run))
         {
-            var resource = await db.Resources.SingleAsync(r => r.Id == run.ResourceId, ct);
+            var resource = await db.Resources.SingleAsync(r => r.Id == resourceId, ct);
             if (await RetirementBlockedReasonAsync(db, resource, run, ct) is { } reason)
                 throw new AssignmentException(reason);
         }

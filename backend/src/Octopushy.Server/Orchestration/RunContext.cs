@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>
-/// What a run's steps are built from, fixed when the run is created. It names secrets by their
+/// What a run's steps, or an observation, are built from, fixed when they are created. It names secrets by their
 /// store keys and never holds their values.
 /// </summary>
 public sealed record RunContext
@@ -97,7 +97,7 @@ public sealed record DiskReporterContext(
     string InstallationMode = "fhs-download-v1",
     string? ImageSha256 = null);
 
-/// <summary>Step names, shared with the API.</summary>
+/// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames
 {
     public const string Plan = "plan";

@@ -142,6 +142,14 @@ public sealed class Resource
 
     public DateTimeOffset? BoundAt { get; set; }
 
+    /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
+    public DateTimeOffset? ObserveRequestedAt { get; set; }
+
+    /// <summary>Why the installation's latest observation did not succeed; cleared when one does.</summary>
+    public string? ObserveError { get; set; }
+
+    public DateTimeOffset? ObserveErrorAt { get; set; }
+
     public ManagedWorkerBinding? ManagedWorker { get; set; }
 }
 
@@ -164,7 +172,6 @@ public static class Operations
 {
     public const string Provision = "provision";
     public const string Retire = "retire";
-    public const string Observe = "observe";
 }
 
 public static class RunStatuses
@@ -250,7 +257,7 @@ public sealed class Step
 
     public int Ordinal { get; set; }
 
-    /// <summary><c>plan</c>, <c>approval</c>, <c>unprotect</c>, <c>apply</c>, <c>verify</c>, <c>verify-absent</c>, or <c>observe</c>.</summary>
+    /// <summary><c>plan</c>, <c>approval</c>, <c>unprotect</c>, <c>apply</c>, <c>verify</c>, or <c>verify-absent</c>.</summary>
     public required string Name { get; set; }
 
     public required string Kind { get; set; }
@@ -301,16 +308,29 @@ public static class AttemptStatuses
     public static bool IsTerminal(string status) => status is Succeeded or Failed or Uncertain or Cancelled;
 }
 
-/// <summary>One execution of a step on an agent; a retry is a new attempt.</summary>
+/// <summary>
+/// One execution of work on an agent: a step of a run, where a retry is a new attempt, or a
+/// background observation of an installation, which belongs to no run.
+/// </summary>
 public sealed class Attempt
 {
     public Guid Id { get; set; }
 
-    public Guid StepId { get; set; }
+    /// <summary>The step the attempt executes; null for an observation.</summary>
+    public Guid? StepId { get; set; }
 
     public Step? Step { get; set; }
 
-    public Guid RunId { get; set; }
+    public Guid? RunId { get; set; }
+
+    /// <summary>For an observation, the installation it observes.</summary>
+    public Guid? ResourceId { get; set; }
+
+    /// <summary>For an observation, the revision its context was built from; it is sent only once that revision is trusted.</summary>
+    public Guid? RevisionId { get; set; }
+
+    /// <summary>For an observation, what its assignment is built from; a step's attempt uses its run's context.</summary>
+    public string? Context { get; set; }
 
     public int Number { get; set; }
 
@@ -498,7 +518,7 @@ public sealed class SecretResolution
     public DateTimeOffset ResolvedAt { get; set; }
 }
 
-/// <summary>What an installation's Proxmox API reported at one time.</summary>
+/// <summary>What an installation's Proxmox API reported at one time, gathered in the background rather than by a run.</summary>
 public sealed class Observation
 {
     public Guid Id { get; set; }

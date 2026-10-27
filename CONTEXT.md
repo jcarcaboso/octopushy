@@ -260,6 +260,11 @@ A named, observable unit of a workflow with its own outcome and recovery rules.
 One execution of a step; a retry creates a new attempt without erasing the
 previous outcome.
 
+**Observation**:
+What an installation's Proxmox API reported at one time, gathered by an agent in
+the background. It changes nothing, so it is not a run; only its failures surface.
+_Avoid_: Observe run
+
 **Approval**:
 An operator's authorization of a specific proposed change, not a blanket
 authorization of all future changes to the same target.

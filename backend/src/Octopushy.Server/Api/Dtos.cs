@@ -177,8 +177,9 @@ public sealed record InstallationSummaryDto(
     int IssueCount,
     DateTimeOffset? ObservedAt,
     string? ObserveError,
-    string? ObserveState,
-    Guid? ObserveRunId,
+    DateTimeOffset? ObserveErrorAt,
+    bool Observing,
+    string? ObserveWaiting,
     string? ProxmoxVersion,
     IReadOnlyList<ObservedHostDto> Hosts,
     IReadOnlyList<GuestSummaryDto> Guests,
@@ -228,8 +229,10 @@ public sealed record InstallationDetailDto(
     string? TokenKey,
     bool? VerifyTls,
     IReadOnlyList<ObservedGuestDto> ObservedGuests,
-    string? ClusterName,
-    IReadOnlyList<RunSummaryDto> Runs);
+    string? ClusterName);
+
+/// <summary>An installation whose latest observation did not succeed.</summary>
+public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At);
 
 public sealed record OverviewCounts(
     int Guests,
@@ -249,6 +252,7 @@ public sealed record OverviewDto(
     int AgentsConnected,
     int AgentsTotal,
     IReadOnlyList<RunSummaryDto> Attention,
+    IReadOnlyList<ObserveErrorDto> ObserveErrors,
     IReadOnlyList<RunSummaryDto> Recent);
 
 public sealed record AgentDto(

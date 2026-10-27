@@ -277,12 +277,14 @@ export function usePlanGuest() {
   });
 }
 
+/** Observes an installation in the background; it is not a run, so only the installation views refresh. */
 export function useObserveInstallation() {
-  const refresh = useRefreshRuns();
+  const client = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
       unwrap(api.POST("/api/installations/{id}/observe", { params: { path: { id } } })),
-    onSuccess: () => refresh(),
+    onSuccess: () =>
+      Promise.all(["overview", "inventory", "installation"].map((key) => client.invalidateQueries({ queryKey: [key] }))),
   });
 }
 

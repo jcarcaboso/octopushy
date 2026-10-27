@@ -70,25 +70,34 @@ public sealed class AssignmentBuilder(
     private static string TokenFor(string stepName, RunContext context) =>
         context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
 
-    public async Task<Assignment> BuildAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
+    /// <summary>Builds the assignment for a step's attempt, or for an observation when <paramref name="step"/> and <paramref name="run"/> are null.</summary>
+    public async Task<Assignment> BuildAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
-        if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+        var blocked = run is null
+            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, cancellationToken)
+            : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);
+        if (blocked is { } reason)
         {
             throw new RevisionUntrustedException(reason);
         }
-        await ManagedWorkerSafety.ValidateDispatchAsync(db, run, context, agentId, cancellationToken);
+        if (step is null || run is null
+                ? step is not null || run is not null || attempt.StepId is not null || attempt.RunId is not null || attempt.ResourceId is null
+                : attempt.RunId != run.Id || step.RunId != run.Id || attempt.StepId != step.Id)
+            throw new AssignmentException("The attempt, step and run do not match.");
+        await ManagedWorkerSafety.ValidateDispatchAsync(db, run?.ResourceId ?? attempt.ResourceId!.Value, run, context, agentId, cancellationToken);
         var invalid = CredentialBindings.Validate(context);
         if (invalid.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
-        if (attempt.RunId != run.Id || step.RunId != run.Id || attempt.StepId != step.Id)
-            throw new AssignmentException("The attempt, step and run do not match.");
-        var action = ActionFor(step.Name);
+        var stepName = step?.Name ?? StepNames.Observe;
+        var action = ActionFor(stepName);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
-        var approvedPlan = TokenFor(step.Name) == SecretNames.ProxmoxPrivilegedToken
-            ? await ApprovedPlanAsync(run, cancellationToken) : null;
-        if (step.Name == StepNames.InstallDiskReporter)
+        var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
+            ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), cancellationToken) : null;
+        if (stepName == StepNames.InstallDiskReporter)
         {
+            if (run is null || step is null)
+                throw new AssignmentException("Reporter setup requires a run.");
             if (run.Status == RunStatuses.Uncertain || step.Status == StepStatuses.Uncertain)
                 throw new AssignmentException("An uncertain guest mutation cannot be replayed; inspect before recovery.");
             var reporter = context.DiskReporter ?? throw new AssignmentException("Missing reporting configuration.");
@@ -113,7 +122,7 @@ public sealed class AssignmentBuilder(
                 || context.ManagedWorker is not null && !await db.ManagedWorkers.AnyAsync(w => w.ResourceId == run.ResourceId && w.ReadyAt != null, cancellationToken))
                 throw new AssignmentException("Reporter setup requires successful guest/root verification and authenticated worker readiness.");
         }
-        var names = SecretsFor(step.Name, context);
+        var names = SecretsFor(stepName, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
         if (problems.Count > 0)
         {
@@ -130,7 +139,7 @@ public sealed class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
-        var token = TokenFor(step.Name, context);
+        var token = TokenFor(stepName, context);
         values[SecretNames.ProxmoxToken] = values[token];
         values.Remove(token);
 
@@ -145,6 +154,7 @@ public sealed class AssignmentBuilder(
         JsonObject input;
         if (action.Executor == "opentofu")
         {
+            ArgumentNullException.ThrowIfNull(run);
             var tofu = context.OpenTofu!;
             input = new JsonObject
             {
@@ -166,7 +176,7 @@ public sealed class AssignmentBuilder(
                 && (context.RootDiskBytes is not null || context.ManagedWorker is not null || context.DiskReporter is not null))
                 input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
-            if (step.Name == StepNames.Apply)
+            if (stepName == StepNames.Apply)
             {
                 assignment.Artifacts.Add(approvedPlan!);
             }
@@ -188,7 +198,7 @@ public sealed class AssignmentBuilder(
                 ["name"] = proxmox.Name,
                 ["expectRunning"] = true,
                 ["expectIpv4"] = proxmox.ExpectIpv4,
-                ["waitSeconds"] = step.Name == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
+                ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = false,
             };
             if (action.Executor == "nixos-rootfs")
@@ -197,7 +207,7 @@ public sealed class AssignmentBuilder(
                 input["address"] = context.Address;
                 input["workerGeneration"] = context.ManagedWorker?.Generation.ToString();
             }
-            if (step.Name == StepNames.InstallDiskReporter)
+            if (stepName == StepNames.InstallDiskReporter && run is not null)
             {
                 var reporter = context.DiskReporter
                     ?? throw new AssignmentException("The run has no disk reporter configuration.");
@@ -241,13 +251,13 @@ public sealed class AssignmentBuilder(
             var worker = context.ManagedWorker ?? throw new AssignmentException("Missing managed worker context.");
             input["address"] = context.Address;
             input["generation"] = worker.Generation.ToString();
-            if (step.Name is StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs)
+            if (stepName is StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs)
             {
                 input["update"] = System.Text.Json.JsonSerializer.SerializeToNode(
                     context.WorkerUpdate ?? throw new AssignmentException("Missing pinned OS update release."), RunContext.Json);
-                input["waitSeconds"] = step.Name == StepNames.UpdateWorkerOs ? 1860 : 300;
+                input["waitSeconds"] = stepName == StepNames.UpdateWorkerOs ? 1860 : 300;
             }
-            if (step.Name == StepNames.InstallWorker)
+            if (stepName == StepNames.InstallWorker && run is not null)
             {
                 var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, cancellationToken);
                 if (binding.AgentId is null || binding.CertificatePem is null || binding.CaCertificatePem is null)

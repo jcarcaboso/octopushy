@@ -14,6 +14,7 @@ export type GuestDetail = Schemas["GuestDetailDto"];
 export type GuestDiskUsage = Schemas["GuestDiskUsageDto"];
 export type ObservedHost = Schemas["ObservedHostDto"];
 export type ObservedGuest = Schemas["ObservedGuestDto"];
+export type ObserveFailure = Schemas["ObserveErrorDto"];
 export type Issue = Schemas["IssueDto"];
 export type Problem = Schemas["ProblemDetails"];
 export type Plan = Schemas["PlanDto"];

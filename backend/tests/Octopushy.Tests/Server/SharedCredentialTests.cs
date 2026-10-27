@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
@@ -101,7 +102,7 @@ public class SharedCredentialTests(PostgresFixture postgres)
         await server.SyncAndTrustAsync();
         var observe = await worker.NextAsync("observe");
         Assert.Equal("shared-v1", Assert.Single(observe.Secrets).Value);
-        var observed = RunContext.Parse((await server.LatestRunAsync("home/korriban", Operations.Observe)).Context);
+        var observed = await server.LatestObservationAsync("home/korriban");
         Assert.Equal(Shared, Assert.Single(observed.Secrets).Value);
         Assert.Equal(SharedRole, Assert.Single(observed.Secrets).Key);
         Assert.Equal(1, Assert.Single(observed.SecretVersions).Value);
@@ -217,11 +218,14 @@ public class SharedCredentialTests(PostgresFixture postgres)
         Assert.Contains("candidate not promoted", blocked.Detail);
         Assert.False(RunContext.Parse(blocked.Context).SecretBindingsPinned);
         Assert.Empty(RunContext.Parse(blocked.Context).SecretVersions);
+        Assert.Contains("candidate not promoted", (await server.ResourceAsync("home/korriban")).ObserveError);
         (await http.PostAsJsonAsync("/api/variables/promote", new
         { key = Shared, version = 2, expectedCurrentVersion = 1, verificationNote = "fixture shared access verified" })).EnsureSuccessStatusCode();
         var preview = await worker.NextAsync("preview");
         Assert.Equal("shared-v2", preview.Secrets["proxmox.token"]);
-        var observed = RunContext.Parse((await server.LatestRunAsync("home/korriban", Operations.Observe)).Context);
+        // A blocked installation stays due, so the next scheduled check observes it.
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        var observed = await server.LatestObservationAsync("home/korriban");
         Assert.Equal(2, Assert.Single(observed.RequestedSecretVersions).Value);
         Assert.Equal(SharedRole, Assert.Single(observed.RequestedSecretVersions).Key);
         await StageAndPromoteAsync(http, 3, 2, "shared-v3");
