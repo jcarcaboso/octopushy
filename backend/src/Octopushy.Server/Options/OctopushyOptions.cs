@@ -34,6 +34,19 @@ public sealed class OctopushyOptions
     public WorkerDeploymentOptions WorkerDeployment { get; set; } = new();
 
     public DiskReporterOptions DiskReporter { get; set; } = new();
+
+    public WorkerUpdateOptions WorkerUpdates { get; set; } = new();
+}
+
+/// <summary>One operator-published NixOS closure export. Disabled until image/boot qualification.</summary>
+public sealed class WorkerUpdateOptions
+{
+    public bool Enabled { get; set; }
+    public string? ArchiveUrl { get; set; }
+    public string? ArchiveSha256 { get; set; }
+    public string? SystemPath { get; set; }
+    public string? ImageSha256 { get; set; }
+    public string? CaCertificatePem { get; set; }
 }
 
 /// <summary>Operator-published, tested worker image. Never selected from an untrusted request.</summary>
@@ -49,6 +62,12 @@ public sealed class WorkerDeploymentOptions
 public sealed class DiskReporterOptions
 {
     public bool Enabled { get; set; }
+
+    /// <summary>Explicit capability attestation for one qualified native-v1 worker image, not the downloadable reporter hash.</summary>
+    public string? ManagedNixosImageSha256 { get; set; }
+
+    public bool SupportsManagedNixosImage(string? hash) => hash is { Length: 64 }
+        && hash.All(char.IsAsciiHexDigit) && string.Equals(hash, ManagedNixosImageSha256, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>HTTPS web/API origin reachable from the VM, not the execution-agent endpoint.</summary>
     public string PublicUrl { get; set; } = "";
@@ -71,6 +90,7 @@ public sealed class DiskReporterOptions
 
         if (!HttpsUrl(PublicUrl) || new Uri(PublicUrl).AbsolutePath != "/" || !HttpsUrl(BinaryUrl)
             || BinarySha256.Length != 64 || BinarySha256.AsSpan().IndexOfAnyExcept("0123456789abcdefABCDEF") >= 0
+            || ManagedNixosImageSha256 is not null && (ManagedNixosImageSha256.Length != 64 || !ManagedNixosImageSha256.All(char.IsAsciiHexDigit))
             || IntervalSeconds is < 60 or > 604800 || CaCertificatePem?.Length > 16384
             || CaCertificatePem?.Contains("PRIVATE KEY", StringComparison.Ordinal) == true)
         {

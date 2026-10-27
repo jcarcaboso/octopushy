@@ -27,6 +27,9 @@ const stepNames: Record<string, string> = {
   "prepare-worker": "Create worker identity",
   "install-worker": "Install public worker identity",
   "wait-worker": "Wait for authenticated worker",
+  "update-worker-os": "Switch worker OS",
+  "verify-worker-os": "Verify updated OS and preserved identity",
+  "wait-updated-worker": "Wait for the original worker to reconnect",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -65,12 +68,12 @@ function describe(step: Step, operation: string): string | null {
 function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const retry = useRetryFilesystem();
   const canRetry = detail.run.status === "failed" && step.status === "failed"
-    && ["grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
+    && ["verify", "grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
     && !detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {
     const planStep = detail.steps.find((s) => s.name === "plan");
-    return <ApprovalPanel runId={detail.run.id} step={step} plan={planStep?.plan ? summarizePlan(planStep.plan) : null} />;
+    return <ApprovalPanel runId={detail.run.id} step={step} plan={planStep?.plan ? summarizePlan(planStep.plan) : null} workerUpdate={detail.workerUpdate} />;
   }
   return (
     <>

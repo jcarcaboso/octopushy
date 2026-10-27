@@ -10,6 +10,7 @@ using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 using Octopushy.Server.Agents;
+using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Api;
 
@@ -36,6 +37,11 @@ public sealed record WorkerDraftRequest(
 
 public sealed record WorkerDraftDto(string FileName, string Content);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkerRetirementRequest(Guid Generation, bool ConfirmAlreadyRemoved);
+
+public sealed record WorkerRetirementRunDto(Guid RunId);
+
 /// <summary>Read-only preparation; reviewed Git publication is a separate explicit action.</summary>
 public static partial class ManagedWorkerPreparation
 {
@@ -46,7 +52,7 @@ public static partial class ManagedWorkerPreparation
         "An independent upgraded control worker must provide managed-worker, nixos-rootfs, proxmox and opentofu executors.",
         "Controller agent ingress and workload endpoints must be guest-reachable. A localhost PostgreSQL backend is not usable by this worker.",
         "Live VMID availability, storage, network and capacity are checked by the existing preview/apply flow, not reserved by this wizard.",
-        "Worker retirement and replacement are disabled in this first version; preserve the VM and its separate identity/state disk.",
+        "Deleting an agent revokes enrollment, not its VM. Retirement verification only checks an already removed VM after its Git definition and enrollment are removed; automatic VM destruction and replacement remain disabled.",
     ];
 
     public static void MapWorkerPreparation(this RouteGroupBuilder api)
@@ -69,7 +75,8 @@ public static partial class ManagedWorkerPreparation
                     i.Hosts.Values.Select(h => new WorkerHostOption(h.Id, ProvisionInputs.EndpointFor(i, h),
                         h.Datastores, h.Bridges)).ToList())).ToList();
             var boundResources = await db.Resources.AsNoTracking().Include(r => r.ManagedWorker)
-                .Where(r => r.ManagedWorker != null).ToListAsync(ct);
+                .Where(r => r.ManagedWorker != null && r.RetiredAt == null).ToListAsync(ct);
+            var enrollments = await db.Agents.AsNoTracking().ToDictionaryAsync(a => a.Id, a => a.Disabled, ct);
             var workers = (repository?.Guests.Where(g => g.ManagedWorker is not null)
                 .Select(g => new WorkerExistingDto(g.Address, g.Host, g.Vmid, g.ManagedWorker!.Generation)) ?? [])
                 .ToDictionary(w => w.Address, StringComparer.Ordinal);
@@ -77,11 +84,20 @@ public static partial class ManagedWorkerPreparation
             {
                 var binding = resource.ManagedWorker!;
                 var connected = binding.AgentId is { } id && connections.IsConnected(id);
+                var retirement = await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Retire
+                    && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                    .OrderByDescending(r => r.CreatedAt).FirstOrDefaultAsync(ct);
+                var blockedRetirement = await ManagedWorkerSafety.RetirementBlockedReasonAsync(db, resource, null, ct);
+                var status = binding.AgentId is { } agentId && !enrollments.ContainsKey(agentId) ? "Enrollment removed"
+                    : binding.AgentId is { } enrolledId && enrollments.GetValueOrDefault(enrolledId) ? "Disabled"
+                    : resource.MissingSince is not null ? "Definition removed"
+                    : binding.ReadyAt is not null ? connected ? "Ready" : "Enrolled · offline"
+                    : binding.InstalledAt is not null ? "Waiting for authenticated connection"
+                    : binding.PreparedAt is not null ? "Installing public identity" : "Provisioning";
+                if (retirement is not null) status = "Verifying retirement";
                 workers[resource.Address] = new(resource.Address, binding.Host, binding.Vmid, binding.Generation,
-                    resource.Id, binding.RunId, binding.AgentId, binding.ReadyAt is not null
-                        ? connected ? "Ready" : "Enrolled · offline"
-                        : binding.InstalledAt is not null ? "Waiting for authenticated connection"
-                        : binding.PreparedAt is not null ? "Installing public identity" : "Provisioning");
+                    resource.Id, retirement?.Id ?? binding.RunId, binding.AgentId, status,
+                    blockedRetirement is null, blockedRetirement, binding.VerifiedOsImageSha256, binding.VerifiedOsUpdateRunId);
             }
             return TypedResults.Ok(new WorkerPreparationDto(settings?.Url, settings?.Branch, settings?.HeadCommit,
                 settings?.LastFetchError, revision is null ? null : Views.Revision(revision, true),
@@ -90,6 +106,44 @@ public static partial class ManagedWorkerPreparation
                 blocked ?? WorkerRepositoryDeployment.BlockedReason(options.Value),
                 workers.Values.ToArray()));
         }).WithName("getWorkerPreparation");
+
+        group.MapPost("/{id:guid}/retire", async Task<Results<Ok<WorkerRetirementRunDto>, NotFound, ProblemHttpResult>> (
+            Guid id, WorkerRetirementRequest request, HttpContext http, RunEngine engine, CancellationToken ct) =>
+        {
+            if (!request.ConfirmAlreadyRemoved)
+                return TypedResults.Problem(statusCode: 400, title: "Confirm that this verifies an already removed VM; it never destroys infrastructure.");
+            try
+            {
+                var result = await engine.ExecuteAsync<WorkerRetirementRunDto?>(async (db, services) =>
+                {
+                    var resource = await db.Resources.SingleOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Guest, ct);
+                    if (resource?.ManagedWorker is not { } binding) return null;
+                    if (request.Generation != binding.Generation)
+                        throw new RunException("The worker generation changed. Reload before verifying retirement.");
+                    var existing = await db.Runs.Include(r => r.Steps).Where(r => r.ResourceId == id && r.Operation == Operations.Retire)
+                        .OrderByDescending(r => r.CreatedAt).FirstOrDefaultAsync(ct);
+                    if (existing is not null && ManagedWorkerSafety.IsRetirementCheck(existing)
+                        && (resource.RetiredAt is not null || !RunStatuses.IsTerminal(existing.Status)))
+                        return new(existing.Id);
+                    if (await ManagedWorkerSafety.RetirementBlockedReasonAsync(db, resource, null, ct) is { } reason)
+                        throw new RunException(reason);
+                    var settings = await db.RepositorySettings.SingleAsync(s => s.Id == 1, ct);
+                    var revision = await RepositoryTrust.EligibleRevisions(db).Where(r => r.Commit == settings.HeadCommit)
+                        .OrderByDescending(r => r.Sequence).FirstAsync(ct);
+                    var repository = await services.GetRequiredService<RevisionCache>().GetAsync(revision.Commit, ct);
+                    var installation = repository.Installation(binding.Installation);
+                    if (installation is null || !repository.IsValid(installation.Address))
+                        throw new RunException("Restore the worker's valid original Proxmox installation before verifying retirement.");
+                    var original = await db.Runs.SingleAsync(r => r.Id == binding.RunId, ct);
+                    var run = services.GetRequiredService<RunFactory>().VerifyWorkerRetirement(repository, installation, resource,
+                        revision, original, $"retirement verification requested by {http.User.Identity!.Name}");
+                    await engine.AddRunsAsync(db, [run], ct);
+                    return new(run.Id);
+                }, ct);
+                return result is null ? TypedResults.NotFound() : TypedResults.Ok(result);
+            }
+            catch (RunException e) { return TypedResults.Problem(statusCode: 409, title: e.Message); }
+        }).WithName("verifyManagedWorkerRetirement");
 
         group.MapPost("", async Task<Results<Ok<WorkerDraftDto>, ProblemHttpResult>> (
             WorkerDraftRequest request, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>

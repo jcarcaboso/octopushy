@@ -21,6 +21,7 @@ const nav = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/variables", label: "Variables", icon: KeyRound },
   { to: "/repository", label: "Repository", icon: GitBranch },
+  { to: "/operator-access", label: "CLI access", icon: User },
 ];
 
 function RevisionIndicator() {

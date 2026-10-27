@@ -19,6 +19,7 @@ import { RunsPage } from "./pages/RunsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
 import { WorkerPreparationPage } from "./pages/WorkerPreparationPage";
+import { OperatorAccessPage } from "./pages/OperatorAccessPage";
 
 export function AppRoutes() {
   return (
@@ -40,6 +41,7 @@ export function AppRoutes() {
         <Route path="runs/:id" element={<RunPage />} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/prepare" element={<WorkerPreparationPage />} />
+        <Route path="operator-access" element={<OperatorAccessPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="repository" element={<RepositoryPage />} />
         <Route path="*" element={<NotFoundPage />} />

@@ -281,6 +281,8 @@ public sealed class Step
     /// <summary>For an approval: the SHA-256 of the plan it approves.</summary>
     public string? PlanSha256 { get; set; }
 
+    public string? WorkerUpdateSha256 { get; set; }
+
     public List<Attempt> Attempts { get; set; } = [];
 }
 
@@ -383,6 +385,9 @@ public sealed class AgentRecord
     public int MaxConcurrency { get; set; } = 2;
 
     public bool Disabled { get; set; }
+
+    /// <summary>Keep mTLS connected while refusing all new workload assignments.</summary>
+    public bool Draining { get; set; }
 
     public DateTimeOffset EnrolledAt { get; set; }
 
@@ -518,6 +523,18 @@ public sealed class User
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>A separately revocable operator grant. Only its SHA-256 hash is retained.</summary>
+public sealed class OperatorToken
+{
+    public Guid Id { get; set; }
+    public int UserId { get; set; }
+    public required string Name { get; set; }
+    public required string TokenHash { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+}
+
 /// <summary>Immutable guest/generation ownership and public bootstrap evidence. Never stores a private key or enrollment token.</summary>
 public sealed class ManagedWorkerBinding
 {
@@ -539,4 +556,7 @@ public sealed class ManagedWorkerBinding
     public DateTimeOffset? InstalledAt { get; set; }
     public DateTimeOffset? AuthenticatedAt { get; set; }
     public DateTimeOffset? ReadyAt { get; set; }
+    /// <summary>Release provenance recorded only after verified activation and fresh authentication, not a boot-disk checksum.</summary>
+    public string? VerifiedOsImageSha256 { get; set; }
+    public Guid? VerifiedOsUpdateRunId { get; set; }
 }

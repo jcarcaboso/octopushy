@@ -30,6 +30,7 @@ public static partial class Endpoints
         MapRuns(api);
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));
         api.MapWorkerPreparation();
+        api.MapWorkerUpdates();
         api.MapWorkerRepositoryDeployment();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
@@ -240,7 +241,7 @@ public static partial class Endpoints
                 s.Outputs is null ? null : JsonNode.Parse(s.Outputs),
                 Views.Plan(s),
                 s.Kind == StepKinds.Approval
-                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256)
+                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256, s.WorkerUpdateSha256)
                     : null,
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
@@ -257,13 +258,14 @@ public static partial class Endpoints
                 context.AgentLabelsSetBy,
                 context.Policy is { } p ? new RunPolicyDto(p.Approval, p.ApprovalSetBy, p.Destructive, p.DestructiveSetBy) : null,
                 canCancel,
-                run.Status == RunStatuses.Uncertain));
+                run.Status == RunStatuses.Uncertain,
+                context.WorkerUpdate is { } update ? ManagedWorkerUpdates.View(context.ManagedWorker!.Generation, update) : null));
         })
         .WithName("getRun");
 
         group.MapPost("/{id:guid}/steps/{stepId:guid}/approve", async (Guid id, Guid stepId, DecisionRequest request, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {
-            await engine.ApproveAsync(id, stepId, request.PlanSha256 ?? "", http.User.Identity!.Name!, request.Note, ct);
+            await engine.ApproveAsync(id, stepId, request.PlanSha256 ?? "", http.User.Identity!.Name!, request.Note, ct, request.WorkerUpdateSha256);
             return TypedResults.NoContent();
         })
         .WithName("approveStep");
@@ -323,65 +325,79 @@ public static partial class Endpoints
                 .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
             return TypedResults.Ok(agents.Select(a => new AgentDto(
                 a.Id, a.Name, a.Labels, a.MaxConcurrency, a.Disabled, connections.IsConnected(a.Id), a.EnrolledAt, a.LastSeenAt,
-                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id))).ToList());
+                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id), a.Draining)).ToList());
         })
         .WithName("listAgents");
 
-        group.MapPatch("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (Guid id, AgentUpdate update, OctopushyDb db, AgentConnections connections, OrchestratorSignal signal, CancellationToken ct) =>
+        group.MapPatch("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (Guid id, AgentUpdate update, RunEngine engine, AgentConnections connections, OrchestratorSignal signal, CancellationToken ct) =>
         {
-            var agent = await db.Agents.FirstOrDefaultAsync(a => a.Id == id, ct);
-            if (agent is null)
+            return await engine.ExecuteAsync<Results<NoContent, NotFound, ProblemHttpResult>>(async (db, _) =>
             {
-                return TypedResults.NotFound();
-            }
-
-            if (update.Labels is { } labels)
-            {
-                if (labels.Any(l => !LabelPattern().IsMatch(l)))
+                var agent = await db.Agents.FirstOrDefaultAsync(a => a.Id == id, ct);
+                if (agent is null)
                 {
-                    return TypedResults.Problem(title: "Labels are lowercase letters, digits, '.', '_', and '-'.", statusCode: 400);
+                    return TypedResults.NotFound();
+                }
+                if ((update.Draining is false || update.Disabled is true) && await ManagedWorkerSafety.HasUnfinishedUpdateAsync(db, id, ct))
+                {
+                    return TypedResults.Problem(statusCode: 409, title: "Resolve this worker's OS update or uncertain outcome before disabling it or ending its drain.");
                 }
 
-                agent.Labels = labels.Distinct().Order().ToArray();
-            }
-
-            if (update.MaxConcurrency is { } max)
-            {
-                if (max is < 1 or > 64)
+                if (update.Labels is { } labels)
                 {
-                    return TypedResults.Problem(title: "An agent runs between 1 and 64 attempts at once.", statusCode: 400);
+                    if (labels.Any(l => !LabelPattern().IsMatch(l)))
+                    {
+                        return TypedResults.Problem(title: "Labels are lowercase letters, digits, '.', '_', and '-'.", statusCode: 400);
+                    }
+
+                    agent.Labels = labels.Distinct().Order().ToArray();
                 }
 
-                agent.MaxConcurrency = max;
-            }
+                if (update.MaxConcurrency is { } max)
+                {
+                    if (max is < 1 or > 64)
+                    {
+                        return TypedResults.Problem(title: "An agent runs between 1 and 64 attempts at once.", statusCode: 400);
+                    }
 
-            if (update.Disabled is { } disabled)
-            {
-                agent.Disabled = disabled;
-            }
+                    agent.MaxConcurrency = max;
+                }
 
-            await db.SaveChangesAsync(ct);
-            if (agent.Disabled)
-            {
-                connections.Disconnect(agent.Id);
-            }
+                if (update.Disabled is { } disabled)
+                {
+                    agent.Disabled = disabled;
+                }
+                if (update.Draining is { } draining) agent.Draining = draining;
 
-            signal.Wake();
-            return TypedResults.NoContent();
+                await db.SaveChangesAsync(ct);
+                if (agent.Disabled)
+                {
+                    connections.Disconnect(agent.Id);
+                }
+
+                signal.Wake();
+                return TypedResults.NoContent();
+            }, ct);
         })
         .WithName("updateAgent");
 
-        group.MapDelete("/{id:guid}", async Task<Results<NoContent, ProblemHttpResult>> (Guid id, OctopushyDb db, AgentConnections connections, CancellationToken ct) =>
-        {
-            if (await db.Attempts.AnyAsync(a => a.AgentId == id && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), ct))
+        group.MapDelete("/{id:guid}", (Guid id, RunEngine engine, AgentConnections connections, OrchestratorSignal signal, CancellationToken ct) =>
+            engine.ExecuteAsync<Results<NoContent, ProblemHttpResult>>(async (db, _) =>
             {
-                return TypedResults.Problem(title: "The agent is running attempts; disable it and wait for them to finish.", statusCode: 409);
-            }
+                if (await ManagedWorkerSafety.HasUnfinishedUpdateAsync(db, id, ct))
+                    return TypedResults.Problem(statusCode: 409, title: "Resolve this worker's OS update or uncertain outcome before removing its enrollment.");
+                if (await db.Attempts.AnyAsync(a => a.AgentId == id
+                    && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
+                        || a.Mutating && a.Status == AttemptStatuses.Uncertain && a.Step!.Status == StepStatuses.Uncertain), ct))
+                {
+                    return TypedResults.Problem(title: "The agent has running or unresolved mutating attempts; disable it, drain its work and inspect uncertain outcomes first.", statusCode: 409);
+                }
 
-            connections.Disconnect(id);
-            await db.Agents.Where(a => a.Id == id).ExecuteDeleteAsync(ct);
-            return TypedResults.NoContent();
-        })
+                connections.Disconnect(id);
+                await db.Agents.Where(a => a.Id == id).ExecuteDeleteAsync(ct);
+                signal.Wake();
+                return TypedResults.NoContent();
+            }, ct))
         .WithName("deleteAgent");
 
         group.MapGet("/tokens", async (OctopushyDb db, CancellationToken ct) =>

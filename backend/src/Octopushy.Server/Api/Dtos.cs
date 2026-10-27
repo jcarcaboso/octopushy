@@ -68,7 +68,8 @@ public sealed record ApprovalDto(
     string? DecidedBy,
     DateTimeOffset? DecidedAt,
     string? Note,
-    string? PlanSha256);
+    string? PlanSha256,
+    string? WorkerUpdateSha256 = null);
 
 public sealed record AttemptDto(
     Guid Id,
@@ -118,9 +119,10 @@ public sealed record RunDetailDto(
     string AgentLabelsSetBy,
     RunPolicyDto? Policy,
     bool CanCancel,
-    bool CanClose);
+    bool CanClose,
+    WorkerUpdateView? WorkerUpdate = null);
 
-public sealed record DecisionRequest(string? PlanSha256, string? Note);
+public sealed record DecisionRequest(string? PlanSha256, string? Note, string? WorkerUpdateSha256 = null);
 
 public sealed record StartedRun(Guid RunId);
 
@@ -262,9 +264,10 @@ public sealed record AgentDto(
     IReadOnlyList<string> Executors,
     string? ToolRuntime,
     DateTimeOffset CertificateExpiresAt,
-    int RunningAttempts);
+    int RunningAttempts,
+    bool Draining = false);
 
-public sealed record AgentUpdate(IReadOnlyList<string>? Labels, int? MaxConcurrency, bool? Disabled);
+public sealed record AgentUpdate(IReadOnlyList<string>? Labels, int? MaxConcurrency, bool? Disabled, bool? Draining = null);
 
 public sealed record TokenRequest(string? Name, IReadOnlyList<string> Labels, int? MaxConcurrency, int? ExpiresInMinutes);
 

@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerPreparation } from "../api/types";
 import { mockApi, problem, renderAt } from "../test/utils";
 import { WorkerPreparationPage } from "./WorkerPreparationPage";
+import { AgentsPage } from "./AgentsPage";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -36,6 +37,38 @@ function options(): WorkerPreparation {
     deploymentGates: ["Missing: pinned NixOS worker image.", "Missing: native CSR enrollment and lifecycle guards.", "Not qualified: remote worker mTLS ingress."],
   };
 }
+
+it("reviews a Ready worker OS release without updating until explicitly requested", async () => {
+  const user = userEvent.setup();
+  const data = options();
+  data.existingWorkers = [{
+    resourceId: "worker-1", generation: "884d09b4-0934-43a4-bffb-d2f7977bc01c",
+    address: "home/cluster/worker", host: "pve-a", vmid: 902,
+    status: "Ready", agentId: "agent-1", runId: null,
+    verifiedOsImageSha256: "b".repeat(64), verifiedOsUpdateRunId: "old-os-run",
+    canVerifyRetirement: false, retirementBlockedReason: null,
+  }];
+  const { requests } = mockApi({
+    "GET /api/managed-worker-preparation": () => data,
+    "GET /api/managed-worker-preparation/worker-1/update": () => ({
+      generation: data.existingWorkers![0].generation, archiveUrl: "https://release.test/worker.nar.xz",
+      archiveSha256: "c".repeat(64), imageSha256: "a".repeat(64),
+      systemPath: "/nix/store/00000000000000000000000000000000-nixos-system-worker-v1",
+    }),
+    "POST /api/managed-worker-preparation/worker-1/update": () => ({ runId: "update-1" }),
+  });
+  renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  expect(await screen.findByRole("link", { name: "Verified OS release" })).toHaveAttribute("href", "/runs/old-os-run");
+  await user.click(await screen.findByRole("button", { name: "Review OS update" }));
+  expect(await screen.findByText(/worker.nar.xz/)).toBeVisible();
+  expect(requests.every((r) => r.method === "GET")).toBe(true);
+  await user.click(screen.getByRole("button", { name: "Drain and plan OS update" }));
+  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  expect(requests.find((r) => r.method === "POST")?.body).toEqual({
+    generation: data.existingWorkers![0].generation, archiveSha256: "c".repeat(64),
+  });
+  expect(await screen.findByRole("link", { name: "Review OS update plan" })).toHaveAttribute("href", "/runs/update-1");
+});
 
 it("prepares a review-only draft from a configured installation and host with small hardware defaults", async () => {
   const user = userEvent.setup();
@@ -232,6 +265,93 @@ it("disables publication when image/ingress setup is missing and shows existing 
   expect(await screen.findByText("Publish the tested worker image first.")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Review deployment" })).toBeDisabled();
   expect(screen.getByText("home/cluster/worker-01")).toBeInTheDocument();
+});
+
+it("requires explicit confirmation before checking an already removed worker and refreshes its retirement state", async () => {
+  const user = userEvent.setup();
+  let retired = false;
+  const worker = {
+    address: "home/cluster/worker-old", host: "pve-a", vmid: 901, generation: "old-generation",
+    resourceId: "old-resource", runId: "old-deployment", agentId: "deleted-agent",
+    status: "Enrollment removed", canVerifyRetirement: true, retirementBlockedReason: null,
+  };
+  const healthy = { ...worker, address: "home/cluster/worker-live", generation: "live-generation", resourceId: "live-resource",
+    status: "Ready", canVerifyRetirement: false, retirementBlockedReason: "Remove the definition first." };
+  const { requests } = mockApi({
+    "GET /api/managed-worker-preparation": () => ({ ...options(), existingWorkers: retired ? [healthy] : [worker, healthy] }),
+    "POST /api/managed-worker-preparation/old-resource/retire": () => {
+      retired = true;
+      return { runId: "retirement-run" };
+    },
+  });
+  renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  await user.click(await screen.findByRole("button", { name: "Verify retirement for home/cluster/worker-old" }));
+  expect(requests.some((r) => r.method === "POST")).toBe(false);
+  expect(screen.getByText(/This does not destroy a VM/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Verify VM absence" }));
+  await waitFor(() => expect(screen.queryByText("home/cluster/worker-old")).not.toBeInTheDocument());
+  expect(screen.getByText("home/cluster/worker-live")).toBeInTheDocument();
+  expect(requests.filter((r) => r.method !== "GET")).toEqual([{
+    method: "POST", path: "/api/managed-worker-preparation/old-resource/retire", search: "",
+    body: { generation: "old-generation", confirmAlreadyRemoved: true },
+  }]);
+});
+
+it("does not offer retirement while its server-side prerequisites are blocked", async () => {
+  const { requests } = mockApi({
+    "GET /api/managed-worker-preparation": () => ({ ...options(), existingWorkers: [{
+      address: "home/cluster/worker-old", host: "pve-a", vmid: 901, generation: "old-generation",
+      resourceId: "old-resource", status: "Enrollment removed", canVerifyRetirement: false,
+      retirementBlockedReason: "Resolve uncertain outcomes first.",
+    }] }),
+  });
+  renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  expect(await screen.findByRole("button", { name: "Verify retirement for home/cluster/worker-old" })).toBeDisabled();
+  expect(screen.getByText("Resolve uncertain outcomes first.")).toBeInTheDocument();
+  expect(requests.some((r) => r.method !== "GET")).toBe(false);
+});
+
+it("refreshes the managed-worker view immediately after enrollment deletion and explains that no VM is deleted", async () => {
+  const user = userEvent.setup();
+  let removed = false;
+  const { requests } = mockApi({
+    "GET /api/agents": () => removed ? [] : [{
+      id: "old-agent", name: "old-worker", labels: [], maxConcurrency: 1, disabled: true, connected: false,
+      enrolledAt: "2026-10-27T10:00:00Z", lastSeenAt: null, version: "test", executors: ["proxmox"],
+      toolRuntime: "podman", certificateExpiresAt: "2026-11-27T10:00:00Z", runningAttempts: 0,
+    }],
+    "GET /api/agents/tokens": () => [],
+    "DELETE /api/agents/old-agent": () => { removed = true; },
+    "GET /api/managed-worker-preparation": () => ({ ...options(), existingWorkers: [{
+      address: "home/cluster/worker-old", host: "pve-a", vmid: 901, generation: "old-generation",
+      resourceId: "old-resource", agentId: "old-agent", status: removed ? "Enrollment removed" : "Disabled",
+      canVerifyRetirement: removed, retirementBlockedReason: removed ? null : "Remove the enrollment first.",
+    }] }),
+  });
+  renderAt(<><AgentsPage /><WorkerPreparationPage /></>, { path: "/agents", route: "/agents" });
+  await user.click(await screen.findByRole("button", { name: "Remove" }));
+  expect(screen.getByText(/This does not delete its VM/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Remove the agent" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Verify retirement for home/cluster/worker-old" })).toBeEnabled());
+  await waitFor(() => expect(requests.filter((r) => r.path === "/api/managed-worker-preparation")).toHaveLength(2));
+  expect(requests.filter((r) => r.method !== "GET").map((r) => r.path)).toEqual(["/api/agents/old-agent"]);
+});
+
+it("shows a refused retirement check without claiming retirement or silently retrying", async () => {
+  const user = userEvent.setup();
+  const { requests } = mockApi({
+    "GET /api/managed-worker-preparation": () => ({ ...options(), existingWorkers: [{
+      address: "home/cluster/worker-old", host: "pve-a", vmid: 901, generation: "old-generation",
+      resourceId: "old-resource", status: "Enrollment removed", canVerifyRetirement: true,
+    }] }),
+    "POST /api/managed-worker-preparation/old-resource/retire": () => problem(409, "The Proxmox endpoint changed."),
+  });
+  renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  await user.click(await screen.findByRole("button", { name: "Verify retirement for home/cluster/worker-old" }));
+  await user.click(screen.getByRole("button", { name: "Verify VM absence" }));
+  expect(await screen.findByText("The Proxmox endpoint changed.")).toBeInTheDocument();
+  expect(screen.getByText("home/cluster/worker-old")).toBeInTheDocument();
+  expect(requests.filter((r) => r.method === "POST")).toHaveLength(1);
 });
 
 it("requires a fresh review after stale publication and never silently retries a write", async () => {

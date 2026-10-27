@@ -91,7 +91,7 @@ public sealed partial class RunEngine(
         signal.Wake();
     }
 
-    public Task ApproveAsync(Guid runId, Guid stepId, string planSha256, string user, string? note, CancellationToken cancellationToken) =>
+    public Task ApproveAsync(Guid runId, Guid stepId, string planSha256, string user, string? note, CancellationToken cancellationToken, string? workerUpdateSha256 = null) =>
         WithDbAsync(async db =>
         {
             var step = await AwaitingApprovalAsync(db, runId, stepId, cancellationToken);
@@ -99,8 +99,13 @@ public sealed partial class RunEngine(
             {
                 throw new RunException("The plan changed since it was shown; review the current plan.");
             }
+            var run = await db.Runs.SingleAsync(r => r.Id == runId, cancellationToken);
+            var update = RunContext.Parse(run.Context).WorkerUpdate;
+            if (update is not null && !string.Equals(update.ArchiveSha256, workerUpdateSha256, StringComparison.OrdinalIgnoreCase))
+                throw new RunException("Explicit approval of the displayed worker OS closure fingerprint is required.");
 
             step.Decision = "approved";
+            step.WorkerUpdateSha256 = update?.ArchiveSha256;
             step.DecidedBy = user;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = note;
@@ -136,11 +141,11 @@ public sealed partial class RunEngine(
         {
             var run = await LoadRunAsync(db, runId, cancellationToken);
             var failed = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => s.Status == StepStatuses.Failed);
-            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker)
+            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.Verify or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker)
                 // Only a mutating attempt can leave an unknown change behind; a read-only one that lost its agent changed nothing.
                 || run.Steps.SelectMany(s => s.Attempts).Any(a => a.Status == AttemptStatuses.Uncertain && a.Mutating))
             {
-                throw new RunException("Only a known failed guest filesystem or managed bootstrap step can be retried. Inspect uncertain outcomes and plan again.");
+                throw new RunException("Only a known failed guest verification, filesystem or managed bootstrap step can be retried. Inspect uncertain outcomes and plan again.");
             }
 
             if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
@@ -313,6 +318,36 @@ public sealed partial class RunEngine(
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
+            if (step.Name == StepNames.WaitUpdatedWorker)
+            {
+                var update = context.WorkerUpdate ?? throw new RunException("Missing worker update context.");
+                var switchedAt = run.Steps.Single(s => s.Name == StepNames.UpdateWorkerOs).FinishedAt;
+                var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, cancellationToken);
+                if (binding.AgentId != update.AgentId || !await db.Agents.AnyAsync(a => a.Id == update.AgentId && !a.Disabled && a.Draining, cancellationToken))
+                {
+                    step.Status = StepStatuses.Failed;
+                    step.FinishedAt = clock.GetUtcNow();
+                    step.Detail = "The original worker enrollment or its drain changed. Inspect the OS update; no replacement enrollment will be issued.";
+                    Finish(run, RunStatuses.Failed, step.Detail);
+                    await db.SaveChangesAsync(cancellationToken);
+                    return;
+                }
+                if (binding.AgentId == update.AgentId && switchedAt is not null && binding.AuthenticatedAt >= switchedAt
+                    && connections.Get(update.AgentId) is { } updated && updated.Executors.Contains("opentofu") && updated.Executors.Contains("proxmox"))
+                {
+                    binding.VerifiedOsImageSha256 = update.ImageSha256;
+                    binding.VerifiedOsUpdateRunId = run.Id;
+                    step.Status = StepStatuses.Succeeded;
+                    step.FinishedAt = clock.GetUtcNow();
+                    step.Detail = "The original worker authenticated again after the OS update. It remains drained until explicitly resumed.";
+                    continue;
+                }
+                step.Status = StepStatuses.Running;
+                step.StartedAt ??= clock.GetUtcNow();
+                step.Detail = run.Detail = "Waiting for the same worker identity to authenticate after the verified OS update.";
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
@@ -374,7 +409,9 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe
+        Finish(run, RunStatuses.Succeeded, context.WorkerUpdate is not null
+            ? "Worker OS update verified with the original identity and state filesystem. The worker remains drained; resume scheduling explicitly."
+            : noChanges && run.Operation != Operations.Observe
             ? context.DiskReporter is null ? "The plan has no changes." : "Infrastructure unchanged; disk reporter setup completed."
             : null);
         await db.SaveChangesAsync(cancellationToken);
@@ -390,6 +427,13 @@ public sealed partial class RunEngine(
         // run or reporter setup still has privileged guest-agent work. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
+        if (context.WorkerUpdate is not null && !ManagedWorkerSafety.UnchangedPlan(outputs))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "Worker OS updates require an unchanged infrastructure plan. Reconcile infrastructure separately; this path never recreates a VM.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
         if (context.ManagedWorker is not null && ManagedWorkerSafety.DestructivePlan(outputs))
         {
             step.Status = StepStatuses.Failed;
@@ -435,6 +479,8 @@ public sealed partial class RunEngine(
         {
             step.Detail += " This run also installs the disk reporter inside the VM after verification.";
         }
+        if (context.WorkerUpdate is { } workerUpdate)
+            step.Detail += $" This also switches the existing worker OS to {workerUpdate.SystemPath}; explicitly approve closure SHA-256 {workerUpdate.ArchiveSha256}.";
         return false;
     }
 

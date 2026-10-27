@@ -4,6 +4,18 @@ The wizard adds **one normal VM guest** to the configured homelab repository.
 It does not install anything on a Proxmox hypervisor. The existing Fedora guest
 and other definitions are not modified.
 
+Use **Review deployment** to review the executable guest definition and versioned
+recipe, then **Add worker to repository** to publish them. **Generate review
+draft** is an optional documentation-only export; it never creates a VM.
+Publication still requires exact-revision trust and the saved infrastructure
+plan's approval before the VM is created and its worker is bootstrapped.
+
+Generated NixOS worker definitions explicitly disable `setup.diskReporter`: the
+separate FHS/systemd installer supports mutable guests such as Fedora, not
+immutable NixOS. Enabling server-wide disk reporting must not send that installer
+to a default worker. This does not yet provide disk-usage telemetry for the
+NixOS worker itself.
+
 ## Operator setup
 
 1. Build the image from the exact reviewed application revision:
@@ -15,6 +27,8 @@ and other definitions are not modified.
    This uses the locked root Nix flake and a digest-pinned Nix build container,
    produces `octopushy-worker-v1.qcow2` and `SHA256SUMS`, checks the QCOW2,
    and boots a disposable overlay with **no network interface**. The
+   The disposable disks reproduce Proxmox's separate SCSI controllers and
+   explicit `device_id`, independently of the state disk's serial.
    `boot-smoke.log` records state-disk, rootless Podman and public identity
    helper checks; a failed check makes the build command fail.
    It does **not** upload or deploy it. The image contains the built Rust agent,
@@ -101,7 +115,9 @@ instead of another VM. Stale or changed input requires another review.
 - The fixed helper generates the private key **inside the VM**. Only public
   CSR/certificate material crosses QGA. There are no bearer enrollment tokens
   in Git, cloud-init or the image.
-- The second disk is identified by its fixed serial. First boot formats only
+- The second disk is identified by its fixed SCSI unit serial through a
+  dedicated udev alias; Proxmox's separate VPD device ID must not determine
+  which disk is selected. First boot formats only
   an entirely blank disk; existing foreign data is refused. The durable
   identity, outbox and runtime storage live on that state disk. The mount uses
   the already-present serial device and waits for initialization, rather than
@@ -118,9 +134,20 @@ instead of another VM. Stale or changed input requires another review.
   Proxmox token. Saved-plan integrity is checked before credential release.
   Shared-token preview still has that token's full upstream permissions;
   approval and exact revision trust are not execution sandboxing.
-- Retirement, generation replacement, movement, role removal and destructive
-  replacement plans are refused. **There is no worker-delete operation in v1.**
-  Persistent drain/retirement remains a separate milestone. Invalid worker
+- Automatic VM destruction, generation replacement, movement, role removal and
+  destructive replacement plans are refused. **Deleting an agent revokes its
+  enrollment; it does not delete or retire its VM.** The worker view distinguishes
+  a removed enrollment from an enrolled but offline worker.
+- To finalize an already removed worker, remove its Git definition, revoke its
+  enrollment, and explicitly choose **Verify retirement** on the worker page.
+  An independent control worker uses the existing read-only `verify-absent`
+  executor against the original installation. Only explicit absence evidence
+  marks the guest retired and removes it from the active worker list. A present
+  VM, untrusted/changed source, unfinished work or unresolved mutation blocks
+  finalization; no plan, unprotect, destroy or guest command is executed.
+  Identity and run evidence remain available. Retired generation names are not
+  silently reused: choose a fresh name and unused VMID for a new deployment.
+  Persistent automated drain/VM destruction remains a separate milestone. Invalid worker
   edits cannot rename their durable resource, and are recorded as per-resource
   issues without dropping unrelated guest discovery. Reverting a rejected
   managed rename retains the original resource/generation.
@@ -171,6 +198,23 @@ locally validated QCOW2's SHA-256 was
 This identifies that artifact, not a promise that an independently rebuilt image
 will have identical bytes. Use the checksum accompanying the image you publish.
 
+**October 27 correction:** that artifact's simplified QEMU disk setup did not
+exercise Proxmox's explicit SCSI `device_id`; its serial-derived mount path
+could fail on Proxmox. Do not deploy the above artifact. The corrected image
+matches the exact SCSI unit serial with udev, and the boot gate now reproduces
+Proxmox's separate controllers, LUN and device ID. The replacement locally
+validated artifact is
+`04fbc180d88277ee3a4397b0e37c925b0ab5dc61db38fac0c3bf8e94cb597e84`.
+Its no-network boot, state mount, rootless Podman and identity checks passed.
+The verification-retry regression also passed, preserving prior plan,
+approval and apply evidence; the full backend suite passed 370 tests and the
+frontend suite passed 102, with lint, typecheck and production build passing.
+A subsequent fresh lab deployment through wizard publication, exact-revision
+trust and saved-plan approval reached authenticated Ready on Proxmox. Every
+executed step succeeded on its first attempt, without custom QEMU arguments.
+This validates worker provisioning/enrollment, not general remote workloads or
+an automated retirement workflow.
+
 Red/green regressions include forbidden inventory renames and revert recovery,
 ordinary rename correction, invalid worker edits alongside unrelated guests,
 unlabeled workload admission, exact generation/key retries, partial enrollment
@@ -181,3 +225,15 @@ ordering defects; the fixes and executable regressions are included.
 The hosted baseline checks are configured for stacked PR targets too. Hosted checks
 do not build or boot this image, deploy a VM, or qualify real provider/network
 permissions.
+
+### Native disk reporter qualification
+
+New image source includes an image-native reporter, but the old published image
+pin is not automatically qualified. Automatic setup requires global reporting
+and an explicit `DiskReporter.ManagedNixosImageSha256` matching the wizard's new
+qualified `WorkerDeployment.ImageSha256`; otherwise generated definitions retain
+the explicit reporter opt-out. Native-v1 supports only the recorded 3600-second
+interval. See [managed worker disk reporting](managed-worker-disk-reporting.md)
+for exact controller settings, runtime secret delivery, approval gates, validation
+levels and the separately authorized OS update/fresh-deployment requirement for
+existing Ready workers. A template pin update alone does not change their boot OS.

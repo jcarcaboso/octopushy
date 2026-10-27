@@ -13,6 +13,43 @@ public class GuestFilesystemRunTests(PostgresFixture postgres)
 {
     private const string Guest = "home/korriban/krb-app-01";
 
+    [Fact]
+    public async Task A_known_failed_guest_verification_can_resume_without_repeating_infrastructure()
+    {
+        using var repo = Definitions.GuestFilesystemTests.Repository();
+        await using var server = await ServerHarness.StartAsync(postgres, repo);
+        using var http = server.CreateClient();
+        var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
+        (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync(http);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "guest agent was unavailable");
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var before = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!;
+
+        (await http.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
+        await agent.ReportAsync(await agent.NextAsync("grow"), Outcome.Succeeded);
+        await agent.ReportAsync(await agent.NextAsync("verify"), Outcome.Succeeded);
+        await server.TickAsync();
+
+        var after = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!;
+        Assert.Equal("succeeded", after["run"]!["status"]!.GetValue<string>());
+        foreach (var name in new[] { "plan", "approval", "apply" })
+        {
+            var original = before["steps"]!.AsArray().Single(s => s!["name"]!.GetValue<string>() == name);
+            var preserved = after["steps"]!.AsArray().Single(s => s!["name"]!.GetValue<string>() == name);
+            Assert.True(JsonNode.DeepEquals(original, preserved));
+        }
+        var attempts = after["steps"]!.AsArray().Single(s => s!["name"]!.GetValue<string>() == "verify")!["attempts"]!.AsArray();
+        Assert.Equal(2, attempts.Count);
+        Assert.Equal("failed", attempts[0]!["status"]!.GetValue<string>());
+        Assert.Equal("succeeded", attempts[1]!["status"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("grow", false)]
     [InlineData("verify", false)]

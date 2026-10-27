@@ -68,6 +68,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/operator-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listOperatorTokens"];
+        put?: never;
+        post: operations["createOperatorToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/operator-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeOperatorToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/operator-tokens/self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeCurrentOperatorToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/overview": {
         parameters: {
             query?: never;
@@ -500,6 +548,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/managed-worker-preparation/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["verifyManagedWorkerRetirement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/managed-worker-preparation/{id}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reviewManagedWorkerUpdate"];
+        put?: never;
+        post: operations["updateManagedWorkerOs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/managed-worker-preparation/review": {
         parameters: {
             query?: never;
@@ -636,12 +716,15 @@ export interface components {
             certificateExpiresAt: string;
             /** Format: int32 */
             runningAttempts: number;
+            /** @default false */
+            draining: boolean;
         };
         AgentUpdate: {
             labels: null | string[];
             /** Format: int32 */
             maxConcurrency: null | number;
             disabled: null | boolean;
+            draining?: null | boolean;
         };
         ApprovalDto: {
             required: boolean;
@@ -651,6 +734,7 @@ export interface components {
             decidedAt: null | string;
             note: null | string;
             planSha256: null | string;
+            workerUpdateSha256?: null | string;
         };
         AttemptDto: {
             /** Format: uuid */
@@ -690,6 +774,13 @@ export interface components {
             /** Format: date-time */
             boundAt: null | string;
         };
+        CreatedOperatorToken: {
+            /** Format: uuid */
+            id: string;
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
         CreatedToken: {
             /** Format: uuid */
             id: string;
@@ -702,6 +793,7 @@ export interface components {
         DecisionRequest: {
             planSha256: null | string;
             note: null | string;
+            workerUpdateSha256?: null | string;
         };
         DiskReporterRequest: {
             /**
@@ -888,6 +980,25 @@ export interface components {
             /** Format: int32 */
             concurrentOperations: null | number;
         };
+        OperatorTokenRequest: {
+            name: string;
+            /**
+             * Format: int32
+             * @default 30
+             */
+            expiresInDays: number;
+        };
+        OperatorTokenView: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            revokedAt: null | string;
+        };
         OverviewCounts: {
             /** Format: int32 */
             guests: number;
@@ -1020,6 +1131,7 @@ export interface components {
             policy: null | components["schemas"]["RunPolicyDto"];
             canCancel: boolean;
             canClose: boolean;
+            workerUpdate?: null | components["schemas"]["WorkerUpdateView"];
         };
         RunPolicyDto: {
             approval: string;
@@ -1219,6 +1331,12 @@ export interface components {
             agentId?: null | string;
             /** @default Declared */
             status: string;
+            /** @default false */
+            canVerifyRetirement: boolean;
+            retirementBlockedReason?: null | string;
+            verifiedOsImageSha256?: null | string;
+            /** Format: uuid */
+            verifiedOsUpdateRunId?: null | string;
         };
         WorkerHostOption: {
             id: string;
@@ -1258,6 +1376,15 @@ export interface components {
             commit: string;
             alreadyPresent: boolean;
         };
+        WorkerRetirementRequest: {
+            /** Format: uuid */
+            generation: string;
+            confirmAlreadyRemoved: boolean;
+        };
+        WorkerRetirementRunDto: {
+            /** Format: uuid */
+            runId: string;
+        };
         WorkerReviewDto: {
             address: string;
             /** Format: uuid */
@@ -1269,6 +1396,19 @@ export interface components {
                 [key: string]: string;
             };
             alreadyExists: boolean;
+        };
+        WorkerUpdateRequest: {
+            /** Format: uuid */
+            generation: string;
+            archiveSha256: string;
+        };
+        WorkerUpdateView: {
+            /** Format: uuid */
+            generation: string;
+            archiveUrl: string;
+            archiveSha256: string;
+            systemPath: string;
+            imageSha256: string;
         };
     };
     responses: never;
@@ -1506,6 +1646,88 @@ export interface operations {
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
+            };
+        };
+    };
+    listOperatorTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorTokenView"][];
+                };
+            };
+        };
+    };
+    createOperatorToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedOperatorToken"];
+                };
+            };
+        };
+    };
+    revokeOperatorToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revokeCurrentOperatorToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3124,6 +3346,182 @@ export interface operations {
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    verifyManagedWorkerRetirement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerRetirementRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerRetirementRunDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    reviewManagedWorkerUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerUpdateView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    updateManagedWorkerOs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Conflict */
             409: {

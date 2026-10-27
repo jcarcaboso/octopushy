@@ -44,6 +44,7 @@ fn handle_signals(token: CancellationToken) {
 
 async fn agent(command: AgentCommand) -> anyhow::Result<()> {
     match command {
+        AgentCommand::ManagedReporting => octopushy::managed_reporting::configure_stdin(),
         AgentCommand::ManagedIdentity { command } => {
             use base64::Engine;
             use octopushy::{cli::ManagedIdentityCommand, managed_identity};
@@ -110,6 +111,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing();
     let result = match cli.command {
+        Command::Operator { config, command } => octopushy::operator::run(config, command).await,
         Command::Version => {
             println!("octopushy {}", octopushy::VERSION);
             Ok(())

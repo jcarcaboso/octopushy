@@ -5,6 +5,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY contracts/ contracts/
 COPY backend/ backend/
+COPY deploy/worker-template-v1/ deploy/worker-template-v1/
 RUN dotnet publish backend/src/Octopushy.Server \
       --configuration Release \
       --runtime linux-x64 \

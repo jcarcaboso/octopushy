@@ -258,6 +258,94 @@
         }
       }
     },
+    "/api/auth/operator-tokens": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "listOperatorTokens",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperatorTokenView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "createOperatorToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedOperatorToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/operator-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "revokeOperatorToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/auth/operator-tokens/self": {
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "revokeCurrentOperatorToken",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/overview": {
       "get": {
         "tags": [
@@ -2193,6 +2281,216 @@
         }
       }
     },
+    "/api/managed-worker-preparation/{id}/retire": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "verifyManagedWorkerRetirement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerRetirementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerRetirementRunDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/managed-worker-preparation/{id}/update": {
+      "get": {
+        "tags": [
+          "Managed workers"
+        ],
+        "operationId": "reviewManagedWorkerUpdate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerUpdateView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Managed workers"
+        ],
+        "operationId": "updateManagedWorkerOs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/managed-worker-preparation/review": {
       "post": {
         "tags": [
@@ -2774,6 +3072,10 @@
           "runningAttempts": {
             "type": "integer",
             "format": "int32"
+          },
+          "draining": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -2802,6 +3104,12 @@
             "format": "int32"
           },
           "disabled": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "draining": {
             "type": [
               "null",
               "boolean"
@@ -2849,6 +3157,12 @@
             ]
           },
           "planSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workerUpdateSha256": {
             "type": [
               "null",
               "string"
@@ -3002,6 +3316,27 @@
           }
         }
       },
+      "CreatedOperatorToken": {
+        "required": [
+          "id",
+          "token",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "token": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "CreatedToken": {
         "required": [
           "id",
@@ -3045,6 +3380,12 @@
             ]
           },
           "note": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workerUpdateSha256": {
             "type": [
               "null",
               "string"
@@ -3886,6 +4227,57 @@
           }
         }
       },
+      "OperatorTokenRequest": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "format": "int32",
+            "default": 30
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperatorTokenView": {
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "expiresAt",
+          "revokedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "OverviewCounts": {
         "required": [
           "guests",
@@ -4424,6 +4816,16 @@
           },
           "canClose": {
             "type": "boolean"
+          },
+          "workerUpdate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkerUpdateView"
+              }
+            ]
           }
         }
       },
@@ -5206,6 +5608,29 @@
           "status": {
             "type": "string",
             "default": "Declared"
+          },
+          "canVerifyRetirement": {
+            "type": "boolean",
+            "default": false
+          },
+          "retirementBlockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "verifiedOsImageSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "verifiedOsUpdateRunId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -5395,6 +5820,35 @@
           }
         }
       },
+      "WorkerRetirementRequest": {
+        "required": [
+          "generation",
+          "confirmAlreadyRemoved"
+        ],
+        "type": "object",
+        "properties": {
+          "generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "confirmAlreadyRemoved": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerRetirementRunDto": {
+        "required": [
+          "runId"
+        ],
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WorkerReviewDto": {
         "required": [
           "address",
@@ -5433,6 +5887,51 @@
             "type": "boolean"
           }
         }
+      },
+      "WorkerUpdateRequest": {
+        "required": [
+          "generation",
+          "archiveSha256"
+        ],
+        "type": "object",
+        "properties": {
+          "generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "archiveSha256": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerUpdateView": {
+        "required": [
+          "generation",
+          "archiveUrl",
+          "archiveSha256",
+          "systemPath",
+          "imageSha256"
+        ],
+        "type": "object",
+        "properties": {
+          "generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "archiveUrl": {
+            "type": "string"
+          },
+          "archiveSha256": {
+            "type": "string"
+          },
+          "systemPath": {
+            "type": "string"
+          },
+          "imageSha256": {
+            "type": "string"
+          }
+        }
       }
     }
   },
@@ -5454,6 +5953,9 @@
     },
     {
       "name": "Agents"
+    },
+    {
+      "name": "Managed workers"
     },
     {
       "name": "Variables"

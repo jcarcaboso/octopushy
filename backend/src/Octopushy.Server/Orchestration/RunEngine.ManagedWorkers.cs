@@ -46,6 +46,36 @@ public sealed partial class RunEngine
 
     private async Task ApplyWorkerEffectsAsync(OctopushyDb db, Run run, Step step, Attempt attempt, JsonNode? outputs, CancellationToken ct)
     {
+        if (step.Name is StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs)
+        {
+            var updateContext = RunContext.Parse(run.Context);
+            var updateBinding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, ct);
+            if (!ManagedWorkerSafety.Matches(updateBinding, run, updateContext) || updateContext.WorkerUpdate is not { } update
+                || updateBinding.AgentId != update.AgentId || attempt.AgentId == update.AgentId
+                || outputs is not JsonObject updateReport || updateReport.Count != 6
+                || updateReport["protocolVersion"]?.GetValue<int>() != 1
+                || updateReport["generation"]?.GetValue<string>() != updateBinding.Generation.ToString()
+                || updateReport["systemPath"]?.GetValue<string>() != update.SystemPath
+                || updateReport["archiveSha256"]?.GetValue<string>() != update.ArchiveSha256
+                || updateReport["identityPreserved"]?.GetValue<bool>() != true
+                || updateReport["stateFilesystemPreserved"]?.GetValue<bool>() != true)
+                throw new RunException("OS update evidence does not match the approved generation, release and preserved identity/state.");
+            // A Hello during download/import could still come from the old
+            // process. Close every pre-result session and require a new mTLS
+            // handshake after the verified switch, with the same identity.
+            if (step.Name == StepNames.UpdateWorkerOs)
+                connections.Disconnect(update.AgentId);
+            return;
+        }
+        if (step.Name == StepNames.VerifyAbsent && ManagedWorkerSafety.IsRetirementCheck(run))
+        {
+            var retiring = await db.Resources.SingleAsync(r => r.Id == run.ResourceId, ct);
+            if (await ManagedWorkerSafety.RetirementBlockedReasonAsync(db, retiring, run, ct) is { } reason)
+                throw new RunException(reason);
+            if (outputs?["present"]?.GetValue<bool>() != false)
+                throw new RunException("Retirement requires explicit successful evidence that the VM is absent.");
+            return;
+        }
         if (step.Name is not (StepNames.PrepareWorker or StepNames.InstallWorker)) return;
         var context = RunContext.Parse(run.Context);
         var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, ct);
@@ -111,6 +141,14 @@ public sealed partial class RunEngine
         var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, ct);
         step.StartedAt ??= clock.GetUtcNow();
         var agent = binding.AgentId is { } id ? await db.Agents.SingleOrDefaultAsync(a => a.Id == id, ct) : null;
+        if (binding.AgentId is not null && agent is null)
+        {
+            step.Status = StepStatuses.Failed;
+            step.FinishedAt = clock.GetUtcNow();
+            step.Detail = "The worker enrollment was removed. Its generation cannot be silently re-enrolled; verify retirement instead.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
         var session = agent is null ? null : connections.Get(agent.Id);
         if (binding.InstalledAt is not null && binding.AuthenticatedAt is not null && binding.AuthenticatedAt >= binding.PreparedAt
             && agent is { Disabled: false } && session is not null && session.Executors.Contains("opentofu") && session.Executors.Contains("proxmox"))

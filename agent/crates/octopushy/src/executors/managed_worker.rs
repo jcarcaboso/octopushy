@@ -19,6 +19,9 @@ struct Input {
     identity: Option<Value>,
 }
 pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
+    if matches!(ctx.action.as_str(), "update-os" | "verify-os") {
+        return super::managed_update::run(cfg, ctx).await;
+    }
     if !matches!(ctx.action.as_str(), "prepare" | "install") {
         return Err(Failure::msg(
             "managed-worker supports only prepare and install",
