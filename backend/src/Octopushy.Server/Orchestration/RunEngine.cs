@@ -374,7 +374,7 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, noChanges && run.Operation != Operations.Observe
+        Finish(run, RunStatuses.Succeeded, noChanges
             ? context.DiskReporter is null ? "The plan has no changes." : "Infrastructure unchanged; disk reporter setup completed."
             : null);
         await db.SaveChangesAsync(cancellationToken);
@@ -530,23 +530,6 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
-                break;
-            case StepNames.Observe:
-                db.Observations.Add(new Observation
-                {
-                    Id = Guid.CreateVersion7(),
-                    ResourceId = resource.Id,
-                    AttemptId = step.Attempts.MaxBy(a => a.Number)?.Id,
-                    ObservedAt = now,
-                    Data = outputs?.ToJsonString() ?? "{}",
-                });
-                var old = await db.Observations
-                    .Where(o => o.ResourceId == resource.Id)
-                    .OrderByDescending(o => o.ObservedAt)
-                    .Skip(50)
-                    .Select(o => o.Id)
-                    .ToListAsync(cancellationToken);
-                await db.Observations.Where(o => old.Contains(o.Id)).ExecuteDeleteAsync(cancellationToken);
                 break;
         }
     }

@@ -1,11 +1,9 @@
 import { Eye } from "lucide-react";
-import { useState } from "react";
 import { isNotFound } from "../api/client";
 import { Link, useParams } from "react-router";
 import { useInstallation, useObserveInstallation } from "../api/queries";
 import type { ObservedGuest } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
-import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { DefinitionView } from "../components/DefinitionView";
 import { GuestTable } from "../components/GuestTable";
@@ -16,10 +14,10 @@ import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
 import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
-import { RunTable } from "../components/RunTable";
 import { EmptyRow, Table } from "../components/Table";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
+import { WaitingNote } from "../components/WaitingNote";
 import { humanize, plural } from "../lib/format";
 
 function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
@@ -78,7 +76,6 @@ export function InstallationPage() {
   const { id = "" } = useParams();
   const { data, error, isPending } = useInstallation(id);
   const observe = useObserveInstallation();
-  const [startedRun, setStartedRun] = useState<string | null>(null);
   useHashScroll(Boolean(data));
 
   if (isPending) return <PageSkeleton rows={4} />;
@@ -88,6 +85,7 @@ export function InstallationPage() {
 
   const installation = data.installation;
   const unmanaged = installation.unmanagedCount;
+  const observing = installation.observing || observe.isPending;
 
   return (
     <>
@@ -119,23 +117,18 @@ export function InstallationPage() {
             <button
               type="button"
               className="button button--primary"
-              disabled={observe.isPending}
-              onClick={() => observe.mutate(id, { onSuccess: (started) => setStartedRun(started.runId) })}
+              disabled={observing}
+              onClick={() => observe.mutate(id)}
             >
               <Eye size={15} aria-hidden="true" />
-              {observe.isPending ? "Starting…" : "Observe now"}
+              {observing ? "Observing…" : "Observe now"}
             </button>
           </>
         }
       />
       <div className="stack stack--large">
         <ErrorMessage error={observe.error} />
-        {startedRun ? (
-          <Callout kind="success" title="Observe run started">
-            <Link to={`/runs/${startedRun}`}>Follow the run</Link>. It needs a connected agent that can reach the
-            Proxmox API.
-          </Callout>
-        ) : null}
+        <WaitingNote text={installation.observeWaiting} />
         <ObserveError installation={installation} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
@@ -152,9 +145,6 @@ export function InstallationPage() {
               flush
             >
               <ObservedVms vms={data.observedGuests} observed={Boolean(installation.observedAt)} />
-            </Card>
-            <Card title="Runs" flush>
-              <RunTable runs={data.runs} label="Observe runs" showAddress={false} emptyText="No observe runs yet." />
             </Card>
             <Card title="Definition" id="definition">
               <DefinitionView file={data.definitionFile} text={data.definitionText} issues={data.issues} />

@@ -1,7 +1,7 @@
 import { Bot, CircleCheck, Circle, GitBranch, KeyRound } from "lucide-react";
 import { Link } from "react-router";
 import { useOverview } from "../api/queries";
-import type { Overview, RunSummary } from "../api/types";
+import type { ObserveFailure, Overview, RunSummary } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { WaitingNote } from "../components/WaitingNote";
 import { Callout } from "../components/Callout";
@@ -14,6 +14,7 @@ import { RunTable } from "../components/RunTable";
 import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
 import { statusStyle } from "../components/status";
 import { operationLabel, runResourcePath } from "../lib/format";
+import { isCredentialBlock } from "../lib/observe";
 
 const tiles: { key: keyof Overview["counts"]; status: string; filter: string; label?: string }[] = [
   { key: "inSync", status: "in-sync", filter: "in-sync" },
@@ -117,12 +118,27 @@ function GettingStarted({ overview }: { overview: Overview }) {
   );
 }
 
-function AttentionList({ runs }: { runs: RunSummary[] }) {
-  if (runs.length === 0) {
+function AttentionList({ runs, observeErrors }: { runs: RunSummary[]; observeErrors: ObserveFailure[] }) {
+  if (runs.length === 0 && observeErrors.length === 0) {
     return <EmptyState compact icon={CircleCheck} title="Nothing needs attention" />;
   }
   return (
     <ul className="attention">
+      {observeErrors.map((failure) => (
+        <li key={failure.installationId} className="attention__item">
+          <StatusBadge status={isCredentialBlock(failure.error) ? "blocked" : "failed"} />
+          <div className="attention__main">
+            <div>
+              <Link to={`/installations/${failure.installationId}`} className="strong-link">
+                Observing {failure.name}
+              </Link>{" "}
+              <span className="mono small muted">{failure.address}</span>
+            </div>
+            <div className="muted small">{failure.error}</div>
+          </div>
+          <RelativeTime value={failure.at} />
+        </li>
+      ))}
       {runs.map((run) => (
         <li key={run.id} className="attention__item">
           <StatusBadge status={run.status} />
@@ -201,8 +217,8 @@ export function OverviewPage() {
         <StatusTiles counts={data.counts} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <Card title="Needs attention" meta={data.attention.length || undefined}>
-              <AttentionList runs={data.attention} />
+            <Card title="Needs attention" meta={data.attention.length + data.observeErrors.length || undefined}>
+              <AttentionList runs={data.attention} observeErrors={data.observeErrors} />
             </Card>
             <Card title="Recent runs" flush actions={<Link to="/runs" className="button button--small button--ghost">All runs</Link>}>
               <RunTable runs={data.recent} label="Recent runs" emptyText="No runs yet. Runs start when a revision changes a guest, or by hand." />

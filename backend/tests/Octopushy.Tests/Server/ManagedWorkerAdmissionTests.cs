@@ -31,18 +31,16 @@ public class ManagedWorkerAdmissionTests(PostgresFixture postgres)
         });
         await server.Engine.ExecuteAsync(async (db, services) =>
         {
-            var run = await db.Runs.Include(r => r.Steps).ThenInclude(s => s.Attempts)
-                .SingleAsync(r => r.Operation == Operations.Observe);
-            var step = run.Steps.Single(s => s.Name == StepNames.Observe);
-            var attempt = Assert.Single(step.Attempts);
+            var attempt = await db.Attempts.SingleAsync(a => a.StepId == null);
+            var context = RunContext.Parse(attempt.Context!);
             var builder = services.GetRequiredService<AssignmentBuilder>();
             if (optedIn)
-                Assert.Equal("observe", (await builder.BuildAsync(attempt, step, run, RunContext.Parse(run.Context),
+                Assert.Equal("observe", (await builder.BuildAsync(attempt, null, null, context,
                     worker.Id, CancellationToken.None)).Action);
             else
             {
                 await Assert.ThrowsAsync<AssignmentException>(() =>
-                    builder.BuildAsync(attempt, step, run, RunContext.Parse(run.Context), worker.Id, CancellationToken.None));
+                    builder.BuildAsync(attempt, null, null, context, worker.Id, CancellationToken.None));
                 Assert.False(await db.SecretResolutions.AnyAsync(r => r.AttemptId == attempt.Id));
             }
             return true;

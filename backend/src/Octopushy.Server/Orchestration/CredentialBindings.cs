@@ -60,8 +60,12 @@ internal static class CredentialBindings
         return problems;
     }
 
+    /// <summary>
+    /// Checks and pins the context's credential versions. An observation passes no run: it has
+    /// no history to recover, and the caller stores the pinned context on its attempt.
+    /// </summary>
     internal static async Task<List<string>> CheckAsync(
-        OctopushyDb db, Run run, RunContext context, CancellationToken ct, IReadOnlyCollection<string>? neededNames = null)
+        OctopushyDb db, Run? run, RunContext context, CancellationToken ct, IReadOnlyCollection<string>? neededNames = null)
     {
         var problems = Validate(context);
         if (neededNames is not null)
@@ -77,9 +81,9 @@ internal static class CredentialBindings
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // Recover old runs from release evidence, never from today's current pointer.
-        var audit = context.SecretBindingsPinned ? [] : await db.SecretResolutions.AsNoTracking()
+        var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
             .Where(r => db.Attempts.Any(a => a.Id == r.AttemptId && a.RunId == run.Id)).ToListAsync(ct);
-        var previouslyDispatched = !context.SecretBindingsPinned && (audit.Count > 0 ||
+        var previouslyDispatched = !context.SecretBindingsPinned && run is not null && (audit.Count > 0 ||
             await db.Attempts.AsNoTracking().AnyAsync(a => a.RunId == run.Id &&
                 (a.AssignedAt != null || a.StartedAt != null || a.FinishedAt != null), ct) ||
             await db.Steps.AsNoTracking().AnyAsync(s => s.RunId == run.Id && s.StartedAt != null, ct));
@@ -151,7 +155,8 @@ internal static class CredentialBindings
             }
 
             context.SecretBindingsPinned = true;
-            run.Context = context.Serialize();
+            if (run is not null)
+                run.Context = context.Serialize();
         }
 
         return problems;

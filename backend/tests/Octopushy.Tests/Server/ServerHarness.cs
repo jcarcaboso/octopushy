@@ -239,6 +239,18 @@ public sealed class ServerHarness : IAsyncDisposable
                 .FirstAsync();
         });
 
+    /// <summary>The context the installation's latest observation was sent, or waits to be sent, with.</summary>
+    public Task<RunContext> LatestObservationAsync(string address) =>
+        QueryAsync(async db =>
+        {
+            var resource = await db.Resources.AsNoTracking().FirstAsync(r => r.Address == address);
+            var attempt = await db.Attempts.AsNoTracking()
+                .Where(a => a.ResourceId == resource.Id)
+                .OrderByDescending(a => a.CreatedAt)
+                .FirstAsync();
+            return RunContext.Parse(attempt.Context!);
+        });
+
     public async Task<FakeAgent> ConnectAgentAsync(params string[] labels)
     {
         var agent = new AgentRecord

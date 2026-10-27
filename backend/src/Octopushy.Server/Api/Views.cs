@@ -160,6 +160,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var resources = await db.Resources.AsNoTracking().Where(r => r.RetiredAt == null || r.Kind == ResourceKinds.Guest).ToListAsync(cancellationToken);
         var runs = await LatestRunsAsync(resources.Select(r => r.Id).ToList(), cancellationToken);
         var observations = await LatestObservationsAsync(cancellationToken);
+        var observing = await ObservingAsync(cancellationToken);
         var labs = resources.Where(r => r.Kind == ResourceKinds.Lab && r.RetiredAt == null).OrderBy(r => r.Address)
             .Select(lab => new LabDto(
                 lab.Id,
@@ -169,7 +170,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 Issues(lab.Issues),
                 resources.Where(r => r.Kind == ResourceKinds.Installation && r.ParentAddress == lab.Address && r.RetiredAt == null)
                     .OrderBy(r => r.Address)
-                    .Select(i => InstallationSummary(i, resources, runs, observations))
+                    .Select(i => InstallationSummary(i, resources, runs, observations, observing))
                     .ToList()))
             .ToList();
         return new InventoryDto(await LatestRevisionAsync(cancellationToken), labs);
@@ -248,7 +249,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             .ToListAsync(cancellationToken);
         var runs = await LatestRunsAsync(resources.Select(r => r.Id).ToList(), cancellationToken);
         var observations = await LatestObservationsAsync(cancellationToken);
-        var summary = InstallationSummary(resource, resources, runs, observations);
+        var summary = InstallationSummary(resource, resources, runs, observations, await ObservingAsync(cancellationToken));
         var observation = observations.GetValueOrDefault(id);
         var guests = resources.Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null).ToList();
         var observedGuests = observation?["guests"] is JsonArray observed
@@ -258,11 +259,6 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
         var text = latest is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken);
         var definition = resource.Definition is null ? null : JsonNode.Parse(resource.Definition);
-        var installationRuns = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
-            .Where(r => r.ResourceId == id)
-            .OrderByDescending(r => r.CreatedAt)
-            .Take(20)
-            .ToListAsync(cancellationToken);
         return new InstallationDetailDto(
             summary,
             resource.DefinitionFile,
@@ -271,8 +267,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             definition?["connection"]?["token"]?["store"]?.GetValue<string>(),
             definition?["connection"]?["tls"]?["verify"]?.GetValue<bool>() ?? (definition is null ? null : true),
             observedGuests,
-            observation?["cluster"]?["name"]?.GetValue<string>(),
-            installationRuns.Select(r => Summary(r, resource.Address, ResourceKinds.Installation)).ToList());
+            observation?["cluster"]?["name"]?.GetValue<string>());
     }
 
     public async Task<OverviewDto> OverviewAsync(RepositoryDto repository, CancellationToken cancellationToken)
@@ -307,6 +302,10 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             .OrderByDescending(r => r.CreatedAt)
             .Take(15)
             .ToListAsync(cancellationToken);
+        var observeErrors = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null && r.MissingSince == null && r.ObserveError != null)
+            .OrderBy(r => r.Address)
+            .ToListAsync(cancellationToken);
         var agents = await db.Agents.AsNoTracking().CountAsync(a => !a.Disabled, cancellationToken);
         return new OverviewDto(
             repository,
@@ -314,6 +313,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             connections.All.Count,
             agents,
             attention.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
+            observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt)).ToList(),
             recent.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList());
     }
 
@@ -321,7 +321,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         Resource installation,
         IReadOnlyList<Resource> resources,
         IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs,
-        IReadOnlyDictionary<Guid, JsonObject> observations)
+        IReadOnlyDictionary<Guid, JsonObject> observations,
+        IReadOnlyDictionary<Guid, string?> observing)
     {
         var definition = installation.Definition is null ? null : JsonNode.Parse(installation.Definition);
         var observation = observations.GetValueOrDefault(installation.Id);
@@ -351,20 +352,19 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var managedVmids = guests.Where(g => g.RetiredAt == null).Select(g => Vmid(g)).OfType<int>().ToHashSet();
         var unmanaged = (observation?["guests"] as JsonArray)?.OfType<JsonObject>()
             .Count(g => g["vmid"]?.GetValue<int>() is { } vmid && !managedVmids.Contains(vmid) && g["template"]?.GetValue<bool>() != true) ?? 0;
-        var (activeRun, lastRun) = runs.GetValueOrDefault(installation.Id);
-        var troubled = (activeRun ?? lastRun) is { Status: RunStatuses.Failed or RunStatuses.Blocked } run ? run : null;
         return new InstallationSummaryDto(
             installation.Id,
             installation.Address,
-            definition?["name"]?.GetValue<string>() ?? installation.Address.Split('/')[^1],
+            InstallationName(installation),
             definition?["type"]?.GetValue<string>(),
             definition?["connection"]?["endpoint"]?.GetValue<string>(),
             installation.Valid,
             Issues(installation.Issues).Count(i => i.Severity == "error"),
             observation?["observedAt"]?.GetValue<DateTimeOffset>(),
-            troubled?.Detail,
-            troubled?.Status,
-            troubled?.Id,
+            installation.ObserveError,
+            installation.ObserveErrorAt,
+            observing.ContainsKey(installation.Id),
+            observing.GetValueOrDefault(installation.Id),
             observation?["version"]?.GetValue<string>(),
             hosts,
             guestSummaries,
@@ -373,7 +373,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
     private static GuestSummaryDto GuestSummary(Resource resource, IReadOnlyList<Run> runs, JsonObject? observation)
     {
-        var ordered = runs.Where(r => r.Operation != Operations.Observe).OrderByDescending(r => r.CreatedAt).ToList();
+        var ordered = runs.OrderByDescending(r => r.CreatedAt).ToList();
         var active = ordered.FirstOrDefault(r => !RunStatuses.IsTerminal(r.Status));
         var last = ordered.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
         var (status, detail) = GuestStatus(resource, active, last);
@@ -429,6 +429,9 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         o?["uptimeSeconds"]?.GetValue<long>(),
         limit);
 
+    private static string InstallationName(Resource installation) =>
+        (installation.Definition is null ? null : JsonNode.Parse(installation.Definition)?["name"]?.GetValue<string>()) ?? installation.Address.Split('/')[^1];
+
     private static string LabName(Resource lab) =>
         (lab.Definition is null ? null : JsonNode.Parse(lab.Definition)?["name"]?.GetValue<string>()) ?? lab.Address;
 
@@ -449,6 +452,18 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             id => id,
             id => (active.Where(r => r.ResourceId == id).MinBy(r => r.CreatedAt), last.FirstOrDefault(r => r.ResourceId == id)));
     }
+
+    /// <summary>The installations with an observation under way, and why it waits when it has no agent yet.</summary>
+    private async Task<Dictionary<Guid, string?>> ObservingAsync(CancellationToken cancellationToken) =>
+        (await db.Attempts.AsNoTracking()
+            .Where(a => a.ResourceId != null
+                        && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+            .Select(a => new { Id = a.ResourceId!.Value, a.Status, a.WaitingReason })
+            .ToListAsync(cancellationToken))
+        .DistinctBy(a => a.Id)
+        .ToDictionary(
+            a => a.Id,
+            a => a.Status == AttemptStatuses.Queued ? a.WaitingReason ?? "Waiting to be assigned to an agent." : null);
 
     private async Task<Dictionary<Guid, JsonObject>> LatestObservationsAsync(CancellationToken cancellationToken)
     {

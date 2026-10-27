@@ -154,6 +154,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("assigned_at");
 
+                    b.Property<string>("Context")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("context");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -212,7 +216,15 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("required_labels");
 
-                    b.Property<Guid>("RunId")
+                    b.Property<Guid?>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<Guid?>("RevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revision_id");
+
+                    b.Property<Guid?>("RunId")
                         .HasColumnType("uuid")
                         .HasColumnName("run_id");
 
@@ -225,7 +237,7 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
-                    b.Property<Guid>("StepId")
+                    b.Property<Guid?>("StepId")
                         .HasColumnType("uuid")
                         .HasColumnName("step_id");
 
@@ -241,6 +253,10 @@ namespace Octopushy.Server.Data.Migrations
 
                     b.HasIndex("StepId")
                         .HasDatabaseName("ix_attempts_step_id");
+
+                    b.HasIndex("ResourceId", "CreatedAt")
+                        .HasDatabaseName("ix_attempts_resource_id_created_at")
+                        .HasFilter("resource_id IS NOT NULL");
 
                     b.HasIndex("Status", "CreatedAt")
                         .HasDatabaseName("ix_attempts_status_created_at");
@@ -674,6 +690,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("missing_since");
 
+                    b.Property<string>("ObserveError")
+                        .HasColumnType("text")
+                        .HasColumnName("observe_error");
+
+                    b.Property<DateTimeOffset?>("ObserveErrorAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("observe_error_at");
+
+                    b.Property<DateTimeOffset?>("ObserveRequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("observe_requested_at");
+
                     b.Property<string>("Outputs")
                         .HasColumnType("jsonb")
                         .HasColumnName("outputs");
@@ -1048,7 +1076,6 @@ namespace Octopushy.Server.Data.Migrations
                         .WithMany("Attempts")
                         .HasForeignKey("StepId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
                         .HasConstraintName("fk_attempts_steps_step_id");
 
                     b.Navigation("Step");

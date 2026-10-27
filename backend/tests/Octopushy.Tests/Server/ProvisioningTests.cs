@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Data;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
@@ -13,6 +14,7 @@ namespace Octopushy.Tests.Server;
 public class ProvisioningTests(PostgresFixture postgres)
 {
     private const string Guest = "home/korriban/krb-app-01";
+    private const string Installation = "home/korriban";
 
     [Fact]
     public async Task A_new_guest_is_planned_applied_and_verified()
@@ -315,7 +317,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         // Later revisions still recognize the retired guest and propose nothing.
         server.Commit("Unrelated");
         await server.SyncAndTrustAsync();
-        var runs = await server.QueryAsync(db => db.Runs.CountAsync(r => r.Operation != Operations.Observe));
+        var runs = await server.QueryAsync(db => db.Runs.CountAsync());
         Assert.Equal(2, runs);
     }
 
@@ -373,6 +375,79 @@ public class ProvisioningTests(PostgresFixture postgres)
         });
         var observations = await server.QueryAsync(db => db.Observations.CountAsync());
         Assert.Equal(1, observations);
+
+        var installation = await server.ResourceAsync(Installation);
+        Assert.NotNull(installation.ObserveRequestedAt);
+        Assert.Null(installation.ObserveError);
+        Assert.Equal(0, await server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == installation.Id)));
+    }
+
+    [Fact]
+    public async Task A_failed_observation_is_recorded_on_the_installation_until_one_succeeds()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Failed, error: "connection refused");
+
+        var installation = await server.ResourceAsync(Installation);
+        Assert.Equal("connection refused", installation.ObserveError);
+        Assert.NotNull(installation.ObserveErrorAt);
+        Assert.Equal(0, await server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == installation.Id)));
+
+        await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Succeeded, new JsonObject { ["hosts"] = new JsonArray(), ["guests"] = new JsonArray() });
+        installation = await server.ResourceAsync(Installation);
+        Assert.Null(installation.ObserveError);
+        Assert.Equal(1, await server.QueryAsync(db => db.Observations.CountAsync()));
+    }
+
+    [Fact]
+    public async Task Observing_again_while_an_observation_is_under_way_does_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAndTrustAsync();
+        var installation = await server.ResourceAsync(Installation);
+        await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+
+        Assert.Equal(1, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.ResourceId == installation.Id)));
+    }
+
+    [Fact]
+    public async Task An_observation_waiting_for_an_agent_takes_the_latest_definition()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAndTrustAsync();
+        var path = Path.Combine(server.Repository.Root, "labs/home/proxmox/korriban/installation.yaml");
+        server.Repository.Write("labs/home/proxmox/korriban/installation.yaml", File.ReadAllText(path).Replace("10.1.0.10", "10.1.0.11"));
+        server.Commit("Move the endpoint");
+        await server.SyncAndTrustAsync();
+
+        var agent = await server.ConnectAgentAsync("home");
+        var observe = await agent.NextAsync("observe");
+        Assert.Equal("https://10.1.0.11:8006/", JsonNode.Parse(observe.InputJson)!["connection"]!["endpoint"]!.GetValue<string>());
+        var installation = await server.ResourceAsync(Installation);
+        Assert.Equal(1, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.ResourceId == installation.Id)));
+    }
+
+    [Fact]
+    public async Task A_missing_secret_is_the_observation_error_and_sends_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        await server.SyncAndTrustAsync();
+
+        var installation = await server.ResourceAsync(Installation);
+        Assert.StartsWith("Blocked credentials:", installation.ObserveError);
+        Assert.Contains("proxmox/korriban/read-only-token: missing", installation.ObserveError);
+        Assert.Null(installation.ObserveRequestedAt);
+        Assert.Equal(0, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.ResourceId == installation.Id)));
+
+        // It stays due: once the secret exists, the next scheduled check sends the observation.
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "reader");
+        var agent = await server.ConnectAgentAsync("home");
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        Assert.Equal("reader", Assert.Single((await agent.NextAsync("observe")).Secrets).Value);
     }
 
     [Fact]

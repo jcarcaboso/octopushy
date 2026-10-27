@@ -186,7 +186,10 @@ public static partial class Endpoints
             .WithName("getInstallation");
 
         api.MapPost("/installations/{id:guid}/observe", async (Guid id, Planner planner, CancellationToken ct) =>
-            TypedResults.Ok(new StartedRun(await planner.ObserveAsync(id, ct))))
+        {
+            await planner.ObserveAsync(id, ct);
+            return TypedResults.NoContent();
+        })
             .WithTags("Inventory")
             .WithName("observeInstallation");
     }
@@ -535,7 +538,7 @@ public static partial class Endpoints
             var releases = await (from release in db.SecretResolutions.AsNoTracking()
                                   join attempt in db.Attempts on release.AttemptId equals attempt.Id
                                   where release.Key == key
-                                  select new { attempt.RunId, release.Version }).Distinct().ToListAsync(ct);
+                                  select new { attempt.RunId, attempt.ResourceId, release.Version }).Distinct().ToListAsync(ct);
             var uses = new Dictionary<int, List<string>>();
             void Add(int version, string use)
             {
@@ -572,6 +575,32 @@ public static partial class Endpoints
                     }
                 }
             }
+            // Observations belong to no run; their releases and pins are named by installation.
+            var observed = releases.Where(r => r.RunId is null && r.ResourceId is not null).ToList();
+            var waiting = await db.Attempts.AsNoTracking()
+                .Where(a => a.StepId == null && a.Status == AttemptStatuses.Queued)
+                .Select(a => new { a.ResourceId, a.Context })
+                .ToListAsync(ct);
+            var installationIds = observed.Select(r => r.ResourceId).Concat(waiting.Select(a => a.ResourceId)).Distinct().ToList();
+            var installations = await db.Resources.AsNoTracking()
+                .Where(r => installationIds.Contains(r.Id))
+                .ToDictionaryAsync(r => r.Id, r => r.Address, ct);
+            foreach (var release in observed)
+            {
+                Add(release.Version, $"observations of {installations.GetValueOrDefault(release.ResourceId!.Value, "a removed installation")} (resolved for assignment)");
+            }
+            foreach (var attempt in waiting)
+            {
+                var context = RunContext.Parse(attempt.Context!);
+                foreach (var (name, _) in context.Secrets.Where(s => s.Value == key))
+                {
+                    if (context.SecretVersions.TryGetValue(name, out var pinned))
+                    {
+                        Add(pinned, $"observation of {installations.GetValueOrDefault(attempt.ResourceId!.Value, "a removed installation")} (queued)");
+                    }
+                }
+            }
+
             var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
             if (revision is not null)
             {

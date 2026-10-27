@@ -196,26 +196,48 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         var trusted = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
         var agent = await server.ConnectAgentAsync("home");
         await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Succeeded, new JsonObject());
-        await server.WithDbAsync(db => db.Runs.Where(r => r.Operation == Operations.Observe)
-            .ExecuteUpdateAsync(u => u.SetProperty(r => r.CreatedAt, DateTimeOffset.UtcNow.AddDays(-1))));
+        await MakeObservationsDueAsync(server);
         server.Repository.Write("labs/home/proxmox/korriban/installation.yaml", "not: a valid installation\n");
         server.Commit("Untrusted broken installation");
         await server.SyncAsync();
         await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
         var observe = await agent.NextAsync("observe");
-        var run = await server.QueryAsync(db => db.Runs.SingleAsync(r => r.Id == db.Attempts.Where(a => a.Id == Guid.Parse(observe.AttemptId)).Select(a => a.RunId).Single()));
-        Assert.Equal(trusted.Id, run.RevisionId);
+        var revisionId = await server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(observe.AttemptId)).Select(a => a.RevisionId).SingleAsync());
+        Assert.Equal(trusted.Id, revisionId);
         Assert.Contains("10.1.0.10", observe.InputJson);
+        await agent.ReportAsync(observe, Outcome.Succeeded, new JsonObject());
         await UpdateSourceAsync(client, null);
-        var count = await server.QueryAsync(db => db.Runs.CountAsync());
+        await MakeObservationsDueAsync(server);
+        var count = await server.QueryAsync(db => db.Attempts.CountAsync());
         await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
-        Assert.Equal(count, await server.QueryAsync(db => db.Runs.CountAsync()));
+        Assert.Equal(count, await server.QueryAsync(db => db.Attempts.CountAsync()));
+    }
+
+    private static Task MakeObservationsDueAsync(ServerHarness server) =>
+        server.WithDbAsync(db => db.Resources.Where(r => r.Kind == ResourceKinds.Installation)
+            .ExecuteUpdateAsync(u => u.SetProperty(r => r.ObserveRequestedAt, DateTimeOffset.UtcNow.AddDays(-1))));
+
+    [Fact]
+    public async Task A_source_change_does_not_discard_a_completed_observation()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await AuthenticateAsync(server);
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        var assignment = await agent.NextAsync("observe");
+        await UpdateSourceAsync(client, server.Repository.Root + "/.");
+        var releases = await server.QueryAsync(db => db.SecretResolutions.CountAsync());
+        await agent.ReportAsync(assignment, Outcome.Succeeded, new JsonObject(), "known fixture outcome");
+        await server.TickAsync();
+        var installation = await server.ResourceAsync("home/korriban");
+        Assert.Null(installation.ObserveError);
+        Assert.Equal(1, await server.QueryAsync(db => db.Observations.CountAsync(o => o.ResourceId == installation.Id)));
+        Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
     }
 
     [Theory]
     [InlineData("apply", Outcome.Failed, RunStatuses.Failed)]
-    [InlineData("observe", Outcome.Succeeded, RunStatuses.Succeeded)]
-    public async Task A_source_change_does_not_mask_a_known_failure_or_completed_observation(string action, Outcome outcome, string expected)
+    public async Task A_source_change_does_not_mask_a_known_failure(string action, Outcome outcome, string expected)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await AuthenticateAsync(server);
@@ -477,6 +499,16 @@ public class TrustedRevisionTests(PostgresFixture postgres)
                 if (missing) run.RevisionId = null;
                 else run.Commit = new string('f', 40);
             }
+            foreach (var observation in await db.Attempts.Where(a => a.StepId == null).ToListAsync())
+            {
+                if (missing) observation.RevisionId = null;
+                else
+                {
+                    var context = JsonNode.Parse(observation.Context!)!;
+                    context["commit"] = new string('f', 40);
+                    observation.Context = context.ToJsonString();
+                }
+            }
             await db.SaveChangesAsync();
         });
         var agent = await server.ConnectAgentAsync("home");
@@ -484,6 +516,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         Assert.Empty(agent.TakeAssignments());
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
         Assert.Contains("Waiting for trust", (await server.LatestRunAsync(Guest)).Detail);
+        Assert.Contains("Waiting for trust", await server.QueryAsync(db => db.Attempts.Where(a => a.StepId == null).Select(a => a.WaitingReason).SingleAsync()));
     }
 
     internal static async Task<HttpResponseMessage> TrustAsync(HttpClient client, Guid id)

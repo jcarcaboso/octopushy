@@ -7,7 +7,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Inventory;
 
-/// <summary>Starts runs on request ("plan now", "observe now") and observes installations on a schedule.</summary>
+/// <summary>Starts runs and observations on request ("plan now", "observe now"), and observes installations on a schedule.</summary>
 public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>Plans a guest at the latest revision, or retires it when its definition says so.</summary>
@@ -21,16 +21,17 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             return run.Id;
         }, cancellationToken);
 
-    public Task<Guid> ObserveAsync(Guid resourceId, CancellationToken cancellationToken) =>
+    /// <summary>Observes an installation now, in the background, unless an observation of it is under way.</summary>
+    public Task ObserveAsync(Guid resourceId, CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Installation, cancellationToken);
-            var run = factory.Observe(repository, repository.Installation(resource.Address)!, resource, revision, "manual");
-            await engine.AddRunsAsync(db, [run], cancellationToken);
-            return run.Id;
+            var context = RunFactory.Observation(repository, repository.Installation(resource.Address)!, revision);
+            await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
+            return 0;
         }, cancellationToken);
 
-    /// <summary>Observes every valid installation whose last observation is older than the interval.</summary>
+    /// <summary>Observes every valid installation that was last sent to be observed longer ago than the interval.</summary>
     public Task ScheduleObservesAsync(CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
@@ -41,24 +42,24 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var cutoff = clock.GetUtcNow().AddMinutes(-options.Value.Scheduling.ObserveMinutes);
             var due = await db.Resources
                 .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null)
-                .Where(r => !db.Runs.Any(run => run.ResourceId == r.Id
-                    && (eligible.Any(v => v.Id == run.RevisionId && v.Commit == run.Commit)
-                        && (run.CreatedAt > cutoff || (run.Status != RunStatuses.Succeeded && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled))
-                        || db.Attempts.Any(a => a.RunId == run.Id && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Mutating && a.Status == AttemptStatuses.Uncertain)))))
+                .Where(r => r.ObserveRequestedAt == null || r.ObserveRequestedAt < cutoff)
                 .ToListAsync(cancellationToken);
             if (due.Count == 0) return 0;
 
             var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
-            var runs = due
+            var observed = 0;
+            foreach (var resource in due)
+            {
                 // Discovery may have invalidated/removed an installation in an untrusted head.
                 // Scheduled work uses the definition and validity of the eligible snapshot only.
-                .Where(r => repository.Resource(r.Address)?.Valid == true)
-                .Select(r => (Resource: r, Definition: repository.Installation(r.Address)))
-                .Where(x => x.Definition is not null)
-                .Select(x => factory.Observe(repository, x.Definition!, x.Resource, revision, "schedule"))
-                .ToList();
-            await engine.AddRunsAsync(db, runs, cancellationToken);
-            return runs.Count;
+                if (repository.Resource(resource.Address)?.Valid == true && repository.Installation(resource.Address) is { } installation)
+                {
+                    await engine.ObserveAsync(db, resource, revision, RunFactory.Observation(repository, installation, revision), cancellationToken);
+                    observed++;
+                }
+            }
+
+            return observed;
         }, cancellationToken);
 
     private async Task<(Resource Resource, DefinitionRevision Revision, Definitions.LabRepository Repository)> LoadAsync(

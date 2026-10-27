@@ -18,14 +18,19 @@ public sealed partial class RunEngine
             var eligible = RepositoryTrust.EligibleRevisions(db);
             var pending = db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .Where(a => a.Status == AttemptStatuses.Queued);
+            // An observation has no step or run; it records its own revision and context.
             var queued = await pending
-                .Where(a => eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
+                .Where(a => a.StepId == null
+                    ? eligible.Any(r => r.Id == a.RevisionId)
+                    : eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken);
             // Keep trust-wait reporting bounded without spending eligible execution slots.
             queued.AddRange(await pending
-                .Where(a => !eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
+                .Where(a => a.StepId == null
+                    ? !eligible.Any(r => r.Id == a.RevisionId)
+                    : !eligible.Any(r => r.Id == a.Step!.Run!.RevisionId && r.Commit == a.Step.Run.Commit))
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken));
@@ -50,19 +55,27 @@ public sealed partial class RunEngine
 
             foreach (var attempt in queued)
             {
-                if (await RepositoryTrust.BlockedReasonAsync(db, attempt.Step!.Run!, cancellationToken) is { } trustReason)
+                var step = attempt.Step;
+                var run = step?.Run;
+                var context = RunContext.Parse(run?.Context ?? attempt.Context!);
+                if (await (run is null
+                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, cancellationToken)
+                        : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
                 {
                     attempt.WaitingReason = trustReason;
-                    attempt.Step.Run!.Status = RunStatuses.Blocked;
-                    attempt.Step.Run.Detail = trustReason;
+                    if (run is not null)
+                    {
+                        run.Status = RunStatuses.Blocked;
+                        run.Detail = trustReason;
+                    }
                     continue;
                 }
-                var context = RunContext.Parse(attempt.Step!.Run!.Context);
+                var resourceId = run?.ResourceId ?? attempt.ResourceId;
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
                                 && !managed.Any(w => w.AgentId == a.Id && (w.ReadyAt is null || context.AgentLabels.Count == 0
-                                    || w.ResourceId == attempt.Step!.Run!.ResourceId
+                                    || w.ResourceId == resourceId
                                     || context.Proxmox.Vmid == w.Vmid && context.Proxmox.Node == w.Host)))
                     .ToList();
                 string? waiting = null;
@@ -100,28 +113,40 @@ public sealed partial class RunEngine
                     attempt.WaitingReason = "The agent disconnected before assignment.";
                     continue;
                 }
-                var step = attempt.Step!;
-                var run = step.Run!;
                 Assignment assignment;
                 try
                 {
-                    assignment = await builder.BuildAsync(attempt, step, run, RunContext.Parse(run.Context), agent.Id, cancellationToken);
+                    assignment = await builder.BuildAsync(attempt, step, run, context, agent.Id, cancellationToken);
                 }
-                catch (Exception e) when (e is CredentialUnavailableException or RevisionUntrustedException)
+                catch (Exception e) when (e is CredentialUnavailableException or RevisionUntrustedException && run is not null)
                 {
                     attempt.WaitingReason = e.Message;
                     run.Status = RunStatuses.Blocked;
                     run.Detail = e.Message;
                     continue;
                 }
-                catch (Exception e) when (e is AssignmentException or IOException or Git.GitException)
+                catch (RevisionUntrustedException e)
+                {
+                    attempt.WaitingReason = e.Message;
+                    continue;
+                }
+                // An observation is not replanned: unavailable credentials are its error until the next one.
+                catch (Exception e) when (e is AssignmentException or CredentialUnavailableException or IOException or Git.GitException)
                 {
                     logger.LogWarning("Attempt {Attempt} cannot be assigned: {Error}", attempt.Id, e.Message);
                     attempt.Status = AttemptStatuses.Failed;
                     attempt.Error = e.Message;
                     attempt.FinishedAt = clock.GetUtcNow();
-                    step.Status = StepStatuses.Failed;
-                    step.Detail = e.Message;
+                    if (step is null)
+                    {
+                        await FinishObservationAsync(db, attempt, null, cancellationToken);
+                    }
+                    else
+                    {
+                        step.Status = StepStatuses.Failed;
+                        step.Detail = e.Message;
+                    }
+
                     signal.Wake();
                     continue;
                 }
@@ -132,8 +157,12 @@ public sealed partial class RunEngine
                 attempt.AssignedAt = now;
                 attempt.LeaseExpiresAt = now.AddSeconds(options.Value.AgentChannel.LeaseSeconds);
                 attempt.WaitingReason = null;
-                step.Status = StepStatuses.Running;
-                step.StartedAt ??= now;
+                if (step is not null)
+                {
+                    step.Status = StepStatuses.Running;
+                    step.StartedAt ??= now;
+                }
+
                 perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
                 if (attempt.HostKey is { } key)
                 {
@@ -153,7 +182,10 @@ public sealed partial class RunEngine
                 {
                     var attempt = queued.Single(a => a.Id == attemptId);
                     Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
-                    attempt.Step!.Status = StepStatuses.Queued;
+                    if (attempt.Step is { } requeued)
+                    {
+                        requeued.Status = StepStatuses.Queued;
+                    }
                 }
             }
             await db.SaveChangesAsync(cancellationToken);
@@ -304,7 +336,15 @@ public sealed partial class RunEngine
             attempt.LeaseExpiresAt = null;
             logs.Close(attempt.Id);
 
-            var step = attempt.Step!;
+            if (attempt.Step is null)
+            {
+                await FinishObservationAsync(db, attempt, outputs, cancellationToken);
+                await db.SaveChangesAsync(cancellationToken);
+                signal.Wake();
+                return true;
+            }
+
+            var step = attempt.Step;
             var run = step.Run!;
             // A late result of an attempt that was already retried is recorded, but the retry decides the step.
             var current = await db.Attempts.Where(a => a.StepId == step.Id).OrderByDescending(a => a.Number).FirstAsync(cancellationToken);
@@ -376,8 +416,14 @@ public sealed partial class RunEngine
             attempt.Error = "The agent stopped reporting before the attempt finished.";
             attempt.FinishedAt = now;
             attempt.LeaseExpiresAt = null;
-            var step = attempt.Step!;
-            if (attempt.Mutating)
+            logger.LogWarning("The lease of attempt {Attempt} expired.", attempt.Id);
+            var step = attempt.Step;
+            if (step is null)
+            {
+                // An observation is not retried here; the schedule observes again.
+                await FinishObservationAsync(db, attempt, null, cancellationToken);
+            }
+            else if (attempt.Mutating)
             {
                 step.Status = StepStatuses.Uncertain;
                 step.Detail = $"The agent stopped reporting during {attempt.Action}; whether the change was made is unknown. Plan again to see the current state, or wait for the agent to report.";
@@ -408,8 +454,6 @@ public sealed partial class RunEngine
                 step.Status = StepStatuses.Failed;
                 step.Detail = $"The agent stopped reporting, {step.Attempts.Count} times.";
             }
-
-            logger.LogWarning("The lease of attempt {Attempt} expired.", attempt.Id);
         }
 
         if (expired.Count > 0)

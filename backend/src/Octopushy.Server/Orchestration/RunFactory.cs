@@ -6,7 +6,7 @@ using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Orchestration;
 
-/// <summary>Builds runs and their steps from a revision's definitions.</summary>
+/// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
 public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, apply, verify) or, for a retired guest, a retire run.</summary>
@@ -158,8 +158,8 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         return run;
     }
 
-    /// <summary>An observe run: the installation's hosts and VMs as its Proxmox API reports them.</summary>
-    public Run Observe(LabRepository repository, InstallationDefinition installation, Resource resource, DefinitionRevision revision, string reason)
+    /// <summary>What an observation of the installation's hosts and VMs through its Proxmox API is built from.</summary>
+    public static RunContext Observation(LabRepository repository, InstallationDefinition installation, DefinitionRevision revision)
     {
         var labels = PolicyResolver.AgentLabels(repository, installation);
         var connection = installation.Connection;
@@ -182,7 +182,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             }
         }
 
-        var context = new RunContext
+        return new RunContext
         {
             Address = installation.Address,
             Commit = revision.Commit,
@@ -192,10 +192,6 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
         };
-        var run = NewRun(resource, Operations.Observe, revision, reason, context);
-        run.InputsHash = InstallationHash(installation);
-        AddSteps(run, [StepNames.Observe]);
-        return run;
     }
 
     public static string RetireHash(string inputsHash) => "retire:" + inputsHash;
