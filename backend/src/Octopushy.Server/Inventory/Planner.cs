@@ -10,10 +10,26 @@ namespace Octopushy.Server.Inventory;
 /// <summary>Starts runs and observations on request ("plan now", "observe now"), and observes installations on a schedule.</summary>
 public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, IOptions<OctopushyOptions> options, TimeProvider clock)
 {
-    /// <summary>Plans a guest at the latest revision, or retires it when its definition says so.</summary>
+    /// <summary>
+    /// Plans a guest at the latest revision, or retires it when its definition says so. A guest
+    /// whose folder was deleted is planned for removal, once the head that deleted it is trusted.
+    /// </summary>
     public Task<Guid> PlanGuestAsync(Guid resourceId, CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
+            var missing = await db.Resources.FirstOrDefaultAsync(r => r.Id == resourceId && r.Kind == ResourceKinds.Guest
+                && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
+            if (missing is not null)
+            {
+                var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+                if (head?.TrustedAt is null)
+                    throw new RunException("Trust the revision that deleted this guest's folder before planning its removal.");
+                var removal = await GuestRemoval.ProposeAsync(db, revisions, factory, missing, head, force: true, cancellationToken)
+                    ?? throw new RunException("A removal of this guest is already under way.");
+                await engine.AddRunsAsync(db, [removal], cancellationToken);
+                return removal.Id;
+            }
+
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
             var run = factory.Guest(repository, guest, resource, revision, "manual");

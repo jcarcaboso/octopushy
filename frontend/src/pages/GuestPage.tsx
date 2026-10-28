@@ -131,17 +131,18 @@ export function GuestPage() {
             disabled={plan.isPending}
           >
             <Play size={15} aria-hidden="true" />
-            {plan.isPending ? "Starting…" : "Plan now"}
+            {plan.isPending ? "Starting…" : data.missingSince && !data.retiredAt ? "Plan removal" : "Plan now"}
           </button>
         }
       />
       <div className="stack stack--large">
         <ErrorMessage error={plan.error} />
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
-        {data.missingSince ? (
-          <Callout kind="warning" title={<>Missing since <RelativeTime value={data.missingSince} /></>}>
-            The guest's folder disappeared from the repository without the guest being retired. Nothing runs for it.
-            Restore the folder, or set <code className="mono">lifecycle: retired</code> to remove the VM.
+        {data.missingSince && !data.retiredAt ? (
+          <Callout kind="warning" title={<>Folder deleted <RelativeTime value={data.missingSince} /></>}>
+            Once the revision that deleted it is trusted, Octopushy proposes removing the VM, using the guest's last applied
+            definition and its approval and destructive policy. If no removal run is shown, use Plan removal. Restore the
+            folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>
         ) : null}
         {data.retiredAt ? (

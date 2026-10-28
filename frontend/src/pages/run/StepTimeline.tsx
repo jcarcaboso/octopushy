@@ -29,6 +29,8 @@ const stepNames: Record<string, string> = {
   "update-worker-os": "Switch worker OS",
   "verify-worker-os": "Verify updated OS and preserved identity",
   "wait-updated-worker": "Wait for the original worker to reconnect",
+  "drain-worker": "Drain the worker",
+  "revoke-worker": "Remove the worker's enrollment",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -57,6 +59,10 @@ function describe(step: Step, operation: string): string | null {
       return "Installs the controller-issued public certificate and pinned CA for this exact worker generation.";
     case "wait-worker":
       return "Waits for this worker's authenticated mTLS connection and runtime capabilities. VM existence is not enrollment.";
+    case "drain-worker":
+      return "Stops the worker taking new work and waits for its current work to finish. Another worker removes its VM.";
+    case "revoke-worker":
+      return "Once the VM is verified absent, removes the worker's enrollment; its identity stays in history.";
     default:
       return null;
   }

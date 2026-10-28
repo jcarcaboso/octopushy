@@ -163,12 +163,21 @@ lab-repo/
    refers to variable-store entries as `{ store: <key> }`, optionally with an
    exact version as `{ store: <key>, version: 2 }`. It never contains a secret
    value or names a secret provider.
-10. **Removal is explicit.** Deleting a file never destroys anything. Setting
-    `lifecycle: retired` asks for removal while keeping what is needed to plan it.
-    Once the removal is verified, the folder can be deleted; Octopushy keeps the
-    history. If an existing resource's folder disappears without being retired,
-    Octopushy reports the definition as missing and proposes retiring or restoring
-    it; nothing runs.
+10. **Removal is reviewed.** There are two ways to remove a guest:
+    - Set `lifecycle: retired`. This keeps the definition in Git while the guest is removed.
+    - **Delete the guest's folder.** Octopushy reports the guest as missing, and
+      an unreviewed commit never destroys anything. Once the deleting revision is
+      trusted, Octopushy proposes a retire run. That run is built from the revision
+      the guest was last applied from, so it destroys what that definition created.
+      It follows that definition's approval and `destructive` policy. **Plan removal**
+      on the guest page proposes it again after it was cancelled. Restoring the
+      folder cancels a removal that has not started changing anything. Managed
+      workers are drained first and lose their enrollment once their VM is verified
+      absent; their removal always needs approval.
+
+    Either way, the history is kept.
+    *Decided October 28, 2026: deleting a folder removes the guest. Before, it only
+    reported the guest as missing.*
 11. **Deletes have their own setting,** `policy.destructive`: `manual` or
     `automatic`. When it is not set, it takes the resource's approval setting, so a
     manual resource never deletes without approval. Setting `destructive: manual` on
