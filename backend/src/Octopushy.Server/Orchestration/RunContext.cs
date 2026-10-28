@@ -52,6 +52,8 @@ public sealed record RunContext
 
     public ManagedWorkerContext? ManagedWorker { get; init; }
 
+    public WorkerUpdateContext? WorkerUpdate { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
@@ -61,6 +63,8 @@ public sealed record RunContext
 }
 
 public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
+
+public sealed record WorkerUpdateContext(Guid AgentId, string ArchiveUrl, string ArchiveSha256, string SystemPath, string ImageSha256, string? CaCertificatePem);
 
 public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy);
 
@@ -86,10 +90,12 @@ public sealed record ProxmoxContext(
 
 public sealed record DiskReporterContext(
     string Endpoint,
-    string BinaryUrl,
-    string BinarySha256,
+    string? BinaryUrl,
+    string? BinarySha256,
     int IntervalSeconds,
-    string? CaCertificatePem);
+    string? CaCertificatePem,
+    string InstallationMode = "fhs-download-v1",
+    string? ImageSha256 = null);
 
 /// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames
@@ -107,6 +113,9 @@ public static class StepNames
     public const string InstallWorker = "install-worker";
     public const string WaitWorker = "wait-worker";
     public const string InstallDiskReporter = "install-disk-reporter";
+    public const string UpdateWorkerOs = "update-worker-os";
+    public const string VerifyWorkerOs = "verify-worker-os";
+    public const string WaitUpdatedWorker = "wait-updated-worker";
 }
 
 /// <summary>The secret names executors look for.</summary>

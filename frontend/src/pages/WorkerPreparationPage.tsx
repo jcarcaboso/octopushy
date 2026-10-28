@@ -1,12 +1,64 @@
 import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import { usePrepareWorkerDraft, useWorkerPreparation, useReviewWorkerDeployment, usePublishWorkerDeployment } from "../api/queries";
-import type { WorkerPreparation, WorkerDeploymentRequest } from "../api/types";
+import { usePrepareWorkerDraft, useWorkerPreparation, useReviewWorkerDeployment, usePublishWorkerDeployment, useVerifyWorkerRetirement, useReviewWorkerUpdate, useStartWorkerUpdate } from "../api/queries";
+import type { WorkerPreparation, WorkerDeploymentRequest, ExistingWorker } from "../api/types";
 import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { DefinitionView } from "../components/DefinitionView";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorMessage, PageSkeleton } from "../components/States";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+
+function WorkerOsUpdate({ worker }: { worker: ExistingWorker }) {
+  const review = useReviewWorkerUpdate();
+  const start = useStartWorkerUpdate();
+  if (!worker.resourceId || worker.status !== "Ready") return null;
+  return (
+    <div className="stack stack--small">
+      <button type="button" className="button button--small" disabled={review.isPending || start.isPending}
+        onClick={() => { start.reset(); review.mutate(worker.resourceId!); }}>Review OS update</button>
+      <ErrorMessage error={review.error ?? start.error} />
+      {review.data && !start.data ? (
+        <div className="stack stack--small">
+          <p className="small break">{review.data.archiveUrl}</p>
+          <code className="break">{review.data.systemPath}</code>
+          <p className="small break">OS archive SHA-256: {review.data.archiveSha256}</p>
+          <Callout kind="warning">The worker must be idle. This drains it and creates a plan run, not an approval.
+            An independent control worker performs the update after you approve the exact OS archive and saved plan.
+            Enrollment and state remain in place. Resume scheduling explicitly after the update succeeds.</Callout>
+          <button type="button" className="button" disabled={start.isPending}
+            onClick={() => start.mutate({
+              id: worker.resourceId!, generation: review.data!.generation, archiveSha256: review.data!.archiveSha256,
+            })}>Drain and plan OS update</button>
+        </div>
+      ) : null}
+      {start.data ? <Link to={`/runs/${start.data.runId}`}>Review OS update plan</Link> : null}
+    </div>
+  );
+}
+
+function WorkerRetirement({ worker }: { worker: ExistingWorker }) {
+  const retirement = useVerifyWorkerRetirement();
+  const [confirm, setConfirm] = useState(false);
+  if (!worker.resourceId || !["Enrollment removed", "Definition removed", "Verifying retirement"].includes(worker.status ?? ""))
+    return null;
+  return (
+    <div className="stack stack--tiny">
+      <p className="small muted">Enrollment removal does not delete the VM. Retire its record only after independent verification that the VM is absent.</p>
+      <button type="button" className="button button--small" aria-label={`Verify retirement for ${worker.address}`}
+        disabled={!worker.canVerifyRetirement || retirement.isPending} onClick={() => setConfirm(true)}>
+        Verify retirement
+      </button>
+      {worker.retirementBlockedReason ? <p className="small muted">{worker.retirementBlockedReason}</p> : null}
+      <ConfirmDialog open={confirm} title={`Verify retirement of ${worker.address}?`} confirmLabel="Verify VM absence"
+        pending={retirement.isPending} error={retirement.error} onClose={() => { setConfirm(false); retirement.reset(); }}
+        onConfirm={() => retirement.mutate({ id: worker.resourceId!, generation: worker.generation }, { onSuccess: () => setConfirm(false) })}>
+        <p>This does not destroy a VM or remove disks. An independent control worker checks that VMID {worker.vmid} is already absent from its original installation.</p>
+        <p>The Git definition and enrollment must be removed first. Historical identity and run evidence are retained.</p>
+      </ConfirmDialog>
+    </div>
+  );
+}
 
 function DraftForm({ data, initialInstallation }: { data: WorkerPreparation; initialInstallation: string | null }) {
   const [installationId, setInstallation] = useState(initialInstallation ?? data.installations[0]?.address ?? "");
@@ -252,8 +304,16 @@ export function WorkerPreparationPage() {
             <ul>{data.existingWorkers.map((worker) => (
               <li key={worker.generation}>
                 <code>{worker.address}</code> · {worker.host} · VMID {worker.vmid} · {worker.status ?? "Declared"}
-                {" · "}{worker.runId ? <Link to={`/runs/${worker.runId}`}>Deployment run</Link> : null}
+                {" · "}{worker.runId ? <Link to={`/runs/${worker.runId}`}>Latest run</Link> : null}
                 {" "}<Link to="/agents">Check agent</Link>
+                {worker.verifiedOsUpdateRunId ? (
+                  <p className="small">
+                    <Link to={`/runs/${worker.verifiedOsUpdateRunId}`}>Verified OS release</Link>
+                    {" · "}<code title={worker.verifiedOsImageSha256 ?? undefined}>{worker.verifiedOsImageSha256?.slice(0, 12)}</code>
+                  </p>
+                ) : null}
+                <WorkerRetirement worker={worker} />
+                <WorkerOsUpdate worker={worker} />
               </li>
             ))}</ul>
             <p>These guests already have a generation. Use their existing run and enrollment status; the wizard does not recreate them.</p>

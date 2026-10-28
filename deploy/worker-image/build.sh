@@ -4,7 +4,9 @@ set -euo pipefail
 umask 077
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 output="$(realpath -m "${1:?Pass a fresh artifact directory}")"
-[[ ! -e "$output/octopushy-worker-v1.qcow2" ]] || { echo "Refusing to overwrite an existing image." >&2; exit 1; }
+for artifact in octopushy-worker-v1.qcow2 worker-system.nar.xz SYSTEM_PATH SHA256SUMS; do
+  [[ ! -e "$output/$artifact" ]] || { echo "Refusing to overwrite an existing artifact." >&2; exit 1; }
+done
 mkdir -p "$output"
 source_dir="$(mktemp -d)"
 trap 'rm -rf "$source_dir"' EXIT
@@ -32,6 +34,7 @@ podman "${podman_args[@]}" run --rm --name octopushy-worker-image-build \
   -v octopushy-worker-image-nix:/nix -v "$source_dir:/src:ro" -v "$output:/artifacts" \
   docker.io/nixos/nix@sha256:53b5ec518b696373829ea305c3c07a8c870113e44648c88ec484ef078550fd4f \
   bash -euc '
+    set -o pipefail
     export NIX_CONFIG="experimental-features = nix-command flakes
     sandbox = false
     build-users-group =
@@ -55,5 +58,13 @@ podman "${podman_args[@]}" run --rm --name octopushy-worker-image-build \
       --qemu /nix/var/nix/gcroots/worker-qemu --firmware "$firmware" \
       > /artifacts/boot-smoke.log
     cat /artifacts/boot-smoke.log
+    # The imported boot disk and an in-place update need different artifacts.
+    # Export the complete matching system closure only after the boot check.
+    system="$(nix build --no-update-lock-file --no-link --print-out-paths path:/src#worker-system-v1)"
+    nix-store --export $(nix-store --query --requisites "$system") |
+      "$system/sw/bin/xz" -T2 -c > /artifacts/worker-system.nar.xz
+    printf "%s\n" "$system" > /artifacts/SYSTEM_PATH
+    cd /artifacts
+    sha256sum octopushy-worker-v1.qcow2 worker-system.nar.xz > SHA256SUMS
   '
-printf 'Image, SHA256SUMS and passing no-network boot-smoke.log written under %s. Not uploaded or deployed.\n' "$output"
+printf 'Image, system closure, SYSTEM_PATH, SHA256SUMS and passing no-network boot-smoke.log written under %s. Update/HTTPS/reboot acceptance still required; not uploaded or deployed.\n' "$output"

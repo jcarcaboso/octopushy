@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -15,8 +16,10 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
 {
     private const string Path = "/api/managed-worker-preparation";
 
-    [Fact]
-    public async Task Authenticated_review_publishes_exact_versioned_files_once_without_trust_approval_or_secret_release()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authenticated_review_publishes_exact_versioned_files_once_without_trust_approval_or_secret_release(bool qualifiedReportingImage)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var remote = new TestRepository();
@@ -29,6 +32,12 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         });
         await server.SyncAsync();
         Enable(server);
+        var reporter = server.Services.GetRequiredService<IOptions<OctopushyOptions>>().Value.DiskReporter;
+        reporter.Enabled = true;
+        reporter.PublicUrl = "https://web.test";
+        reporter.BinaryUrl = "https://releases.test/reporter";
+        reporter.BinarySha256 = new string('c', 64);
+        reporter.ManagedNixosImageSha256 = new string(qualifiedReportingImage ? 'a' : 'b', 64);
         using var client = await TrustedRevisionTests.AuthenticateAsync(server);
         var view = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.Null(view.DeploymentBlockedReason);
@@ -42,6 +51,8 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         Assert.NotEqual(Guid.Empty, review.Generation);
         Assert.Contains("modules/opentofu/octopushy-worker-v1/.terraform.lock.hcl", review.Files.Keys);
         Assert.Contains("templates/octopushy-worker-v1/template.yaml", review.Files.Keys);
+        var worker = JsonNode.Parse(review.Files["labs/home/proxmox/korriban/guests/worker-01/guest.yaml"])!;
+        Assert.Equal(qualifiedReportingImage, worker["setup"]!["diskReporter"]!["enabled"]!.GetValue<bool>());
         Assert.DoesNotContain(review.Files.Values, f => f.Contains("secret-token") || f.Contains("PRIVATE KEY") || f.Contains("opy1."));
         Assert.Contains(review.Files.Values, f => f.Contains("worker-generation:"));
         var initial = view.HeadCommit!;

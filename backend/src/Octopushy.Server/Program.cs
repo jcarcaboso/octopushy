@@ -1,5 +1,6 @@
 using System.Net;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -77,7 +78,11 @@ if (!generatingDocument)
     // Keeps sessions valid across restarts.
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(settings.DataDirectory, "data-protection")));
 }
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+builder.Services.AddAuthentication("operator-or-console")
+    .AddPolicyScheme("operator-or-console", null, options =>
+        options.ForwardDefaultSelector = http => http.Request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? OperatorTokenAuthentication.SchemeName : CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddScheme<AuthenticationSchemeOptions, OperatorTokenAuthentication>(OperatorTokenAuthentication.SchemeName, _ => { })
     .AddCookie(options =>
     {
         options.Cookie.Name = "octopushy_session";
@@ -193,6 +198,7 @@ app.UseAuthorization();
 app.MapOpenApi("/api/openapi/{documentName}.json");
 app.MapGet("/api/health", () => TypedResults.Ok(new { status = "ok" })).ExcludeFromDescription();
 app.MapAccount();
+app.MapOperatorTokens();
 app.MapApi();
 
 app.MapGrpcService<EnrollmentService>();

@@ -16,7 +16,9 @@ using Octopushy.Server.Store;
 namespace Octopushy.Server.Api;
 
 public sealed record WorkerExistingDto(string Address, string Host, int Vmid, Guid Generation,
-    Guid? ResourceId = null, Guid? RunId = null, Guid? AgentId = null, string Status = "Declared");
+    Guid? ResourceId = null, Guid? RunId = null, Guid? AgentId = null, string Status = "Declared",
+    bool CanVerifyRetirement = false, string? RetirementBlockedReason = null,
+    string? VerifiedOsImageSha256 = null, Guid? VerifiedOsUpdateRunId = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkerDeploymentRequest(WorkerDraftRequest Selection, string StateBackend);
@@ -119,7 +121,9 @@ public static class WorkerRepositoryDeployment
         var durable = await db.Resources.AsNoTracking().Include(r => r.ManagedWorker)
             .SingleOrDefaultAsync(r => r.Address == address && r.ManagedWorker != null, ct);
         if (durable is not null && existing?.ManagedWorker?.Generation != durable.ManagedWorker!.Generation)
-            throw new GitException("A managed worker already owns this resource. Restore its existing definition; replacement is disabled.");
+            throw new GitException(durable.RetiredAt is not null
+                ? "This name belongs to a retired worker generation. Choose a new name and unused VMID; historical identities are not reused."
+                : "A managed worker already owns this resource. Restore its existing definition; replacement is disabled.");
         var generation = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes($"{revision.SourceId}/worker-v1/{address}"))[..16]);
         if (existing is not null)
         {
@@ -158,6 +162,15 @@ public static class WorkerRepositoryDeployment
                 ["state"] = new JsonObject { ["backend"] = request.StateBackend },
             },
             ["policy"] = new JsonObject { ["approval"] = "manual", ["destructive"] = "manual" },
+            // Enable only for the exact image the operator qualified for native-v1 reporting.
+            ["setup"] = new JsonObject
+            {
+                ["diskReporter"] = new JsonObject
+                {
+                    ["enabled"] = options.DiskReporter.Enabled
+                    && options.DiskReporter.SupportsManagedNixosImage(options.WorkerDeployment.ImageSha256)
+                },
+            },
             ["worker"] = new JsonObject
             {
                 ["templateVersion"] = 1,

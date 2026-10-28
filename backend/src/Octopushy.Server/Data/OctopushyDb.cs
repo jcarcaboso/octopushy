@@ -36,6 +36,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<User> Users => Set<User>();
 
+    public DbSet<OperatorToken> OperatorTokens => Set<OperatorToken>();
+
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<RepositorySettings>(e =>
@@ -67,6 +69,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<ManagedWorkerBinding>(e =>
         {
             e.HasKey(x => x.ResourceId);
+            e.Property(x => x.VerifiedOsImageSha256).HasMaxLength(64);
             e.HasIndex(x => x.Generation).IsUnique();
             e.HasIndex(x => x.AgentId).IsUnique();
             e.HasOne<Resource>().WithOne(x => x.ManagedWorker).HasForeignKey<ManagedWorkerBinding>(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
@@ -148,6 +151,12 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<User>(e =>
         {
             e.HasIndex(x => x.Username).IsUnique();
+        });
+        model.Entity<OperatorToken>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(80);
+            e.Property(x => x.TokenHash).HasMaxLength(64);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

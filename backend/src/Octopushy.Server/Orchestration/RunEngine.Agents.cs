@@ -48,7 +48,7 @@ public sealed partial class RunEngine
             var perHost = active.Where(a => a.HostKey is not null).GroupBy(a => a.HostKey!).ToDictionary(g => g.Key, g => g.Count());
             var connectedIds = connections.All.Select(s => s.AgentId).ToList();
             var agents = await db.Agents.AsNoTracking()
-                .Where(a => !a.Disabled && connectedIds.Contains(a.Id))
+                .Where(a => !a.Disabled && !a.Draining && connectedIds.Contains(a.Id))
                 .ToListAsync(cancellationToken);
             var managed = await db.ManagedWorkers.AsNoTracking().Where(w => w.AgentId != null).ToListAsync(cancellationToken);
             var builder = services.GetRequiredService<AssignmentBuilder>();
@@ -361,14 +361,15 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Succeeded;
                         step.Detail = late ? "The result arrived after the agent had stopped reporting." : null;
                         step.Outputs = outputs?.ToJsonString();
-                        if (step.Name is StepNames.PrepareWorker or StepNames.InstallWorker)
+                        if (step.Name is StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
+                            || step.Name == StepNames.VerifyAbsent && ManagedWorkerSafety.IsRetirementCheck(run))
                         {
                             try { await ApplyWorkerEffectsAsync(db, run, step, attempt, outputs, cancellationToken); }
                             catch (Exception e) when (e is RunException or ArgumentException or System.Security.Cryptography.CryptographicException or FormatException or InvalidOperationException)
                             {
-                                attempt.Status = AttemptStatuses.Failed;
+                                attempt.Status = step.Name == StepNames.UpdateWorkerOs ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
                                 attempt.Error = "Managed worker evidence was refused: " + e.Message;
-                                step.Status = StepStatuses.Failed;
+                                step.Status = step.Name == StepNames.UpdateWorkerOs ? StepStatuses.Uncertain : StepStatuses.Failed;
                                 step.Detail = attempt.Error;
                                 step.Outputs = attempt.Outputs = null;
                             }

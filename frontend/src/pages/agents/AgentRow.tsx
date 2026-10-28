@@ -1,5 +1,6 @@
 import { Power, PowerOff, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { useDeleteAgent, useUpdateAgent } from "../../api/queries";
 import type { Agent } from "../../api/types";
 import { Badge } from "../../components/Badge";
@@ -101,6 +102,7 @@ export function AgentRow({ agent }: { agent: Agent }) {
               <Badge tone="muted">Disabled</Badge>
             </>
           ) : null}
+          {agent.draining ? <Badge tone="muted">Draining</Badge> : null}
         </div>
         <div className="small muted mono">{agent.version ?? "version unknown"}</div>
       </th>
@@ -123,6 +125,10 @@ export function AgentRow({ agent }: { agent: Agent }) {
       <td className="num">{running}</td>
       <td>
         <div className="button-row button-row--tight">
+          <button type="button" className="button button--small" disabled={toggle.isPending || agent.disabled}
+            onClick={() => toggle.mutate({ id: agent.id, draining: !agent.draining })}>
+            {agent.draining ? "Resume scheduling" : "Drain"}
+          </button>
           <button
             type="button"
             className="button button--small"
@@ -152,9 +158,10 @@ export function AgentRow({ agent }: { agent: Agent }) {
           onConfirm={() => remove.mutate(agent.id, { onSuccess: () => setConfirm(false) })}
         >
           <p>
-            The agent is disconnected and its certificate is no longer accepted. To use the machine again, enroll it with
-            a new token.
+            The agent is disconnected and its certificate is no longer accepted. This does not delete its VM, remove its
+            Git definition or retire the guest.
           </p>
+          <p>Managed workers retain their generation-bound identity history. Use <Link to="/agents/prepare">worker deployment</Link> to verify retirement after the VM has been removed.</p>
           {running > 0 ? (
             <p>
               It is running {running} {running === 1 ? "attempt" : "attempts"}; disable it and wait for them to finish first.

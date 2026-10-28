@@ -16,6 +16,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Operate a controller using a separately granted operator credential.
+    Operator {
+        #[arg(long, global = true)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        command: OperatorCommand,
+    },
     /// Run or manage this machine's agent.
     Agent {
         #[command(subcommand)]
@@ -26,7 +33,36 @@ pub enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum OperatorCommand {
+    /// Save a console-created token from stdin. Never accepts a password.
+    Login {
+        #[arg(long)]
+        server: String,
+        #[arg(long, required = true)]
+        token_stdin: bool,
+        #[arg(long)]
+        ca_file: Option<PathBuf>,
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Show the current authenticated operator.
+    Whoami,
+    /// Revoke this grant on the controller, then remove its local copy.
+    Logout,
+    /// Call the existing API. JSON bodies are read only from stdin.
+    Request {
+        path: String,
+        #[arg(long, default_value = "GET", value_parser = ["GET", "POST", "PUT", "PATCH", "DELETE"])]
+        method: String,
+        #[arg(long)]
+        json_stdin: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum AgentCommand {
+    /// Configure the image-native reporter using bounded sensitive stdin only.
+    ManagedReporting,
     /// Enroll with a server using a one-time token.
     Enroll(EnrollArgs),
     /// Connect to the server and execute assignments.

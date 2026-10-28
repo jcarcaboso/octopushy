@@ -137,10 +137,27 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
                 continue;
             }
 
+            Run proposed;
+            try
+            {
+                proposed = factory.Guest(repository, guest, resource, revision, "revision");
+            }
+            catch (RunException error)
+            {
+                // Controller/image compatibility is a per-guest refusal, not a
+                // reason to abandon other runs after recording this repository head.
+                resource.Valid = false;
+                var issues = repository.IssuesFor(resource.Address).ToList();
+                issues.Add(new DefinitionIssue(IssueSeverity.Error, guest.File, null, error.Message, resource.Address));
+                resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
+                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition cannot be planned in {Short(revision.Commit)}.", cancellationToken);
+                continue;
+            }
+
             resource.DesiredInputsHash = desired;
             resource.DesiredRevisionId = revision.Id;
             await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
-            runs.Add(factory.Guest(repository, guest, resource, revision, "revision"));
+            runs.Add(proposed);
         }
 
         foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Installation && seen.Contains(r.Id) && r.Valid))

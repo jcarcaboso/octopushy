@@ -35,11 +35,15 @@ def main():
             "-cpu", "host", "-m", "2048", "-smp", "2", "-display", "none", "-nic", "none",
             "-drive", f"if=pflash,format=raw,readonly=on,file={args.firmware}/FV/OVMF_CODE.fd",
             "-drive", f"if=pflash,format=raw,file={root}/vars.fd",
-            "-device", "virtio-scsi-pci,id=scsi0",
+            # Match Proxmox's virtio-scsi-single topology and explicit VPD
+            # device_id. With only serial=, QEMU uses that serial as device_id,
+            # masking differences in the guest's persistent disk identifiers.
+            "-device", "virtio-scsi-pci,id=virtioscsi0",
             "-drive", f"file={root}/boot.qcow2,format=qcow2,if=none,id=boot",
-            "-device", "scsi-hd,drive=boot,bus=scsi0.0",
+            "-device", "scsi-hd,drive=boot,bus=virtioscsi0.0,lun=0,device_id=drive-scsi0",
+            "-device", "virtio-scsi-pci,id=virtioscsi1",
             "-drive", f"file={root}/state.qcow2,format=qcow2,if=none,id=state",
-            "-device", "scsi-hd,drive=state,bus=scsi0.0,serial=opy-worker-state-v1",
+            "-device", "scsi-hd,id=scsi1,drive=state,bus=virtioscsi1.0,lun=1,device_id=drive-scsi1,serial=opy-worker-state-v1",
             "-device", "virtio-serial-pci",
             "-chardev", f"socket,path={agent_socket},server=on,wait=off,id=qga",
             "-device", "virtserialport,chardev=qga,name=org.qemu.guest_agent.0",
@@ -87,8 +91,13 @@ def main():
                     mount = execute(stream, "/run/current-system/sw/bin/systemctl",
                                     ["show", "var-lib-octopushy.mount", "-p", "What", "-p", "After"])
                     device = execute(stream, "/run/current-system/sw/bin/readlink",
-                                     ["-f", "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_opy-worker-state-v1"])
+                                     ["-f", "/dev/disk/by-id/opy-worker-state-v1"])
                     assert device["exitcode"] == 0 and "What=" + device["stdout"].strip() + "\n" in mount["stdout"], mount
+                    identity = execute(stream, "/run/current-system/sw/bin/udevadm",
+                                       ["info", "--query=property", "--name=" + device["stdout"].strip()])
+                    assert identity["exitcode"] == 0, identity
+                    assert "ID_SCSI_SERIAL=opy-worker-state-v1\n" in identity["stdout"], identity
+                    assert "ID_SERIAL=0QEMU_QEMU_HARDDISK_drive-scsi1\n" in identity["stdout"], identity
                     assert "octopushy-worker-state.service" in mount["stdout"], mount
                     assert "by-label" not in mount["stdout"], mount
                     runtime = execute(stream, "/run/current-system/sw/bin/runuser", [
@@ -99,6 +108,19 @@ def main():
                     ])
                     assert runtime["exitcode"] == 0, runtime
                     assert json.loads(runtime["stdout"])["host"]["security"]["rootless"] is True
+                    # Local executable/unit checks only; this networkless smoke
+                    # cannot claim authenticated ingress delivery or reboot cadence.
+                    measurement = execute(stream, "/run/current-system/sw/bin/octopushy-disk-reporter", ["measure"])
+                    assert measurement["exitcode"] == 0 and json.loads(measurement["stdout"])["usedBytes"] > 0
+                    for unit in ["octopushy-disk-reporter.service", "octopushy-disk-reporter.timer"]:
+                        state = execute(stream, "/run/current-system/sw/bin/systemctl", ["is-active", unit])
+                        assert state["exitcode"] != 0 and state["stdout"].strip() != "failed", state
+                    service = execute(stream, "/run/current-system/sw/bin/systemctl", ["cat", "octopushy-disk-reporter.service"])
+                    assert service["exitcode"] == 0 and "LoadCredential=token:/var/lib/octopushy-disk-reporter/current/token" in service["stdout"]
+                    timer = execute(stream, "/run/current-system/sw/bin/systemctl", ["cat", "octopushy-disk-reporter.timer"])
+                    assert timer["exitcode"] == 0 and "OnUnitActiveSec=3600s" in timer["stdout"]
+                    missing = execute(stream, "/run/current-system/sw/bin/octopushy-worker-reporting", ["unexpected"])
+                    assert missing["exitcode"] != 0
                     helper = "/run/current-system/sw/bin/octopushy-worker-bootstrap"
                     generation = "78cd5ef0-ef9d-4ad4-a227-bd49c52d21ab"
                     first = execute(stream, helper, ["prepare", "--generation", generation])
@@ -117,6 +139,7 @@ def main():
                     print(json.dumps({"boot": "passed", "stateDisk": "mounted", "csr": "public-only",
                                       "sameGeneration": "idempotent", "otherGeneration": "refused",
                                       "unenrolledService": "inactive", "rootlessPodman": "passed",
+                                      "unconfiguredReporter": "inactive", "reporterExecutable": "present",
                                       "network": "disabled"}))
             finally:
                 proc.terminate()
@@ -135,9 +158,12 @@ def rpc(stream, method, arguments=None):
     return response["return"]
 
 
-def execute(stream, path, arguments):
-    pid = rpc(stream, "guest-exec", {"path": path, "arg": arguments, "capture-output": True})["pid"]
-    deadline = time.monotonic() + 120
+def execute(stream, path, arguments, stdin=None, timeout=120):
+    request = {"path": path, "arg": arguments, "capture-output": True}
+    if stdin is not None:
+        request["input-data"] = base64.b64encode(stdin).decode()
+    pid = rpc(stream, "guest-exec", request)["pid"]
+    deadline = time.monotonic() + timeout
     while True:
         status = rpc(stream, "guest-exec-status", {"pid": pid})
         if status.get("exited"):

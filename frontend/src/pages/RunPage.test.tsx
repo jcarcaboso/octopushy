@@ -8,9 +8,9 @@ import { RunPage } from "./RunPage";
 const sha = "3f6c2a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615e4d3";
 const created = "2026-10-20T08:00:00Z";
 
-it("retries a failed guest step without requesting another infrastructure plan", async () => {
-  const detail = runDetail({ status: "failed", currentStep: "grow-root" });
-  detail.steps = [{ ...detail.steps[0], name: "grow-root", kind: "agent", status: "failed", plan: null, approval: null }];
+it.each(["grow-root", "verify"])("retries a failed %s step without requesting another infrastructure plan", async (name) => {
+  const detail = runDetail({ status: "failed", currentStep: name });
+  detail.steps = [{ ...detail.steps[0], name, kind: "agent", status: "failed", plan: null, approval: null }];
   const { requests } = mockApi({
     "GET /api/runs/run-1": () => detail,
     "POST /api/runs/run-1/retry-filesystem": () => undefined,
@@ -141,6 +141,31 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
 
 describe("RunPage", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("requires separate consent for the exact worker OS archive before approving its plan", async () => {
+    const user = userEvent.setup();
+    const detail = runDetail();
+    detail.workerUpdate = {
+      generation: "884d09b4-0934-43a4-bffb-d2f7977bc01c",
+      archiveUrl: "https://release.test/worker.nar.xz", archiveSha256: "c".repeat(64),
+      systemPath: "/nix/store/00000000000000000000000000000000-nixos-system-worker-v1",
+      imageSha256: "a".repeat(64),
+    };
+    const { requests } = mockApi({
+      "GET /api/runs/run-1": () => detail,
+      "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
+    });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    expect(approve).toBeDisabled();
+    expect(screen.getByText(detail.workerUpdate.systemPath)).toBeVisible();
+    await user.click(screen.getByLabelText(/I approve this exact worker OS archive/));
+    await user.click(approve);
+    await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+    expect(requests.find((r) => r.method === "POST")?.body).toEqual({
+      planSha256: sha, note: null, workerUpdateSha256: "c".repeat(64),
+    });
+  });
 
   it("shows the plan's changes and approves with the plan hash the step shows", async () => {
     const user = userEvent.setup();

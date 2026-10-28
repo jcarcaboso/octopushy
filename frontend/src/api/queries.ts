@@ -293,16 +293,17 @@ interface Decision {
   stepId: string;
   planSha256: string | null;
   note: string | null;
+  workerUpdateSha256?: string;
 }
 
 export function useApproveStep() {
   const refresh = useRefreshRuns();
   return useMutation({
-    mutationFn: ({ runId, stepId, planSha256, note }: Decision) =>
+    mutationFn: ({ runId, stepId, planSha256, note, workerUpdateSha256 }: Decision) =>
       unwrap(
         api.POST("/api/runs/{id}/steps/{stepId}/approve", {
           params: { path: { id: runId, stepId } },
-          body: { planSha256, note },
+          body: { planSha256, note, ...(workerUpdateSha256 ? { workerUpdateSha256 } : {}) },
         }),
       ),
     onSettled: () => refresh(),
@@ -358,10 +359,31 @@ export function useUpdateAgent() {
             labels: update.labels ?? null,
             maxConcurrency: update.maxConcurrency ?? null,
             disabled: update.disabled ?? null,
+            draining: update.draining ?? null,
           },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+    onSettled: () => Promise.all([
+      client.invalidateQueries({ queryKey: keys.agents }),
+      client.invalidateQueries({ queryKey: keys.workerPreparation }),
+    ]),
+  });
+}
+
+export function useReviewWorkerUpdate() {
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.GET("/api/managed-worker-preparation/{id}/update", { params: { path: { id } } })),
+  });
+}
+
+export function useStartWorkerUpdate() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: ({ id, generation, archiveSha256 }: { id: string; generation: string; archiveSha256: string }) =>
+      unwrap(api.POST("/api/managed-worker-preparation/{id}/update", {
+        params: { path: { id } }, body: { generation, archiveSha256 },
+      })),
+    onSuccess: () => refresh(),
   });
 }
 
@@ -369,7 +391,26 @@ export function useDeleteAgent() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => unwrap(api.DELETE("/api/agents/{id}", { params: { path: { id } } })),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+    onSettled: () => Promise.all([
+      client.invalidateQueries({ queryKey: keys.agents }),
+      client.invalidateQueries({ queryKey: keys.workerPreparation }),
+      client.invalidateQueries({ queryKey: keys.overview }),
+    ]),
+  });
+}
+
+export function useVerifyWorkerRetirement() {
+  const client = useQueryClient();
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: ({ id, generation }: { id: string; generation: string }) =>
+      unwrap(api.POST("/api/managed-worker-preparation/{id}/retire", {
+        params: { path: { id } }, body: { generation, confirmAlreadyRemoved: true },
+      })),
+    onSettled: () => Promise.all([
+      refresh(),
+      client.invalidateQueries({ queryKey: keys.workerPreparation }),
+    ]),
   });
 }
 

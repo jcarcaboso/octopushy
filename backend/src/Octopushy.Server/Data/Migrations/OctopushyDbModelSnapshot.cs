@@ -46,6 +46,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("disabled");
 
+                    b.Property<bool>("Draining")
+                        .HasColumnType("boolean")
+                        .HasColumnName("draining");
+
                     b.Property<DateTimeOffset>("EnrolledAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("enrolled_at");
@@ -494,6 +498,15 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("server_url");
 
+                    b.Property<string>("VerifiedOsImageSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("verified_os_image_sha256");
+
+                    b.Property<Guid?>("VerifiedOsUpdateRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("verified_os_update_run_id");
+
                     b.Property<int>("Vmid")
                         .HasColumnType("integer")
                         .HasColumnName("vmid");
@@ -543,6 +556,50 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_observations_resource_id_observed_at");
 
                     b.ToTable("observations", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.OperatorToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token_hash");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_operator_tokens");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_operator_tokens_user_id");
+
+                    b.ToTable("operator_tokens", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.RepositorySettings", b =>
@@ -933,6 +990,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.Property<string>("WorkerUpdateSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("worker_update_sha256");
+
                     b.HasKey("Id")
                         .HasName("pk_steps");
 
@@ -1099,6 +1160,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_managed_workers_resources_resource_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.OperatorToken", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_operator_tokens_users_user_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Step", b =>

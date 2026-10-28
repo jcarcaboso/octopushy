@@ -3,6 +3,7 @@
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
 pub mod guest;
+mod managed_update;
 pub mod managed_worker;
 pub mod nixos_rootfs;
 pub mod opentofu;
@@ -38,7 +39,7 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
             | ("proxmox", "set-protection")
             | ("nixos-rootfs", "grow")
             | ("guest", "install-disk-reporter")
-            | ("managed-worker", "prepare" | "install")
+            | ("managed-worker", "prepare" | "install" | "update-os")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 

@@ -44,6 +44,8 @@ public sealed class AssignmentBuilder(
         StepNames.GrowRoot => new StepAction("nixos-rootfs", "grow", true),
         StepNames.VerifyRoot => new StepAction("nixos-rootfs", "verify", false),
         StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
+        StepNames.UpdateWorkerOs => new StepAction("managed-worker", "update-os", true),
+        StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -62,6 +64,7 @@ public sealed class AssignmentBuilder(
     public static string TokenFor(string stepName) => stepName is
         StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
         or StepNames.InstallDiskReporter
+        or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
@@ -91,6 +94,34 @@ public sealed class AssignmentBuilder(
         // for native actions or callers that bypass normal engine advancement.
         var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
             ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), cancellationToken) : null;
+        if (stepName == StepNames.InstallDiskReporter)
+        {
+            if (run is null || step is null)
+                throw new AssignmentException("Reporter setup requires a run.");
+            if (run.Status == RunStatuses.Uncertain || step.Status == StepStatuses.Uncertain)
+                throw new AssignmentException("An uncertain guest mutation cannot be replayed; inspect before recovery.");
+            var reporter = context.DiskReporter ?? throw new AssignmentException("Missing reporting configuration.");
+            if (reporter.InstallationMode == "managed-nixos-v1")
+            {
+                if (context.ManagedWorker is null || reporter.ImageSha256 is not { Length: 64 } imageHash
+                    || !imageHash.All(char.IsAsciiHexDigit) || reporter.IntervalSeconds != 3600
+                    || reporter.BinarySha256 is not null || reporter.BinaryUrl is not null)
+                    throw new AssignmentException("Invalid frozen native reporter provenance/ownership.");
+            }
+            else if (reporter.InstallationMode != "fhs-download-v1" || context.ManagedWorker is not null)
+                throw new AssignmentException("Unsupported reporting installation mode; managed workers have no FHS fallback.");
+            if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
+                throw new AssignmentException("The guest is missing or retired.");
+            // Approval alone does not establish root/guest readiness. Do not resolve
+            // even Proxmox plaintext when a direct builder caller skips these gates.
+            var prerequisites = new[] { StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot, StepNames.WaitWorker };
+            var readiness = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && prerequisites.Contains(s.Name)).ToListAsync(cancellationToken);
+            if (!readiness.Any(s => s.Name == StepNames.Verify && s.Status == StepStatuses.Succeeded)
+                || context.RootDiskBytes is not null && (!readiness.Any(s => s.Name == StepNames.GrowRoot) || !readiness.Any(s => s.Name == StepNames.VerifyRoot))
+                || readiness.Any(s => s.Status != StepStatuses.Succeeded && !(s.Name == StepNames.WaitWorker && s.Status == StepStatuses.Skipped))
+                || context.ManagedWorker is not null && !await db.ManagedWorkers.AnyAsync(w => w.ResourceId == run.ResourceId && w.ReadyAt != null, cancellationToken))
+                throw new AssignmentException("Reporter setup requires successful guest/root verification and authenticated worker readiness.");
+        }
         var names = SecretsFor(stepName, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
         if (problems.Count > 0)
@@ -202,6 +233,16 @@ public sealed class AssignmentBuilder(
                 await db.SaveChangesAsync(cancellationToken);
                 values[SecretNames.DiskReporterToken] = credential.Value;
                 input["reporter"] = System.Text.Json.JsonSerializer.SerializeToNode(reporter, RunContext.Json);
+                if (reporter.InstallationMode == "managed-nixos-v1")
+                {
+                    input["address"] = context.Address;
+                    input["generation"] = context.ManagedWorker!.Generation.ToString();
+                }
+                else
+                {
+                    // Keep the ordinary FHS wire shape compatible with existing control workers.
+                    input["reporter"]!.AsObject().Remove("installationMode");
+                }
             }
         }
 
@@ -210,6 +251,12 @@ public sealed class AssignmentBuilder(
             var worker = context.ManagedWorker ?? throw new AssignmentException("Missing managed worker context.");
             input["address"] = context.Address;
             input["generation"] = worker.Generation.ToString();
+            if (stepName is StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs)
+            {
+                input["update"] = System.Text.Json.JsonSerializer.SerializeToNode(
+                    context.WorkerUpdate ?? throw new AssignmentException("Missing pinned OS update release."), RunContext.Json);
+                input["waitSeconds"] = stepName == StepNames.UpdateWorkerOs ? 1860 : 300;
+            }
             if (stepName == StepNames.InstallWorker && run is not null)
             {
                 var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, cancellationToken);
@@ -246,6 +293,11 @@ public sealed class AssignmentBuilder(
         {
             throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
         }
+        if (RunContext.Parse(run.Context).WorkerUpdate is { } update && approval.WorkerUpdateSha256 != update.ArchiveSha256)
+            throw new AssignmentException("The exact worker OS closure archive was not explicitly approved.");
+        if (RunContext.Parse(run.Context).WorkerUpdate is not null
+            && !ManagedWorkerSafety.UnchangedPlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
+            throw new AssignmentException("Worker OS updates require an unchanged infrastructure plan and must never recreate or reconcile a VM.");
         if (RunContext.Parse(run.Context).ManagedWorker is not null
             && ManagedWorkerSafety.DestructivePlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
             throw new AssignmentException("Managed worker deletion/replacement is not supported, even with saved-plan approval.");

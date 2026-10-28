@@ -20,7 +20,7 @@
         cargoRoot = "agent";
         buildAndTestSubdir = "agent";
         cargoLock.lockFile = ./agent/Cargo.lock;
-        cargoBuildFlags = [ "-p" "octopushy" ];
+        cargoBuildFlags = [ "-p" "octopushy" "-p" "octopushy-disk-reporter" ];
         cargoTestFlags = [ "-p" "octopushy" "--lib" ];
         # Cargo and runtime tests both need a writable private HOME. Do this
         # before any phase: a check-only override leaves cargo's earlier cache
@@ -40,6 +40,7 @@
         inherit agent;
         default = agent;
         worker-image-v1 = image.config.system.build.cloudImage;
+        worker-system-v1 = image.config.system.build.toplevel;
         qemu = pkgs.qemu;
         firmware = pkgs.OVMF.fd;
         smoke-python = pkgs.python3;
@@ -47,6 +48,19 @@
       nixosConfigurations.worker-v1 = image;
       checks.${system}.worker-image-policy =
         assert image.config.services.qemuGuest.enable;
+        assert image.config.systemd.services.octopushy-disk-reporter.serviceConfig.ExecStart
+          == "${agent}/bin/octopushy-disk-reporter report %d/config.json";
+        assert image.config.systemd.services.octopushy-disk-reporter.serviceConfig.DynamicUser;
+        assert image.config.systemd.services.octopushy-disk-reporter.serviceConfig.ProtectSystem == "strict";
+        assert image.config.systemd.services.octopushy-disk-reporter.unitConfig.ConditionPathExists
+          == "/var/lib/octopushy-disk-reporter/current/token";
+        assert image.config.systemd.services.octopushy-disk-reporter.serviceConfig.LoadCredential
+          == [ "config.json:/var/lib/octopushy-disk-reporter/current/config.json"
+               "token:/var/lib/octopushy-disk-reporter/current/token"
+               "ca.pem:/var/lib/octopushy-disk-reporter/current/ca.pem" ];
+        assert image.config.systemd.timers.octopushy-disk-reporter.timerConfig.OnUnitActiveSec == "3600s";
+        assert image.config.systemd.timers.octopushy-disk-reporter.unitConfig.ConditionPathExists
+          == "/var/lib/octopushy-disk-reporter/current/token";
         assert image.config.virtualisation.podman.enable;
         assert !image.config.virtualisation.docker.enable;
         assert image.config.users.users.octopushy.isNormalUser;
@@ -57,7 +71,7 @@
         assert image.config.systemd.paths.octopushy-worker.pathConfig.PathExists
           == "/var/lib/octopushy/identity/agent.json";
         assert image.config.fileSystems."/var/lib/octopushy".device
-          == "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_opy-worker-state-v1";
+          == "/dev/disk/by-id/opy-worker-state-v1";
         assert image.config.fileSystems."/var/lib/octopushy".noCheck;
         assert image.config.systemd.services.octopushy-worker-state.serviceConfig.TimeoutStartSec == "infinity";
         assert image.config.proxmox.partitionTableType == "efi";

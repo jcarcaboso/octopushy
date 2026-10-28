@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -25,6 +26,47 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         ["Octopushy:DiskReporter:BinaryUrl"] = "https://releases.test/disk-reporter",
         ["Octopushy:DiskReporter:BinarySha256"] = new string('a', 64),
     };
+
+    [Theory]
+    [InlineData(false, 3600)]
+    [InlineData(true, 1800)]
+    public async Task Unsupported_native_reporting_is_local_to_one_guest_and_can_be_corrected(bool qualified, int interval)
+    {
+        using var repository = Definitions.ManagedWorkerDefinitionTests.Repository();
+        using var ordinary = TestRepository.Minimal();
+        var original = File.ReadAllText(Path.Combine(repository.Root, GuestFile));
+        repository.Write(GuestFile, original + $"\nsetup: {{ diskReporter: {{ enabled: true, intervalSeconds: {interval} }} }}\n");
+        repository.Write(GuestFile.Replace("krb-app-01", "unrelated"),
+            File.ReadAllText(Path.Combine(ordinary.Root, GuestFile)).Replace("vmid: 310", "vmid: 311"));
+        var settings = Settings;
+        if (qualified)
+            settings["Octopushy:DiskReporter:ManagedNixosImageSha256"] = new string('a', 64);
+        await using var server = await ServerHarness.StartAsync(postgres, repository, settings: settings);
+        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+
+        await server.SyncAsync();
+        var inventory = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!;
+        var guests = inventory["labs"]![0]!["installations"]![0]!["guests"]!.AsArray();
+        var worker = guests.Single(g => g!["address"]!.GetValue<string>() == Guest)!;
+        Assert.False(worker["valid"]!.GetValue<bool>());
+        var peer = guests.Single(g => g!["address"]!.GetValue<string>() == "home/korriban/unrelated")!;
+        Assert.True(peer["valid"]!.GetValue<bool>());
+        Assert.Equal("provision", peer["activeRun"]!["operation"]!.GetValue<string>());
+        var workerId = worker["id"]!.GetValue<Guid>();
+        var detail = (await client.GetFromJsonAsync<JsonObject>($"/api/guests/{workerId}"))!;
+        Assert.Contains(detail["issues"]!.AsArray(), i =>
+            i!["severity"]!.GetValue<string>() == "error"
+            && i["message"]!.GetValue<string>().Contains("reporting", StringComparison.OrdinalIgnoreCase));
+        Assert.Null(worker["activeRun"]);
+        Assert.Null(worker["lastRun"]);
+
+        repository.Write(GuestFile, original + "\nsetup: { diskReporter: { enabled: false } }\n");
+        server.Commit("Correct unsupported reporting");
+        await server.SyncAsync();
+        detail = (await client.GetFromJsonAsync<JsonObject>($"/api/guests/{workerId}"))!;
+        Assert.True(detail["guest"]!["valid"]!.GetValue<bool>());
+        Assert.Equal("provision", detail["guest"]!["activeRun"]!["operation"]!.GetValue<string>());
+    }
 
     [Fact]
     public void Enabled_configuration_requires_safe_urls_a_pinned_release_and_a_bounded_interval()
@@ -54,10 +96,15 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.Throws<InvalidOperationException>(config.Validate);
     }
 
-    [Fact]
-    public async Task Untrusted_revisions_never_create_or_release_reporter_credentials()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Untrusted_revisions_never_create_or_release_reporter_credentials(bool native)
     {
-        await using var server = await ServerHarness.StartAsync(postgres, settings: Settings);
+        using var repository = native ? Definitions.ManagedWorkerDefinitionTests.Repository() : TestRepository.Minimal();
+        var settings = Settings;
+        settings["Octopushy:DiskReporter:ManagedNixosImageSha256"] = new string('a', 64);
+        await using var server = await ServerHarness.StartAsync(postgres, repository, settings: settings);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAsync();
         await server.TickAsync();
@@ -260,4 +307,67 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.Single(run.Steps.Single(s => s.Name == StepNames.InstallDiskReporter).Attempts);
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "install-disk-reporter");
     }
+}
+
+/// <summary>Public run-construction seam; no database or operational state.</summary>
+public class NativeDiskReporterRunTests
+{
+    private static (Run Run, OctopushyOptions Options) Create(bool qualified, bool enabled = true, bool optedOut = false, int interval = 3600)
+    {
+        using var repo = Definitions.ManagedWorkerDefinitionTests.Repository();
+        if (optedOut || interval != 3600)
+            repo.Write(Definitions.ManagedWorkerDefinitionTests.GuestPath,
+                File.ReadAllText(Path.Combine(repo.Root, Definitions.ManagedWorkerDefinitionTests.GuestPath))
+                + $"\nsetup: {{ diskReporter: {{ enabled: {(!optedOut).ToString().ToLowerInvariant()}, intervalSeconds: {interval} }} }}\n");
+        var options = new OctopushyOptions
+        {
+            AgentChannel = { PublicUrl = "https://agent.test:8443" },
+            DiskReporter = { Enabled = enabled, PublicUrl = "https://web.test", BinaryUrl = "https://releases.test/reporter", BinarySha256 = new string('b', 64) },
+        };
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DiskReporter:ManagedNixosImageSha256"] = qualified ? new string('a', 64) : null,
+            }).Build();
+        Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(config, options);
+        var repository = Octopushy.Definitions.LabRepositoryLoader.Load(repo.Root);
+        var guest = repository.Guests.Single();
+        var run = new RunFactory(Microsoft.Extensions.Options.Options.Create(options), TimeProvider.System).Guest(repository, guest,
+            new Resource { Id = Guid.NewGuid(), Kind = ResourceKinds.Guest, Address = guest.Address, Lab = guest.Lab },
+            new DefinitionRevision { Commit = "fixture" }, "test");
+        return (run, options);
+    }
+
+    [Fact]
+    public void Qualified_managed_image_freezes_native_mode_image_provenance_and_ownership_not_download_hash()
+    {
+        var (run, options) = Create(true);
+        var context = JsonNode.Parse(run.Context)!;
+        Assert.Equal("managed-nixos-v1", context["diskReporter"]!["installationMode"]!.GetValue<string>());
+        Assert.Equal(new string('a', 64), context["diskReporter"]!["imageSha256"]!.GetValue<string>());
+        Assert.Null(context["diskReporter"]!["binarySha256"]);
+        Assert.Null(context["diskReporter"]!["binaryUrl"]);
+        Assert.Equal("https://web.test/api/guests/" + run.ResourceId + "/disk-usage", context["diskReporter"]!["endpoint"]!.GetValue<string>());
+        Assert.Equal(Definitions.ManagedWorkerDefinitionTests.Generation, context["managedWorker"]!["generation"]!.GetValue<string>());
+        Assert.DoesNotContain("disk-reporter.token", run.Context);
+        Assert.DoesNotContain(new string('b', 64), run.Steps.Single(s => s.Name == StepNames.InstallDiskReporter).Detail);
+        Assert.Equal("manual", RunContext.Parse(run.Context).Policy!.Approval);
+        options.DiskReporter.PublicUrl = "https://changed.test";
+        Assert.Contains("https://web.test", run.Context);
+    }
+
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public void Old_images_global_disable_and_explicit_opt_out_never_select_fhs_for_a_managed_worker(bool qualified, bool enabled, bool optedOut)
+    {
+        var (run, _) = Create(qualified, enabled, optedOut);
+        Assert.Null(RunContext.Parse(run.Context).DiskReporter);
+        Assert.DoesNotContain(run.Steps, s => s.Name == StepNames.InstallDiskReporter);
+    }
+
+    [Fact]
+    public void Native_image_cannot_record_an_interval_other_than_the_image_supported_hour() =>
+        Assert.Throws<RunException>(() => Create(true, interval: 1800));
 }

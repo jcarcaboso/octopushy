@@ -54,6 +54,8 @@ artifact is needed.
 }
 ```
 
+For ordinary guests this is `installationMode=fhs-download-v1` (the default;
+controllers omit the mode field on this legacy wire shape for compatibility).
 `reporter` is a strict object: HTTPS URLs without userinfo/query/fragment, a SHA-256
 digest, interval 60–604800 seconds, and an optional public CA bundle (at most
 16 KiB) for both download and reporting.
@@ -72,9 +74,35 @@ oneshot/timer, and starts a first report. Successful output:
 { "installed": true, "firstReportSent": true, "binarySha256": "…", "intervalSeconds": 3600 }
 ```
 
+Managed NixOS workers instead freeze `installationMode=managed-nixos-v1`, an
+explicitly qualified `imageSha256`, and the existing address/generation/VM
+identity expectations in the run. Their `reporter` object omits `binaryUrl` and
+`binarySha256`: the image-native executable is **not** the downloadable release.
+The assignment additionally carries top-level `address` and canonical UUID
+`generation`. Native-v1 requires `intervalSeconds=3600`.
+
+The native executor verifies the exact management tag/address/generation in VM
+configuration before sending a single fixed command:
+`/run/current-system/sw/bin/octopushy-worker-reporting` (no arguments). Its strict,
+bounded stdin JSON contains `protocolVersion=1`, `generation`, `endpoint`,
+`intervalSeconds`, optional `caCertificatePem`, and the separately resolved
+reporter `token`. Never put this sensitive JSON into command arguments or the
+**public-only** managed-identity bootstrap payload. A missing helper never selects
+a shell or FHS fallback. New native assignments require an updated independent
+control worker; older executors reject the unknown native mode before execution.
+
+The fixed helper checks the enrolled guest generation, atomically writes protected
+runtime credential files, starts the image's hardened systemd oneshot, and waits
+for its new authenticated HTTPS/204 upload before starting the hourly timer.
+Native success outputs have `installed`, `firstReportSent`, `installationMode`,
+`imageSha256` (frozen image provenance expectation, not a measured running-OS
+attestation), and `intervalSeconds`, but **no** `binarySha256`. Unconfigured image
+units are inactive. See [rollout and validation](../../../docs/managed-worker-disk-reporting.md).
+
 This action is **mutating and not cancellable**. A known nonzero exit fails;
 ambiguous dispatch or lost status returns `OUTCOME_UNCERTAIN`. No automatic
-remote-execution retries. The controller requests a saved infrastructure plan even
+remote-execution retries. Native helper timeout (124/137) or interruption is also
+uncertain. Guest output is never forwarded. The controller requests a saved infrastructure plan even
 when it has no changes, binding approval to its `planSha256` before releasing any
 installation credentials. Missing or mismatched plans block installation.
 
