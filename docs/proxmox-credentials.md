@@ -20,7 +20,7 @@ active version before its first attempt.
 
 **Shared means shared permissions:** observation, planning, apply and verification
 receive the same token. Trusted repository/provider code can use all of its
-upstream permissions during planning, before infrastructure approval. Revision
+upstream permissions during planning, before infrastructure approval. Installation
 trust and approved-plan checks remain, but they are **not an execution sandbox or
 a read-only planning guarantee**. Scope the token to the resources you intend to
 manage. Prefer verified TLS where available; `verify: false` still uses HTTPS but
@@ -88,7 +88,7 @@ and version. Split guest runs pin both roles before their first attempt; split
 installation observations need only the reader. Promotion does not rewrite a run's
 bindings. Revocation blocks subsequent relevant releases without replacing the version.
 
-Exact-revision trust remains necessary before any execution token is released.
+A token is released only to an endpoint its [installation trust](installation-trust.md) covers.
 Privileged **actions**, in either configuration, additionally check approval and saved
 plan's identity before decrypting credentials, including native guest actions.
 The existing manual/automatic policy still applies: **this is not T3's proposed
@@ -118,7 +118,7 @@ restrictions, and state-backend least privilege remain separate work.
 3. Choose a shared token or independent split identities outside Octopushy and
    verify their intended scopes. Do not paste secrets into Git, logs, or chat.
 4. Configure `token` or both split references, import through the store, and
-   review/trust the exact repository revision. Existing YAML `connection.token`
+   sync the repository. Existing YAML `connection.token`
    is supported for newly created runs; no secret copying is needed. If an older
    build already recorded that commit as invalid, sync a new reviewed commit
    (a configuration comment is sufficient); do not edit stored revision evidence.

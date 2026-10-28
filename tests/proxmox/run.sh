@@ -29,7 +29,7 @@ set -euo pipefail
 umask 077
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-source "$root/tests/revision-trust/fixture.sh"
+source "$root/tests/installation-trust/fixture.sh"
 remote=${REMOTE_WORKER:-0}
 [[ $remote == 0 || $remote == 1 ]] || { echo "REMOTE_WORKER must be 0 or 1." >&2; exit 1; }
 work=$root/.dev/proxmox-e2e
@@ -209,7 +209,7 @@ commit() {
   git -C "$lab" add -A
   git -C "$lab" -c user.name=octopushy-e2e -c user.email=e2e@example.invalid commit -q --allow-empty -m "$1"
   call -X POST "$api/api/repository/sync" >/dev/null
-  trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
+  trust_fixture_installations "$lab" "$(git -C "$lab" rev-parse HEAD)"
 }
 
 if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
@@ -420,7 +420,7 @@ YAML
 
 log "Observing $node"
 call -X POST "$api/api/repository/sync" >/dev/null
-trust_fixture_revision "$lab" "$(git -C "$lab" rev-parse HEAD)"
+trust_fixture_installations "$lab" "$(git -C "$lab" rev-parse HEAD)"
 for _ in $(seq 1 60); do installation=$(installation_id); [[ -n $installation ]] && break; sleep 2; done
 [[ -n ${installation:-} ]] || fail "The installation never appeared; see $work/backend.log."
 wait_observed "$installation" || fail "Octopushy could not observe $node with the read-only token."

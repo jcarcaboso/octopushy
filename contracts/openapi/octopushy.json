@@ -689,6 +689,77 @@
         }
       }
     },
+    "/api/installations/{id}/trust": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "trustInstallation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustInstallationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationTrustDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/attempts/{id}/log": {
       "get": {
         "tags": [
@@ -1043,138 +1114,6 @@
           },
           "404": {
             "description": "Not Found"
-          }
-        }
-      }
-    },
-    "/api/repository/revisions/{id}/review": {
-      "get": {
-        "tags": [
-          "Repository"
-        ],
-        "operationId": "reviewRevision",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevisionReviewDto"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/repository/revisions/{id}/trust": {
-      "post": {
-        "tags": [
-          "Repository"
-        ],
-        "operationId": "trustRevision",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TrustRevisionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevisionDto"
-                }
-              }
-            }
           }
         }
       }
@@ -4728,7 +4667,8 @@
           "proxmoxVersion",
           "hosts",
           "guests",
-          "unmanagedCount"
+          "unmanagedCount",
+          "trust"
         ],
         "type": "object",
         "properties": {
@@ -4811,6 +4751,45 @@
           "unmanagedCount": {
             "type": "integer",
             "format": "int32"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/InstallationTrustDto"
+          }
+        }
+      },
+      "InstallationTrustDto": {
+        "required": [
+          "endpoints",
+          "untrusted",
+          "trustedAt",
+          "trustedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "untrusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "trustedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -5627,8 +5606,6 @@
           "valid",
           "errorCount",
           "warningCount",
-          "trustedAt",
-          "trustedBy",
           "isCurrentSource"
         ],
         "type": "object",
@@ -5674,58 +5651,8 @@
             "type": "integer",
             "format": "int32"
           },
-          "trustedAt": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "format": "date-time"
-          },
-          "trustedBy": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "isCurrentSource": {
             "type": "boolean"
-          }
-        }
-      },
-      "RevisionReviewDto": {
-        "required": [
-          "revision",
-          "baseCommit",
-          "diff",
-          "truncated",
-          "canTrust",
-          "blockedReason"
-        ],
-        "type": "object",
-        "properties": {
-          "revision": {
-            "$ref": "#/components/schemas/RevisionDto"
-          },
-          "baseCommit": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "diff": {
-            "type": "string"
-          },
-          "truncated": {
-            "type": "boolean"
-          },
-          "canTrust": {
-            "type": "boolean"
-          },
-          "blockedReason": {
-            "type": [
-              "null",
-              "string"
-            ]
           }
         }
       },
@@ -6133,21 +6060,17 @@
           }
         }
       },
-      "TrustRevisionRequest": {
+      "TrustInstallationRequest": {
         "required": [
-          "commit",
-          "baseCommit"
+          "endpoints"
         ],
         "type": "object",
         "properties": {
-          "commit": {
-            "type": "string"
-          },
-          "baseCommit": {
-            "type": [
-              "null",
-              "string"
-            ]
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

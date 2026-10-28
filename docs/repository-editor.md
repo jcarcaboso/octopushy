@@ -46,8 +46,7 @@ checked for well-formedness.
 
 The commit is authored by the signed-in operator (`<name>@octopushy.invalid`) and
 committed by "Octopushy editor". A published commit is an ordinary new revision:
-Octopushy loads it at the next sync, and nothing runs until it is trusted on the
-Repository page.
+Octopushy loads it at the next sync and proposes the runs it implies.
 
 ## Enabling publishing
 

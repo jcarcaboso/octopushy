@@ -39,7 +39,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         reporter.BinaryUrl = "https://releases.test/reporter";
         reporter.BinarySha256 = new string('c', 64);
         reporter.ManagedNixosImageSha256 = new string(qualifiedReportingImage ? 'a' : 'b', 64);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var view = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.Null(view.DeploymentBlockedReason);
         var draft = Request(view);
@@ -74,7 +74,6 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         Assert.Equal(result.Commit, (await git.RunAsync(["rev-parse", "main"], remote.Root)).Trim());
         await server.SyncAsync();
         var current = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
-        Assert.Null(current.Revision!.TrustedAt);
         Assert.Single(current.ExistingWorkers);
         var loaded = await server.Services.GetRequiredService<RevisionCache>().GetAsync(result.Commit, default);
         Assert.DoesNotContain(loaded.Issues, i => i.Severity == IssueSeverity.Error);
@@ -97,7 +96,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         await server.SyncAsync();
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.NotNull(options.DeploymentBlockedReason);
         var draft = Request(options);
@@ -121,7 +120,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAsync();
         Enable(server);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var draft = Request((await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!);
         var original = (await (await client.PostAsJsonAsync(Path + "/review", draft)).Content.ReadFromJsonAsync<WorkerReviewDto>())!;
 

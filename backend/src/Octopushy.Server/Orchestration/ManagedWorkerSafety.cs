@@ -86,7 +86,7 @@ public static class ManagedWorkerSafety
         var head = await RepositoryTrust.EligibleRevisions(db).AsNoTracking()
             .Where(r => settings != null && r.Commit == settings.HeadCommit).OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
         if (head is null)
-            return "Trust the exact current-source head before verifying retirement.";
+            return "Sync the current repository source; its head must be loaded and valid before verifying retirement.";
         var original = await db.Runs.AsNoTracking().SingleOrDefaultAsync(r => r.Id == binding.RunId, ct);
         var source = await db.Revisions.AsNoTracking().SingleOrDefaultAsync(r => r.Id == binding.RevisionId, ct);
         if (original is null || source?.SourceId != head.SourceId)

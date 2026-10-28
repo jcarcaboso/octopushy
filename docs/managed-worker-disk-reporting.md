@@ -64,7 +64,7 @@ revert the recorded interval.
 
 ## Approved runtime delivery
 
-Normal trusted-revision plan/checksum review and action-based privileged approval
+Normal plan/checksum review and action-based privileged approval
 still apply, including no-change plans and Ready generations. No reporter token
 is created/released until successful guest/root verification and authenticated
 worker readiness. Pinned Proxmox credential checks and self-target exclusion

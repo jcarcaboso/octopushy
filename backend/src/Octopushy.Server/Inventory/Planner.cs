@@ -12,7 +12,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
 {
     /// <summary>
     /// Plans a guest at the latest revision, or retires it when its definition says so. A guest
-    /// whose folder was deleted is planned for removal, once the head that deleted it is trusted.
+    /// whose folder was deleted is planned for removal.
     /// </summary>
     public Task<Guid> PlanGuestAsync(Guid resourceId, CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
@@ -21,9 +21,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                 && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
             if (missing is not null)
             {
-                var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-                if (head?.TrustedAt is null)
-                    throw new RunException("Trust the revision that deleted this guest's folder before planning its removal.");
+                var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
+                    ?? throw new RunException("Sync the current repository source before planning this guest's removal.");
                 var removal = await GuestRemoval.ProposeAsync(db, revisions, factory, missing, head, force: true, cancellationToken)
                     ?? throw new RunException("A removal of this guest is already under way.");
                 await engine.AddRunsAsync(db, [removal], cancellationToken);
@@ -66,8 +65,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var observed = 0;
             foreach (var resource in due)
             {
-                // Discovery may have invalidated/removed an installation in an untrusted head.
-                // Scheduled work uses the definition and validity of the eligible snapshot only.
+                // The head may be invalid; scheduled work uses the latest valid snapshot only.
                 if (repository.Resource(resource.Address)?.Valid == true && repository.Installation(resource.Address) is { } installation)
                 {
                     await engine.ObserveAsync(db, resource, revision, RunFactory.Observation(repository, installation, revision), cancellationToken);

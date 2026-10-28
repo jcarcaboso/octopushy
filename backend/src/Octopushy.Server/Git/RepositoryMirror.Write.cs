@@ -7,7 +7,7 @@ public sealed record RepositoryWriteResult(string Commit, bool AlreadyPresent);
 public sealed partial class RepositoryMirror
 {
     /// <summary>Add literal files using native Git objects and a remote expected-head CAS.
-    /// No working tree, filters, hooks, shell, overwrite or trust grant.</summary>
+    /// No working tree, filters, hooks, shell or overwrite.</summary>
     public async Task<RepositoryWriteResult> AddFilesAsync(
         string url, string branch, string expectedCommit, IReadOnlyDictionary<string, string> files,
         GitCredential credential, CancellationToken ct)

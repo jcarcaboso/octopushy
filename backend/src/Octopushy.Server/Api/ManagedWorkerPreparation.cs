@@ -47,7 +47,7 @@ public static partial class ManagedWorkerPreparation
 {
     private static readonly string[] DeploymentGates =
     [
-        "Publication adds a normal guest and the versioned worker recipe to Git. It does not trust a revision or approve an infrastructure plan.",
+        "Publication adds a normal guest and the versioned worker recipe to Git. It does not approve an infrastructure plan.",
         "VM bootstrap creates its private key locally. Ready requires the correlated agent to connect with mTLS, not merely a running VM.",
         "An independent upgraded control worker must provide managed-worker, nixos-rootfs, proxmox and opentofu executors.",
         "Controller agent ingress and workload endpoints must be guest-reachable. A localhost PostgreSQL backend is not usable by this worker.",
@@ -182,7 +182,7 @@ public static partial class ManagedWorkerPreparation
                 ["kind"] = "octopushy-managed-worker-preparation",
                 ["schemaVersion"] = 1,
                 ["preparationOnly"] = true,
-                ["notice"] = "Review artifact only, not guest.yaml or an executable definition. Commit under docs/worker-drafts for review; do not copy into guests. No deployment, enrollment, trust, reservation or approval has occurred.",
+                ["notice"] = "Review artifact only, not guest.yaml or an executable definition. Commit under docs/worker-drafts for review; do not copy into guests. No deployment, enrollment, reservation or approval has occurred.",
                 ["baseRevision"] = JsonSerializer.SerializeToNode(Views.Revision(revision, true), JsonSerializerOptions.Web),
                 ["repositorySource"] = new JsonObject
                 {

@@ -1,13 +1,19 @@
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
-using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Git;
 
-/// <summary>Execution authority is attached to a loaded revision, never inferred from Git ancestry.</summary>
+/// <summary>
+/// Which work may receive credentials. Any valid revision of the current repository source may
+/// run; credentials go only to Proxmox endpoints an operator trusted for their installation.
+/// </summary>
 public static class RepositoryTrust
 {
+    /// <summary>The start of every reason that an installation trust resolves.</summary>
+    public const string WaitingForInstallation = "Waiting for trust";
+
     public static bool IsCurrentSource(DefinitionRevision revision, RepositorySettings? settings) =>
         settings?.Url is not null && revision.SourceId is { } source && source == settings.SourceId;
 
@@ -15,50 +21,41 @@ public static class RepositoryTrust
         db.Revisions.Where(r => r.SourceId != null && db.RepositorySettings.Any(s => s.Id == 1 && s.Url != null && s.SourceId == r.SourceId));
 
     public static IQueryable<DefinitionRevision> EligibleRevisions(OctopushyDb db) =>
-        CurrentRevisions(db).Where(r => r.TrustedAt != null && r.TrustedBy != null && r.RepositoryValid);
+        CurrentRevisions(db).Where(r => r.RepositoryValid);
 
     public static IQueryable<DefinitionRevision> HeadRevisions(OctopushyDb db) =>
         CurrentRevisions(db).Where(r => db.RepositorySettings.Any(s => s.Id == 1 && s.HeadCommit == r.Commit));
 
-    public static Task<string?> BlockedReasonAsync(OctopushyDb db, Run run, CancellationToken ct) =>
-        BlockedReasonAsync(db, run.RevisionId, run.Commit, ct);
+    /// <summary>The installation an address belongs to: <c>lab/installation</c> of a guest or of the installation itself.</summary>
+    public static string InstallationAddress(string address) => string.Join('/', address.Split('/').Take(2));
 
-    /// <summary>Why work built from this revision and commit, such as an observation, may not be sent yet.</summary>
-    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, CancellationToken ct)
+    /// <summary>The API endpoints an installation definition declares: its connection's and any host's own, sorted.</summary>
+    public static List<string> DeclaredEndpoints(JsonNode? definition) =>
+        new[] { definition?["connection"]?["endpoint"]?.GetValue<string>() }
+            .Concat((definition?["hosts"] as JsonObject)?.Select(h => h.Value?["endpoint"]?.GetValue<string>()) ?? [])
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+    public static Task<string?> BlockedReasonAsync(OctopushyDb db, Run run, CancellationToken ct) =>
+        BlockedReasonAsync(db, run.RevisionId, run.Commit, RunContext.Parse(run.Context), ct);
+
+    /// <summary>Why work built from this revision and context, such as an observation, may not be sent yet.</summary>
+    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, CancellationToken ct)
     {
         if (revisionId is not { } id || commit is null
             || !await EligibleRevisions(db).AnyAsync(r => r.Id == id && r.Commit == commit, ct))
         {
-            return "Waiting for trust: explicitly trust this exact revision of the current repository source. Legacy or previous-source work requires an explicit replan.";
+            return "Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.";
         }
+        var address = InstallationAddress(context.Address);
+        var endpoint = context.Proxmox.Endpoint;
+        var trust = await db.InstallationTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
+        if (trust is null)
+            return $"{WaitingForInstallation}: {address} is a new Proxmox installation. Trust it on its page before its credentials are sent to {endpoint}.";
+        if (!trust.Endpoints.Contains(endpoint))
+            return $"{WaitingForInstallation}: {endpoint} is a new endpoint for {address}. Trust the installation again on its page before its credentials are sent there.";
         return null;
-    }
-
-    /// <summary>Called under the engine gate. No repository code, credentials, or worker is involved.</summary>
-    public static async Task<RevisionReviewDto> ReviewAsync(OctopushyDb db, RepositoryMirror mirror, Guid id, CancellationToken ct)
-    {
-        var revision = await db.Revisions.FirstOrDefaultAsync(r => r.Id == id, ct)
-            ?? throw new RunException("There is no such revision.");
-        var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
-        var current = IsCurrentSource(revision, settings);
-        var dto = Views.Revision(revision, current);
-        var basis = await EligibleRevisions(db).Where(r => r.Id != id).OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
-        string? blocked = !current ? "This revision is not from the current repository source. Sync and review the current source."
-            : !revision.RepositoryValid ? "The repository definition is invalid; fix it and sync again."
-            : revision.TrustedAt is not null ? "This exact revision is already trusted."
-            : null;
-        if (!current)
-        {
-            return new(dto, null, "", false, false, blocked);
-        }
-        try
-        {
-            var diff = await mirror.ReviewDiffAsync(basis?.Commit, revision.Commit, ct);
-            return new(dto, basis?.Commit, diff, false, blocked is null, blocked);
-        }
-        catch (GitException e)
-        {
-            return new(dto, basis?.Commit, "", e is ReviewTooLargeException, false, $"Review unavailable: {e.Message}");
-        }
     }
 }

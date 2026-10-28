@@ -321,14 +321,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("subject");
 
-                    b.Property<DateTimeOffset?>("TrustedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("trusted_at");
-
-                    b.Property<string>("TrustedBy")
-                        .HasColumnType("text")
-                        .HasColumnName("trusted_by");
-
                     b.Property<int>("WarningCount")
                         .HasColumnType("integer")
                         .HasColumnName("warning_count");
@@ -424,6 +416,32 @@ namespace Octopushy.Server.Data.Migrations
                         .HasName("pk_guest_disk_usages");
 
                     b.ToTable("guest_disk_usages", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.InstallationTrust", b =>
+                {
+                    b.Property<string>("Address")
+                        .HasColumnType("text")
+                        .HasColumnName("address");
+
+                    b.PrimitiveCollection<List<string>>("Endpoints")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("endpoints");
+
+                    b.Property<DateTimeOffset>("TrustedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("trusted_at");
+
+                    b.Property<string>("TrustedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("trusted_by");
+
+                    b.HasKey("Address")
+                        .HasName("pk_installation_trusts");
+
+                    b.ToTable("installation_trusts", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>

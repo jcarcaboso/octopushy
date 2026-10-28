@@ -42,7 +42,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         if (qualified)
             settings["Octopushy:DiskReporter:ManagedNixosImageSha256"] = new string('a', 64);
         await using var server = await ServerHarness.StartAsync(postgres, repository, settings: settings);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
 
         await server.SyncAsync();
         var inventory = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!;
@@ -99,7 +99,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Untrusted_revisions_never_create_or_release_reporter_credentials(bool native)
+    public async Task Untrusted_installations_never_create_or_release_reporter_credentials(bool native)
     {
         using var repository = native ? Definitions.ManagedWorkerDefinitionTests.Repository() : TestRepository.Minimal();
         var settings = Settings;

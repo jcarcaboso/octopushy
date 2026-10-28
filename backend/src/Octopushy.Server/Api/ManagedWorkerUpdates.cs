@@ -74,7 +74,7 @@ public static class ManagedWorkerUpdates
                         throw new RunException("The worker has active work or an unresolved mutation. Drain and inspect it before updating.");
                     var settings = await db.RepositorySettings.SingleAsync(s => s.Id == 1, ct);
                     var revision = await RepositoryTrust.EligibleRevisions(db).Where(r => r.Commit == settings.HeadCommit).OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct)
-                        ?? throw new RunException("Sync and trust the current exact repository revision first.");
+                        ?? throw new RunException("Sync the current repository source first; its head must be loaded and valid.");
                     var original = await db.Runs.SingleAsync(r => r.Id == binding.RunId, ct);
                     var originalRevision = await db.Revisions.SingleAsync(r => r.Id == original.RevisionId, ct);
                     if (revision.SourceId != originalRevision.SourceId) throw new RunException("This worker is bound to a different repository-source generation.");
