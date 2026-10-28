@@ -213,7 +213,7 @@ public class ManagedWorkerRetirementTests(PostgresFixture postgres)
         return preparation["existingWorkers"]!.AsArray().Single(w => w!["address"]!.GetValue<string>() == Guest)!;
     }
 
-    private static async Task<Guid> ReadyAsync(ServerHarness server, HttpClient http, FakeAgent control)
+    internal static async Task<Guid> ReadyAsync(ServerHarness server, HttpClient http, FakeAgent control)
     {
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();

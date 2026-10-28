@@ -40,13 +40,19 @@ public static class ManagedWorkerSafety
         && plan["counts"] is JsonObject counts && new[] { "create", "update", "delete", "replace" }
             .All(key => counts[key] is JsonValue value && value.TryGetValue<int>(out var count) && count == 0);
 
+    /// <summary>The read-only check that a worker removed by hand is gone; never a removal that destroys it.</summary>
     public static bool IsRetirementCheck(Run? run) =>
         run is not null && run.Operation == Operations.Retire && run.Steps.Count == 1
         && run.Steps[0].Name == StepNames.VerifyAbsent
-        && run.Steps[0].Attempts.All(a => !a.Mutating);
+        && run.Steps[0].Attempts.All(a => !a.Mutating)
+        && RunContext.Parse(run.Context).DefinitionRemovedIn is null;
+
+    /// <summary>A retire run that destroys a managed worker whose folder was deleted.</summary>
+    public static bool IsWorkerRemoval(Run? run, RunContext context) =>
+        run is not null && run.Operation == Operations.Retire && context.DefinitionRemovedIn is not null && context.ManagedWorker is not null;
 
     public static bool Matches(ManagedWorkerBinding binding, Run run, RunContext context) =>
-        (run.Operation == Operations.Provision || IsRetirementCheck(run))
+        (run.Operation == Operations.Provision || IsRetirementCheck(run) || IsWorkerRemoval(run, context))
         && context.ManagedWorker?.Generation == binding.Generation
         && context.Proxmox.Node == binding.Host && context.Proxmox.Vmid == binding.Vmid
         && context.HostKey == $"{binding.Installation}/{binding.Host}";
@@ -115,7 +121,8 @@ public static class ManagedWorkerSafety
             if (await RetirementBlockedReasonAsync(db, resource, run, ct) is { } reason)
                 throw new AssignmentException(reason);
         }
-        else if (bound?.AgentId is { } enrolledId && !await db.Agents.AnyAsync(a => a.Id == enrolledId, ct))
+        // A removal still destroys a worker whose enrollment was removed by hand.
+        else if (bound?.AgentId is { } enrolledId && !IsWorkerRemoval(run, context) && !await db.Agents.AnyAsync(a => a.Id == enrolledId, ct))
             throw new AssignmentException("This worker's enrollment was removed. Its generation cannot be silently re-enrolled; verify retirement instead.");
         if (context.WorkerUpdate is { } update)
         {

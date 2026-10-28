@@ -9,10 +9,11 @@ namespace Octopushy.Server.Inventory;
 
 /// <summary>
 /// Applies a new revision to the resources Octopushy knows, and proposes the runs it implies:
-/// a provision run for each guest whose inputs changed and a retire run for each guest newly
-/// retired. Each installation whose definition changed is observed again.
+/// a provision run for each guest whose inputs changed, a retire run for each guest newly
+/// retired, and, once the revision is trusted, a retire run for each guest whose folder was
+/// deleted. Each installation whose definition changed is observed again.
 /// </summary>
-public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeProvider clock, ILogger<InventoryUpdater> logger)
+public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
@@ -106,16 +107,31 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
             .ToListAsync(cancellationToken);
         var currentSourceIds = await RepositoryTrust.CurrentRevisions(db).Select(r => r.Id).ToListAsync(cancellationToken);
 
+        var runs = new List<Run>();
         if (repository.RepositoryValid)
         {
             foreach (var resource in byAddress.Values.Where(r => !seen.Contains(r.Id) && r.RetiredAt is null))
             {
                 resource.MissingSince ??= now;
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}; nothing runs until it is restored or retired.", cancellationToken);
+                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}.",
+                    cancellationToken, keepRemoval: true);
+                // Deleting a folder asks for removal, but only once the deleting revision is trusted:
+                // an unreviewed commit never proposes destroying anything.
+                if (revision.TrustedAt is null || resource.Kind != ResourceKinds.Guest) continue;
+                try
+                {
+                    if (await GuestRemoval.ProposeAsync(db, revisions, factory, resource, revision, force: false, cancellationToken) is { } removal)
+                        runs.Add(removal);
+                }
+                catch (RunException error)
+                {
+                    logger.LogWarning("The removal of {Address} cannot be planned: {Error}", resource.Address, error.Message);
+                    resource.Issues = JsonSerializer.Serialize(new[] { new DefinitionIssue(IssueSeverity.Error, resource.DefinitionFile ?? resource.Address,
+                        null, $"The folder was deleted, but its removal cannot be planned: {error.Message}", resource.Address) }, IssueJson);
+                }
             }
         }
 
-        var runs = new List<Run>();
         var changedInstallations = new List<(Resource Resource, RunContext Context)>();
         foreach (var resource in guests)
         {
@@ -211,10 +227,14 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, TimeP
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
     }
 
-    private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason, CancellationToken cancellationToken)
+    private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
+        CancellationToken cancellationToken, bool keepRemoval = false)
     {
         foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id).ToList())
         {
+            // A guest that stays deleted keeps its proposed removal.
+            if (keepRemoval && run.Operation == Operations.Retire && RunContext.Parse(run.Context).DefinitionRemovedIn is not null)
+                continue;
             // Discovery must not discard a prepared, trusted plan for an untrusted head.
             if (revision.TrustedAt is null && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is null)
                 continue;

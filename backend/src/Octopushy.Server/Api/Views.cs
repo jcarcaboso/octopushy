@@ -104,9 +104,11 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             return (GuestStatuses.Retired, null);
         }
 
-        if (resource.MissingSince is not null)
+        // A deleted guest with a proposed removal shows the removal's progress.
+        if (resource.MissingSince is not null && active is null)
         {
-            return (GuestStatuses.Missing, "The folder disappeared without the guest being retired. Restore it, or retire the guest.");
+            return (GuestStatuses.Missing, "The folder was deleted. Once that revision is trusted, Octopushy proposes removing the guest; "
+                + "Plan now proposes it again. Restore the folder to keep the guest.");
         }
 
         if (!resource.Valid)

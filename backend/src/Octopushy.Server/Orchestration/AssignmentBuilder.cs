@@ -298,7 +298,14 @@ public sealed class AssignmentBuilder(
         if (RunContext.Parse(run.Context).WorkerUpdate is not null
             && !ManagedWorkerSafety.UnchangedPlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
             throw new AssignmentException("Worker OS updates require an unchanged infrastructure plan and must never recreate or reconcile a VM.");
-        if (RunContext.Parse(run.Context).ManagedWorker is not null
+        var runContext = RunContext.Parse(run.Context);
+        if (ManagedWorkerSafety.IsWorkerRemoval(run, runContext))
+        {
+            // Only a deleted worker's removal destroys a worker VM, and only once it is drained.
+            if (steps.SingleOrDefault(s => s.Name == StepNames.DrainWorker)?.Status != StepStatuses.Succeeded)
+                throw new AssignmentException("The worker must be drained before its VM is removed.");
+        }
+        else if (runContext.ManagedWorker is not null
             && ManagedWorkerSafety.DestructivePlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
             throw new AssignmentException("Managed worker deletion/replacement is not supported, even with saved-plan approval.");
         var planAttempt = await db.Attempts.AsNoTracking()

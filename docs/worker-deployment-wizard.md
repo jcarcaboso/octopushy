@@ -134,12 +134,23 @@ instead of another VM. Stale or changed input requires another review.
   Proxmox token. Saved-plan integrity is checked before credential release.
   Shared-token preview still has that token's full upstream permissions;
   approval and exact revision trust are not execution sandboxing.
-- Automatic VM destruction, generation replacement, movement, role removal and
-  destructive replacement plans are refused. **Deleting an agent revokes its
+- Generation replacement, movement, role removal, `lifecycle: retired` and
+  destructive plans in ordinary runs are refused. **Deleting an agent revokes its
   enrollment; it does not delete or retire its VM.** The worker view distinguishes
   a removed enrollment from an enrolled but offline worker.
-- To finalize an already removed worker, remove its Git definition, revoke its
-  enrollment, and explicitly choose **Verify retirement** on the worker page.
+- **To remove a worker, delete its folder.** Once the deleting revision is trusted,
+  Octopushy proposes a removal run built from the worker's last applied
+  definition: plan the destroy, wait for manual approval (always, for workers),
+  drain the worker, remove its VM protection, apply the saved destroy plan, verify
+  the VM is absent, then remove its enrollment. Another worker does all of this;
+  a worker never operates on its own VM. A failed absence check keeps the
+  enrollment. Restoring the folder before the destroy starts cancels the removal,
+  but the worker stays drained until it is resumed. See
+  [lab-repository.md](lab-repository.md), rule 10.
+- To finalize a worker already removed by hand, remove its Git definition, revoke its
+  enrollment, and explicitly choose **Verify retirement** on the worker page. A
+  deleted worker whose enrollment was already revoked is not destroyed
+  automatically; **Plan removal** on its guest page does that explicitly.
   An independent control worker uses the existing read-only `verify-absent`
   executor against the original installation. Only explicit absence evidence
   marks the guest retired and removes it from the active worker list. A present
@@ -147,7 +158,7 @@ instead of another VM. Stale or changed input requires another review.
   finalization; no plan, unprotect, destroy or guest command is executed.
   Identity and run evidence remain available. Retired generation names are not
   silently reused: choose a fresh name and unused VMID for a new deployment.
-  Persistent automated drain/VM destruction remains a separate milestone. Invalid worker
+  Invalid worker
   edits cannot rename their durable resource, and are recorded as per-resource
   issues without dropping unrelated guest discovery. Reverting a rejected
   managed rename retains the original resource/generation.

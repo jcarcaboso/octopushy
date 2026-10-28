@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
 using Octopushy.Server.Api;
+using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 
@@ -112,6 +113,47 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(Path + "/review", bad)).StatusCode);
         config.WorkerDeployment.ImageUrl = "https://host/image?token=forbidden";
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(Path + "/review", draft)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_retired_workers_name_is_reused_with_a_new_generation_but_not_while_removal_is_pending()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAsync();
+        Enable(server);
+        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        var draft = Request((await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!);
+        var original = (await (await client.PostAsJsonAsync(Path + "/review", draft)).Content.ReadFromJsonAsync<WorkerReviewDto>())!;
+
+        var id = Guid.CreateVersion7();
+        await server.WithDbAsync(async db =>
+        {
+            db.Resources.Add(new Resource
+            {
+                Id = id, Address = original.Address, Kind = ResourceKinds.Guest, ParentAddress = "home/korriban", Lab = "home",
+                MissingSince = DateTimeOffset.UtcNow,
+                ManagedWorker = new()
+                {
+                    ResourceId = id, Generation = original.Generation, Installation = "home/korriban", Host = "korriban",
+                    Vmid = 901, RevisionId = draft.Selection!.RevisionId, RunId = Guid.NewGuid(), ServerUrl = "https://controller.test",
+                },
+            });
+            await db.SaveChangesAsync();
+        });
+        var pending = await client.PostAsJsonAsync(Path + "/review", draft);
+        Assert.Equal(HttpStatusCode.Conflict, pending.StatusCode);
+        Assert.Contains("removal has not finished", await pending.Content.ReadAsStringAsync());
+
+        await server.WithDbAsync(async db =>
+        {
+            (await db.Resources.SingleAsync(r => r.Id == id)).RetiredAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        });
+        var reused = await client.PostAsJsonAsync(Path + "/review", draft);
+        reused.EnsureSuccessStatusCode();
+        var review = (await reused.Content.ReadFromJsonAsync<WorkerReviewDto>())!;
+        Assert.False(review.AlreadyExists);
+        Assert.NotEqual(original.Generation, review.Generation);
     }
 
     private static void Enable(ServerHarness server)
