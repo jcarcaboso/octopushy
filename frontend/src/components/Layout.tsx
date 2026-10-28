@@ -1,6 +1,7 @@
 import {
   Bot,
   CirclePlay,
+  FilePen,
   GitBranch,
   GitCommitHorizontal,
   KeyRound,
@@ -21,6 +22,7 @@ const nav = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/variables", label: "Variables", icon: KeyRound },
   { to: "/repository", label: "Repository", icon: GitBranch },
+  { to: "/editor", label: "Editor", icon: FilePen },
   { to: "/operator-access", label: "CLI access", icon: User },
 ];
 

@@ -32,6 +32,7 @@ public static partial class Endpoints
         api.MapWorkerPreparation();
         api.MapWorkerUpdates();
         api.MapWorkerRepositoryDeployment();
+        api.MapRepositoryEditor();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
 

@@ -556,3 +556,239 @@
   justify-content: space-between;
   gap: var(--space-2) var(--space-4);
 }
+
+/* Repository editor */
+.content:has(.draft-page) {
+  max-width: none;
+}
+
+.draft-page__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr);
+  gap: var(--space-3);
+  height: max(28rem, calc(100vh - 13rem));
+}
+
+.workspace__side,
+.workspace__main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.workspace__side {
+  gap: var(--space-2);
+  padding: var(--space-2);
+  overflow: auto;
+}
+
+.workspace__side-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.workspace__changes {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.workspace__heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.workspace__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.workspace__spacer {
+  flex: 1;
+}
+
+.workspace__editor {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace__placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  text-align: center;
+  background: var(--surface);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.code-editor {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.segmented--inline {
+  margin-bottom: 0;
+}
+
+.segmented--inline .segmented__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.segmented__item:disabled {
+  opacity: 0.5;
+}
+
+.file-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.file-tree__filter {
+  width: 100%;
+}
+
+.file-tree__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.file-tree__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: 0.2rem var(--space-2) 0.2rem calc(var(--space-2) + var(--depth, 0) * 0.9rem);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-tree__item:hover {
+  background: var(--surface-3);
+}
+
+.file-tree__item--selected {
+  background: var(--accent-soft);
+}
+
+.file-tree__item svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.file-tree__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tree__mark {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.file-tree__mark--added {
+  color: var(--success-fg);
+}
+
+.file-tree__mark--modified,
+.file-tree__mark--dirty {
+  color: var(--info-fg);
+}
+
+.file-tree__mark--deleted,
+.file-tree__mark--conflict {
+  color: var(--danger-fg);
+}
+
+.change-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.change-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(24rem, 1fr);
+    height: auto;
+  }
+
+  .workspace__side {
+    max-height: 18rem;
+  }
+}

@@ -8,6 +8,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<DefinitionRevision> Revisions => Set<DefinitionRevision>();
 
+    public DbSet<RepositoryDraft> RepositoryDrafts => Set<RepositoryDraft>();
+
     public DbSet<Resource> Resources => Set<Resource>();
 
     public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
@@ -43,6 +45,12 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<RepositorySettings>(e =>
         {
             e.Property(x => x.Id).ValueGeneratedNever();
+        });
+
+        model.Entity<RepositoryDraft>(e =>
+        {
+            e.Property(x => x.Title).HasMaxLength(120);
+            e.HasIndex(x => x.UpdatedAt);
         });
 
         model.Entity<DefinitionRevision>(e =>

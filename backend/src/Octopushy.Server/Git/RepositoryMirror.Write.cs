@@ -17,12 +17,8 @@ public sealed partial class RepositoryMirror
         if (!BranchPattern().IsMatch(branch) || files.Count is < 1 or > 32
             || files.Sum(f => Encoding.UTF8.GetByteCount(f.Value)) > 512 * 1024)
             throw new GitException("The repository addition is invalid or exceeds the bounded review limit.");
-        foreach (var path in files.Keys)
-        {
-            if (path.Length > 512 || path.Any(c => char.IsControl(c) || c is '\\' or ':')
-                || path.Split('/').Any(p => p.Length == 0 || p is "." or ".." || p.Equals(".git", StringComparison.OrdinalIgnoreCase)))
-                throw new GitException("A generated repository path is invalid.");
-        }
+        if (files.Keys.Any(path => !IsSafePath(path)))
+            throw new GitException("A generated repository path is invalid.");
 
         await _gate.WaitAsync(ct);
         var temporary = Path.Combine(_directory, "write-" + Guid.NewGuid().ToString("N"));
@@ -83,4 +79,9 @@ public sealed partial class RepositoryMirror
             _gate.Release();
         }
     }
+
+    /// <summary>A relative path with no empty, dot or <c>.git</c> segments, control characters, backslashes or colons.</summary>
+    internal static bool IsSafePath(string path) =>
+        path.Length is > 0 and <= 512 && !path.Any(c => char.IsControl(c) || c is '\\' or ':')
+        && !path.Split('/').Any(p => p.Length == 0 || p is "." or ".." || p.Equals(".git", StringComparison.OrdinalIgnoreCase));
 }

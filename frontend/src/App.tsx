@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes } from "react-router";
 import { setUnauthorizedHandler } from "./api/client";
 import { createQueryClient } from "./api/queryClient";
@@ -20,6 +20,11 @@ import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
 import { WorkerPreparationPage } from "./pages/WorkerPreparationPage";
 import { OperatorAccessPage } from "./pages/OperatorAccessPage";
+import { EditorPage } from "./pages/EditorPage";
+import { PageSkeleton } from "./components/States";
+
+// Monaco is large, so the draft workspace and the editor load only when a draft is opened.
+const DraftPage = lazy(() => import("./pages/DraftPage").then((m) => ({ default: m.DraftPage })));
 
 export function AppRoutes() {
   return (
@@ -44,6 +49,15 @@ export function AppRoutes() {
         <Route path="operator-access" element={<OperatorAccessPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="repository" element={<RepositoryPage />} />
+        <Route path="editor" element={<EditorPage />} />
+        <Route
+          path="editor/:id"
+          element={
+            <Suspense fallback={<PageSkeleton rows={3} />}>
+              <DraftPage />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

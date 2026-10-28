@@ -13,8 +13,9 @@ sequence, see [Progress and next steps](docs/progress-and-next-steps.md).
 **Status:** milestone 1, Proxmox and virtual machines
 ([scope and contracts](docs/milestone-1.md)). Guests are planned, approved, applied,
 verified, and retired; installations are observed through the Proxmox API. Optional
-post-provision setup installs the disk reporter; general guest setup, services, DNS,
-and the editor come later. The first Python proof of concept is archived
+post-provision setup installs the disk reporter; the [repository editor](docs/repository-editor.md)
+edits the lab repository in drafts and publishes them as commits. General guest setup,
+services, and DNS come later. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)

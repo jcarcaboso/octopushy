@@ -29,6 +29,39 @@ public sealed class RepositorySettings
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/// <summary>
+/// Edits to the lab repository kept by Octopushy until they are published. The files live on a
+/// Git ref in Octopushy's mirror; this row records where the draft started and where it is.
+/// </summary>
+public sealed class RepositoryDraft
+{
+    public Guid Id { get; set; }
+
+    /// <summary>The repository source the draft was started from; a different source makes it stale.</summary>
+    public Guid SourceId { get; set; }
+
+    public required string Title { get; set; }
+
+    /// <summary>The branch commit the draft's edits are relative to.</summary>
+    public required string BaseCommit { get; set; }
+
+    /// <summary>The draft's latest commit, never pushed.</summary>
+    public required string HeadCommit { get; set; }
+
+    /// <summary>Files left with conflict markers by an update; publishing waits until each is saved.</summary>
+    public List<string> ConflictPaths { get; set; } = [];
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public string? PublishedCommit { get; set; }
+
+    public DateTimeOffset? PublishedAt { get; set; }
+
+    public string? PublishedBy { get; set; }
+}
+
 /// <summary>A commit of the lab repository as Octopushy read it.</summary>
 public sealed class DefinitionRevision
 {
