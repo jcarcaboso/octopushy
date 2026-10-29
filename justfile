@@ -72,3 +72,4 @@ proxmox-e2e: dev-db
 images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .
     podman build -f frontend/Containerfile -t octopushy-frontend:{{version}} .
+    podman build -f agent/Containerfile -t octopushy-agent:{{version}} .
