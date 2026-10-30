@@ -1,0 +1,7 @@
+# Build output and local state stay out of image builds (Docker and Podman read this).
+.dev/
+agent/target/
+backend/**/bin/
+backend/**/obj/
+frontend/node_modules/
+frontend/dist/

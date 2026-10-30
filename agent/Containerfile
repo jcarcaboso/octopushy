@@ -1,0 +1,29 @@
+# The agent image: the `octopushy` binary and OpenTofu, which the agent runs directly
+# (`--tool-runtime local`), so it needs no container runtime of its own. The Compose
+# project runs it as the internal agent. Build from the repository root:
+#   podman build -f agent/Containerfile -t octopushy-agent:<version> .
+FROM docker.io/library/rust:1.98.1-trixie AS build
+WORKDIR /src
+COPY contracts/ contracts/
+COPY agent/ agent/
+RUN cd agent && cargo build --release --locked --bin octopushy
+
+# The same OpenTofu release the podman and docker runtimes use (tools/mod.rs).
+FROM ghcr.io/opentofu/opentofu:1.13.1-minimal AS tofu
+
+FROM docker.io/library/debian:trixie-slim
+# git: OpenTofu module sources may be Git repositories.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends ca-certificates git \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --user-group --home-dir /var/lib/octopushy-agent --shell /usr/sbin/nologin octopushy-agent \
+ && install -d -o octopushy-agent -g octopushy-agent -m 0700 /var/lib/octopushy-agent
+COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
+COPY --from=build /src/agent/target/release/octopushy /usr/local/bin/octopushy
+COPY --chmod=0755 agent/packaging/container-entrypoint.sh /usr/local/bin/octopushy-agent-entrypoint
+USER octopushy-agent
+ENV STATE_DIRECTORY=/var/lib/octopushy-agent \
+    HOME=/var/lib/octopushy-agent \
+    OCTOPUSHY_LOG=info
+VOLUME /var/lib/octopushy-agent
+ENTRYPOINT ["/usr/local/bin/octopushy-agent-entrypoint"]

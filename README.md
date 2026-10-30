@@ -156,9 +156,13 @@ packet paths, remote access, or deployment success.
 
 ## Deployment
 
-Releases are built by hand for now: `just images <version>` builds the backend and
-frontend images, and [`deploy/`](deploy/README.md) runs them with PostgreSQL on one
-host. Agents run where they can reach the labs; one agent can serve every lab.
+`just images <version>` builds the backend, frontend, and agent images by hand, and
+[`deploy/`](deploy/README.md) runs them with PostgreSQL on one host. GitHub Actions
+publishes them to Docker Hub for `main` and every `v<version>` tag;
+[`deploy/proxmox/`](deploy/proxmox/README.md) installs those in a Proxmox LXC container
+with one command, with an internal agent to start with, and updates it with a snapshot
+to roll back to. Agents run where they can reach the labs; one agent can serve every
+lab.
 
 For guest disk usage, the separate [disk reporter](agent/packaging/disk-reporter/README.md)
 pushes root-filesystem used bytes on a configurable hourly systemd timer and exits.

@@ -1,5 +1,7 @@
 <Project>
   <PropertyGroup>
+    <!-- One version for the backend, the frontend, and the agent. -->
+    <Version>0.1.0</Version>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -1,5 +1,6 @@
 # The control host: PostgreSQL, the backend, and the frontend. Agents run elsewhere (or on
-# this host under their own user) and connect to the agent port. See deploy/README.md.
+# this host under their own user) and connect to the agent port; the `agent` profile adds
+# an internal agent to this project. See deploy/README.md.
 name: octopushy
 
 services:
@@ -37,6 +38,8 @@ services:
       Octopushy__Store__KeyFile: /run/secrets/kek
       # The name or address agents use to reach this host; it goes into the agent endpoint's certificate.
       Octopushy__AgentChannel__Hostnames__0: ${OCTOPUSHY_AGENT_HOST:?set OCTOPUSHY_AGENT_HOST in .env}
+      # The name the internal agent uses on the agents network.
+      Octopushy__AgentChannel__Hostnames__1: backend
       Octopushy__AgentChannel__PublicUrl: https://${OCTOPUSHY_AGENT_HOST}:${OCTOPUSHY_AGENT_PORT:-8443}
       # Post-provision one-shot guest reporter; publish a compatible, pinned binary first.
       Octopushy__DiskReporter__Enabled: ${OCTOPUSHY_DISK_REPORTER_ENABLED:-false}
@@ -49,6 +52,7 @@ services:
       - kek
     volumes:
       - data:/var/lib/octopushy
+    networks: [default, agents]
     ports:
       # Agents connect here: gRPC over TLS with client certificates.
       - "${OCTOPUSHY_AGENT_PORT:-8443}:8443"
@@ -67,11 +71,35 @@ services:
     depends_on:
       - backend
 
+  # The internal agent (profile `agent`): runs OpenTofu and the Proxmox checks from this
+  # host. It shares only the agents network with the backend, so it cannot reach
+  # PostgreSQL, and it gets neither the key nor the database password. It waits until it
+  # is enrolled: `docker compose run --rm -e OCTOPUSHY_ENROLLMENT_TOKEN agent agent enroll
+  # --server https://backend:8443 --name internal`, with the token from the web interface.
+  agent:
+    image: ${OCTOPUSHY_AGENT_IMAGE:-localhost/octopushy-agent:dev}
+    profiles: [agent]
+    restart: unless-stopped
+    # Reaps the processes OpenTofu leaves behind and forwards signals to the agent.
+    init: true
+    # The first SIGTERM lets running applies finish; never cut one short.
+    stop_grace_period: 30m
+    volumes:
+      - agent:/var/lib/octopushy-agent
+    networks: [agents]
+    depends_on:
+      - backend
+
+networks:
+  default:
+  agents:
+
 secrets:
   # The key-encryption key for the variable store: 32 random bytes, kept out of backups.
   kek:
-    file: ./secrets/kek
+    file: ${OCTOPUSHY_KEK_FILE:-./secrets/kek}
 
 volumes:
   postgres:
   data:
+  agent:

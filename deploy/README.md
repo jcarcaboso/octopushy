@@ -5,6 +5,9 @@ Agents run separately (see [`agent/`](../agent)). Any Linux host with Podman (th
 Docker-compatible API, or `podman compose`) or Docker Engine with the Compose plugin
 works.
 
+To run it in a Proxmox LXC container with Docker, created and updated by script, see
+[`proxmox/`](proxmox/README.md).
+
 For repository-backed NixOS worker VMs, see the
 [managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
 It reuses an independent control worker; publishing a definition does not grant
@@ -24,6 +27,9 @@ podman compose up -d                      # or: docker compose up -d
 ```
 
 - `migrate` applies the database schema and exits; the backend starts after it.
+- `COMPOSE_PROFILES=agent` in `.env` adds an internal agent (image `just images` builds
+  too). Enroll it once with a token from the web interface:
+  `OCTOPUSHY_ENROLLMENT_TOKEN='opy1.…' podman compose run --rm --no-deps -e OCTOPUSHY_ENROLLMENT_TOKEN agent agent enroll --server https://backend:8443 --name internal`.
 - The web interface listens on `127.0.0.1:8081` by default. Put TLS in front of it
   before exposing it to the network (`OCTOPUSHY_UI_BIND`).
 - Agents connect to port 8443 on `OCTOPUSHY_AGENT_HOST`. That name goes into the agent
