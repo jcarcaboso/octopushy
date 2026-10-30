@@ -52,7 +52,7 @@ export function OperatorAccessPage() {
       <header className="page-header"><h1>CLI access</h1></header>
       <p>Create a named operator grant for the CLI. It has your account's API access, including explicit approvals.
         It cannot create or manage other grants. Infrastructure credentials remain in Octopushy.</p>
-      <p>Grant creation does not approve a plan, trust a revision, or update a machine.</p>
+      <p>Grant creation does not approve a plan, trust an installation, or update a machine.</p>
       <form className="form" onSubmit={(event) => { void create(event); }}>
         <div className="field">
           <label htmlFor="operator-name">Grant name</label>

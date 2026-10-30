@@ -70,10 +70,6 @@ public sealed class DefinitionRevision
     /// <summary>Null for legacy revisions whose configured source cannot be established.</summary>
     public Guid? SourceId { get; set; }
 
-    public DateTimeOffset? TrustedAt { get; set; }
-
-    public string? TrustedBy { get; set; }
-
     /// <summary>Increases with every revision loaded, for ordering.</summary>
     public long Sequence { get; set; }
 
@@ -95,6 +91,24 @@ public sealed class DefinitionRevision
 
     /// <summary>JSON array of issues.</summary>
     public string Issues { get; set; } = "[]";
+}
+
+/// <summary>
+/// An operator's confirmation that a Proxmox installation's API endpoints may receive its
+/// credentials. Revisions need no trust of their own; a new installation, or a new endpoint for
+/// one, waits for this before any credential-bearing work is sent to it.
+/// </summary>
+public sealed class InstallationTrust
+{
+    /// <summary>The installation's address, <c>lab/installation</c>.</summary>
+    public required string Address { get; set; }
+
+    /// <summary>Every endpoint the installation declared when it was trusted, sorted.</summary>
+    public List<string> Endpoints { get; set; } = [];
+
+    public DateTimeOffset TrustedAt { get; set; }
+
+    public required string TrustedBy { get; set; }
 }
 
 public static class ResourceKinds

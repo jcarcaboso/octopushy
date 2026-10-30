@@ -34,7 +34,7 @@ export function PublishDialog({ detail, open, onClose, onPublished }: Props) {
       description={
         <>
           Octopushy validates the draft, merges it onto the latest <code className="mono">{detail.branch}</code>, and pushes one
-          commit. Nothing runs until that commit is trusted on the Repository page.
+          commit. Octopushy loads it at the next sync and proposes the runs it implies.
         </>
       }
       footer={

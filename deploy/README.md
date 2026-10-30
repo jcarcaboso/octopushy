@@ -8,7 +8,7 @@ works.
 For repository-backed NixOS worker VMs, see the
 [managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
 It reuses an independent control worker; publishing a definition does not grant
-revision trust or infrastructure approval.
+infrastructure approval.
 
 ## First start
 

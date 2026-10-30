@@ -123,47 +123,6 @@ public static partial class Endpoints
             return TypedResults.Ok(new RevisionDetailDto(Views.Revision(revision, RepositoryTrust.IsCurrentSource(revision, settings)), Views.Issues(revision.Issues)));
         })
         .WithName("getRevision");
-
-        group.MapGet("/revisions/{id:guid}/review", async (Guid id, RunEngine engine, RepositoryMirror mirror, CancellationToken ct) =>
-            TypedResults.Ok(await engine.ExecuteAsync((db, _) => RepositoryTrust.ReviewAsync(db, mirror, id, ct), ct)))
-            .WithName("reviewRevision");
-
-        group.MapPost("/revisions/{id:guid}/trust", async (Guid id, TrustRevisionRequest request, HttpContext http,
-            RunEngine engine, RepositoryMirror mirror, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
-            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
-            {
-                var review = await RepositoryTrust.ReviewAsync(db, mirror, id, ct);
-                if (!review.CanTrust || !string.Equals(request.Commit, review.Revision.Commit, StringComparison.Ordinal)
-                    || !string.Equals(request.BaseCommit, review.BaseCommit, StringComparison.Ordinal))
-                {
-                    throw new RunException(review.BlockedReason ?? "The review changed. Review the exact revision and its current base again.");
-                }
-                var actor = http.User.Identity?.Name;
-                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
-                var revision = await db.Revisions.SingleAsync(r => r.Id == id, ct);
-                revision.TrustedAt = clock.GetUtcNow();
-                revision.TrustedBy = actor;
-                await db.SaveChangesAsync(ct);
-                // Promoting the discovered head can now supersede older prepared work;
-                // merely discovering it could not. Trusting an older pinned revision
-                // never rolls the visible inventory back.
-                var settings = await db.RepositorySettings.SingleAsync(s => s.Id == 1, ct);
-                if (settings.HeadCommit == revision.Commit)
-                {
-                    var repository = await services.GetRequiredService<RevisionCache>().GetAsync(revision.Commit, ct);
-                    await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, ct);
-                }
-                foreach (var run in await db.Runs.Where(r => r.RevisionId == id && r.Commit == revision.Commit
-                    && r.Status == RunStatuses.Blocked && r.Detail != null && r.Detail.StartsWith("Waiting for trust")).ToListAsync(ct))
-                {
-                    run.Status = run.StartedAt is null ? RunStatuses.Queued : RunStatuses.Running;
-                    run.Detail = null;
-                }
-                await db.SaveChangesAsync(ct);
-                signal.Wake();
-                return Views.Revision(revision, true);
-            }, ct)))
-            .WithName("trustRevision");
     }
 
     private static void MapInventory(RouteGroupBuilder api)
@@ -194,6 +153,43 @@ public static partial class Endpoints
         })
             .WithTags("Inventory")
             .WithName("observeInstallation");
+
+        api.MapPost("/installations/{id:guid}/trust", async (Guid id, TrustInstallationRequest request, HttpContext http,
+            RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, _) =>
+            {
+                var resource = await db.Resources.FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Installation && r.RetiredAt == null, ct)
+                    ?? throw new RunException("There is no such installation.");
+                if (!resource.Valid || resource.MissingSince is not null || resource.Definition is null)
+                    throw new RunException("Fix the installation's definition before trusting it.");
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                // Trust exactly the endpoints the operator saw: a newer definition may point elsewhere.
+                var endpoints = RepositoryTrust.DeclaredEndpoints(JsonNode.Parse(resource.Definition));
+                if (endpoints.Count == 0 || !endpoints.SequenceEqual(request.Endpoints.Distinct().Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                    throw new RunException("The installation's endpoints changed since they were shown. Review them again.");
+                var trust = await db.InstallationTrusts.FirstOrDefaultAsync(t => t.Address == resource.Address, ct);
+                if (trust is null)
+                {
+                    trust = new InstallationTrust { Address = resource.Address, TrustedBy = actor };
+                    db.InstallationTrusts.Add(trust);
+                }
+                trust.Endpoints = endpoints;
+                trust.TrustedAt = clock.GetUtcNow();
+                trust.TrustedBy = actor;
+                foreach (var run in await db.Runs.Where(r => r.Status == RunStatuses.Blocked && r.Detail != null
+                    && r.Detail.StartsWith(RepositoryTrust.WaitingForInstallation)).ToListAsync(ct))
+                {
+                    if (RepositoryTrust.InstallationAddress(RunContext.Parse(run.Context).Address) != resource.Address) continue;
+                    run.Status = run.StartedAt is null ? RunStatuses.Queued : RunStatuses.Running;
+                    run.Detail = null;
+                }
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return Views.Trust(resource, trust);
+            }, ct)))
+            .WithTags("Inventory")
+            .WithName("trustInstallation");
     }
 
     private static void MapRuns(RouteGroupBuilder api)

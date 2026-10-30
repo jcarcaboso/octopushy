@@ -1,5 +1,7 @@
 # Trust the source revision before releasing execution credentials
 
+Superseded by [0002](0002-installation-trust.md).
+
 Planning already executes repository-selected code with credentials, so apply
 approval is too late to authorize that code. Require an explicit operator
 decision for the exact loaded revision and repository-source generation before

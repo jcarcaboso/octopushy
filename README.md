@@ -37,9 +37,9 @@ or completed service orchestration.
 ## How it fits together
 
 1. The backend fetches the lab repository's branch, reads each commit's definitions, and
-   validates them (one JSON Schema per kind, plus reference checks). The operator
-   [reviews and trusts the exact revision](docs/trusted-revisions.md) before
-   credential-bearing work can run; discovery alone does not grant execution trust.
+   validates them (one JSON Schema per kind, plus reference checks). Credentials go
+   only to Proxmox installations the operator [trusted](docs/installation-trust.md),
+   once when each is added or its endpoint changes; revisions need no trust of their own.
 2. A guest whose inputs changed gets a provision run: **plan** (OpenTofu, on an agent),
    **approval** (automatic or manual, per the guest's policy; deletes follow the
    destructive setting), **apply** of exactly the approved plan, and **verify** through
@@ -49,8 +49,8 @@ or completed service orchestration.
    the secrets that attempt needs. OpenTofu runs in a rootless container on the agent.
 4. Each installation is observed every few minutes, so the inventory shows what Proxmox
    reports next to what Git declares, including VMs Octopushy does not manage.
-   Scheduled observations use the latest eligible trusted revision, which may be
-   behind the discovered head. Execution trust is separate from apply approval.
+   Scheduled observations use the latest valid revision, which may be behind an
+   invalid head. Installation trust is separate from apply approval.
 
 The Proxmox VM recipe supports [plain DHCP, externally reserved DHCP, and static
 IPv4](docs/vm-networking.md). A reserved DHCP address is checked during guest

@@ -229,7 +229,7 @@ function DraftForm({ data, initialInstallation }: { data: WorkerPreparation; ini
           ) : (
             <div className="stack">
               {Object.entries(review.data.files).map(([file, text]) => <DefinitionView key={file} file={file} text={text} />)}
-              <Callout kind="warning">This writes the displayed files to the configured repository branch. It does not grant revision trust or approve infrastructure changes. Existing files will never be overwritten.</Callout>
+              <Callout kind="warning">This writes the displayed files to the configured repository branch. It does not approve infrastructure changes. Existing files will never be overwritten.</Callout>
               <label>
                 <input type="checkbox" checked={confirmed} disabled={mustReview || publish.isPending || Boolean(publish.data)} onChange={(e) => setConfirmed(e.target.checked)} />
                 {" "}I reviewed these exact files and want to add this worker to the repository.
@@ -250,13 +250,13 @@ function DraftForm({ data, initialInstallation }: { data: WorkerPreparation; ini
       {publish.data ? (
         <Callout kind="success" title={publish.data.alreadyPresent ? "Worker definition already present" : "Worker definition published"}>
           <p>Commit <code>{publish.data.commit}</code>. Sync has been requested.</p>
-          <p><Link to="/repository">Review and trust the new revision</Link>, then <Link to="/runs">review its saved deployment plan</Link> and approve it. Enrollment readiness appears under Agents after bootstrap.</p>
+          <p>After the next <Link to="/repository">sync</Link>, <Link to="/runs">review its saved deployment plan</Link> and approve it. Enrollment readiness appears under Agents after bootstrap.</p>
         </Callout>
       ) : null}
       {prepare.data ? (
         <div className="stack">
           <Callout kind="info" title="Review artifact generated — not deployed">
-            No Git write, trust, run, enrollment, reservation or apply occurred. This is not a guest definition.
+            No Git write, run, enrollment, reservation or apply occurred. This is not a guest definition.
             Save under <code>docs/worker-drafts/</code> for Git review, never as <code>guest.yaml</code>.
           </Callout>
           <a className="button" download={prepare.data.fileName} href={`data:application/json;charset=utf-8,${encodeURIComponent(prepare.data.content)}`}>
@@ -289,12 +289,6 @@ export function WorkerPreparationPage() {
           <p><code>{data.sourceUrl ?? "Not configured"}</code> · Branch <code>{data.branch ?? "—"}</code></p>
           <p>Loaded source head: <code>{data.headCommit ?? "Not loaded"}</code></p>
           {data.lastFetchError ? <Callout kind="warning" title="Last sync failed">{data.lastFetchError} This draft can only use the last loaded source head.</Callout> : null}
-          <p>
-            {revision?.isCurrentSource && revision.trustedAt && revision.trustedBy
-              ? "Exact current-source revision trusted. This is not deployment approval or sandboxing."
-              : "Exact current-source revision is not trusted. Preparation does not grant trust."}
-            {" "}<Link to="/repository">Review source and revision trust</Link>.
-          </p>
         </Card>
         <Card title="Deployment and safety checks">
           <ul>{data.deploymentGates.map((gate) => <li key={gate}>{gate}</li>)}</ul>

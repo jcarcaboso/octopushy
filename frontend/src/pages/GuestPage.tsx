@@ -140,7 +140,7 @@ export function GuestPage() {
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
         {data.missingSince && !data.retiredAt ? (
           <Callout kind="warning" title={<>Folder deleted <RelativeTime value={data.missingSince} /></>}>
-            Once the revision that deleted it is trusted, Octopushy proposes removing the VM, using the guest's last applied
+            Octopushy proposes removing the VM, using the guest's last applied
             definition and its approval and destructive policy. If no removal run is shown, use Plan removal. Restore the
             folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>

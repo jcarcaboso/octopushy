@@ -18,7 +18,7 @@ public sealed class AssignmentException(string message) : Exception(message);
 
 public sealed class CredentialUnavailableException(string message) : Exception(message);
 
-public sealed class RevisionUntrustedException(string message) : Exception(message);
+public sealed class ExecutionUntrustedException(string message) : Exception(message);
 
 /// <summary>Builds the assignment an agent receives for an attempt.</summary>
 public sealed class AssignmentBuilder(
@@ -74,11 +74,11 @@ public sealed class AssignmentBuilder(
     public async Task<Assignment> BuildAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
         var blocked = run is null
-            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, cancellationToken)
+            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
             : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);
         if (blocked is { } reason)
         {
-            throw new RevisionUntrustedException(reason);
+            throw new ExecutionUntrustedException(reason);
         }
         if (step is null || run is null
                 ? step is not null || run is not null || attempt.StepId is not null || attempt.RunId is not null || attempt.ResourceId is null

@@ -30,7 +30,7 @@ public class RepositoryEditorTests(PostgresFixture postgres)
         var initial = (await git.RunAsync(["rev-parse", "main"], remote.Root)).Trim();
         using var anonymous = server.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(Drafts)).StatusCode);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
 
         var draft = await ReadAsync<DraftDetailDto>(await client.PostAsJsonAsync(Drafts, new DraftCreateRequest("Tidy the lab")));
         Assert.Equal("open", draft.Draft.Status);
@@ -89,7 +89,7 @@ public class RepositoryEditorTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAsync();
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var draft = await ReadAsync<DraftDetailDto>(await client.PostAsJsonAsync(Drafts, new DraftCreateRequest("Conflict")));
         var path = $"{Drafts}/{draft.Draft.Id}";
         draft = await ReadAsync<DraftDetailDto>(await client.PostAsJsonAsync($"{path}/changes",

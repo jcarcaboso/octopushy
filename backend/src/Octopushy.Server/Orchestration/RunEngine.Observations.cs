@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
-using Octopushy.Server.Git;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -20,7 +19,7 @@ public sealed partial class RunEngine
     /// <summary>
     /// Sends the installation to an agent to be observed with the context built from
     /// <paramref name="revision"/>, unless an observation of it is already with an agent; one still
-    /// waiting is replaced by a newer revision, though not by an untrusted one while it can be sent. Unavailable credentials are recorded as the observation's error instead.
+    /// waiting is replaced by a newer revision. Unavailable credentials are recorded as the observation's error instead.
     /// </summary>
     public async Task ObserveAsync(OctopushyDb db, Resource installation, DefinitionRevision revision, RunContext context, CancellationToken cancellationToken)
     {
@@ -28,11 +27,8 @@ public sealed partial class RunEngine
             a => a.ResourceId == installation.Id
                  && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running),
             cancellationToken);
-        // One with an agent finishes first. One still waiting stays when it is from this revision, and
-        // discovery must not swap a trusted one for an untrusted head.
-        if (underWay is not null && (underWay.Status != AttemptStatuses.Queued || underWay.RevisionId == revision.Id
-                || revision.TrustedAt is null
-                && await RepositoryTrust.BlockedReasonAsync(db, underWay.RevisionId, RunContext.Parse(underWay.Context!).Commit, cancellationToken) is null))
+        // One with an agent finishes first. One still waiting stays when it is from this revision.
+        if (underWay is not null && (underWay.Status != AttemptStatuses.Queued || underWay.RevisionId == revision.Id))
         {
             return;
         }

@@ -223,8 +223,8 @@ function Workspace({ detail }: { detail: DraftDetail }) {
       <div className="stack">
         {published || draft.publishedCommit ? (
           <Callout kind="success" title={`Published as ${(published ?? draft.publishedCommit)!.slice(0, 10)}`}>
-            The commit is on <code className="mono">{detail.branch}</code>. Octopushy loads it at the next sync; review and trust
-            it on the <Link to="/repository">Repository</Link> page before runs use it.
+            The commit is on <code className="mono">{detail.branch}</code>. Octopushy loads it at the next sync; follow it on
+            the <Link to="/repository">Repository</Link> page.
           </Callout>
         ) : null}
         {detail.editBlockedReason && draft.status !== "published" ? <Callout kind="warning">{detail.editBlockedReason}</Callout> : null}

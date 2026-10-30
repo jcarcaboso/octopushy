@@ -8,7 +8,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
 
-/// <summary>Deleting a guest's folder removes the guest, once the deleting revision is trusted.</summary>
+/// <summary>Deleting a guest's folder removes the guest.</summary>
 [Collection(PostgresCollection.Name)]
 public class GuestRemovalTests(PostgresFixture postgres)
 {
@@ -28,19 +28,15 @@ public class GuestRemovalTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_deleted_folder_destroys_the_guest_from_its_applied_definition_once_trusted()
+    public async Task A_deleted_folder_destroys_the_guest_from_its_applied_definition()
     {
         var (server, agent, applied) = await ProvisionedAsync(postgres);
         await using var _ = server;
         server.Repository.Delete(Folder);
         server.Commit("Remove the guest");
 
-        // Discovery alone never proposes destroying anything.
         await server.SyncAsync();
         Assert.NotNull((await server.ResourceAsync(Guest)).MissingSince);
-        Assert.Equal(0, await server.QueryAsync(db => db.Runs.CountAsync(r => r.Operation == Operations.Retire)));
-
-        await server.SyncAndTrustAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Retire);
         Assert.Equal(applied, run.Commit);
         var context = RunContext.Parse(run.Context);

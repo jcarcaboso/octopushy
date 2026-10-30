@@ -62,11 +62,11 @@ migration plan for that repository.
 
 ## What the repository holds
 
-**Execution boundary (October 23, 2026):** syncing and validating definitions does
-not authorize their execution. An operator must [review and trust the exact
-revision](trusted-revisions.md) before it can receive worker execution
-credentials. This is separate from the per-resource apply policy described
-below, and cannot be enabled or weakened by a setting in the lab repository.
+**Credential boundary:** each Proxmox installation's credentials go only to the
+endpoints an operator [trusted](installation-trust.md) for it. A new installation,
+or a new endpoint for one, waits for that trust; other changes run as soon as they
+are synced. This is separate from the per-resource apply policy described below,
+and cannot be enabled or weakened by a setting in the lab repository.
 
 The lab repository is the desired configuration Octopushy reads. It is separate from
 Octopushy's own source code and holds two kinds of files:
@@ -165,9 +165,8 @@ lab-repo/
    value or names a secret provider.
 10. **Removal is reviewed.** There are two ways to remove a guest:
     - Set `lifecycle: retired`. This keeps the definition in Git while the guest is removed.
-    - **Delete the guest's folder.** Octopushy reports the guest as missing, and
-      an unreviewed commit never destroys anything. Once the deleting revision is
-      trusted, Octopushy proposes a retire run. That run is built from the revision
+    - **Delete the guest's folder.** Octopushy reports the guest as missing and
+      proposes a retire run. That run is built from the revision
       the guest was last applied from, so it destroys what that definition created.
       It follows that definition's approval and `destructive` policy. **Plan removal**
       on the guest page proposes it again after it was cancelled. Restoring the
