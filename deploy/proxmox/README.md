@@ -41,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `main` | `main`, a release such as `0.1.0`, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `0.1.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
@@ -170,8 +170,10 @@ yet. Migrations are forward-only: to go back after a successful update, roll bac
 snapshot (`pct rollback <ctid> octopushy-<time> --start 1`, then
 `pct exec <ctid> -- octopushy-compose up -d`) rather than starting older images.
 
-To make a release: tag the commit `v<version>` and push the tag; the workflow publishes
-`backend-<version>`, `frontend-<version>`, and `agent-<version>`.
+To make a release: set the new version in `backend/Directory.Build.props`,
+`frontend/package.json`, `agent/Cargo.toml`, and the default in `install.sh`, tag that
+commit `v<version>`, and push the tag. The workflow publishes `backend-<version>`,
+`frontend-<version>`, and `agent-<version>`.
 
 ## Day to day
 
