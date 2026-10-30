@@ -4,8 +4,9 @@
 #
 #   octopushy-update <container-id> <version> [--no-snapshot] [--keep N] [--yes]
 #
-# <version> is an image tag: a release such as 0.2.0, `main` for the newest build of the
-# main branch, or sha-<commit>. compose.yaml comes from the matching Git ref.
+# <version> is what follows the component in an image tag: a release such as 0.2.0, `main`
+# for the newest build of the main branch, or sha-<commit>. compose.yaml comes from the
+# matching Git ref.
 #
 # Steps: pull the new images (nothing stops if that fails), stop everything but
 # PostgreSQL (the internal agent lets running applies finish first), dump the database
@@ -58,16 +59,16 @@ curl -fsSL "https://raw.githubusercontent.com/$repo/$ref/deploy/compose.yaml" -o
 
 env_file=$(in_ct "cat .env")
 current=$(sed -n 's/^OCTOPUSHY_BACKEND_IMAGE=//p' <<<"$env_file")
-[[ $current == *-backend:* ]] || die "cannot read OCTOPUSHY_BACKEND_IMAGE from $dir/.env"
-prefix=${current%-backend:*}
-backend=$prefix-backend:$version
+[[ $current == *:backend-* ]] || die "cannot read OCTOPUSHY_BACKEND_IMAGE from $dir/.env"
+repository=${current%:backend-*}
+backend=$repository:backend-$version
 # Every image named in .env moves to the new version: backend, frontend, and agent.
 targets=() set_images=()
 for component in backend frontend agent; do
   var=OCTOPUSHY_${component^^}_IMAGE
   grep "^$var=" <<<"$env_file" >/dev/null || continue
-  targets+=("$prefix-$component:$version")
-  set_images+=(-e "'s|^$var=.*|$var=$prefix-$component:$version|'")
+  targets+=("$repository:$component-$version")
+  set_images+=(-e "'s|^$var=.*|$var=$repository:$component-$version|'")
 done
 
 say "Pulling ${targets[*]}"

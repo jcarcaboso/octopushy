@@ -11,7 +11,7 @@
 set -euo pipefail
 
 repo=${OCTOPUSHY_REPO:-jcarcaboso/octopushy}
-images=${OCTOPUSHY_IMAGES:-ghcr.io/jcarcaboso/octopushy}
+images=${OCTOPUSHY_IMAGES:-docker.io/skorcius/octopushy}
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -98,7 +98,7 @@ cat <<EOF
   resources   $CT_CORES cores, $CT_MEMORY MiB, $CT_DISK GiB on $CT_STORAGE
   network     $net0
   agents      connect to $OCTOPUSHY_AGENT_HOST:8443
-  images      $images-{backend,frontend,agent}:$OCTOPUSHY_VERSION
+  images      $images:{backend,frontend,agent}-$OCTOPUSHY_VERSION
   files from  github.com/$repo at $OCTOPUSHY_REF
 
 EOF

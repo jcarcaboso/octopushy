@@ -89,11 +89,11 @@ OCTOPUSHY_AGENT_PORT=8443
 OCTOPUSHY_UI_BIND=0.0.0.0
 OCTOPUSHY_UI_PORT=8081
 OCTOPUSHY_KEK_FILE=$secrets/kek
-OCTOPUSHY_BACKEND_IMAGE=$images-backend:$version
-OCTOPUSHY_FRONTEND_IMAGE=$images-frontend:$version
+OCTOPUSHY_BACKEND_IMAGE=$images:backend-$version
+OCTOPUSHY_FRONTEND_IMAGE=$images:frontend-$version
 # The internal agent: enroll it with octopushy-agent-enroll.
 COMPOSE_PROFILES=agent
-OCTOPUSHY_AGENT_IMAGE=$images-agent:$version
+OCTOPUSHY_AGENT_IMAGE=$images:agent-$version
 EOF
   )
 fi

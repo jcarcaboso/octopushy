@@ -158,7 +158,7 @@ packet paths, remote access, or deployment success.
 
 `just images <version>` builds the backend, frontend, and agent images by hand, and
 [`deploy/`](deploy/README.md) runs them with PostgreSQL on one host. GitHub Actions
-publishes them to ghcr.io for `main` and every `v<version>` tag;
+publishes them to Docker Hub for `main` and every `v<version>` tag;
 [`deploy/proxmox/`](deploy/proxmox/README.md) installs those in a Proxmox LXC container
 with one command, with an internal agent to start with, and updates it with a snapshot
 to roll back to. Agents run where they can reach the labs; one agent can serve every

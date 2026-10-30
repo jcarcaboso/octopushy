@@ -4,7 +4,7 @@
 Docker in it, and starts the [Compose project](../compose.yaml) (PostgreSQL, the
 backend, the frontend, and an internal agent) from the images that
 [`.github/workflows/images.yml`](../../.github/workflows/images.yml) publishes to
-ghcr.io. `octopushy-update` moves it to another version later, with a container
+[Docker Hub](https://hub.docker.com/r/skorcius/octopushy). `octopushy-update` moves it to another version later, with a container
 snapshot to roll back to.
 
 An LXC container shares the Proxmox host's kernel but has its own file system, network
@@ -14,11 +14,13 @@ and has `nesting` and `keyctl` turned on, which Docker needs.
 
 ## Before you start
 
-- **Published images.** The workflow publishes `ghcr.io/jcarcaboso/octopushy-backend`,
-  `-frontend`, and `-agent` on every push to `main` (tags `main` and `sha-<commit>`) and
-  for every `v<version>` tag (tags `<version>` and `latest`). After the first run, check
-  that the three packages are public under the repository's **Packages** on GitHub; the
-  container pulls them without credentials.
+- **Published images.** The workflow publishes the three images to the public repository
+  `docker.io/skorcius/octopushy`, told apart by tag: `backend-…`, `frontend-…`, and
+  `agent-…`, followed by `main` or `sha-<commit>` on every push to `main`, and by
+  `<version>` or `latest` for every `v<version>` tag. It needs the GitHub repository
+  secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The container pulls without
+  credentials. Docker Hub limits anonymous pulls per address; if a pull stops with
+  `toomanyrequests`, run `docker login` in the container.
 - **Snapshot-capable storage** for the container: ZFS (`local-zfs`), LVM-thin
   (`local-lvm`), Ceph RBD, or Btrfs. A plain directory works, but then updates cannot
   roll back by themselves.
@@ -39,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `main` | Image tag: `main`, a release such as `0.1.0`, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `main` | `main`, a release such as `0.1.0`, or `sha-<commit>` |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
@@ -169,7 +171,7 @@ snapshot (`pct rollback <ctid> octopushy-<time> --start 1`, then
 `pct exec <ctid> -- octopushy-compose up -d`) rather than starting older images.
 
 To make a release: tag the commit `v<version>` and push the tag; the workflow publishes
-the images under `<version>`.
+`backend-<version>`, `frontend-<version>`, and `agent-<version>`.
 
 ## Day to day
 
