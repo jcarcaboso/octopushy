@@ -97,7 +97,7 @@ public sealed class RepositorySync(
                 current.LastFetchAt = clock.GetUtcNow();
                 current.LastFetchError = null;
                 current.HeadCommit = head;
-                // A return to an already loaded exact commit of this source reuses its authority.
+                // A return to an already loaded exact commit of this source reuses its revision.
                 var loaded = await RepositoryTrust.CurrentRevisions(db).AnyAsync(r => r.Commit == head, cancellationToken);
                 if (alreadyLoadedHead && loaded)
                 {
@@ -149,13 +149,14 @@ public sealed class RepositorySync(
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
-        var trusted = await db.Revisions.AsNoTracking().Where(r => r.TrustedAt != null).Select(r => r.Commit).ToListAsync(cancellationToken);
+        // Scheduled observations use the latest valid revision, which may be older than the recent ones.
+        var valid = await RepositoryTrust.EligibleRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).Select(r => r.Commit).Take(1).ToListAsync(cancellationToken);
         var recent = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).Take(10).Select(r => r.Commit).ToListAsync(cancellationToken);
         var inUse = await db.Runs.AsNoTracking()
             .Where(r => r.Commit != null && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
             .Select(r => r.Commit!)
             .ToListAsync(cancellationToken);
-        mirror.Prune(recent.Concat(inUse).Concat(trusted).ToHashSet(StringComparer.Ordinal));
+        mirror.Prune(recent.Concat(inUse).Concat(valid).ToHashSet(StringComparer.Ordinal));
     }
 
     private static async Task<GitCredential> CredentialAsync(VariableStore store, RepositorySettings settings, CancellationToken cancellationToken)

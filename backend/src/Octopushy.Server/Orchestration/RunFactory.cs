@@ -11,18 +11,31 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
 {
     /// <summary>A provision run (plan, approval, apply, verify) or, for a retired guest, a retire run.</summary>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason) =>
-        CreateGuest(repository, guest, resource, revision, reason, null);
+        CreateGuest(repository, guest, resource, revision, reason, null, null);
 
     public Run UpdateWorker(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, WorkerUpdateContext update) =>
-        CreateGuest(repository, guest, resource, revision, reason, update);
+        CreateGuest(repository, guest, resource, revision, reason, update, null);
 
-    private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, WorkerUpdateContext? update)
+    /// <summary>
+    /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
+    /// the last revision that defined it, so it destroys exactly what that definition created.
+    /// A managed worker is drained first and its enrollment removed once its VM is gone.
+    /// </summary>
+    public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
+        string removedIn, string reason) =>
+        CreateGuest(repository, guest, resource, lastDefined, reason, null, removedIn);
+
+    private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
+        WorkerUpdateContext? update, string? removedIn)
     {
+        var removal = removedIn is not null;
         if (resource.ManagedWorker is { } bound && (guest.Retired || guest.ManagedWorker?.Generation != bound.Generation
             || guest.Host != bound.Host || guest.Vmid != bound.Vmid || guest.InstallationAddress != bound.Installation))
-            throw new RunException("Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding.");
+            throw new RunException("Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding. To remove a worker, delete its folder.");
         if (guest.ManagedWorker is not null && guest.Retired)
-            throw new RunException("Managed worker retirement is not supported.");
+            throw new RunException("Managed workers are not retired with lifecycle: retired; delete the worker's folder to remove it.");
+        if (removal && (update is not null || guest.Retired))
+            throw new RunException("Only a guest whose definition was deleted can be removed this way.");
         var inputs = ProvisionInputs.Build(repository, guest, revision.Commit);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -90,7 +103,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 external.Workspace?.Replace("{stack}", guest.Stack))
             : BackendContext.BuiltIn;
 
-        var retire = guest.Retired;
+        var retire = guest.Retired || removal;
         var reporter = options.Value.DiskReporter;
         reporter.Validate();
         var guestReporter = guest.Json["setup"]?["diskReporter"];
@@ -126,6 +139,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             ManagedWorker = guest.ManagedWorker is { } worker ? new ManagedWorkerContext(worker.Generation, worker.Labels,
                 worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             WorkerUpdate = update,
+            DefinitionRemovedIn = removedIn,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,
@@ -157,7 +171,12 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             : context.RootDiskBytes is not null
                 ? [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
                 : [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify];
-        if (context.ManagedWorker is not null)
+        if (context.ManagedWorker is not null && retire)
+            // Another worker destroys the VM; this one stops taking work first and loses its
+            // enrollment only once the VM is verified absent.
+            steps = [StepNames.Plan, StepNames.Approval, StepNames.DrainWorker, StepNames.Unprotect, StepNames.Apply,
+                StepNames.VerifyAbsent, StepNames.RevokeWorker];
+        else if (context.ManagedWorker is not null)
             steps = [.. steps, StepNames.PrepareWorker, StepNames.InstallWorker, StepNames.WaitWorker];
         if (update is not null)
         {
@@ -170,7 +189,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         if (update is not null)
             run.Steps.Single(s => s.Name == StepNames.UpdateWorkerOs).Detail =
                 $"Switch this existing VM to {update.SystemPath}; approved closure archive SHA-256 {update.ArchiveSha256}. Preserve identity/state and retain the previous system generation.";
-        if (resource.ManagedWorker?.ReadyAt is not null)
+        if (resource.ManagedWorker?.ReadyAt is not null && !retire)
             foreach (var step in run.Steps.Where(s => s.Name is StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker))
             {
                 step.Status = StepStatuses.Skipped;

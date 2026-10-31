@@ -48,6 +48,11 @@ function InstallationCard({ installation, filter }: { installation: Installation
         <span className="mono muted break">{installation.endpoint ?? "No endpoint"}</span>
         {installation.proxmoxVersion ? <span className="muted">Proxmox VE {installation.proxmoxVersion}</span> : null}
         {installation.valid ? null : <StatusBadge status="invalid" />}
+        {installation.valid && installation.trust.untrusted.length > 0 ? (
+          <Link to={`/installations/${installation.id}#trust`}>
+            <Badge tone="warning">Needs trust</Badge>
+          </Link>
+        ) : null}
         {issues > 0 ? (
           <Link to={`/installations/${installation.id}#issues`}>
             <Badge tone="danger">{plural(issues, "error")}</Badge>

@@ -3,10 +3,13 @@ import { api, unwrap } from "./client";
 import type {
   AgentUpdate,
   AuthState,
+  DraftDetail,
+  DraftFileChange,
+  DraftPublishRequest,
   RepositoryUpdate,
   RunDetail,
   TokenRequest,
-  TrustRevisionRequest,
+  TrustInstallationRequest,
   VariableCandidate,
   VariablePromotion,
   VariableRevocation,
@@ -32,7 +35,8 @@ export const keys = {
   repository: ["repository"] as const,
   revisions: ["revisions"] as const,
   revision: (id: string) => ["revision", id] as const,
-  revisionReview: (id: string) => ["revision-review", id] as const,
+  drafts: ["drafts"] as const,
+  draft: (id: string) => ["drafts", id] as const,
 };
 
 export const signedOut: AuthState = { setupRequired: false, authenticated: false, username: null };
@@ -189,21 +193,7 @@ export function useRevision(id: string | null) {
     queryFn: () =>
       unwrap(api.GET("/api/repository/revisions/{id}", { params: { path: { id: id! } } })),
     enabled: Boolean(id),
-    // Definitions are immutable, but execution trust and source eligibility can change.
-    refetchInterval: 30_000,
-  });
-}
-
-export function useRevisionReview(id: string) {
-  return useQuery({
-    queryKey: keys.revisionReview(id),
-    queryFn: () =>
-      unwrap(api.GET("/api/repository/revisions/{id}/review", { params: { path: { id } } })),
-    // Keep the displayed review fixed until the operator explicitly refreshes it.
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: "always",
-    gcTime: 0,
+    staleTime: Infinity,
   });
 }
 
@@ -511,19 +501,108 @@ export function useSyncRepository() {
   });
 }
 
-export function useTrustRevision() {
-  const client = useQueryClient();
+/** Lets credentials go to the endpoints an installation declares now; waiting runs and observations continue. */
+export function useTrustInstallation() {
   const refreshRuns = useRefreshRuns();
   return useMutation({
     retry: false,
-    mutationFn: ({ id, ...body }: TrustRevisionRequest & { id: string }) =>
-      unwrap(api.POST("/api/repository/revisions/{id}/trust", { params: { path: { id } }, body })),
-    onSuccess: (_revision, { id }) =>
+    mutationFn: ({ id, ...body }: TrustInstallationRequest & { id: string }) =>
+      unwrap(api.POST("/api/installations/{id}/trust", { params: { path: { id } }, body })),
+    onSuccess: () => refreshRuns(),
+  });
+}
+
+// Repository editor drafts
+
+export function useDrafts() {
+  return useQuery({
+    queryKey: keys.drafts,
+    queryFn: () => unwrap(api.GET("/api/repository/drafts")),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useDraft(id: string) {
+  return useQuery({
+    queryKey: keys.draft(id),
+    queryFn: () => unwrap(api.GET("/api/repository/drafts/{id}", { params: { path: { id } } })),
+    // Picks up a moved branch, which offers updating the draft.
+    refetchInterval: 30_000,
+  });
+}
+
+/** Reads one file of a draft, with its content at the draft's base for comparing. */
+export function fetchDraftFile(id: string, path: string) {
+  return unwrap(api.GET("/api/repository/drafts/{id}/file", { params: { path: { id }, query: { path } } }));
+}
+
+function useDraftMutation<T>(id: string, mutationFn: (variables: T) => Promise<DraftDetail>) {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn,
+    onSuccess: (detail) => {
+      client.setQueryData(keys.draft(id), detail);
+      void client.invalidateQueries({ queryKey: keys.drafts, exact: true });
+    },
+  });
+}
+
+export function useCreateDraft() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (title: string) => unwrap(api.POST("/api/repository/drafts", { body: { title } })),
+    onSuccess: (detail) => {
+      client.setQueryData(keys.draft(detail.draft.id), detail);
+      void client.invalidateQueries({ queryKey: keys.drafts, exact: true });
+    },
+  });
+}
+
+export function useChangeDraft(id: string) {
+  return useDraftMutation(id, ({ expectedHead, changes }: { expectedHead: string; changes: DraftFileChange[] }) =>
+    unwrap(api.POST("/api/repository/drafts/{id}/changes", { params: { path: { id } }, body: { expectedHead, changes } })),
+  );
+}
+
+export function useUpdateDraft(id: string) {
+  return useDraftMutation(id, (expectedHead: string) =>
+    unwrap(api.POST("/api/repository/drafts/{id}/update", { params: { path: { id } }, body: { expectedHead } })),
+  );
+}
+
+export function useValidateDraft(id: string) {
+  return useMutation({
+    retry: false,
+    mutationFn: () => unwrap(api.POST("/api/repository/drafts/{id}/validate", { params: { path: { id } } })),
+  });
+}
+
+export function usePublishDraft(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (body: DraftPublishRequest) =>
+      unwrap(api.POST("/api/repository/drafts/{id}/publish", { params: { path: { id } }, body })),
+    onSuccess: () =>
       Promise.all([
+        client.invalidateQueries({ queryKey: keys.drafts }),
         client.invalidateQueries({ queryKey: keys.repository }),
         client.invalidateQueries({ queryKey: keys.revisions }),
-        client.invalidateQueries({ queryKey: keys.revision(id) }),
-        refreshRuns(),
       ]),
+  });
+}
+
+export function useDiscardDraft() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (id: string) =>
+      unwrap(api.DELETE("/api/repository/drafts/{id}", { params: { path: { id } }, parseAs: "text" })),
+    onSuccess: (_result, id) => {
+      client.removeQueries({ queryKey: keys.draft(id) });
+      return client.invalidateQueries({ queryKey: keys.drafts, exact: true });
+    },
   });
 }

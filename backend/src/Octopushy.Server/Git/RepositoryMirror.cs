@@ -1,6 +1,5 @@
 using System.Formats.Tar;
 using System.IO.Compression;
-using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Octopushy.Server.Options;
@@ -8,8 +7,6 @@ using Octopushy.Server.Options;
 namespace Octopushy.Server.Git;
 
 public sealed record CommitInfo(string Commit, string Subject, string Author, DateTimeOffset CommittedAt);
-
-public sealed class ReviewTooLargeException() : GitException("The diff exceeds the 512 KiB review limit. Reduce the change and sync again.");
 
 /// <summary>How to authenticate to the lab repository's remote.</summary>
 public sealed record GitCredential(string Kind, string? Username, string? Secret)
@@ -88,65 +85,6 @@ public sealed partial class RepositoryMirror
             cancellationToken: cancellationToken);
         var parts = text.TrimEnd('\n').Split('\0');
         return new CommitInfo(parts[0], parts[1], parts[2], DateTimeOffset.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture).ToUniversalTime());
-    }
-
-    /// <summary>A bounded native Git diff; never invokes repository external diffs or text converters.</summary>
-    public async Task<string> ReviewDiffAsync(string? baseCommit, string commit, CancellationToken cancellationToken)
-    {
-        CheckCommit(commit);
-        if (baseCommit is not null)
-        {
-            CheckCommit(baseCommit);
-        }
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try
-        {
-            // Materialize the empty tree in this mirror, also supporting SHA-256 repositories.
-            var basis = baseCommit ?? (await _git.RunAsync(
-                ["-C", _mirror, "hash-object", "-w", "-t", "tree", "--", "/dev/null"], cancellationToken: timeout.Token)).Trim();
-            using var output = new ReviewOutput();
-            var error = await _git.RunToStreamAsync(
-                ["-C", _mirror, "-c", "core.attributesFile=/dev/null", "-c", "diff.external=",
-                    "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--binary", "--full-index",
-                    "--ignore-submodules=none", "--submodule=short",
-                    "--src-prefix=a/", "--dst-prefix=b/", basis, commit, "--"],
-                output, cancellationToken: timeout.Token);
-            if (error is not null)
-            {
-                throw new GitException(error);
-            }
-            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(output.ToArray());
-        }
-        catch (DecoderFallbackException)
-        {
-            throw new GitException("The review diff is not valid UTF-8. Normalize the source encoding before requesting trust.");
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new GitException("The review diff exceeded its 10 second time limit.");
-        }
-    }
-
-    private sealed class ReviewOutput : MemoryStream
-    {
-        private void CheckLength(int count)
-        {
-            if (Length + count > 512 * 1024)
-            {
-                throw new ReviewTooLargeException();
-            }
-        }
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            CheckLength(count);
-            base.Write(buffer, offset, count);
-        }
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            CheckLength(buffer.Length);
-            return base.WriteAsync(buffer, cancellationToken);
-        }
     }
 
     /// <summary>The directory holding the files of <paramref name="commit"/>, extracted on first use.</summary>

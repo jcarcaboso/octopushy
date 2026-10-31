@@ -11,7 +11,7 @@ To run it in a Proxmox LXC container with Docker, created and updated by script,
 For repository-backed NixOS worker VMs, see the
 [managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
 It reuses an independent control worker; publishing a definition does not grant
-revision trust or infrastructure approval.
+infrastructure approval.
 
 ## First start
 

@@ -15,7 +15,7 @@ most every 20 seconds. OpenTofu needs no network route for it, so it works the s
 runtime, on any container network, and for internal, remote and managed agents.
 
 Agents never connect to the controller's PostgreSQL, and they get neither the key nor the
-database password. [Why not an OpenTofu `http` backend](adr/0002-built-in-opentofu-state.md).
+database password. [Why not an OpenTofu `http` backend](adr/0003-built-in-opentofu-state.md).
 The wire details are in the [executor contract](../contracts/agent/v1/executors.md#built-in-state).
 
 ## What protects it
@@ -29,11 +29,14 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
   is the exposure saved plans already had. Those plans stay encrypted artifacts in the data
   volume, outside the database dump.
 - **Reading.** State goes only into the assignment of a plan or apply of that guest, after
-  the same gates that release its credentials: the revision is trusted, and for an apply,
-  the plan is approved. An agent has no way to ask for it. A plan attempt does get the
-  state, because OpenTofu cannot plan without it, so a trusted revision's code can read it.
+  the same gates that release its credentials: a valid revision of the current source, an
+  [installation trusted](adr/0002-installation-trust.md) for that endpoint, and for an
+  apply, the approved plan. An agent has no way to ask for it. A plan does get the state,
+  because OpenTofu cannot plan without it. No one reviews a commit before its plan runs, so
+  tool-native code in any commit can read the guest's state, as it can its credentials.
 - **Writing.** A plan cannot change state: only an `apply` attempt can write, and only while
-  it holds the stack's lock, which it gets after approval. A write must be valid OpenTofu
+  it holds the stack's lock, which it gets once its plan is approved, by a person or by the
+  guest's automatic policy. A write must be valid OpenTofu
   state of the same lineage, with no older serial. Otherwise it is refused, the last good
   version stays, and a finished apply becomes `uncertain`.
 

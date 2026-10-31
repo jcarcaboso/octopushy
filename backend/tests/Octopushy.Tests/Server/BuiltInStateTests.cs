@@ -145,23 +145,23 @@ public class BuiltInStateTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task An_untrusted_revision_gets_no_state()
+    public async Task An_untrusted_endpoint_gets_no_state()
     {
         await using var server = await StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         await ApplyOnceAsync(server, agent);
 
-        var path = "modules/opentofu/test-vm/main.tf";
-        server.Repository.Write(path, File.ReadAllText(Path.Combine(server.Repository.Root, path)) + "\n# changed\n");
-        server.Commit("Change the root");
+        var path = "labs/home/proxmox/korriban/installation.yaml";
+        server.Repository.Write(path, File.ReadAllText(Path.Combine(server.Repository.Root, path)).Replace("https://10.1.0.10:8006/", "https://10.1.0.99:8006/"));
+        server.Commit("Move the Proxmox endpoint");
         await server.SyncAsync();
         for (var i = 0; i < 3; i++)
         {
             await server.TickAsync();
         }
 
-        Assert.Empty(agent.TakeAssignments());
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Artifacts.Any(x => x.Name == TofuStateStore.ArtifactName));
         await server.SyncAndTrustAsync();
         Assert.Single((await agent.NextAsync("preview")).Artifacts);
     }
@@ -447,7 +447,7 @@ public class BuiltInStateTests(PostgresFixture postgres)
     public async Task The_api_shows_versions_without_content_and_restores_an_earlier_one()
     {
         await using var server = await StartAsync(postgres);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(client);
         var resource = await ApplyOnceAsync(server, agent);

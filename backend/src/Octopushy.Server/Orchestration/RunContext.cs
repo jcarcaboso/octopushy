@@ -54,6 +54,12 @@ public sealed record RunContext
 
     public WorkerUpdateContext? WorkerUpdate { get; init; }
 
+    /// <summary>
+    /// The commit that deleted the guest's folder, when this retire run removes a guest whose
+    /// definition disappeared. The run itself is built from the last revision that defined it.
+    /// </summary>
+    public string? DefinitionRemovedIn { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
@@ -125,6 +131,10 @@ public static class StepNames
     public const string UpdateWorkerOs = "update-worker-os";
     public const string VerifyWorkerOs = "verify-worker-os";
     public const string WaitUpdatedWorker = "wait-updated-worker";
+    /// <summary>Server-side: stop a managed worker taking work and wait for its attempts to end.</summary>
+    public const string DrainWorker = "drain-worker";
+    /// <summary>Server-side: remove a removed managed worker's enrollment once its VM is gone.</summary>
+    public const string RevokeWorker = "revoke-worker";
 }
 
 /// <summary>The secret names executors look for.</summary>

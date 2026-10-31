@@ -252,7 +252,7 @@ as well; verify compatibility with the actual guest images before adoption.
   delivery records, and schedule cursors.
 - **OpenTofu backend:** authoritative infrastructure state and backend locks.
   Do not build a replacement state backend. *Superseded: the
-  [built-in state](adr/0002-built-in-opentofu-state.md) is now the default, so users
+  [built-in state](adr/0003-built-in-opentofu-state.md) is now the default, so users
   configure none; external backends remain an option.*
 - **Agents:** bounded temporary workspace and durable local execution journal;
   neither the authoritative configuration store nor the only copy of evidence.

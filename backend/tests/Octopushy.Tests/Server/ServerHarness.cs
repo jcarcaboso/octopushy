@@ -169,7 +169,7 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public async Task SyncAsync() => await Services.GetRequiredService<RepositorySync>().SyncOnceAsync(CancellationToken.None);
 
-    /// <summary>Execution fixtures explicitly review and grant authority through the authenticated API.</summary>
+    /// <summary>Syncs, then trusts every installation with untrusted endpoints through the authenticated API.</summary>
     public async Task SyncAndTrustAsync(HttpClient? client = null)
     {
         await SyncAsync();
@@ -184,16 +184,14 @@ public sealed class ServerHarness : IAsyncDisposable
             }
             client = _trustClient;
         }
-        var repository = (await client.GetFromJsonAsync<JsonObject>("/api/repository"))!;
-        var revision = repository["revision"]!;
-        if (revision["trustedAt"] is not null) return;
-        var path = $"/api/repository/revisions/{revision["id"]}";
-        var review = (await client.GetFromJsonAsync<JsonObject>(path + "/review"))!;
-        (await client.PostAsJsonAsync(path + "/trust", new
+        var inventory = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!;
+        foreach (var installation in inventory["labs"]!.AsArray().SelectMany(l => l!["installations"]!.AsArray()))
         {
-            commit = revision["commit"]!.GetValue<string>(),
-            baseCommit = review["baseCommit"]?.GetValue<string>(),
-        })).EnsureSuccessStatusCode();
+            var trust = installation!["trust"]!;
+            if (!installation["valid"]!.GetValue<bool>() || trust["untrusted"]!.AsArray().Count == 0) continue;
+            (await client.PostAsJsonAsync($"/api/installations/{installation["id"]}/trust", new { endpoints = trust["endpoints"] }))
+                .EnsureSuccessStatusCode();
+        }
     }
 
     public Task TickAsync() => Engine.TickAsync(CancellationToken.None);

@@ -8,6 +8,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<DefinitionRevision> Revisions => Set<DefinitionRevision>();
 
+    public DbSet<RepositoryDraft> RepositoryDrafts => Set<RepositoryDraft>();
+
+    public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
+
     public DbSet<Resource> Resources => Set<Resource>();
 
     public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
@@ -49,12 +53,23 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Id).ValueGeneratedNever();
         });
 
+        model.Entity<RepositoryDraft>(e =>
+        {
+            e.Property(x => x.Title).HasMaxLength(120);
+            e.HasIndex(x => x.UpdatedAt);
+        });
+
         model.Entity<DefinitionRevision>(e =>
         {
             e.Property(x => x.Sequence).UseIdentityAlwaysColumn();
             e.HasIndex(x => x.Sequence).IsUnique();
             e.HasIndex(x => x.Commit);
             e.Property(x => x.Issues).HasColumnType("jsonb");
+        });
+
+        model.Entity<InstallationTrust>(e =>
+        {
+            e.HasKey(x => x.Address);
         });
 
         model.Entity<Resource>(e =>

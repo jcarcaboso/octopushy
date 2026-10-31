@@ -13,12 +13,13 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Tests.Server;
 
 [Collection(PostgresCollection.Name)]
-public class TrustedRevisionTests(PostgresFixture postgres)
+public class InstallationTrustTests(PostgresFixture postgres)
 {
     private const string Guest = "home/korriban/krb-app-01";
+    private const string InstallationFile = "labs/home/proxmox/korriban/installation.yaml";
 
     [Fact]
-    public async Task Sync_persists_a_non_utc_commit_and_discovers_the_guest_without_granting_trust()
+    public async Task Sync_persists_a_non_utc_commit_and_a_new_installation_waits_for_trust()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         using var client = await AuthenticateAsync(server);
@@ -33,137 +34,155 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         var repository = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!;
         var revision = Assert.IsType<RevisionDto>(repository.Revision);
         Assert.Equal(new DateTimeOffset(2026, 10, 25, 18, 20, 1, TimeSpan.Zero), revision.CommittedAt);
-        Assert.Null(revision.TrustedAt);
         Assert.True(revision.IsCurrentSource);
         var run = await server.LatestRunAsync(Guest);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains("Waiting for trust", run.Detail);
+        Assert.Contains("new Proxmox installation", run.Detail);
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
     }
 
     [Fact]
-    public async Task Discovery_waits_for_exact_revision_trust_without_releasing_credentials()
+    public async Task A_new_installation_waits_for_trust_without_releasing_credentials()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAsync();
         var agent = await server.ConnectAgentAsync("home");
         await server.TickAsync();
-        var run = await server.LatestRunAsync("home/korriban/krb-app-01");
+        var run = await server.LatestRunAsync(Guest);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains("Waiting for trust", run.Detail);
         Assert.Empty(agent.TakeAssignments());
+        Assert.Contains("Waiting for trust", await server.QueryAsync(db => db.Attempts.Where(a => a.StepId == null).Select(a => a.WaitingReason).SingleAsync()));
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
 
         using var client = await AuthenticateAsync(server);
-        var revision = (await client.GetFromJsonAsync<JsonArray>("/api/repository/revisions"))![0]!;
-        var path = $"/api/repository/revisions/{revision["id"]}";
-        var review = (await client.GetFromJsonAsync<JsonObject>(path + "/review"))!;
-        Assert.True(review["canTrust"]!.GetValue<bool>());
-        Assert.Null(review["baseCommit"]);
-        Assert.Contains("guest.yaml", review["diff"]!.GetValue<string>());
-        var response = await client.PostAsJsonAsync(path + "/trust", new { commit = revision["commit"]!.GetValue<string>(), baseCommit = (string?)null });
+        var installation = await InstallationAsync(client);
+        Assert.Equal(["https://10.1.0.10:8006/"], installation.Trust.Endpoints);
+        Assert.Equal(installation.Trust.Endpoints, installation.Trust.Untrusted);
+        Assert.Null(installation.Trust.TrustedAt);
+        var response = await TrustAsync(client, installation);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var trusted = (await response.Content.ReadFromJsonAsync<JsonObject>())!;
-        Assert.Equal("ops", trusted["trustedBy"]!.GetValue<string>());
-        Assert.NotNull(trusted["trustedAt"]);
-        Assert.True(trusted["isCurrentSource"]!.GetValue<bool>());
+        var trusted = (await response.Content.ReadFromJsonAsync<InstallationTrustDto>())!;
+        Assert.Equal("ops", trusted.TrustedBy);
+        Assert.NotNull(trusted.TrustedAt);
+        Assert.Empty(trusted.Untrusted);
         await agent.NextAsync("preview");
         Assert.True(await server.QueryAsync(db => db.SecretResolutions.AnyAsync()));
+        Assert.Empty((await InstallationAsync(client)).Trust.Untrusted);
     }
 
     [Fact]
-    public async Task Trust_requires_authentication_and_rejects_stale_targets_and_review_bases()
+    public async Task New_revisions_of_a_trusted_installation_run_without_another_trust()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAndTrustAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        var applied = (await server.LatestRunAsync(Guest)).Commit;
+
+        var guestFile = Path.Combine(server.Repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml");
+        File.WriteAllText(guestFile, File.ReadAllText(guestFile).Replace("memory: 2048", "memory: 4096"));
+        server.Commit("More memory");
+        await server.SyncAsync();
+
+        var plan = await agent.NextAsync("preview");
+        var latest = await server.LatestRunAsync(Guest);
+        Assert.Equal(latest.Id, await server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(plan.AttemptId)).Select(a => a.RunId).SingleAsync()));
+        Assert.NotEqual(applied, latest.Commit);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_new_endpoint_waits_for_trust_again(bool hostEndpoint)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await AuthenticateAsync(server);
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+
+        var installationFile = Path.Combine(server.Repository.Root, InstallationFile);
+        var definition = File.ReadAllText(installationFile);
+        File.WriteAllText(installationFile, hostEndpoint
+            ? definition.Replace("    datastores:", "    endpoint: https://10.1.0.99:8006/\n    datastores:")
+            : definition.Replace("https://10.1.0.10:8006/", "https://10.1.0.99:8006/"));
+        var guestFile = Path.Combine(server.Repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml");
+        File.WriteAllText(guestFile, File.ReadAllText(guestFile).Replace("memory: 2048", "memory: 4096"));
+        server.Commit("Move the API");
+        await server.SyncAsync();
+        await server.TickAsync();
+
+        var releases = await server.QueryAsync(db => db.SecretResolutions.CountAsync());
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action is "preview" or "observe");
+        var run = await server.LatestRunAsync(Guest);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("https://10.1.0.99:8006/ is a new endpoint", run.Detail);
+        var installation = await InstallationAsync(client);
+        Assert.Equal(["https://10.1.0.99:8006/"], installation.Trust.Untrusted);
+        Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
+
+        (await TrustAsync(client, installation)).EnsureSuccessStatusCode();
+        Assert.Contains("10.1.0.99", (await agent.NextAsync("preview")).InputJson);
+    }
+
+    [Fact]
+    public async Task Trust_requires_authentication_a_valid_definition_and_the_endpoints_shown()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAsync();
         using var anonymous = server.CreateClient();
         using var client = await AuthenticateAsync(server);
-        var first = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var path = $"/api/repository/revisions/{first.Id}";
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(path + "/review")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsJsonAsync(path + "/trust", new TrustRevisionRequest(first.Commit, null))).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(path + "/trust", new TrustRevisionRequest(new string('a', 40), null))).StatusCode);
-        (await TrustAsync(client, first.Id)).EnsureSuccessStatusCode();
-        server.Repository.Write("notes.txt", "Second discovered revision\n");
-        server.Commit("Second");
-        await server.SyncAsync();
-        var second = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        server.Repository.Write("notes.txt", "Third discovered revision\n");
-        server.Commit("Third");
-        await server.SyncAsync();
-        var third = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{third.Id}/review"))!;
-        Assert.Equal(first.Commit, review.BaseCommit);
-        (await TrustAsync(client, second.Id)).EnsureSuccessStatusCode();
-        var stale = await client.PostAsJsonAsync($"/api/repository/revisions/{third.Id}/trust", new TrustRevisionRequest(third.Commit, review.BaseCommit));
+        var installation = await InstallationAsync(client);
+        var path = $"/api/installations/{installation.Id}/trust";
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await anonymous.PostAsJsonAsync(path, new TrustInstallationRequest(installation.Trust.Endpoints))).StatusCode);
+        var stale = await client.PostAsJsonAsync(path, new TrustInstallationRequest(["https://10.9.9.9:8006/"]));
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
-        Assert.Contains("review", (await stale.Content.ReadAsStringAsync()).ToLowerInvariant());
-        (await TrustAsync(client, third.Id)).EnsureSuccessStatusCode();
+        Assert.Contains("endpoints changed", await stale.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(path, new TrustInstallationRequest([]))).StatusCode);
+        Assert.Empty(await server.QueryAsync(db => db.InstallationTrusts.ToListAsync()));
+
+        server.Repository.Write(InstallationFile, "not: a valid installation\n");
+        server.Commit("Break the installation");
+        await server.SyncAsync();
+        Assert.Equal(HttpStatusCode.Conflict, (await TrustAsync(client, installation)).StatusCode);
+        Assert.Empty(await server.QueryAsync(db => db.InstallationTrusts.ToListAsync()));
     }
 
     [Fact]
-    public async Task Source_changes_and_disconnects_invalidate_same_hash_authority_and_current_labels()
+    public async Task Source_changes_need_no_new_trust_but_previous_source_work_is_not_sent()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await AuthenticateAsync(server);
         await server.SyncAndTrustAsync(client);
         var first = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var agent = await server.ConnectAgentAsync("home");
+        var stale = await server.LatestRunAsync(Guest);
         await UpdateSourceAsync(client, server.Repository.Root + "/.");
         Assert.Null((await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision);
         var detail = (await client.GetFromJsonAsync<RevisionDetailDto>($"/api/repository/revisions/{first.Id}"))!;
         Assert.False(detail.Revision.IsCurrentSource);
-        Assert.NotNull(detail.Revision.TrustedAt);
-        Assert.Equal(HttpStatusCode.Conflict, (await TrustAsync(client, first.Id)).StatusCode);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.TickAsync();
+        Assert.Empty(agent.TakeAssignments());
+        Assert.Contains("current repository source", (await server.QueryAsync(db => db.Runs.SingleAsync(r => r.Id == stale.Id))).Detail);
+        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
+
         await server.SyncAsync();
         var second = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
         Assert.NotEqual(first.Id, second.Id);
         Assert.Equal(first.Commit, second.Commit);
-        Assert.Null(second.TrustedAt);
         Assert.True(second.IsCurrentSource);
-        await server.TickAsync();
-        Assert.Empty(agent.TakeAssignments());
-        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
-        (await TrustAsync(client, second.Id)).EnsureSuccessStatusCode();
         await agent.NextAsync("preview");
-        await UpdateSourceAsync(client, null);
-        await UpdateSourceAsync(client, server.Repository.Root + "/.");
-        await server.SyncAsync();
-        var third = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        Assert.Null(third.TrustedAt);
-        Assert.NotEqual(second.Id, third.Id);
     }
 
     [Fact]
-    public async Task Untrusted_inventory_does_not_cancel_a_pinned_trusted_plan_or_approve_apply()
-    {
-        using var repository = TestRepository.Minimal();
-        repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        using var client = await AuthenticateAsync(server);
-        await server.SyncAndTrustAsync(client);
-        var agent = await server.ConnectAgentAsync("home");
-        var plan = await agent.NextAsync("preview");
-        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
-        var prepared = await server.LatestRunAsync(Guest);
-        Assert.Equal(RunStatuses.AwaitingApproval, prepared.Status);
-        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "apply");
-        var guestFile = Path.Combine(repository.Root, "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml");
-        File.WriteAllText(guestFile, File.ReadAllText(guestFile).Replace("memory: 2048", "memory: 4096"));
-        server.Commit("Untrusted desired change");
-        await server.SyncAsync();
-        await server.TickAsync();
-        var old = await server.QueryAsync(db => db.Runs.Include(r => r.Steps).SingleAsync(r => r.Id == prepared.Id));
-        Assert.Equal(RunStatuses.AwaitingApproval, old.Status);
-        var approval = old.Steps.Single(s => s.Name == StepNames.Approval);
-        await server.Engine.ApproveAsync(old.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
-        var apply = await agent.NextAsync("apply");
-        Assert.Equal(prepared.Id, await server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(apply.AttemptId)).Select(a => a.RunId).SingleAsync()));
-        Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Guest)).Status);
-    }
-
-    [Fact]
-    public async Task Trusting_a_metadata_only_revision_preserves_the_existing_plan_approval_and_artifact()
+    public async Task A_metadata_only_revision_preserves_the_existing_plan_approval_and_artifact()
     {
         using var repository = TestRepository.Minimal();
         repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
@@ -176,7 +195,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         var original = await server.LatestRunAsync(Guest);
         repository.Write("README.md", "Metadata only; no infrastructure input changes.\n");
         server.Commit("Explain the repository");
-        await server.SyncAndTrustAsync(client);
+        await server.SyncAsync();
         var retained = await server.LatestRunAsync(Guest);
         Assert.Equal(original.Id, retained.Id);
         Assert.Equal(RunStatuses.AwaitingApproval, retained.Status);
@@ -188,22 +207,22 @@ public class TrustedRevisionTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Scheduled_observation_uses_the_trusted_snapshot_even_when_untrusted_discovery_invalidates_inventory()
+    public async Task Scheduled_observation_uses_the_latest_valid_snapshot_when_the_head_is_invalid()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await AuthenticateAsync(server);
         await server.SyncAndTrustAsync(client);
-        var trusted = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
+        var valid = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
         var agent = await server.ConnectAgentAsync("home");
         await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Succeeded, new JsonObject());
         await MakeObservationsDueAsync(server);
-        server.Repository.Write("labs/home/proxmox/korriban/installation.yaml", "not: a valid installation\n");
-        server.Commit("Untrusted broken installation");
+        server.Repository.Write("octopushy.yaml", "schemaVersion: 999\n");
+        server.Commit("Broken repository");
         await server.SyncAsync();
         await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
         var observe = await agent.NextAsync("observe");
         var revisionId = await server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(observe.AttemptId)).Select(a => a.RevisionId).SingleAsync());
-        Assert.Equal(trusted.Id, revisionId);
+        Assert.Equal(valid.Id, revisionId);
         Assert.Contains("10.1.0.10", observe.InputJson);
         await agent.ReportAsync(observe, Outcome.Succeeded, new JsonObject());
         await UpdateSourceAsync(client, null);
@@ -257,7 +276,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_filesystem_retry_revalidates_revision_trust_before_reopening_a_failed_step()
+    public async Task A_filesystem_retry_rechecks_the_source_before_reopening_a_failed_step()
     {
         using var repository = Definitions.GuestFilesystemTests.Repository();
         await using var server = await ServerHarness.StartAsync(postgres, repository);
@@ -272,22 +291,27 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         await UpdateSourceAsync(client, repository.Root + "/.");
         var response = await client.PostAsync($"/api/runs/{failed.Id}/retry-filesystem", null);
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("Waiting for trust", await response.Content.ReadAsStringAsync());
+        Assert.Contains("current repository source", await response.Content.ReadAsStringAsync());
         Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest)).Status);
     }
 
-    [Fact]
-    public async Task The_real_assignment_builder_itself_refuses_missing_provenance_before_secret_resolution()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_real_assignment_builder_itself_refuses_untrusted_work_before_secret_resolution(bool untrustedInstallation)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await AuthenticateAsync(server);
         await server.SyncAndTrustAsync(client);
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest);
-        run.RevisionId = null;
+        if (untrustedInstallation)
+            await server.WithDbAsync(db => db.InstallationTrusts.ExecuteDeleteAsync());
+        else
+            run.RevisionId = null;
         var step = run.Steps.Single(s => s.Name == StepNames.Plan);
         await using var scope = server.Services.CreateAsyncScope();
-        await Assert.ThrowsAsync<RevisionUntrustedException>(() => scope.ServiceProvider.GetRequiredService<AssignmentBuilder>()
+        await Assert.ThrowsAsync<ExecutionUntrustedException>(() => scope.ServiceProvider.GetRequiredService<AssignmentBuilder>()
             .BuildAsync(Assert.Single(step.Attempts), step, run, RunContext.Parse(run.Context), Guid.NewGuid(), CancellationToken.None));
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
     }
@@ -295,7 +319,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Persisted_trust_survives_only_in_the_fixture_database_and_restart_never_grants_missing_authority(bool trustBeforeRestart)
+    public async Task Persisted_trust_survives_a_restart_and_a_restart_never_grants_missing_trust(bool trustBeforeRestart)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using (var client = await AuthenticateAsync(server))
@@ -308,8 +332,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         await server.RestartFixtureAsync();
         using var afterClient = server.CreateClient();
         (await afterClient.PostAsJsonAsync("/api/auth/login", new { username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
-        var revision = (await afterClient.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        Assert.Equal(trustBeforeRestart, revision.TrustedAt is not null);
+        Assert.Equal(trustBeforeRestart, (await InstallationAsync(afterClient)).Trust.TrustedAt is not null);
         var agent = await server.ConnectAgentAsync("home");
         await server.TickAsync();
         if (trustBeforeRestart)
@@ -360,94 +383,6 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         Assert.Equal(1, await server.QueryAsync(db => db.Revisions.CountAsync()));
     }
 
-    [Fact]
-    public async Task A_branch_change_with_the_same_hash_requires_a_fresh_current_source_review()
-    {
-        await using var server = await ServerHarness.StartAsync(postgres);
-        using var client = await AuthenticateAsync(server);
-        await server.SyncAndTrustAsync(client);
-        var first = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        await server.Services.GetRequiredService<GitCli>().RunAsync(["-C", server.Repository.Root, "branch", "another", "main"]);
-        await UpdateSourceAsync(client, server.Repository.Root, "another");
-        await server.SyncAsync();
-        var second = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        Assert.Equal(first.Commit, second.Commit);
-        Assert.NotEqual(first.Id, second.Id);
-        Assert.Null(second.TrustedAt);
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{second.Id}/review"))!;
-        Assert.Null(review.BaseCommit);
-        Assert.NotEmpty(review.Diff);
-    }
-
-    [Fact]
-    public async Task An_oversized_binary_patch_cannot_be_confirmed_as_an_empty_or_partial_review()
-    {
-        using var repository = TestRepository.Minimal();
-        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(600 * 1024);
-        bytes[0] = 0;
-        await File.WriteAllBytesAsync(Path.Combine(repository.Root, "bundled-code.bin"), bytes);
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        await server.SyncAsync();
-        using var client = await AuthenticateAsync(server);
-        var revision = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{revision.Id}/review"))!;
-        Assert.False(review.CanTrust);
-        Assert.True(review.Truncated);
-        Assert.Contains("512 KiB", review.BlockedReason);
-        Assert.Equal(HttpStatusCode.Conflict, (await TrustAsync(client, revision.Id)).StatusCode);
-        Assert.Null((await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!.TrustedAt);
-    }
-
-    [Fact]
-    public async Task Non_utf8_text_cannot_be_trusted_until_the_source_encoding_is_corrected()
-    {
-        using var repository = TestRepository.Minimal();
-        // No NUL: Git treats this as text even with --binary, but it is not UTF-8.
-        var bytes = "#!/bin/sh\nprintf \""u8.ToArray().Concat(new byte[] { 0xff, (byte)'"', (byte)'\n' }).ToArray();
-        await File.WriteAllBytesAsync(Path.Combine(repository.Root, "helper.sh"), bytes);
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        await server.SyncAsync();
-        using var client = await AuthenticateAsync(server);
-        var revision = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{revision.Id}/review"))!;
-        Assert.False(review.CanTrust);
-        Assert.False(review.Truncated);
-        Assert.Empty(review.Diff);
-        Assert.Contains("UTF-8", review.BlockedReason);
-        Assert.Equal(HttpStatusCode.Conflict, (await TrustAsync(client, revision.Id)).StatusCode);
-        Assert.Null((await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!.TrustedAt);
-        Assert.False(await server.QueryAsync(db => db.SecretResolutions.AnyAsync()));
-
-        repository.Write("helper.sh", "#!/bin/sh\nprintf 'UTF-8 fixture only\\n'");
-        server.Commit("Normalize source encoding for review");
-        await server.SyncAsync();
-        var corrected = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        var correctedReview = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{corrected.Id}/review"))!;
-        Assert.True(correctedReview.CanTrust);
-        Assert.Contains("UTF-8 fixture only", correctedReview.Diff);
-        (await TrustAsync(client, corrected.Id)).EnsureSuccessStatusCode();
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Invalid_definitions_or_unavailable_git_objects_cannot_be_trusted(bool invalidDefinition)
-    {
-        using var repository = TestRepository.Minimal();
-        if (invalidDefinition) repository.Write("octopushy.yaml", "schemaVersion: 999\n");
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        await server.SyncAsync();
-        using var client = await AuthenticateAsync(server);
-        var revision = (await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!;
-        if (!invalidDefinition) Directory.Delete(Path.Combine(server.DataDirectory, "git", "mirror.git"), recursive: true);
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>($"/api/repository/revisions/{revision.Id}/review"))!;
-        Assert.False(review.CanTrust);
-        Assert.False(review.Truncated);
-        Assert.NotNull(review.BlockedReason);
-        Assert.Equal(HttpStatusCode.Conflict, (await TrustAsync(client, revision.Id)).StatusCode);
-        Assert.Null((await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!.TrustedAt);
-    }
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -461,7 +396,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         var apply = await agent.NextAsync("apply");
         var original = await server.LatestRunAsync(Guest);
         await UpdateSourceAsync(client, server.Repository.Root + "/.");
-        await server.SyncAndTrustAsync(client);
+        await server.SyncAsync();
         if (expiredLease)
         {
             await server.WithDbAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(apply.AttemptId))
@@ -486,7 +421,7 @@ public class TrustedRevisionTests(PostgresFixture postgres)
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Missing_or_mismatched_run_provenance_fails_closed_even_with_a_trusted_revision(bool missing)
+    public async Task Missing_or_mismatched_run_provenance_fails_closed_even_for_a_trusted_installation(bool missing)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await AuthenticateAsync(server);
@@ -515,16 +450,15 @@ public class TrustedRevisionTests(PostgresFixture postgres)
         await server.Engine.DispatchAsync(CancellationToken.None); // No advancement pass to help the final hand-off guard.
         Assert.Empty(agent.TakeAssignments());
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
-        Assert.Contains("Waiting for trust", (await server.LatestRunAsync(Guest)).Detail);
-        Assert.Contains("Waiting for trust", await server.QueryAsync(db => db.Attempts.Where(a => a.StepId == null).Select(a => a.WaitingReason).SingleAsync()));
+        Assert.Contains("current repository source", (await server.LatestRunAsync(Guest)).Detail);
+        Assert.Contains("current repository source", await server.QueryAsync(db => db.Attempts.Where(a => a.StepId == null).Select(a => a.WaitingReason).SingleAsync()));
     }
 
-    internal static async Task<HttpResponseMessage> TrustAsync(HttpClient client, Guid id)
-    {
-        var path = $"/api/repository/revisions/{id}";
-        var review = (await client.GetFromJsonAsync<RevisionReviewDto>(path + "/review"))!;
-        return await client.PostAsJsonAsync(path + "/trust", new TrustRevisionRequest(review.Revision.Commit, review.BaseCommit));
-    }
+    private static async Task<InstallationSummaryDto> InstallationAsync(HttpClient client, string address = "home/korriban") =>
+        (await client.GetFromJsonAsync<InventoryDto>("/api/inventory"))!.Labs.SelectMany(l => l.Installations).Single(i => i.Address == address);
+
+    internal static Task<HttpResponseMessage> TrustAsync(HttpClient client, InstallationSummaryDto installation) =>
+        client.PostAsJsonAsync($"/api/installations/{installation.Id}/trust", new TrustInstallationRequest(installation.Trust.Endpoints));
 
     internal static async Task UpdateSourceAsync(HttpClient client, string? url, string branch = "main") =>
         (await client.PutAsJsonAsync("/api/repository", new RepositoryUpdate(url, branch, 60, "none", null, null))).EnsureSuccessStatusCode();

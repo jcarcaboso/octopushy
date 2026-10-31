@@ -17,7 +17,7 @@ function options(): WorkerPreparation {
     revision: {
       id: "revision-1", commit: "a".repeat(40), subject: "Configured hosts", author: "ops",
       committedAt: null, loadedAt: "2026-10-25T10:00:00Z", valid: true, errorCount: 0, warningCount: 0,
-      trustedAt: null, trustedBy: null, isCurrentSource: true,
+      isCurrentSource: true,
     },
     preparationBlockedReason: null,
     stateBackends: ["postgres"], deploymentBlockedReason: "Operator image configuration is required.", existingWorkers: [],
@@ -89,7 +89,6 @@ it("prepares a review-only draft from a configured installation and host with sm
   expect(screen.getByLabelText("Agent state disk (GiB)")).toHaveValue(16);
   expect(screen.getByLabelText("Disk datastore")).toHaveValue("fast-a");
   expect(screen.getByLabelText("Ethernet bridge")).toHaveValue("vmbr0");
-  expect(screen.getByText(/current-source revision is not trusted/)).toBeInTheDocument();
   expect(screen.getByText(/Missing: pinned NixOS/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Deploy/ })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Generate review draft" }));
@@ -219,14 +218,12 @@ it("shows stale-source refusal without an executable action and reloads onto a f
   expect(requests.filter((r) => r.method !== "GET").every((r) => r.path === "/api/managed-worker-preparation")).toBe(true);
 });
 
-it("does not confuse exact revision trust or a local worker with deployment readiness", async () => {
+it("does not confuse a local worker with deployment readiness", async () => {
   const data = options();
-  data.revision = { ...data.revision!, trustedAt: "2026-10-25T10:05:00Z", trustedBy: "ops" };
   data.lastFetchError = "Unable to fetch current remote head.";
   mockApi({ "GET /api/managed-worker-preparation": () => data });
   renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
-  expect(await screen.findByText(/revision trusted.*not deployment approval/)).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Deployment and safety checks" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Deployment and safety checks" })).toBeInTheDocument();
   expect(screen.getByText(/remote worker mTLS ingress/)).toBeInTheDocument();
   expect(screen.getByText(/last loaded source head/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Deploy/ })).not.toBeInTheDocument();
@@ -258,7 +255,7 @@ it("offers no state choice without an external backend and defaults to the built
   expect(chosen.filter((r) => r.method === "POST")[0].body).toMatchObject({ stateBackend: "postgres" });
 });
 
-it("reviews the exact repository files, requires confirmation and publishes without trusting or approving", async () => {
+it("reviews the exact repository files, requires confirmation and publishes without approving", async () => {
   const user = userEvent.setup();
   const current = { ...options(), stateBackends: [], deploymentBlockedReason: null, existingWorkers: [] };
   const { requests } = mockApi({
@@ -282,7 +279,7 @@ it("reviews the exact repository files, requires confirmation and publishes with
   const mutation = requests.filter((r) => r.method === "POST");
   expect(mutation.map((r) => r.path)).toEqual(["/api/managed-worker-preparation/review", "/api/managed-worker-preparation/publish"]);
   expect(mutation[1].body).toMatchObject({ reviewSha256: "d".repeat(64), confirmRepositoryWrite: true, draft: { stateBackend: null, selection: { vmid: 901, sockets: 1, cores: 2 } } });
-  expect(screen.getByRole("link", { name: "Review and trust the new revision" })).toHaveAttribute("href", "/repository");
+  expect(screen.getByRole("link", { name: "sync" })).toHaveAttribute("href", "/repository");
 });
 
 it("disables publication when image/ingress setup is missing and shows existing workers rather than redeploying", async () => {

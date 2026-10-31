@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
 using Octopushy.Server.Api;
+using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 
@@ -38,7 +39,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         reporter.BinaryUrl = "https://releases.test/reporter";
         reporter.BinarySha256 = new string('c', 64);
         reporter.ManagedNixosImageSha256 = new string(qualifiedReportingImage ? 'a' : 'b', 64);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var view = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.Null(view.DeploymentBlockedReason);
         var draft = Request(view);
@@ -73,7 +74,6 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         Assert.Equal(result.Commit, (await git.RunAsync(["rev-parse", "main"], remote.Root)).Trim());
         await server.SyncAsync();
         var current = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
-        Assert.Null(current.Revision!.TrustedAt);
         Assert.Single(current.ExistingWorkers);
         var loaded = await server.Services.GetRequiredService<RevisionCache>().GetAsync(result.Commit, default);
         Assert.DoesNotContain(loaded.Issues, i => i.Severity == IssueSeverity.Error);
@@ -96,7 +96,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         await server.SyncAsync();
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.NotNull(options.DeploymentBlockedReason);
         var draft = Request(options);
@@ -114,6 +114,47 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(Path + "/review", draft)).StatusCode);
     }
 
+    [Fact]
+    public async Task A_retired_workers_name_is_reused_with_a_new_generation_but_not_while_removal_is_pending()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAsync();
+        Enable(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        var draft = Request((await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!);
+        var original = (await (await client.PostAsJsonAsync(Path + "/review", draft)).Content.ReadFromJsonAsync<WorkerReviewDto>())!;
+
+        var id = Guid.CreateVersion7();
+        await server.WithDbAsync(async db =>
+        {
+            db.Resources.Add(new Resource
+            {
+                Id = id, Address = original.Address, Kind = ResourceKinds.Guest, ParentAddress = "home/korriban", Lab = "home",
+                MissingSince = DateTimeOffset.UtcNow,
+                ManagedWorker = new()
+                {
+                    ResourceId = id, Generation = original.Generation, Installation = "home/korriban", Host = "korriban",
+                    Vmid = 901, RevisionId = draft.Selection!.RevisionId, RunId = Guid.NewGuid(), ServerUrl = "https://controller.test",
+                },
+            });
+            await db.SaveChangesAsync();
+        });
+        var pending = await client.PostAsJsonAsync(Path + "/review", draft);
+        Assert.Equal(HttpStatusCode.Conflict, pending.StatusCode);
+        Assert.Contains("removal has not finished", await pending.Content.ReadAsStringAsync());
+
+        await server.WithDbAsync(async db =>
+        {
+            (await db.Resources.SingleAsync(r => r.Id == id)).RetiredAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        });
+        var reused = await client.PostAsJsonAsync(Path + "/review", draft);
+        reused.EnsureSuccessStatusCode();
+        var review = (await reused.Content.ReadFromJsonAsync<WorkerReviewDto>())!;
+        Assert.False(review.AlreadyExists);
+        Assert.NotEqual(original.Generation, review.Generation);
+    }
+
     private static void Enable(ServerHarness server)
     {
         var config = server.Services.GetRequiredService<IOptions<OctopushyOptions>>().Value;
@@ -129,7 +170,7 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres, repository);
         await server.SyncAsync();
         Enable(server);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         var view = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.Empty(view.StateBackends);
 

@@ -7,7 +7,7 @@ and other definitions are not modified.
 Use **Review deployment** to review the executable guest definition and versioned
 recipe, then **Add worker to repository** to publish them. **Generate review
 draft** is an optional documentation-only export; it never creates a VM.
-Publication still requires exact-revision trust and the saved infrastructure
+Publication still requires a trusted installation and the saved infrastructure
 plan's approval before the VM is created and its worker is bootstrapped.
 
 Generated NixOS worker definitions explicitly disable `setup.diskReporter`: the
@@ -79,8 +79,8 @@ Open **Agents → Prepare worker deployment** (`/agents/prepare`).
 3. **Review deployment** shows the exact files and base commit. Confirm them,
    then **Add worker to repository**. This is an authenticated Git write, not
    a deployment approval.
-4. Review and trust the new exact revision using the normal Repository flow.
-   Then approve the saved VM plan. A managed worker always requires manual
+4. After the next sync, approve the saved VM plan (trust the installation first
+   if it is new). A managed worker always requires manual
    approval even when surrounding policy is automatic.
 5. Follow the run through VM verification, root capacity checks, guest-local
    CSR preparation, public certificate installation and authenticated readiness.
@@ -134,21 +134,31 @@ instead of another VM. Stale or changed input requires another review.
 - Native bootstrap uses the privileged action approval path even with a shared
   Proxmox token. Saved-plan integrity is checked before credential release.
   Shared-token preview still has that token's full upstream permissions;
-  approval and exact revision trust are not execution sandboxing.
-- Automatic VM destruction, generation replacement, movement, role removal and
-  destructive replacement plans are refused. **Deleting an agent revokes its
+  approval and installation trust are not execution sandboxing.
+- Generation replacement, movement, role removal, `lifecycle: retired` and
+  destructive plans in ordinary runs are refused. **Deleting an agent revokes its
   enrollment; it does not delete or retire its VM.** The worker view distinguishes
   a removed enrollment from an enrolled but offline worker.
-- To finalize an already removed worker, remove its Git definition, revoke its
-  enrollment, and explicitly choose **Verify retirement** on the worker page.
+- **To remove a worker, delete its folder.** Octopushy proposes a removal run built from the worker's last applied
+  definition: plan the destroy, wait for manual approval (always, for workers),
+  drain the worker, remove its VM protection, apply the saved destroy plan, verify
+  the VM is absent, then remove its enrollment. Another worker does all of this;
+  a worker never operates on its own VM. A failed absence check keeps the
+  enrollment. Restoring the folder before the destroy starts cancels the removal,
+  but the worker stays drained until it is resumed. See
+  [lab-repository.md](lab-repository.md), rule 10.
+- To finalize a worker already removed by hand, remove its Git definition, revoke its
+  enrollment, and explicitly choose **Verify retirement** on the worker page. A
+  deleted worker whose enrollment was already revoked is not destroyed
+  automatically; **Plan removal** on its guest page does that explicitly.
   An independent control worker uses the existing read-only `verify-absent`
   executor against the original installation. Only explicit absence evidence
   marks the guest retired and removes it from the active worker list. A present
-  VM, untrusted/changed source, unfinished work or unresolved mutation blocks
+  VM, changed source, unfinished work or unresolved mutation blocks
   finalization; no plan, unprotect, destroy or guest command is executed.
   Identity and run evidence remain available. Retired generation names are not
   silently reused: choose a fresh name and unused VMID for a new deployment.
-  Persistent automated drain/VM destruction remains a separate milestone. Invalid worker
+  Invalid worker
   edits cannot rename their durable resource, and are recorded as per-resource
   issues without dropping unrelated guest discovery. Reverting a rejected
   managed rename retains the original resource/generation.

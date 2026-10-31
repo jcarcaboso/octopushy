@@ -352,7 +352,7 @@ Run/Step/Attempt engine; they are not a second polling scheduler. Expose
 waiting/failed/uncertain reasons alongside the phase.
 
 ```text
-Deploy requested (Git intent, validated and exact revision trusted)
+Deploy requested (Git intent, validated, installation trusted)
   → Deploying: RO plan → explicit approval → privileged apply → RO VM verify
   → Bootstrapping: prepare guest-local identity / retrieve public CSR
   → Enrolling: issue bound identity / install public certificate / mTLS connect
@@ -516,7 +516,7 @@ not the older aspirational deployment descriptions.
    policy, bound to the saved plan and typed bootstrap/drain manifest. Native
    work after an infrastructure no-op still requires that approval/artifact;
    generalize the existing rootfs no-op handling, do not skip identity changes.
-   Revision execution trust and action approval are separate decisions.
+   Installation trust and action approval are separate decisions.
 4. **Purpose/destination restrictions remain missing.** Distinct store keys
    cannot prove distinct upstream privileges. Bind approved credential purposes
    and versions to this installation, verified endpoint and intended actions;
@@ -530,10 +530,10 @@ not the older aspirational deployment descriptions.
    fallbacks. The example installation uses `tls.verify: false`; it is not an
    acceptable managed-worker deployment default. Enforce approved rootless
    runtime/digest in dispatch/assignment construction, since current dispatch
-   does not reject `local`. Revision trust alone does not sandbox code or pin
+   does not reject `local`. Installation trust alone does not sandbox code or pin
    all downloaded dependencies.
 
-Exact revision trust for the current repository source, approved plan identity,
+Installation trust, the current repository source, approved plan identity,
 least-privilege upstream ACLs and protected state storage all remain mandatory.
 The bootstrap writer needs guest-command authority in the chosen PVE version;
 do not invent a universally sufficient ACL recipe or equate pool membership
@@ -556,7 +556,7 @@ building another console:
   Git write-back/drafts are vocabulary/planned work, not an implemented editor
   in the current repository page. A later minimal publish action must validate
   a base revision, create a real Git commit through an explicitly configured
-  write identity, then follow normal sync/trust; that integration is not a
+  write identity, then follow normal sync; that integration is not a
   prerequisite for proving worker lifecycle.
 - **Plan/approve deployment:** use existing run links with separate blocked
   reasons and show the bootstrap manifest alongside the exact plan.
@@ -627,8 +627,8 @@ and operator-enrolled control workers keep their current behavior.
   worker schema/labels, independent control-worker selectors, role changes,
   generation-input stability and no private bootstrap data in tool variables.
 - Server: `ServerHarness`, `ProvisioningTests`, `RecoveryTests`, `ApiTests`,
-  `GuestFilesystemRunTests`, `SplitCredentialTests`, `TrustedRevisionTests` and
-  `DispatchTrustBacklogTests`: no-op approval, RO/writer release, exact source/
+  `GuestFilesystemRunTests`, `SplitCredentialTests` and `InstallationTrustTests`:
+  no-op approval, RO/writer release, exact source/
   revision, self-target exclusion including retry construction, last-control-
   worker block, durable drain, late results and restart/uncertain safety.
 - Identity: existing `agent/crates/octopushy/tests/grpc_e2e.rs` enrollment,

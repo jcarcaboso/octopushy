@@ -27,7 +27,7 @@ public sealed partial class RunEngine
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken);
-            // Keep trust-wait reporting bounded without spending eligible execution slots.
+            // Keep reporting on previous-source work bounded without spending eligible execution slots.
             queued.AddRange(await pending
                 .Where(a => a.StepId == null
                     ? !eligible.Any(r => r.Id == a.RevisionId)
@@ -60,7 +60,7 @@ public sealed partial class RunEngine
                 var run = step?.Run;
                 var context = RunContext.Parse(run?.Context ?? attempt.Context!);
                 if (await (run is null
-                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, cancellationToken)
+                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
                         : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
                 {
                     attempt.WaitingReason = trustReason;
@@ -123,14 +123,14 @@ public sealed partial class RunEngine
                 {
                     assignment = await builder.BuildAsync(attempt, step, run, context, agent.Id, cancellationToken);
                 }
-                catch (Exception e) when (e is CredentialUnavailableException or RevisionUntrustedException && run is not null)
+                catch (Exception e) when (e is CredentialUnavailableException or ExecutionUntrustedException && run is not null)
                 {
                     attempt.WaitingReason = e.Message;
                     run.Status = RunStatuses.Blocked;
                     run.Detail = e.Message;
                     continue;
                 }
-                catch (Exception e) when (e is RevisionUntrustedException or StateBusyException)
+                catch (Exception e) when (e is ExecutionUntrustedException or StateBusyException)
                 {
                     attempt.WaitingReason = e.Message;
                     continue;

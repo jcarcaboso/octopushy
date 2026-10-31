@@ -343,7 +343,7 @@ public class ProvisioningTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_deleted_folder_marks_the_guest_missing_and_runs_nothing()
+    public async Task A_deleted_folder_marks_the_guest_missing_and_replaces_provisioning_with_its_removal()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAndTrustAsync();
@@ -356,6 +356,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Cancelled, run.Status);
         Assert.Contains("disappeared", run.Detail);
+        Assert.NotNull(RunContext.Parse((await server.LatestRunAsync(Guest, Operations.Retire)).Context).DefinitionRemovedIn);
     }
 
     [Fact]
