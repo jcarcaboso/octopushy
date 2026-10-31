@@ -75,6 +75,7 @@ JSON
       echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
     fi
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
+    if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
     echo "Apply complete! Resources: 2 added. token=$PROXMOX_VE_API_TOKEN"
     exit "${FAKE_APPLY_EXIT:-0}" ;;
   output)
@@ -306,6 +307,35 @@ async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
     let left = state::read(&apply.workspace).expect("the state for the result");
     assert_eq!(left.sha256, snapshot.sha256);
     assert_no_secrets(&fx, &apply);
+}
+
+#[tokio::test]
+async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state() {
+    let fx = Fixture::new();
+    let preview = run(
+        &fx,
+        "p1",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let plan = preview.result.unwrap().artifacts.remove(0);
+    let apply = run(
+        &fx,
+        "a1",
+        "apply",
+        &built_in(json!({ "FAKE_ERRORED": "1", "FAKE_APPLY_EXIT": "1" })),
+        repo_tar(None),
+        vec![plan],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(apply.result.is_err());
+    let left = state::read(&apply.workspace).expect("the emergency state");
+    assert!(String::from_utf8_lossy(&left.content).contains("\"serial\":9"));
 }
 
 #[tokio::test]

@@ -152,9 +152,11 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     public async Task<string?> SettleAsync(Attempt attempt, Guid resourceId, byte[]? content, CancellationToken cancellationToken)
     {
         var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId, cancellationToken);
+        // An apply that started may have changed something, whatever it reports, and only its
+        // state would say what. One that never started has nothing to lose.
         var refused = content is not null
             ? await WriteAsync(attempt.Id, resourceId, content, cancellationToken)
-            : attempt.Status == AttemptStatuses.Succeeded ? "The agent returned no state." : null;
+            : attempt.Status == AttemptStatuses.Succeeded || attempt.StartedAt is not null ? "The agent returned no state." : null;
         if (state?.LockAttemptId == attempt.Id)
         {
             state.LockAttemptId = null;
@@ -307,14 +309,20 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     private Task<bool> IsRunningAsync(Guid attemptId, CancellationToken cancellationToken) =>
         db.Attempts.AnyAsync(a => a.Id == attemptId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), cancellationToken);
 
+    /// <summary>
+    /// Whether an external backend may hold resources of this guest: its latest apply that
+    /// reached an agent used one, and was not a retirement that finished. A failed or uncertain
+    /// apply counts, because it can have created resources before it stopped.
+    /// </summary>
     private async Task<bool> LastApplyUsedExternalBackendAsync(Guid resourceId, CancellationToken cancellationToken)
     {
-        var last = await db.Steps.AsNoTracking()
-            .Where(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Succeeded && s.Run!.ResourceId == resourceId)
-            .OrderByDescending(s => s.FinishedAt)
-            .Select(s => new { s.Run!.Operation, s.Run.Context })
+        var last = await db.Attempts.AsNoTracking()
+            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.AssignedAt != null && a.Step!.Run!.ResourceId == resourceId)
+            .OrderByDescending(a => a.AssignedAt)
+            .Select(a => new { a.Status, a.Step!.Run!.Operation, a.Step.Run.Context })
             .FirstOrDefaultAsync(cancellationToken);
-        return last?.Operation == Operations.Provision && RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == false;
+        return last is not null && RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == false
+            && !(last.Operation == Operations.Retire && last.Status == AttemptStatuses.Succeeded);
     }
 
     private static (long Serial, string Lineage, int Resources)? Parse(byte[] content)

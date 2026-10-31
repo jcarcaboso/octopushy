@@ -24,6 +24,9 @@ pub const BACKEND_TYPE: &str = "octopushy";
 /// What `Hello.capabilities` advertises.
 pub const CAPABILITY: &str = "opentofu-builtin-state";
 pub const ARTIFACT: &str = "terraform.tfstate";
+/// Where OpenTofu saves the state, in its working directory, when it cannot write
+/// the backend file. It is then the only copy of what the apply did.
+const ERRORED: &str = "errored.tfstate";
 /// Larger states are not sent: a result shares the 64 MiB message limit.
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -44,6 +47,11 @@ impl Snapshots {
 
 fn file(workspace: &Path) -> PathBuf {
     workspace.join("state").join(ARTIFACT)
+}
+
+/// Names the root, so its emergency state can be found after a restart too.
+fn root_record(workspace: &Path) -> PathBuf {
+    workspace.join("state").join("root")
 }
 
 /// The backend's `path`, from the root. It is relative because a saved plan keeps
@@ -77,10 +85,37 @@ pub fn restore(ctx: &ExecContext) -> Result<(), Failure> {
     write_fresh(&path, &state.content)
 }
 
-/// The state in the workspace, if there is a complete one. OpenTofu rewrites the
-/// file in place, so a read during an apply can see part of it.
+/// Records where OpenTofu runs. A file of that name from the repository goes first:
+/// it is not this apply's emergency state.
+pub fn record_root(workspace: &Path, root: &Path) -> Result<(), Failure> {
+    let workspace = workspace.canonicalize().map_err(anyhow::Error::from)?;
+    let relative = root
+        .strip_prefix(&workspace)
+        .map_err(|_| Failure::msg("the root is outside the attempt's workspace"))?;
+    if let Err(e) = fs::remove_file(root.join(ERRORED))
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(Failure::msg(format!("removing {ERRORED}: {e}")));
+    }
+    write_fresh(
+        &root_record(&workspace),
+        relative.to_string_lossy().as_bytes(),
+    )
+}
+
+/// The newest complete state in the workspace: OpenTofu's emergency state if it
+/// left one, or else the backend file.
 pub fn read(workspace: &Path) -> Option<Artifact> {
-    let content = fs::read(file(workspace)).ok()?;
+    let emergency = fs::read_to_string(root_record(workspace))
+        .ok()
+        .and_then(|root| complete(&workspace.join(root).join(ERRORED)));
+    emergency.or_else(|| complete(&file(workspace)))
+}
+
+/// The state at `path`, if it is complete. OpenTofu rewrites the backend file in
+/// place, so a read during an apply can see part of it.
+fn complete(path: &Path) -> Option<Artifact> {
+    let content = fs::read(path).ok()?;
     if content.len() > MAX_BYTES {
         tracing::error!("the OpenTofu state is too large to send");
         return None;
@@ -138,6 +173,25 @@ mod tests {
         let read = read(dir.path()).unwrap();
         assert_eq!(read.content, state);
         assert_eq!(read.sha256, sha256_hex(state));
+    }
+
+    #[test]
+    fn the_emergency_state_wins_but_only_from_this_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().canonicalize().unwrap();
+        let root = ws.join("repo/vm");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir(ws.join("state")).unwrap();
+        fs::write(file(&ws), br#"{"serial":0,"lineage":"l"}"#).unwrap();
+
+        // Committed to the repository: not OpenTofu's, so it must not count.
+        fs::write(root.join(ERRORED), br#"{"serial":9,"lineage":"evil"}"#).unwrap();
+        record_root(&ws, &root).unwrap();
+        assert!(!root.join(ERRORED).exists());
+        assert!(String::from_utf8_lossy(&read(&ws).unwrap().content).contains(r#""serial":0"#));
+
+        fs::write(root.join(ERRORED), br#"{"serial":1,"lineage":"l"}"#).unwrap();
+        assert!(String::from_utf8_lossy(&read(&ws).unwrap().content).contains(r#""serial":1"#));
     }
 
     #[tokio::test]

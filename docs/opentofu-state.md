@@ -22,7 +22,10 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
 
 - **At rest.** Each version is sealed with a fresh data key under the variable store's
   key-encryption key, bound to its guest and version.
-- **In logs and the API.** State is never logged. The API shows a version's serial, lineage,
+- **In logs and the API.** State is never logged, with one exception outside Octopushy's
+  control: if OpenTofu can write neither the backend file nor `errored.tfstate`, usually
+  because the disk is full, it prints the state as its last resort, which reaches the
+  attempt's log. The API shows a version's serial, lineage,
   resource count, digest, size and origin, never its content; there is no way to download it.
 - **On agents.** It is plaintext in the attempt's workspace while the attempt runs, and in
   the outbox until the result is acknowledged. A saved plan embeds the same state, so this
@@ -38,7 +41,11 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
   it holds the stack's lock, which it gets once its plan is approved, by a person or by the
   guest's automatic policy. A write must be valid OpenTofu
   state of the same lineage, with no older serial. Otherwise it is refused, the last good
-  version stays, and a finished apply becomes `uncertain`.
+  version stays, and a finished apply becomes `uncertain`. So does an apply that started
+  and returned no state, even if it reported a failure: it may have changed something.
+- **When OpenTofu cannot save.** If it cannot write the backend file, it leaves the state
+  in `errored.tfstate`. The agent reports that file, so the controller keeps what the apply
+  did and the next plan starts from it.
 
 ## Locking
 
@@ -80,11 +87,12 @@ refuses to start rather than create a new one.
 
 ## Moving between backends
 
-There is no migration in either direction. A guest applied with an external backend keeps
-that state, and removing `provision.state` from it fails its plan rather than planning from
-an empty state, which would try to create everything again. The same refusal applies when
-adding `provision.state` to a guest whose built-in state tracks resources. A guest that was
-never applied can use either.
+There is no migration in either direction. Once an apply has started on an external
+backend, even one that failed, that backend may hold the guest's resources. Removing
+`provision.state` then fails the plan rather than planning from an empty state, which would
+try to create everything again. The same refusal applies when
+adding `provision.state` to a guest whose built-in state tracks resources. A guest with no started apply can use either, and so can one whose external retirement
+finished.
 
 The key is the guest's resource, not its name, so a rename with `renamedFrom` keeps the
 state. A retired guest keeps its versions; a new guest at the same address starts empty.

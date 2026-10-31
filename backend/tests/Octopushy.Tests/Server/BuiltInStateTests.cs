@@ -272,6 +272,36 @@ public class BuiltInStateTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_started_apply_that_failed_without_its_state_is_uncertain()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        var resource = await ApplyOnceAsync(server, agent);
+        await agent.ReportAsync(await ReplanAsync(server, agent, resource), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        await server.Engine.OnStartedAsync(agent.Id, Guid.Parse(apply.AttemptId), CancellationToken.None);
+        await agent.ReportAsync(apply, Outcome.Failed, error: "the provider failed");
+        await server.TickAsync();
+
+        Assert.Equal(RunStatuses.Uncertain, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        Assert.Single(await VersionsAsync(server, resource));
+    }
+
+    [Fact]
+    public async Task An_apply_that_never_started_can_fail_without_a_state()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        await server.Engine.OnResultAsync(agent.Id, new AttemptResult { AttemptId = apply.AttemptId, Outcome = Outcome.Failed, Error = "the agent is shutting down" }, CancellationToken.None);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+    }
+
+    [Fact]
     public async Task A_running_apply_keeps_plans_of_the_stack_waiting()
     {
         await using var server = await StartAsync(postgres);
@@ -420,6 +450,33 @@ public class BuiltInStateTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, run.Status);
         Assert.Contains("Restore provision.state", run.Steps.Single(s => s.Name == StepNames.Plan).Detail);
+    }
+
+    [Theory]
+    [InlineData(Outcome.Failed)]
+    [InlineData(Outcome.Uncertain)]
+    public async Task Removing_an_external_backend_after_an_unfinished_apply_is_refused(Outcome outcome)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await PlanToApplyAsync(server, agent), outcome, error: "stopped after creating some resources");
+        await server.TickAsync();
+        var first = await server.LatestRunAsync(Guest, Operations.Provision);
+        if (first.Status == RunStatuses.Uncertain)
+        {
+            await server.Engine.CloseUncertainAsync(first.Id, "ops", CancellationToken.None);
+        }
+
+        var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(path, File.ReadAllText(Path.Combine(server.Repository.Root, path)).Replace("  state: { backend: postgres }\n", ""));
+        server.Commit("Drop the backend");
+        await server.SyncAndTrustAsync();
+        await server.TickAsync();
+        await server.TickAsync();
+
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
+        Assert.Contains("Restore provision.state", (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Plan).Detail);
     }
 
     [Fact]

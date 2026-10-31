@@ -295,6 +295,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     let mut backends = Map::new();
     if built_in {
         state::restore(ctx)?;
+        state::record_root(ws, &root)?;
         backends.insert(
             "local".to_owned(),
             json!({ "path": state::backend_path(ws, &root)? }),

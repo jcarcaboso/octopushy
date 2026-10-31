@@ -290,7 +290,11 @@ keeps the state; see [how it works](../../../docs/opentofu-state.md).
   checks the file every `poll_interval` and sends each complete new state as a snapshot;
   the newest replaces any not sent yet. An agent that restarts during an apply adds the state in the workspace to the
   `uncertain` result it reports.
-- States over 32 MiB are not sent. A finished apply without its state is `uncertain`.
+- When OpenTofu cannot write the backend file it leaves `errored.tfstate` in the root, and
+  the executor reports that instead, because it is the only copy of what the apply did. A
+  file of that name from the repository is removed before OpenTofu runs.
+- States over 32 MiB are not sent. An apply that started and returns no state is `uncertain`,
+  whatever it reported.
 
 ### `preview`
 
