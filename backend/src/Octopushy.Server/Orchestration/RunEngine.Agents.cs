@@ -253,6 +253,13 @@ public sealed partial class RunEngine
                 attempt.LeaseExpiresAt = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
                 await db.SaveChangesAsync(cancellationToken);
             }
+            else if (attempt is { StartedAt: null })
+            {
+                // Lost with a connection and resent after the lease ended. It changes nothing
+                // about the attempt, but that it ran still decides what a missing state means.
+                attempt.StartedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(cancellationToken);
+            }
         }, cancellationToken);
 
     /// <summary>Records an attempt's result. Returns true when the agent may forget it.</summary>

@@ -42,8 +42,8 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         var last = await LastApplyAsync(run.ResourceId, cancellationToken);
         if (!context.OpenTofu!.Backend.IsBuiltIn)
         {
-            // An unfinished built-in apply can have created what no stored state records.
-            if (head?.ResourceCount > 0 || last is { BuiltIn: true, Finished: false })
+            // An uncertain built-in apply can have created what no stored state records.
+            if (head?.ResourceCount > 0 || last is { BuiltIn: true, StateKnown: false })
             {
                 throw new AssignmentException("This guest's OpenTofu state is in Octopushy, and an external backend would not include it and could plan to recreate what it tracks. "
                     + "Remove provision.state; moving state between backends is not automatic.");
@@ -312,14 +312,15 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         db.Attempts.AnyAsync(a => a.Id == attemptId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), cancellationToken);
 
     /// <summary>
-    /// The latest apply that reached an agent. A failed or uncertain one counts: it can have
-    /// created resources before it stopped, so its backend may hold them.
+    /// The latest apply that ran. A failed or uncertain one counts: it can have created
+    /// resources before it stopped, so its backend may hold them. A failed one returned its
+    /// state, or it would be uncertain, so what the built-in state knows about it is complete.
     /// </summary>
-    private async Task<(bool BuiltIn, bool Finished, bool Retired)?> LastApplyAsync(Guid resourceId, CancellationToken cancellationToken)
+    private async Task<(bool BuiltIn, bool StateKnown, bool Retired)?> LastApplyAsync(Guid resourceId, CancellationToken cancellationToken)
     {
         var last = await db.Attempts.AsNoTracking()
-            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.AssignedAt != null && a.Step!.Run!.ResourceId == resourceId)
-            .OrderByDescending(a => a.AssignedAt)
+            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.StartedAt != null && a.Step!.Run!.ResourceId == resourceId)
+            .OrderByDescending(a => a.StartedAt)
             .Select(a => new { a.Status, a.Step!.Run!.Operation, a.Step.Run.Context })
             .FirstOrDefaultAsync(cancellationToken);
         if (last is null)
@@ -327,8 +328,9 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             return null;
         }
 
-        var finished = last.Status == AttemptStatuses.Succeeded;
-        return (RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == true, finished, finished && last.Operation == Operations.Retire);
+        return (RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == true,
+            last.Status is AttemptStatuses.Succeeded or AttemptStatuses.Failed,
+            last.Status == AttemptStatuses.Succeeded && last.Operation == Operations.Retire);
     }
 
     private static (long Serial, string Lineage, int Resources)? Parse(byte[] content)

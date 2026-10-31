@@ -158,6 +158,14 @@ impl Failure {
         }
     }
 
+    /// What went wrong, for people to read.
+    pub fn message(&self) -> &str {
+        match self {
+            Failure::Uncertain(message) | Failure::Failed { message, .. } => message,
+            Failure::Cancelled => "cancelled",
+        }
+    }
+
     pub fn with_outputs(message: impl Into<String>, outputs: Value) -> Self {
         Failure::Failed {
             message: message.into(),

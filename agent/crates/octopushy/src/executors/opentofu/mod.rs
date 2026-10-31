@@ -353,6 +353,8 @@ impl Tofu<'_> {
                     settings: self.prep.settings.clone(),
                     env: self.prep.env.clone(),
                     capture_stdout: capture,
+                    stderr_mark: (self.prep.built_in && step == "apply")
+                        .then_some(state::NOT_SAVED),
                 },
                 &self.ctx.log,
                 &self.ctx.cancel,
@@ -592,7 +594,15 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
     let applied = applied?;
     if applied.code != Some(0) {
-        if prep.built_in && state::lost(&ctx.workspace, &applied.stderr_tail) {
+        // OpenTofu exits 1 after saving what it did. Anything else, such as being
+        // killed, leaves work done since its last write out of the state.
+        if prep.built_in && applied.code != Some(1) {
+            return Err(Failure::Uncertain(format!(
+                "{}; the state may not include its last changes, so inspect the guest before planning again",
+                step_failed("apply", &applied).message()
+            )));
+        }
+        if prep.built_in && applied.stderr_marked && !state::has_emergency(&ctx.workspace) {
             return Err(Failure::Uncertain(
                 "OpenTofu could not save its state anywhere; inspect the guest before planning again"
                     .into(),

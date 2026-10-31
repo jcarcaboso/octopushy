@@ -76,7 +76,11 @@ JSON
     fi
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
     if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
-    if [ -n "${FAKE_NOT_SAVED:-}" ]; then echo 'Error: Failed to persist state to backend' >&2; fi
+    if [ -n "${FAKE_NOT_SAVED:-}" ]; then
+      echo 'Error: Failed to persist state to backend' >&2
+      for i in $(seq 1 30); do echo "more diagnostics $i" >&2; done
+    fi
+    if [ -n "${FAKE_QUOTED:-}" ]; then echo 'Error running command: Failed to persist state to backend' >&2; fi
     echo "Apply complete! Resources: 2 added. token=$PROXMOX_VE_API_TOKEN"
     exit "${FAKE_APPLY_EXIT:-0}" ;;
   output)
@@ -339,11 +343,9 @@ async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state()
     assert!(String::from_utf8_lossy(&left.content).contains("\"serial\":9"));
 }
 
-#[tokio::test]
-async fn an_apply_that_saved_its_state_nowhere_is_uncertain() {
-    let fx = Fixture::new();
+async fn failed_apply(fx: &Fixture, env: Value) -> Result<Success, Failure> {
     let preview = run(
-        &fx,
+        fx,
         "p1",
         "preview",
         &built_in(json!({})),
@@ -353,21 +355,42 @@ async fn an_apply_that_saved_its_state_nowhere_is_uncertain() {
     )
     .await;
     let plan = preview.result.unwrap().artifacts.remove(0);
-    let apply = run(
-        &fx,
+    run(
+        fx,
         "a1",
         "apply",
-        &built_in(json!({ "FAKE_NOT_SAVED": "1", "FAKE_APPLY_EXIT": "1" })),
+        &built_in(env),
         repo_tar(None),
         vec![plan],
         CancellationToken::new(),
     )
+    .await
+    .result
+}
+
+#[tokio::test]
+async fn an_apply_that_saved_its_state_nowhere_is_uncertain_however_much_follows() {
+    let fx = Fixture::new();
+    let result = failed_apply(
+        &fx,
+        json!({ "FAKE_NOT_SAVED": "1", "FAKE_APPLY_EXIT": "1" }),
+    )
     .await;
-    assert!(
-        matches!(&apply.result, Err(Failure::Uncertain(_))),
-        "{:?}",
-        apply.result
-    );
+    assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn an_apply_that_was_killed_is_uncertain() {
+    let fx = Fixture::new();
+    let result = failed_apply(&fx, json!({ "FAKE_APPLY_EXIT": "137" })).await;
+    assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn output_that_quotes_the_failure_is_an_ordinary_failure() {
+    let fx = Fixture::new();
+    let result = failed_apply(&fx, json!({ "FAKE_QUOTED": "1", "FAKE_APPLY_EXIT": "1" })).await;
+    assert!(matches!(&result, Err(Failure::Failed { .. })), "{result:?}");
 }
 
 #[tokio::test]

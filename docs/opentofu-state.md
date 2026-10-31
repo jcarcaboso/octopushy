@@ -47,6 +47,8 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
   did and the next plan starts from it. If that file is incomplete or missing, the apply is
   `uncertain` and the stored state is out of date. Missing is possible even when OpenTofu
   says it wrote the file: on 1.13.2 it does so when its working directory is not writable.
+  An apply that ends any way but OpenTofu's own failure, such as being killed, is `uncertain`
+  too, because work since OpenTofu's last write is not in the state.
 
 ## Locking
 
@@ -94,9 +96,11 @@ state that may be missing resources, which would try to create them again:
 - **Removing `provision.state`** is refused while the guest's latest started apply used an
   external backend, even if that apply failed, unless it was a retirement that finished.
 - **Adding `provision.state`** is refused while the built-in state tracks resources, or while
-  the guest's latest started built-in apply did not finish.
+  the guest's latest started built-in apply is `uncertain`, because the stored state may not
+  include what it did.
 
-A guest with no started apply can use either.
+A guest with no started apply can use either. While refused, the guest keeps working with the
+backend it has; a finished apply there clears an `uncertain` one.
 
 The key is the guest's resource, not its name, so a rename with `renamedFrom` keeps the
 state. A retired guest keeps its versions; a new guest at the same address starts empty.

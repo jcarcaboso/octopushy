@@ -302,6 +302,28 @@ public class BuiltInStateTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_start_that_arrives_after_the_lease_still_counts()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        var resource = await ApplyOnceAsync(server, agent);
+        await agent.ReportAsync(await ReplanAsync(server, agent, resource), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        await ExpireLeaseAsync(server, apply);
+
+        await server.Engine.OnStartedAsync(agent.Id, Guid.Parse(apply.AttemptId), CancellationToken.None);
+        var late = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(apply.AttemptId)));
+        Assert.Equal(AttemptStatuses.Uncertain, late.Status);
+        Assert.Null(late.LeaseExpiresAt);
+        Assert.NotNull(late.StartedAt);
+
+        await server.Engine.OnResultAsync(agent.Id, new AttemptResult { AttemptId = apply.AttemptId, Outcome = Outcome.Failed, Error = "its state was lost" }, CancellationToken.None);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Uncertain, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+    }
+
+    [Fact]
     public async Task A_running_apply_keeps_plans_of_the_stack_waiting()
     {
         await using var server = await StartAsync(postgres);
@@ -528,6 +550,45 @@ public class BuiltInStateTests(PostgresFixture postgres)
 
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
         Assert.Contains("Remove provision.state", (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Plan).Detail);
+    }
+
+    private static async Task AddExternalBackendAsync(ServerHarness server)
+    {
+        server.Repository.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
+        var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(path, File.ReadAllText(Path.Combine(server.Repository.Root, path)).Replace("  recipe: test-vm\n", "  recipe: test-vm\n  state: { backend: postgres }\n"));
+        server.Commit("Add a backend");
+        await server.SyncAndTrustAsync();
+    }
+
+    [Fact]
+    public async Task An_apply_that_never_ran_does_not_decide_the_backend()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        await server.Engine.OnResultAsync(agent.Id, new AttemptResult { AttemptId = apply.AttemptId, Outcome = Outcome.Failed, Error = "could not create the workspace" }, CancellationToken.None);
+        await server.TickAsync();
+
+        await AddExternalBackendAsync(server);
+        var plan = await agent.NextAsync("preview");
+        Assert.Equal("pg", JsonNode.Parse(plan.InputJson)!["backend"]!["type"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_failed_built_in_apply_whose_state_is_known_empty_can_move()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await PlanToApplyAsync(server, agent), Outcome.Failed, error: "failed before creating anything", artifacts: State(1, resources: 0));
+        await server.TickAsync();
+
+        await AddExternalBackendAsync(server);
+        var plan = await agent.NextAsync("preview");
+        Assert.Equal("pg", JsonNode.Parse(plan.InputJson)!["backend"]!["type"]!.GetValue<string>());
     }
 
     [Fact]

@@ -41,6 +41,24 @@ resource "terraform_data" "created" {
 }
 "#;
 
+/// As above, with more diagnostics after OpenTofu's than a stderr tail keeps.
+const ROOT_NOWHERE_LONG: &[u8] = br#"
+resource "terraform_data" "created" {
+  provisioner "local-exec" {
+    command = "chmod 500 ../state .; seq 1 30; exit 1"
+  }
+}
+"#;
+
+/// Fails with the words of a failed save in its output, after OpenTofu saved everything.
+const ROOT_QUOTES: &[u8] = br#"
+resource "terraform_data" "created" {
+  provisioner "local-exec" {
+    command = "echo Failed to persist state to backend; exit 1"
+  }
+}
+"#;
+
 async fn run(
     dir: &Path,
     id: &str,
@@ -104,24 +122,46 @@ async fn the_state_of_an_apply_that_could_not_save_it_is_not_lost() {
     assert_eq!(parsed["resources"][0]["name"], "created");
 }
 
-#[tokio::test]
-#[ignore = "needs a real tofu"]
-async fn an_apply_that_could_save_its_state_nowhere_is_uncertain() {
+async fn apply(
+    root: &[u8],
+) -> (
+    tempfile::TempDir,
+    Result<Vec<Artifact>, String>,
+    std::path::PathBuf,
+) {
     let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().canonicalize().unwrap();
+    let path = dir.path().canonicalize().unwrap();
     let seed = Artifact {
         name: state::ARTIFACT.into(),
         sha256: octopushy::tls::sha256_hex(SEED),
         content: SEED.to_vec(),
     };
-
-    let (preview, _) = run(&dir, "plan", "preview", ROOT_NOWHERE, vec![seed.clone()]).await;
+    let (preview, _) = run(&path, "plan", "preview", root, vec![seed.clone()]).await;
     let plan = preview.unwrap().remove(0);
-    let (apply, workspace) = run(&dir, "apply", "apply", ROOT_NOWHERE, vec![plan, seed]).await;
+    let (result, workspace) = run(&path, "apply", "apply", root, vec![plan, seed]).await;
     for directory in [workspace.join("state"), workspace.join("repo")] {
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
+    (dir, result, workspace)
+}
 
-    let error = apply.expect_err("the apply cannot have saved its state");
-    assert!(error.starts_with("Uncertain"), "{error}");
+#[tokio::test]
+#[ignore = "needs a real tofu"]
+async fn an_apply_that_could_save_its_state_nowhere_is_uncertain() {
+    for root in [ROOT_NOWHERE, ROOT_NOWHERE_LONG] {
+        let (_dir, result, _) = apply(root).await;
+        let error = result.expect_err("the apply cannot have saved its state");
+        assert!(error.starts_with("Uncertain"), "{error}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs a real tofu"]
+async fn output_that_quotes_a_failed_save_is_an_ordinary_failure() {
+    let (_dir, result, workspace) = apply(ROOT_QUOTES).await;
+    let error = result.expect_err("the provisioner fails");
+    assert!(error.starts_with("Failed"), "{error}");
+    let left = state::read(&workspace).expect("the saved state");
+    let parsed: Value = serde_json::from_slice(&left.content).unwrap();
+    assert_eq!(parsed["serial"], 1);
 }

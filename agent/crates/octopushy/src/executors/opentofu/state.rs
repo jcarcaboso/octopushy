@@ -27,9 +27,11 @@ pub const ARTIFACT: &str = "terraform.tfstate";
 /// Where OpenTofu saves the state, in its working directory, when it cannot write
 /// the backend file. It is then the only copy of what the apply did.
 const ERRORED: &str = "errored.tfstate";
-/// What OpenTofu reports whenever it cannot write the backend file. It can also claim
-/// to have written `errored.tfstate` when it could not, so only the file itself counts.
-const NOT_SAVED: &str = "Failed to persist state to backend";
+/// The line OpenTofu prints whenever it cannot write the backend file. It is matched
+/// whole, because a provider's or provisioner's output can quote the words. It can
+/// also claim to have written `errored.tfstate` when it could not, so only the file
+/// itself shows that it did.
+pub const NOT_SAVED: &str = "Error: Failed to persist state to backend";
 /// Larger states are not sent: a result shares the 64 MiB message limit.
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -113,10 +115,9 @@ fn emergency(workspace: &Path) -> Option<PathBuf> {
     path.symlink_metadata().is_ok().then_some(path)
 }
 
-/// Whether OpenTofu could save the state nowhere: it says it failed and left no
-/// emergency state. The backend file looks unchanged, but it is out of date.
-pub fn lost(workspace: &Path, stderr_tail: &[String]) -> bool {
-    emergency(workspace).is_none() && stderr_tail.iter().any(|line| line.contains(NOT_SAVED))
+/// Whether OpenTofu left an emergency state, complete or not.
+pub fn has_emergency(workspace: &Path) -> bool {
+    emergency(workspace).is_some()
 }
 
 /// The newest complete state in the workspace. An emergency state replaces the
@@ -213,21 +214,6 @@ mod tests {
         // A partial one must not read as if the backend file were still current.
         fs::write(root.join(ERRORED), br#"{"serial":1,"lin"#).unwrap();
         assert!(read(&ws).is_none());
-    }
-
-    #[test]
-    fn a_state_saved_nowhere_is_lost() {
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().canonicalize().unwrap();
-        let root = ws.join("repo");
-        fs::create_dir_all(&root).unwrap();
-        fs::create_dir(ws.join("state")).unwrap();
-        record_root(&ws, &root).unwrap();
-        let said = ["Error: Failed to persist state to backend".to_owned()];
-        assert!(lost(&ws, &said));
-        assert!(!lost(&ws, &["Error: something else".to_owned()]));
-        fs::write(root.join(ERRORED), b"{}").unwrap();
-        assert!(!lost(&ws, &said), "an emergency file is handled by read");
     }
 
     #[tokio::test]
