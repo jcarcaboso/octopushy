@@ -480,6 +480,57 @@ public class BuiltInStateTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_empty_built_in_version_does_not_hide_a_later_external_apply()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await PlanToApplyAsync(server, agent), Outcome.Succeeded, Applied(), artifacts: State(1, resources: 0));
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        await server.TickAsync();
+
+        var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var builtIn = File.ReadAllText(Path.Combine(server.Repository.Root, path));
+        server.Repository.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
+        server.Repository.Write(path, builtIn.Replace("  recipe: test-vm\n", "  recipe: test-vm\n  state: { backend: postgres }\n"));
+        server.Commit("Add a backend");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await PlanToApplyAsync(server, agent), Outcome.Failed, error: "stopped after creating some resources");
+        await server.TickAsync();
+
+        server.Repository.Write(path, builtIn);
+        server.Commit("Drop the backend");
+        await server.SyncAndTrustAsync();
+        await server.TickAsync();
+        await server.TickAsync();
+
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
+        Assert.Contains("Restore provision.state", (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Plan).Detail);
+    }
+
+    [Fact]
+    public async Task Moving_to_an_external_backend_after_an_unfinished_built_in_apply_is_refused()
+    {
+        await using var server = await StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await PlanToApplyAsync(server, agent), Outcome.Uncertain, error: "the agent restarted");
+        await server.TickAsync();
+        await server.Engine.CloseUncertainAsync((await server.LatestRunAsync(Guest, Operations.Provision)).Id, "ops", CancellationToken.None);
+
+        server.Repository.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
+        var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(path, File.ReadAllText(Path.Combine(server.Repository.Root, path)).Replace("  recipe: test-vm\n", "  recipe: test-vm\n  state: { backend: postgres }\n"));
+        server.Commit("Add a backend");
+        await server.SyncAndTrustAsync();
+        await server.TickAsync();
+        await server.TickAsync();
+
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
+        Assert.Contains("Remove provision.state", (await server.LatestRunAsync(Guest, Operations.Provision)).Steps.Single(s => s.Name == StepNames.Plan).Detail);
+    }
+
+    [Fact]
     public async Task Moving_a_guest_with_built_in_state_to_an_external_backend_is_refused()
     {
         await using var server = await StartAsync(postgres);

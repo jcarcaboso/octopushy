@@ -357,3 +357,24 @@ esac
         .unwrap();
     assert!(String::from_utf8_lossy(&saved.content).contains("\"serial\":5"));
 }
+
+#[tokio::test]
+async fn an_attempt_that_never_ran_does_not_claim_to_have_started() {
+    let h = harness();
+    let queued = workspace::create(&h.work, "queued-1", "opentofu", "apply").unwrap();
+    let running = workspace::create(&h.work, "running-1", "opentofu", "apply").unwrap();
+    workspace::mark_running(&running).unwrap();
+    assert!(queued.exists());
+    h.manager.recover().unwrap();
+
+    let mut collector = Collector::default();
+    let started: Vec<String> = collector
+        .poll(&h.manager)
+        .into_iter()
+        .filter_map(|m| match m.kind {
+            Some(Kind::Started(s)) => Some(s.attempt_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, ["running-1"]);
+}

@@ -39,11 +39,13 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     {
         var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == run.ResourceId, cancellationToken);
         var head = await HeadAsync(state, cancellationToken);
+        var last = await LastApplyAsync(run.ResourceId, cancellationToken);
         if (!context.OpenTofu!.Backend.IsBuiltIn)
         {
-            if (head?.ResourceCount > 0)
+            // An unfinished built-in apply can have created what no stored state records.
+            if (head?.ResourceCount > 0 || last is { BuiltIn: true, Finished: false })
             {
-                throw new AssignmentException("This guest's OpenTofu state is in Octopushy, and an external backend would start empty and plan to recreate it. "
+                throw new AssignmentException("This guest's OpenTofu state is in Octopushy, and an external backend would not include it and could plan to recreate what it tracks. "
                     + "Remove provision.state; moving state between backends is not automatic.");
             }
             return null;
@@ -54,9 +56,9 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             throw new StateBusyException("Waiting for the apply that holds this guest's state lock.");
         }
 
-        if (head is null && await LastApplyUsedExternalBackendAsync(run.ResourceId, cancellationToken))
+        if (last is { BuiltIn: false, Retired: false })
         {
-            throw new AssignmentException("This guest was applied with an external state backend, and built-in state would start empty and plan to recreate it. "
+            throw new AssignmentException("This guest's last apply used an external state backend, and built-in state would not include what it created and could plan to recreate it. "
                 + "Restore provision.state; moving state between backends is not automatic.");
         }
 
@@ -310,19 +312,23 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         db.Attempts.AnyAsync(a => a.Id == attemptId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), cancellationToken);
 
     /// <summary>
-    /// Whether an external backend may hold resources of this guest: its latest apply that
-    /// reached an agent used one, and was not a retirement that finished. A failed or uncertain
-    /// apply counts, because it can have created resources before it stopped.
+    /// The latest apply that reached an agent. A failed or uncertain one counts: it can have
+    /// created resources before it stopped, so its backend may hold them.
     /// </summary>
-    private async Task<bool> LastApplyUsedExternalBackendAsync(Guid resourceId, CancellationToken cancellationToken)
+    private async Task<(bool BuiltIn, bool Finished, bool Retired)?> LastApplyAsync(Guid resourceId, CancellationToken cancellationToken)
     {
         var last = await db.Attempts.AsNoTracking()
             .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.AssignedAt != null && a.Step!.Run!.ResourceId == resourceId)
             .OrderByDescending(a => a.AssignedAt)
             .Select(a => new { a.Status, a.Step!.Run!.Operation, a.Step.Run.Context })
             .FirstOrDefaultAsync(cancellationToken);
-        return last is not null && RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == false
-            && !(last.Operation == Operations.Retire && last.Status == AttemptStatuses.Succeeded);
+        if (last is null)
+        {
+            return null;
+        }
+
+        var finished = last.Status == AttemptStatuses.Succeeded;
+        return (RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == true, finished, finished && last.Operation == Operations.Retire);
     }
 
     private static (long Serial, string Lineage, int Resources)? Parse(byte[] content)

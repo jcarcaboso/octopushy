@@ -292,9 +292,14 @@ keeps the state; see [how it works](../../../docs/opentofu-state.md).
   `uncertain` result it reports.
 - When OpenTofu cannot write the backend file it leaves `errored.tfstate` in the root, and
   the executor reports that instead, because it is the only copy of what the apply did. A
-  file of that name from the repository is removed before OpenTofu runs.
+  file of that name from the repository is removed before OpenTofu runs. If that file is
+  incomplete, no state is reported, because the backend file is out of date. If OpenTofu
+  reports `Failed to persist state to backend` and the file is missing, which it can be
+  even when OpenTofu says it wrote it, the attempt is `uncertain`.
 - States over 32 MiB are not sent. An apply that started and returns no state is `uncertain`,
   whatever it reported.
+- `AttemptStarted` means the executor ran. An attempt that finished without running, such as
+  one cancelled while queued, sends no `AttemptStarted`.
 
 ### `preview`
 

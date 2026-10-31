@@ -76,6 +76,7 @@ JSON
     fi
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
     if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
+    if [ -n "${FAKE_NOT_SAVED:-}" ]; then echo 'Error: Failed to persist state to backend' >&2; fi
     echo "Apply complete! Resources: 2 added. token=$PROXMOX_VE_API_TOKEN"
     exit "${FAKE_APPLY_EXIT:-0}" ;;
   output)
@@ -336,6 +337,37 @@ async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state()
     assert!(apply.result.is_err());
     let left = state::read(&apply.workspace).expect("the emergency state");
     assert!(String::from_utf8_lossy(&left.content).contains("\"serial\":9"));
+}
+
+#[tokio::test]
+async fn an_apply_that_saved_its_state_nowhere_is_uncertain() {
+    let fx = Fixture::new();
+    let preview = run(
+        &fx,
+        "p1",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let plan = preview.result.unwrap().artifacts.remove(0);
+    let apply = run(
+        &fx,
+        "a1",
+        "apply",
+        &built_in(json!({ "FAKE_NOT_SAVED": "1", "FAKE_APPLY_EXIT": "1" })),
+        repo_tar(None),
+        vec![plan],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&apply.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        apply.result
+    );
 }
 
 #[tokio::test]

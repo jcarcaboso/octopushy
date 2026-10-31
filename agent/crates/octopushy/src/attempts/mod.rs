@@ -50,6 +50,8 @@ struct Entry {
     executor: String,
     action: String,
     state: State,
+    /// Whether the executor started. A finished attempt can be one that never did.
+    started: bool,
     mutating: bool,
     cancel: CancellationToken,
     logs: Arc<LogBuffer>,
@@ -105,6 +107,14 @@ impl AttemptManager {
         let count = ids.len();
         let mut entries = self.entries.lock().unwrap();
         for id in ids {
+            // Only a marker that says so rules out a start.
+            let started = !matches!(
+                workspace::read(&workspace::dir(&self.work_dir, &id)),
+                Ok(Some(workspace::Marker {
+                    phase: workspace::Phase::Queued,
+                    ..
+                }))
+            );
             let logs = Arc::new(LogBuffer::default());
             let logger =
                 AttemptLogger::new(logs.clone(), Arc::new(Masker::default()), self.wake.clone());
@@ -115,6 +125,7 @@ impl AttemptManager {
                     executor: String::new(),
                     action: String::new(),
                     state: State::Finished,
+                    started,
                     // The executor and action are unknown after a restart. If the stored result
                     // is later unreadable, that must read as "cannot tell", never as a failure.
                     mutating: true,
@@ -203,6 +214,7 @@ impl AttemptManager {
                     executor: assignment.executor.clone(),
                     action: assignment.action.clone(),
                     state: State::Queued,
+                    started: false,
                     mutating: executors::is_mutating(&assignment.executor, &assignment.action),
                     cancel: cancel.clone(),
                     logs,
@@ -283,6 +295,7 @@ impl AttemptManager {
                 .get_mut(&id)
                 .expect("attempt entry exists while running");
             entry.state = State::Running;
+            entry.started = true;
             entry.mutating
         };
         self.wake.notify_one();
@@ -479,8 +492,7 @@ impl AttemptManager {
                 .map(|(id, e)| {
                     // Once per connection for every attempt that started, so a
                     // Started lost with a dropped connection is repaired.
-                    let started =
-                        e.state != State::Queued && cursor.started_sent.insert(id.clone());
+                    let started = e.started && cursor.started_sent.insert(id.clone());
                     let want_result = e.state == State::Finished
                         && (!cursor.results_sent.contains(id)
                             || std::mem::take(&mut e.resend_result));

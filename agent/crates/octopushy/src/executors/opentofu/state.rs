@@ -27,6 +27,9 @@ pub const ARTIFACT: &str = "terraform.tfstate";
 /// Where OpenTofu saves the state, in its working directory, when it cannot write
 /// the backend file. It is then the only copy of what the apply did.
 const ERRORED: &str = "errored.tfstate";
+/// What OpenTofu reports whenever it cannot write the backend file. It can also claim
+/// to have written `errored.tfstate` when it could not, so only the file itself counts.
+const NOT_SAVED: &str = "Failed to persist state to backend";
 /// Larger states are not sent: a result shares the 64 MiB message limit.
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -103,13 +106,27 @@ pub fn record_root(workspace: &Path, root: &Path) -> Result<(), Failure> {
     )
 }
 
-/// The newest complete state in the workspace: OpenTofu's emergency state if it
-/// left one, or else the backend file.
+/// OpenTofu's emergency state, if it left one, however complete.
+fn emergency(workspace: &Path) -> Option<PathBuf> {
+    let root = fs::read_to_string(root_record(workspace)).ok()?;
+    let path = workspace.join(root).join(ERRORED);
+    path.symlink_metadata().is_ok().then_some(path)
+}
+
+/// Whether OpenTofu could save the state nowhere: it says it failed and left no
+/// emergency state. The backend file looks unchanged, but it is out of date.
+pub fn lost(workspace: &Path, stderr_tail: &[String]) -> bool {
+    emergency(workspace).is_none() && stderr_tail.iter().any(|line| line.contains(NOT_SAVED))
+}
+
+/// The newest complete state in the workspace. An emergency state replaces the
+/// backend file, which is then out of date, so one that cannot be read means there
+/// is no state to report, never that the backend file will do.
 pub fn read(workspace: &Path) -> Option<Artifact> {
-    let emergency = fs::read_to_string(root_record(workspace))
-        .ok()
-        .and_then(|root| complete(&workspace.join(root).join(ERRORED)));
-    emergency.or_else(|| complete(&file(workspace)))
+    match emergency(workspace) {
+        Some(path) => complete(&path),
+        None => complete(&file(workspace)),
+    }
 }
 
 /// The state at `path`, if it is complete. OpenTofu rewrites the backend file in
@@ -192,6 +209,25 @@ mod tests {
 
         fs::write(root.join(ERRORED), br#"{"serial":1,"lineage":"l"}"#).unwrap();
         assert!(String::from_utf8_lossy(&read(&ws).unwrap().content).contains(r#""serial":1"#));
+
+        // A partial one must not read as if the backend file were still current.
+        fs::write(root.join(ERRORED), br#"{"serial":1,"lin"#).unwrap();
+        assert!(read(&ws).is_none());
+    }
+
+    #[test]
+    fn a_state_saved_nowhere_is_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().canonicalize().unwrap();
+        let root = ws.join("repo");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir(ws.join("state")).unwrap();
+        record_root(&ws, &root).unwrap();
+        let said = ["Error: Failed to persist state to backend".to_owned()];
+        assert!(lost(&ws, &said));
+        assert!(!lost(&ws, &["Error: something else".to_owned()]));
+        fs::write(root.join(ERRORED), b"{}").unwrap();
+        assert!(!lost(&ws, &said), "an emergency file is handled by read");
     }
 
     #[tokio::test]

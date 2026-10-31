@@ -576,7 +576,7 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         ))
     });
     let applied = tofu
-        .run_ok(
+        .run(
             "apply",
             vec![
                 "apply".into(),
@@ -590,7 +590,16 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     if let Some(watcher) = watcher {
         watcher.abort();
     }
-    applied?;
+    let applied = applied?;
+    if applied.code != Some(0) {
+        if prep.built_in && state::lost(&ctx.workspace, &applied.stderr_tail) {
+            return Err(Failure::Uncertain(
+                "OpenTofu could not save its state anywhere; inspect the guest before planning again"
+                    .into(),
+            ));
+        }
+        return Err(step_failed("apply", &applied));
+    }
 
     // The change is made; failing to read outputs does not undo it.
     let (outputs, sensitive) = match tofu

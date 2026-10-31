@@ -22,10 +22,9 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
 
 - **At rest.** Each version is sealed with a fresh data key under the variable store's
   key-encryption key, bound to its guest and version.
-- **In logs and the API.** State is never logged, with one exception outside Octopushy's
-  control: if OpenTofu can write neither the backend file nor `errored.tfstate`, usually
-  because the disk is full, it prints the state as its last resort, which reaches the
-  attempt's log. The API shows a version's serial, lineage,
+- **In logs and the API.** Octopushy never logs state. OpenTofu's source has one last resort
+  that would print it, which would reach the attempt's log, when it cannot serialize a
+  recovery file. The API shows a version's serial, lineage,
   resource count, digest, size and origin, never its content; there is no way to download it.
 - **On agents.** It is plaintext in the attempt's workspace while the attempt runs, and in
   the outbox until the result is acknowledged. A saved plan embeds the same state, so this
@@ -45,7 +44,9 @@ The wire details are in the [executor contract](../contracts/agent/v1/executors.
   and returned no state, even if it reported a failure: it may have changed something.
 - **When OpenTofu cannot save.** If it cannot write the backend file, it leaves the state
   in `errored.tfstate`. The agent reports that file, so the controller keeps what the apply
-  did and the next plan starts from it.
+  did and the next plan starts from it. If that file is incomplete or missing, the apply is
+  `uncertain` and the stored state is out of date. Missing is possible even when OpenTofu
+  says it wrote the file: on 1.13.2 it does so when its working directory is not writable.
 
 ## Locking
 
@@ -87,12 +88,15 @@ refuses to start rather than create a new one.
 
 ## Moving between backends
 
-There is no migration in either direction. Once an apply has started on an external
-backend, even one that failed, that backend may hold the guest's resources. Removing
-`provision.state` then fails the plan rather than planning from an empty state, which would
-try to create everything again. The same refusal applies when
-adding `provision.state` to a guest whose built-in state tracks resources. A guest with no started apply can use either, and so can one whose external retirement
-finished.
+There is no migration in either direction. A plan is refused rather than started from a
+state that may be missing resources, which would try to create them again:
+
+- **Removing `provision.state`** is refused while the guest's latest started apply used an
+  external backend, even if that apply failed, unless it was a retirement that finished.
+- **Adding `provision.state`** is refused while the built-in state tracks resources, or while
+  the guest's latest started built-in apply did not finish.
+
+A guest with no started apply can use either.
 
 The key is the guest's resource, not its name, so a rename with `renamedFrom` keeps the
 state. A retired guest keeps its versions; a new guest at the same address starts empty.

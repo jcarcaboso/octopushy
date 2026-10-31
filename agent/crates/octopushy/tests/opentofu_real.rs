@@ -32,10 +32,20 @@ resource "terraform_data" "created" {
 }
 "#;
 
+/// Makes OpenTofu's working directory unwritable too, so it can save the state nowhere.
+const ROOT_NOWHERE: &[u8] = br#"
+resource "terraform_data" "created" {
+  provisioner "local-exec" {
+    command = "chmod 500 ../state ."
+  }
+}
+"#;
+
 async fn run(
     dir: &Path,
     id: &str,
     action: &str,
+    root: &[u8],
     artifacts: Vec<Artifact>,
 ) -> (Result<Vec<Artifact>, String>, std::path::PathBuf) {
     let cfg = ExecutorConfig {
@@ -51,7 +61,7 @@ async fn run(
         action: action.into(),
         input_json: json!({ "root": ".", "backend": { "type": "octopushy" } }).to_string(),
         secrets: Secrets::new(HashMap::new()),
-        files_tar_gz: archive::pack(&[("main.tf", ROOT)]).unwrap(),
+        files_tar_gz: archive::pack(&[("main.tf", root)]).unwrap(),
         artifacts,
         workspace: workspace.clone(),
         log: AttemptLogger::new(
@@ -80,9 +90,9 @@ async fn the_state_of_an_apply_that_could_not_save_it_is_not_lost() {
         content: SEED.to_vec(),
     };
 
-    let (preview, _) = run(&dir, "plan", "preview", vec![seed.clone()]).await;
+    let (preview, _) = run(&dir, "plan", "preview", ROOT, vec![seed.clone()]).await;
     let plan = preview.unwrap().remove(0);
-    let (apply, workspace) = run(&dir, "apply", "apply", vec![plan, seed]).await;
+    let (apply, workspace) = run(&dir, "apply", "apply", ROOT, vec![plan, seed]).await;
     let state_dir = workspace.join("state");
     std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
@@ -92,4 +102,26 @@ async fn the_state_of_an_apply_that_could_not_save_it_is_not_lost() {
     assert_eq!(parsed["lineage"], "seed");
     assert_eq!(parsed["serial"], 1);
     assert_eq!(parsed["resources"][0]["name"], "created");
+}
+
+#[tokio::test]
+#[ignore = "needs a real tofu"]
+async fn an_apply_that_could_save_its_state_nowhere_is_uncertain() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let seed = Artifact {
+        name: state::ARTIFACT.into(),
+        sha256: octopushy::tls::sha256_hex(SEED),
+        content: SEED.to_vec(),
+    };
+
+    let (preview, _) = run(&dir, "plan", "preview", ROOT_NOWHERE, vec![seed.clone()]).await;
+    let plan = preview.unwrap().remove(0);
+    let (apply, workspace) = run(&dir, "apply", "apply", ROOT_NOWHERE, vec![plan, seed]).await;
+    for directory in [workspace.join("state"), workspace.join("repo")] {
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let error = apply.expect_err("the apply cannot have saved its state");
+    assert!(error.starts_with("Uncertain"), "{error}");
 }
