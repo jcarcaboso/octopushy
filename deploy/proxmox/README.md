@@ -41,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `0.1.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `0.2.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
