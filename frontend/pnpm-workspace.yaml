@@ -1,3 +1,5 @@
 overrides:
   # monaco-editor 0.57.0 pins dompurify 3.4.15, which has known advisories.
   monaco-editor>dompurify: 3.4.17
+  # GHSA-g3hv-75wg-m249: denial of service, fixed in 11.0.1.
+  minimatch@<11.0.1: ^11.0.1

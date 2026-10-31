@@ -5,7 +5,7 @@
 
 FROM docker.io/library/node:24-alpine AS build
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
 COPY frontend/index.html frontend/vite.config.ts frontend/tsconfig.json frontend/tsconfig.app.json frontend/tsconfig.node.json ./
 COPY frontend/public ./public
