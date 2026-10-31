@@ -92,6 +92,8 @@ pub struct ExecContext {
     pub workspace: PathBuf,
     pub log: AttemptLogger,
     pub cancel: CancellationToken,
+    /// Where a running apply leaves its state for the connection to send.
+    pub snapshots: opentofu::state::Snapshots,
 }
 
 impl ExecContext {

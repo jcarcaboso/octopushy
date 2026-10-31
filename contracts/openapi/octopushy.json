@@ -689,6 +689,131 @@
         }
       }
     },
+    "/api/guests/{id}/state": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getGuestState",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TofuStateDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/guests/{id}/state/rollback": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "rollBackGuestState",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TofuStateRollback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/attempts/{id}/log": {
       "get": {
         "tags": [
@@ -5115,6 +5240,130 @@
           }
         }
       },
+      "TofuStateDto": {
+        "required": [
+          "headVersion",
+          "lockHeld",
+          "lockAttemptId",
+          "lockedAt",
+          "versions"
+        ],
+        "type": "object",
+        "properties": {
+          "headVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lockHeld": {
+            "type": "boolean"
+          },
+          "lockAttemptId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "lockedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TofuStateVersionDto"
+            }
+          }
+        }
+      },
+      "TofuStateRollback": {
+        "required": [
+          "version",
+          "expectedHead"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "expectedHead": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "TofuStateVersionDto": {
+        "required": [
+          "version",
+          "serial",
+          "lineage",
+          "resources",
+          "sha256",
+          "size",
+          "attemptId",
+          "restoredFrom",
+          "restoredBy",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "serial": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lineage": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "attemptId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "restoredFrom": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "restoredBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "TokenDto": {
         "required": [
           "id",
@@ -5490,8 +5739,7 @@
       },
       "WorkerDeploymentRequest": {
         "required": [
-          "selection",
-          "stateBackend"
+          "selection"
         ],
         "type": "object",
         "properties": {
@@ -5499,7 +5747,10 @@
             "$ref": "#/components/schemas/WorkerDraftRequest"
           },
           "stateBackend": {
-            "type": "string"
+            "type": [
+              "null",
+              "string"
+            ]
           }
         },
         "additionalProperties": false

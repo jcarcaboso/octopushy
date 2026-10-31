@@ -50,6 +50,7 @@ async fn exec(action: &str, input: Value, token: &str) -> (Result<Success, Failu
         workspace: dir.path().to_path_buf(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel: CancellationToken::new(),
+        snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "proxmox", &ctx).await;
     let lines = buffer

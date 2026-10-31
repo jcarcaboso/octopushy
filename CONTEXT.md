@@ -194,6 +194,11 @@ OpenTofu's resource bindings and recorded attributes for a stack, independent of
 its configuration source or execution history.
 _Avoid_: Status when referring to persistent infrastructure state
 
+**Built-in state**:
+OpenTofu state Octopushy keeps for a guest in its own database, encrypted and versioned,
+used unless the guest names an external state backend.
+_Avoid_: Local state, which OpenTofu means as a file that outlives a run
+
 **State-derived inventory**:
 A view of resources recorded in the last observed OpenTofu state, not a live
 measurement of their health.

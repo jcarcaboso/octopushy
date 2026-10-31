@@ -92,6 +92,16 @@ public sealed class TestRepository : IDisposable
         return repository;
     }
 
+    /// <summary><see cref="Minimal"/> with no state backend anywhere, so its guest uses the built-in state.</summary>
+    public static TestRepository BuiltInState()
+    {
+        var repository = Minimal();
+        repository.Write("octopushy.yaml", "schemaVersion: 1");
+        var guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        repository.Write(guest, File.ReadAllText(Path.Combine(repository.Root, guest)).Replace("  state: { backend: postgres }\n", ""));
+        return repository;
+    }
+
     public void Write(string path, string content)
     {
         var full = Path.Combine(Root, path);

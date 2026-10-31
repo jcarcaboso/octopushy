@@ -179,6 +179,7 @@ output "secret" {
             workspace: ws,
             log,
             cancel: CancellationToken::new(),
+            snapshots: Default::default(),
         };
         let cfg = &cfg;
         async move {

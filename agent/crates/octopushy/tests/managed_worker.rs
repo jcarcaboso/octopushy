@@ -107,6 +107,7 @@ async fn exercise_vm(
         files_tar_gz: vec![], artifacts: vec![], workspace: work.path().into(),
         log: AttemptLogger::new(Arc::new(LogBuffer::default()), Arc::new(Masker::new(["secret"])), Arc::new(Notify::new())),
         cancel: CancellationToken::new(),
+        snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "managed-worker", &ctx).await;
     server.abort();

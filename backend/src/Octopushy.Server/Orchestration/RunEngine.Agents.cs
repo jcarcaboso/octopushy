@@ -5,6 +5,7 @@ using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -71,9 +72,11 @@ public sealed partial class RunEngine
                     continue;
                 }
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
+                var needsBuiltInState = attempt.Executor == "opentofu" && context.OpenTofu?.Backend.IsBuiltIn == true;
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
+                                && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability))
                                 && !managed.Any(w => w.AgentId == a.Id && (w.ReadyAt is null || context.AgentLabels.Count == 0
                                     || w.ResourceId == resourceId
                                     || context.Proxmox.Vmid == w.Vmid && context.Proxmox.Node == w.Host)))
@@ -83,7 +86,9 @@ public sealed partial class RunEngine
                 {
                     var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
                     waiting = matchingLabels
-                        ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
+                        ? needsBuiltInState
+                            ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
+                            : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
                         : attempt.RequiredLabels.Length == 0
                             ? "Waiting for a connected agent."
                             : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
@@ -125,7 +130,7 @@ public sealed partial class RunEngine
                     run.Detail = e.Message;
                     continue;
                 }
-                catch (RevisionUntrustedException e)
+                catch (Exception e) when (e is RevisionUntrustedException or StateBusyException)
                 {
                     attempt.WaitingReason = e.Message;
                     continue;
@@ -265,13 +270,15 @@ public sealed partial class RunEngine
             result = new AttemptResult
             {
                 AttemptId = result.AttemptId,
-                Outcome = result.Outcome == Outcome.Succeeded ? Outcome.Failed : result.Outcome,
+                // Losing the state of an apply loses what it did, so that outcome cannot be a known failure.
+                Outcome = corrupted.Name == TofuStateStore.ArtifactName ? Outcome.Uncertain
+                    : result.Outcome == Outcome.Succeeded ? Outcome.Failed : result.Outcome,
                 OutputsJson = result.OutputsJson,
                 Error = $"The artifact {corrupted.Name} did not match its checksum.",
             };
         }
 
-        return await WithDbAsync(async (db, _) =>
+        return await WithDbAsync(async (db, services) =>
         {
             var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
@@ -300,7 +307,9 @@ public sealed partial class RunEngine
                 }
             }
 
-            foreach (var artifact in result.Artifacts)
+            // State goes to the database, never to the artifact files.
+            var state = result.Artifacts.FirstOrDefault(a => a.Name == TofuStateStore.ArtifactName);
+            foreach (var artifact in result.Artifacts.Where(a => a != state))
             {
                 await artifacts.SaveAsync(attempt.Id, artifact.Name, artifact.Content.ToByteArray(), cancellationToken);
                 if (!await db.Artifacts.AnyAsync(a => a.AttemptId == attempt.Id && a.Name == artifact.Name, cancellationToken))
@@ -335,6 +344,17 @@ public sealed partial class RunEngine
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
             logs.Close(attempt.Id);
+
+            if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
+                && RunContext.Parse(tofuRun.Context).OpenTofu?.Backend.IsBuiltIn == true
+                && await services.GetRequiredService<TofuStateStore>().SettleAsync(attempt, tofuRun.ResourceId, state?.Content.ToByteArray(), cancellationToken) is { } refused)
+            {
+                logger.LogError("The state of attempt {Attempt} was refused: {Reason}", attempt.Id, refused);
+                attempt.Status = AttemptStatuses.Uncertain;
+                attempt.Error = $"The state of this apply was not saved: {refused} Inspect the guest and plan again.";
+                outputs = null;
+                attempt.Outputs = null;
+            }
 
             if (attempt.Step is null)
             {
@@ -404,6 +424,35 @@ public sealed partial class RunEngine
             return true;
         }, cancellationToken);
     }
+
+    /// <summary>Stores a running apply's state. Best effort: the result decides whether it is lost.</summary>
+    public Task OnStateSnapshotAsync(Guid agentId, Guid attemptId, Artifact state, CancellationToken cancellationToken) =>
+        WithDbAsync<bool>(async (db, services) =>
+        {
+            var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+                .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
+            if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || attempt.Action != "apply" || attempt.Executor != "opentofu"
+                || RunContext.Parse(run.Context).OpenTofu?.Backend.IsBuiltIn != true)
+            {
+                logger.LogWarning("Agent {Agent} sent state for attempt {Attempt}, which may not write any.", agentId, attemptId);
+                return false;
+            }
+
+            if (ArtifactStore.Sha256(state.Content.Span) != state.Sha256.ToLowerInvariant())
+            {
+                logger.LogWarning("A state snapshot of attempt {Attempt} does not match its checksum.", attemptId);
+                return false;
+            }
+
+            if (await services.GetRequiredService<TofuStateStore>().WriteAsync(attempt.Id, run.ResourceId, state.Content.ToByteArray(), cancellationToken) is { } refused)
+            {
+                logger.LogWarning("A state snapshot of attempt {Attempt} was refused: {Reason}", attemptId, refused);
+                return false;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            return true;
+        }, cancellationToken);
 
     private async Task ExpireLeasesAsync(OctopushyDb db, CancellationToken cancellationToken)
     {

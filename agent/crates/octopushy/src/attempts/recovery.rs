@@ -9,6 +9,9 @@
 //! - A workspace without a marker never got past setup and is removed.
 //! - A marker that exists but cannot be read says nothing about what the
 //!   attempt was doing: uncertain, never failed.
+//!
+//! An interrupted `opentofu/apply` also reports the built-in state it left in
+//! its workspace, which records whatever it finished.
 
 use std::fs;
 use std::path::Path;
@@ -17,7 +20,7 @@ use anyhow::Result;
 use octopushy_proto::v1::{AttemptResult, Outcome};
 
 use super::workspace::{self, Marker, Phase};
-use crate::executors;
+use crate::executors::{self, opentofu::state};
 use crate::identity::now_ms;
 use crate::outbox::{Outbox, OutboxRecord};
 use crate::paths::is_safe_id;
@@ -70,8 +73,14 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
             if outbox.contains(&id) {
                 continue; // reported already; cleaned up on acknowledgement
             }
+            let mut applying = false;
             let (outcome, error) = match workspace::read(&ws) {
-                Ok(Some(marker)) => classify(&marker),
+                Ok(Some(marker)) => {
+                    applying = marker.phase == Phase::Running
+                        && (marker.executor.as_str(), marker.action.as_str())
+                            == ("opentofu", "apply");
+                    classify(&marker)
+                }
                 Ok(None) => {
                     tracing::info!("removing incomplete workspace {}", ws.display());
                     workspace::remove(&ws);
@@ -91,7 +100,11 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
                 outcome: outcome as i32,
                 outputs_json: "{}".to_owned(),
                 error,
-                artifacts: Vec::new(),
+                artifacts: if applying {
+                    state::read(&ws).into_iter().collect()
+                } else {
+                    Vec::new()
+                },
             };
             outbox.put(&OutboxRecord::from_result(&result, now_ms()))?;
         }
@@ -102,6 +115,8 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STATE: &[u8] = br#"{"version":4,"serial":3,"lineage":"l"}"#;
 
     fn marker(executor: &str, action: &str, phase: Phase) -> Marker {
         Marker {
@@ -148,6 +163,10 @@ mod tests {
         let preview = workspace::create(&work, "preview-1", "opentofu", "preview").unwrap();
         workspace::mark_running(&preview).unwrap();
         workspace::create(&work, "queued-1", "proxmox", "set-protection").unwrap();
+        fs::create_dir_all(preview.join("state")).unwrap();
+        fs::write(preview.join("state/terraform.tfstate"), STATE).unwrap();
+        fs::create_dir_all(apply.join("state")).unwrap();
+        fs::write(apply.join("state/terraform.tfstate"), STATE).unwrap();
         fs::create_dir_all(work.join("nomarker-1")).unwrap();
         let torn = workspace::create(&work, "torn-1", "opentofu", "apply").unwrap();
         fs::write(
@@ -174,6 +193,9 @@ mod tests {
 
         let get = |id: &str| outbox.get(id).unwrap().unwrap().to_result().unwrap();
         assert_eq!(get("apply-1").outcome(), Outcome::Uncertain);
+        assert_eq!(get("apply-1").artifacts.len(), 1);
+        assert_eq!(get("apply-1").artifacts[0].content, STATE);
+        assert!(get("preview-1").artifacts.is_empty());
         assert_eq!(get("preview-1").outcome(), Outcome::Failed);
         assert_eq!(get("preview-1").error, "agent restarted during the attempt");
         assert_eq!(get("queued-1").outcome(), Outcome::Failed);

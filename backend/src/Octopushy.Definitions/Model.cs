@@ -104,7 +104,8 @@ public sealed record GuestDefinition(
     int Vmid,
     string? Template,
     string Recipe,
-    string StateBackend,
+    /// <summary>A backend from octopushy.yaml; null keeps the state in Octopushy itself.</summary>
+    string? StateBackend,
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {

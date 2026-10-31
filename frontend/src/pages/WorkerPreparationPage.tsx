@@ -99,7 +99,7 @@ function DraftForm({ data, initialInstallation }: { data: WorkerPreparation; ini
     const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value");
     if (action === "deploy") {
       if (data.deploymentBlockedReason) return;
-      const draft = { selection, stateBackend: text("stateBackend") };
+      const draft = { selection, stateBackend: text("stateBackend") || null };
       setCaptured(draft);
       setConfirmed(false);
       setMustReview(false);
@@ -199,16 +199,19 @@ function DraftForm({ data, initialInstallation }: { data: WorkerPreparation; ini
               </Callout>
             ) : null}
             <div>
-              <div className="field">
-                <label htmlFor="worker-state-backend">OpenTofu state backend</label>
-                <select id="worker-state-backend" name="stateBackend" defaultValue={data.stateBackends?.[0] ?? ""}>
-                  {(data.stateBackends ?? []).map((backend) => <option key={backend}>{backend}</option>)}
-                </select>
-                <span className="field__hint">Used by the independent control worker to create this VM. The new worker gets a dedicated routing label until its workload endpoints are qualified.</span>
-              </div>
+              {data.stateBackends?.length ? (
+                <div className="field">
+                  <label htmlFor="worker-state-backend">OpenTofu state</label>
+                  <select id="worker-state-backend" name="stateBackend" defaultValue="">
+                    <option value="">Built in (recommended)</option>
+                    {data.stateBackends.map((backend) => <option key={backend} value={backend}>External backend: {backend}</option>)}
+                  </select>
+                  <span className="field__hint">Octopushy keeps the state unless you choose a backend from octopushy.yaml. The new worker gets a dedicated routing label until its workload endpoints are qualified.</span>
+                </div>
+              ) : null}
               {data.deploymentBlockedReason ? <Callout kind="warning">{data.deploymentBlockedReason}</Callout> : null}
               <button type="submit" name="action" value="deploy" className="button button--primary"
-                disabled={!canPrepare || Boolean(data.deploymentBlockedReason) || !data.stateBackends?.length || review.isPending}>
+                disabled={!canPrepare || Boolean(data.deploymentBlockedReason) || review.isPending}>
                 {review.isPending ? "Reviewing…" : "Review deployment"}
               </button>
               <button type="submit" name="action" value="draft" className="button" disabled={!canPrepare || prepare.isPending}>

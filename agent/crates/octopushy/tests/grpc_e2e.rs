@@ -140,6 +140,12 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             vec!["proxmox", "nixos-rootfs", "guest", "managed-worker"]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
+        let capabilities: &[&str] = if available {
+            &["opentofu-builtin-state"]
+        } else {
+            &[]
+        };
+        assert_eq!(hello.capabilities, capabilities, "{kind:?}: {binary}");
         shutdown.cancel();
         task.await.unwrap().unwrap();
     }

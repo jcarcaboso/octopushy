@@ -511,7 +511,7 @@ public sealed partial class LabRepositoryLoader
             json["vmid"]!.GetValue<int>(),
             json["template"]?.GetValue<string>(),
             provision["recipe"]!.GetValue<string>(),
-            provision["state"]!["backend"]!.GetValue<string>(),
+            provision["state"]?["backend"]?.GetValue<string>(),
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
     }
@@ -613,9 +613,9 @@ public sealed partial class LabRepositoryLoader
             Error(guest.File, null, "guestFilesystem requires hardware.disks[0].size in GiB (2–65536).", guest.Address);
         }
 
-        if (settings is not null && !settings.StateBackends.ContainsKey(guest.StateBackend))
+        if (settings is not null && guest.StateBackend is { } backend && !settings.StateBackends.ContainsKey(backend))
         {
-            Error(guest.File, LineOf(guest.File, "/provision/state/backend"), $"The state backend '{guest.StateBackend}' is not defined in octopushy.yaml.", guest.Address);
+            Error(guest.File, LineOf(guest.File, "/provision/state/backend"), $"The state backend '{backend}' is not defined in octopushy.yaml.", guest.Address);
         }
 
         if (guest.ManagedWorker is not null)

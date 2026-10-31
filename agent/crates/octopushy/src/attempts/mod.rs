@@ -22,12 +22,13 @@ use std::time::Instant;
 use anyhow::Result;
 use futures::FutureExt;
 use octopushy_proto::v1::{
-    AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, Outcome,
-    agent_message::Kind,
+    AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, AttemptStateSnapshot,
+    Outcome, agent_message::Kind,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::executors::opentofu::state::{self, Snapshots};
 use crate::executors::{self, ExecContext, ExecutorConfig, Failure, Secrets};
 use crate::identity::now_ms;
 use crate::masking::Masker;
@@ -53,6 +54,7 @@ struct Entry {
     cancel: CancellationToken,
     logs: Arc<LogBuffer>,
     logger: AttemptLogger,
+    snapshots: Snapshots,
     /// The server sent the assignment again; resend the result even if this
     /// connection already sent it.
     resend_result: bool,
@@ -119,6 +121,7 @@ impl AttemptManager {
                     cancel: CancellationToken::new(),
                     logs,
                     logger,
+                    snapshots: Snapshots::default(),
                     resend_result: false,
                     memory_result: None,
                     on_disk: true,
@@ -179,6 +182,7 @@ impl AttemptManager {
         let logs = Arc::new(LogBuffer::default());
         let logger = AttemptLogger::new(logs.clone(), masker, self.wake.clone());
         let cancel = CancellationToken::new();
+        let snapshots = Snapshots::default();
         let safe = is_safe_id(&id);
         {
             let mut entries = self.entries.lock().unwrap();
@@ -203,6 +207,7 @@ impl AttemptManager {
                     cancel: cancel.clone(),
                     logs,
                     logger: logger.clone(),
+                    snapshots: snapshots.clone(),
                     resend_result: false,
                     memory_result: None,
                     on_disk: safe,
@@ -241,7 +246,9 @@ impl AttemptManager {
         };
         let manager = self.clone();
         tokio::spawn(async move {
-            manager.run_attempt(assignment, ws, logger, cancel).await;
+            manager
+                .run_attempt(assignment, ws, logger, cancel, snapshots)
+                .await;
         });
     }
 
@@ -251,6 +258,7 @@ impl AttemptManager {
         ws: PathBuf,
         log: AttemptLogger,
         cancel: CancellationToken,
+        snapshots: Snapshots,
     ) {
         let id = assignment.attempt_id.clone();
         let permit = tokio::select! {
@@ -295,6 +303,7 @@ impl AttemptManager {
             workspace: ws,
             log: log.clone(),
             cancel: cancel.clone(),
+            snapshots,
         };
         let started = Instant::now();
         let run = executors::run(&self.exec, &executor, &ctx);
@@ -331,6 +340,10 @@ impl AttemptManager {
             Err(_) => failed(&id, "internal error: the executor panicked"),
         };
         res.error = log.mask(&res.error);
+        // Whatever the outcome, the state records what the apply did.
+        if executor == "opentofu" && action == "apply" {
+            res.artifacts.extend(state::read(&ctx.workspace));
+        }
         let secs = started.elapsed().as_secs_f64();
         match res.outcome() {
             Outcome::Succeeded => log.agent(format!("succeeded in {secs:.1}s")),
@@ -455,6 +468,7 @@ impl AttemptManager {
             id: String,
             started: bool,
             logs: Arc<LogBuffer>,
+            snapshots: Snapshots,
             result: Option<Option<AttemptResult>>,
             mutating: bool,
         }
@@ -476,6 +490,7 @@ impl AttemptManager {
                             id: id.clone(),
                             started,
                             logs: e.logs.clone(),
+                            snapshots: e.snapshots.clone(),
                             result: want_result.then(|| e.memory_result.clone()),
                             mutating: e.mutating,
                         },
@@ -506,6 +521,15 @@ impl AttemptManager {
                 });
             }
             cursor.log_next.insert(p.id.clone(), next);
+
+            if let Some(state) = p.snapshots.take() {
+                out.push(AgentMessage {
+                    kind: Some(Kind::StateSnapshot(AttemptStateSnapshot {
+                        attempt_id: p.id.clone(),
+                        state: Some(state),
+                    })),
+                });
+            }
 
             if let Some(memory) = p.result {
                 let result = match memory {

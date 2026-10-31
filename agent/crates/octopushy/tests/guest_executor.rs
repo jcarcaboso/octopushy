@@ -84,6 +84,7 @@ async fn exec_mode(server: &MockServer, native: bool) -> (Result<Success, Failur
         workspace: dir.path().to_path_buf(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel: CancellationToken::new(),
+        snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "guest", &ctx).await;
     let lines = buffer

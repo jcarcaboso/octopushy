@@ -13,7 +13,9 @@ older agents. An executor that cannot parse its input fails the attempt. Outputs
 Messages are at most 64 MiB in each direction. `Welcome.max_concurrency` 0 means 1
 and `heartbeat_seconds` 0 means 10. `Hello.running_attempt_ids` includes attempts the
 agent accepted and is still holding for capacity. The agent sends `AttemptStarted`
-again on each new connection while an attempt runs.
+again on each new connection while an attempt runs. `Hello.capabilities` lists features
+that are not executors; a controller sends built-in OpenTofu state work only to agents
+that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 
 ## Enrollment token and CA
 
@@ -247,7 +249,8 @@ Input (the same for both actions):
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
   symbolic links that dangle or point outside the tree. (The server sends no links.)
 - The backend type `local` is refused, because its state would vanish with the
-  workspace. `env` and `secretEnv` may not set what the agent or the container
+  workspace; the built-in state below is the supported way to have none to set up.
+  `env` and `secretEnv` may not set what the agent or the container
   runtime needs itself: `HOME`, `PATH`, `TMPDIR`, `USER`, `XDG_RUNTIME_DIR`, the `TF_*`
   variables the agent sets, and names starting with `TF_CLI_ARGS`, `CONTAINERS_`,
   `PODMAN_`, `DOCKER_`, or `BUILDAH_`.
@@ -260,6 +263,34 @@ Input (the same for both actions):
 - `env` and `secretEnv` are set for every OpenTofu command, together with
   `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, and `TF_PLUGIN_CACHE_DIR`. Secret values are
   passed through the environment, never as command-line arguments.
+
+### Built-in state
+
+When no external backend is configured the input is `"backend": { "type": "octopushy" }`,
+with no `config`, no `workspace`, and no backend credentials in `secretEnv`. The controller
+keeps the state; see [how it works](../../../docs/opentofu-state.md).
+
+- The state travels on the agent channel only: an artifact `terraform.tfstate` in the
+  assignment of `preview` and `apply`, an artifact of the same name in the `apply` result,
+  and `AttemptStateSnapshot` messages during the apply. Its `sha256` is checked. It is
+  never logged.
+- A stack with no state yet still gets one: an empty seed with serial 0 and a stable
+  lineage. With no state at all, OpenTofu's `local` backend drops the first resource of
+  an apply from its intermediate writes (seen in 1.13.2), which is what a crash leaves.
+- The executor writes it to `<workspace>/state/terraform.tfstate` and generates
+  `{"terraform":{"backend":{"local":{"path":"<relative path to it>"}}}}`. The path is
+  relative because the saved plan records it and applies from another workspace, and a
+  container sees different absolute paths. OpenTofu needs no route to anything, so this
+  works the same with every tool runtime and container network.
+- `preview` returns no state. The controller ignores state from anything but the `apply`
+  attempt holding the stack's lock.
+- `apply` reports the state with its result whatever the outcome, because the state records
+  what a failed apply did. OpenTofu writes the file when a resource finishes and at least
+  20 seconds passed since its last write, as it does for remote backends. The executor
+  checks the file every `poll_interval` and sends each complete new state as a snapshot;
+  the newest replaces any not sent yet. An agent that restarts during an apply adds the state in the workspace to the
+  `uncertain` result it reports.
+- States over 32 MiB are not sent. A finished apply without its state is `uncertain`.
 
 ### `preview`
 

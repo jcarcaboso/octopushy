@@ -294,3 +294,66 @@ async fn a_lost_stored_result_of_a_recovered_attempt_is_uncertain_not_failed() {
     let result = c.find("apply-1").expect("a result is still reported");
     assert_eq!(result.outcome(), Outcome::Uncertain);
 }
+
+#[tokio::test]
+async fn an_apply_reports_its_state_even_when_it_fails() {
+    use crate::executors::opentofu::{archive, state};
+
+    let dir = tempfile::tempdir().unwrap();
+    let tofu = dir.path().join("tofu");
+    std::fs::write(
+        &tofu,
+        r#"#!/bin/sh
+case "$1" in
+  version) echo '{"terraform_version":"1.13.1"}' ;;
+  apply) echo '{"version":4,"serial":5,"lineage":"l"}' > "$STATE_FILE"; exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&tofu, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let exec = Arc::new(ExecutorConfig {
+        runtime: ToolRuntime::new(RuntimeKind::Local, None, tofu, None),
+        provider_cache: dir.path().join("cache"),
+        poll_interval: Duration::from_secs(60),
+        proxmox_timeout: Duration::from_secs(1),
+    });
+    std::fs::create_dir_all(dir.path().join("work")).unwrap();
+    let work = dir.path().join("work").canonicalize().unwrap();
+    let outbox = Outbox::open(dir.path().join("outbox")).unwrap();
+    let manager = AttemptManager::new(work.clone(), outbox, exec);
+
+    let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
+    let input = serde_json::json!({
+        "root": ".",
+        "backend": { "type": "octopushy" },
+        "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate") },
+    });
+    let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());
+    apply.files_tar_gz = archive::pack(&[("main.tf", b"".as_slice())]).unwrap();
+    apply.artifacts = vec![octopushy_proto::v1::Artifact {
+        name: "plan.tar.gz".into(),
+        sha256: crate::tls::sha256_hex(&plan),
+        content: plan,
+    }];
+    manager.accept(apply);
+
+    let mut collector = Collector::default();
+    let result = loop {
+        collector.poll(&manager);
+        if let Some(result) = collector.msgs.iter().find_map(|m| match &m.kind {
+            Some(Kind::Result(r)) => Some(r.clone()),
+            _ => None,
+        }) {
+            break result;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(result.outcome(), Outcome::Failed);
+    let saved = result
+        .artifacts
+        .iter()
+        .find(|a| a.name == state::ARTIFACT)
+        .unwrap();
+    assert!(String::from_utf8_lossy(&saved.content).contains("\"serial\":5"));
+}

@@ -15,8 +15,7 @@ trap 'kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 rm -rf "$work" && mkdir -p "$work"
 dotnet build --nologo -v quiet "$root/backend/src/Octopushy.Server" >"$work/build-backend.log"
 (cd "$root/agent" && cargo build --quiet --bin octopushy --bin mock-proxmox)
-"${pg[@]}" -c "DROP DATABASE IF EXISTS demo_octopushy" -c "DROP DATABASE IF EXISTS demo_state" \
-  -c "CREATE DATABASE demo_octopushy" -c "CREATE DATABASE demo_state"
+"${pg[@]}" -c "DROP DATABASE IF EXISTS demo_octopushy" -c "CREATE DATABASE demo_octopushy"
 
 cp -r "$root/tests/e2e/lab" "$work/lab"
 printf 'policy:\n  approval: manual\n' >>"$work/lab/labs/e2e/lab.yaml"
@@ -45,13 +44,12 @@ code=$(tr -d '\n' <"$work/server/setup-code")
 call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"demo\",\"password\":\"octopushy-demo\"}" >/dev/null
 call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/read-only-token","value":"octopushy-reader@pve!e2e-read-only=00000000-0000-4000-8000-0000000000e1","visibility":"secret","description":"Read-only identity for the mock Proxmox"}'
 call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/privileged-token","value":"octopushy-writer@pve!e2e-privileged=00000000-0000-4000-8000-0000000000e2","visibility":"secret","description":"Privileged identity for the mock Proxmox"}'
-call -X PUT "$api/api/variables" -d '{"key":"e2e/pg-conn","value":"postgres://octopushy:octopushy@127.0.0.1:55432/demo_state?sslmode=disable","visibility":"secret","description":"OpenTofu state in PostgreSQL"}'
 call -X PUT "$api/api/repository" -d "{\"url\":\"$work/lab\",\"branch\":\"main\",\"pollSeconds\":10,\"credentialKind\":\"none\"}" >/dev/null
 token=$(call -X POST "$api/api/agents/tokens" -d '{"name":"demo-agent","labels":["e2e"]}' | jq -r .token)
 OCTOPUSHY_ENROLLMENT_TOKEN=$token "$root/agent/target/debug/octopushy" agent enroll \
   --server https://127.0.0.1:18443 --name demo-agent --state-dir "$work/agent" >"$work/enroll.log" 2>&1
 "$root/agent/target/debug/octopushy" agent run --state-dir "$work/agent" --tool-runtime podman \
-  --container-network host >"$work/agent.log" 2>&1 &
+  >"$work/agent.log" 2>&1 &
 pids+=($!)
 (cd "$root/frontend" && OCTOPUSHY_API=$api exec pnpm exec vite --port 5174 --strictPort) >"$work/frontend.log" 2>&1 &
 pids+=($!)

@@ -236,6 +236,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("started_at");
 
+                    b.Property<int?>("StateVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("state_version");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1098,6 +1102,108 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("store_versions", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.TofuState", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<int>("HeadVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("head_version");
+
+                    b.Property<Guid?>("LockAttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lock_attempt_id");
+
+                    b.Property<DateTimeOffset?>("LockedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_at");
+
+                    b.HasKey("ResourceId")
+                        .HasName("pk_tofu_states");
+
+                    b.ToTable("tofu_states", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.TofuStateVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attempt_id");
+
+                    b.Property<byte[]>("Ciphertext")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("ciphertext");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Lineage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("lineage");
+
+                    b.Property<int>("ResourceCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("resource_count");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("RestoredBy")
+                        .HasColumnType("text")
+                        .HasColumnName("restored_by");
+
+                    b.Property<int?>("RestoredFrom")
+                        .HasColumnType("integer")
+                        .HasColumnName("restored_from");
+
+                    b.Property<long>("Serial")
+                        .HasColumnType("bigint")
+                        .HasColumnName("serial");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<int>("Size")
+                        .HasColumnType("integer")
+                        .HasColumnName("size");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.Property<byte[]>("WrappedKey")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("wrapped_key");
+
+                    b.HasKey("Id")
+                        .HasName("pk_tofu_state_versions");
+
+                    b.HasIndex("ResourceId", "Version")
+                        .IsUnique()
+                        .HasDatabaseName("ix_tofu_state_versions_resource_id_version");
+
+                    b.ToTable("tofu_state_versions", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.User", b =>
                 {
                     b.Property<int>("Id")
@@ -1182,6 +1288,26 @@ namespace Octopushy.Server.Data.Migrations
                         .HasConstraintName("fk_steps_runs_run_id");
 
                     b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.TofuState", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithOne()
+                        .HasForeignKey("Octopushy.Server.Data.TofuState", "ResourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_tofu_states_resources_resource_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.TofuStateVersion", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.TofuState", null)
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_tofu_state_versions_tofu_states_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Resource", b =>

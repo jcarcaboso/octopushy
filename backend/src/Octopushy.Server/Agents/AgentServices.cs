@@ -111,7 +111,7 @@ public sealed class AgentChannelService(
             }
         }, call.Token);
 
-        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList());
+        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList());
         connections.Add(session);
         logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
         var writer = Task.CompletedTask;
@@ -167,6 +167,9 @@ public sealed class AgentChannelService(
                             await logs.AppendAsync(attemptId, (long)message.Log.FirstSequence, lines, call.Token);
                         }
 
+                        break;
+                    case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
+                        await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
                         break;
                     case AgentMessage.KindOneofCase.Result:
                         if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))

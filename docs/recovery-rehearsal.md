@@ -28,6 +28,7 @@ services' in-memory encryption objects.
 | Historical credential restrictions | Revoked and unpromoted versions still cannot be released through `ResolveForAttemptAsync` |
 | Backup cutoff | Writes and revocation after the snapshot are absent; independent allocation resumes from the restored counter |
 | Run evidence | Resource/run/attempt identity, uncertain mutation status, pinned version, approval digest/actor, artifact metadata and release audit survive |
+| Built-in OpenTofu state | The encrypted versions survive the native restore and decrypt to the same bytes with the original KEK; a correctly sized wrong key fails authentication, and state alone is enough for a missing key to be refused rather than regenerated |
 | Files outside PostgreSQL | Copied plan decrypts and matches its recorded digest; the restored log reader returns the saved line |
 | CA identity | Same CA fingerprint, validity of the pre-backup certificate, and preserved registered serial; a post-backup issued serial is absent |
 | Missing/wrong KEK | Missing key is not regenerated; a correctly sized wrong key fails authenticated store, artifact and CA reads without rewriting stored ciphertext |
@@ -43,8 +44,8 @@ No scheduler runs against the restored uncertain work, so preservation is
 demonstrated without claiming that resumed dispatch is safe.
 
 The rehearsal does **not** validate user/session restoration, filesystem
-ownership for a deployed container, full Git snapshots, actual OpenTofu state,
-remote outboxes, external-provider state, automatic drain, or live service health.
+ownership for a deployed container, full Git snapshots, a plan against a restored
+OpenTofu state, remote outboxes, external-provider state, automatic drain, or live service health.
 The fake plan is not executable infrastructure and is never applied.
 
 ## Reproduce locally
@@ -93,8 +94,13 @@ the synthetic tests is not permission to perform these actions.
   A new random key cannot recover old encrypted material.
 - Keep artifacts, logs, repository mirror/snapshots and the web-session key ring
   protected. The session key ring is sensitive independently of the KEK.
+- Built-in OpenTofu state is in the database, so the dump covers it, but it is
+  encrypted: **restoring it needs the same KEK**, like stored secrets. Without that key
+  the guests' state is unrecoverable, and Octopushy would have nothing to plan from.
+  A state written after the dump is not in it, so a restored guest can be behind its
+  VM. Compare with the Proxmox observations and the last runs before planning.
 - Preserve external OpenTofu backends under their own backup/ownership procedure;
-  the Octopushy database is not an OpenTofu state backup or a VM/data backup.
+  the Octopushy database does not hold their state, and it is not a VM/data backup.
 
 ### 2. Restore into an isolated destination
 

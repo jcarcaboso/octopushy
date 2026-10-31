@@ -20,8 +20,9 @@ public sealed record WorkerExistingDto(string Address, string Host, int Vmid, Gu
     bool CanVerifyRetirement = false, string? RetirementBlockedReason = null,
     string? VerifiedOsImageSha256 = null, Guid? VerifiedOsUpdateRunId = null);
 
+/// <summary>Leaving out <paramref name="StateBackend"/> keeps the worker's OpenTofu state in Octopushy.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record WorkerDeploymentRequest(WorkerDraftRequest Selection, string StateBackend);
+public sealed record WorkerDeploymentRequest(WorkerDraftRequest Selection, string? StateBackend = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkerPublishRequest(WorkerDeploymentRequest Draft, string ReviewSha256, bool ConfirmRepositoryWrite);
@@ -114,8 +115,8 @@ public static class WorkerRepositoryDeployment
         if (!repository.RepositoryValid || installation is null || !repository.IsValid(installation.Address)
             || selection.Host is null || !installation.Hosts.TryGetValue(selection.Host, out var host))
             throw new GitException("Select a valid installation and one of its configured hosts.");
-        if (request.StateBackend is null || !repository.Settings!.StateBackends.ContainsKey(request.StateBackend))
-            throw new GitException("Select a state backend configured in this repository.");
+        if (request.StateBackend is { } backend && !repository.Settings!.StateBackends.ContainsKey(backend))
+            throw new GitException("Select a state backend configured in this repository, or leave it out for Octopushy's built-in state.");
         var address = $"{installation.Address}/{selection.Name}";
         var existing = repository.Guests.SingleOrDefault(g => g.Address == address);
         var durable = await db.Resources.AsNoTracking().Include(r => r.ManagedWorker)
@@ -137,6 +138,8 @@ public static class WorkerRepositoryDeployment
             throw new GitException(error);
 
         var files = TemplateFiles();
+        var provision = new JsonObject { ["recipe"] = "octopushy-worker-v1" };
+        if (request.StateBackend is { } external) provision["state"] = new JsonObject { ["backend"] = external };
         var network = new JsonObject { ["bridge"] = selection.Bridge, ["mode"] = "dhcp" };
         if (selection.Vlan is { } vlan) network["vlan"] = vlan;
         var guest = new JsonObject
@@ -156,11 +159,7 @@ public static class WorkerRepositoryDeployment
                     new JsonObject { ["size"] = selection.StateDiskGiB, ["datastore"] = selection.Datastore }),
             },
             ["network"] = network,
-            ["provision"] = new JsonObject
-            {
-                ["recipe"] = "octopushy-worker-v1",
-                ["state"] = new JsonObject { ["backend"] = request.StateBackend },
-            },
+            ["provision"] = provision,
             ["policy"] = new JsonObject { ["approval"] = "manual", ["destructive"] = "manual" },
             // Enable only for the exact image the operator qualified for native-v1 reporting.
             ["setup"] = new JsonObject

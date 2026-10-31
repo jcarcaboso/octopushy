@@ -212,6 +212,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/guests/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getGuestState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/guests/{id}/state/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rollBackGuestState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/attempts/{id}/log": {
         parameters: {
             query?: never;
@@ -1205,6 +1237,43 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        TofuStateDto: {
+            /** Format: int32 */
+            headVersion: number;
+            lockHeld: boolean;
+            /** Format: uuid */
+            lockAttemptId: null | string;
+            /** Format: date-time */
+            lockedAt: null | string;
+            versions: components["schemas"]["TofuStateVersionDto"][];
+        };
+        TofuStateRollback: {
+            /** Format: int32 */
+            version: number;
+            /** Format: int32 */
+            expectedHead: number;
+        };
+        TofuStateVersionDto: {
+            /** Format: int32 */
+            version: number;
+            /** Format: int64 */
+            serial: number;
+            lineage: string;
+            /** Format: int32 */
+            resources: number;
+            sha256: string;
+            /** Format: int32 */
+            size: number;
+            /** Format: uuid */
+            attemptId: null | string;
+            /** Format: int32 */
+            restoredFrom: null | number;
+            restoredBy: null | string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         TokenDto: {
             /** Format: uuid */
             id: string;
@@ -1297,7 +1366,7 @@ export interface components {
         };
         WorkerDeploymentRequest: {
             selection: components["schemas"]["WorkerDraftRequest"];
-            stateBackend: string;
+            stateBackend?: null | string;
         };
         WorkerDraftDto: {
             fileName: string;
@@ -2006,6 +2075,106 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getGuestState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TofuStateDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    rollBackGuestState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TofuStateRollback"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

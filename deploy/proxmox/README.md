@@ -106,12 +106,15 @@ instead of downloading them.
 
 The agent runs the work: OpenTofu plans and applies, and the Proxmox API checks. The
 internal one runs in the same container as the server, so you can start without another
-machine. It needs network access to your Proxmox hosts' API (port 8006), to the OpenTofu
-registry for providers, and to wherever your OpenTofu state lives.
+machine. It needs network access to your Proxmox hosts' API (port 8006) and to the
+OpenTofu registry for providers. OpenTofu state needs no setup: the backend keeps it in
+its database and hands it to the agent over their private channel, so `octopushy-update`
+keeps it and its database dump covers it. Restoring that dump needs the key above.
 
 It runs OpenTofu directly (`--tool-runtime local`) inside its own Docker container, as
 an unprivileged user. It shares only a private network with the backend, so it cannot
-reach PostgreSQL, and it gets neither the key nor the database password. It still runs
+reach PostgreSQL, and it gets neither the key nor the database password. The state it
+works on is decrypted for one attempt of the guest it was assigned. It still runs
 on the same machine as the server. Once you manage more than this lab, or want a
 stronger boundary, add agents on their own VMs (the
 [managed worker wizard](../../docs/worker-deployment-wizard.md) builds them with this

@@ -40,6 +40,8 @@ pub struct Agent {
     pub tool_runtime: RuntimeKind,
     /// Executors usable with the runtime probed at startup.
     pub executors: Vec<String>,
+    /// Features usable with the runtime probed at startup.
+    pub capabilities: Vec<String>,
 }
 
 enum End {
@@ -131,6 +133,7 @@ fn hello(agent: &Agent) -> AgentMessage {
             executors: agent.executors.clone(),
             running_attempt_ids: agent.manager.active_ids(),
             tool_runtime: agent.tool_runtime.as_str().to_owned(),
+            capabilities: agent.capabilities.clone(),
         })),
     }
 }

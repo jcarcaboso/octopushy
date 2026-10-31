@@ -162,7 +162,10 @@ or execution status is **uncertain**, not automatically retried. See the
   devices and FIFOs, symlinks that leave the tree (checked lexically and by
   resolving them afterwards), writing through symlinks, and more than 256 MiB.
 - Writes `octopushy.auto.tfvars.json` and `octopushy_backend.tf.json` into the root
-  (the `local` backend is refused: its state would vanish with the workspace).
+  (a configured `local` backend is refused: its state would vanish with the workspace).
+  With the built-in state, the generated backend is a `local` file the agent restores
+  from the assignment and reports back; see
+  [executors](../contracts/agent/v1/executors.md#built-in-state).
 - Runs `version -json`, `init -input=false -no-color -backend-config=k=v…`,
   `workspace select -or-create=true` (when a workspace is set), then
   `plan -detailed-exitcode -out=…/out/plan.bin [-destroy]` and `show -json` (parsed,
@@ -262,7 +265,7 @@ certificate for 127.0.0.1, ::1, and localhost; `--ca-out` writes the CA for
 - `tests/opentofu_fake.rs`: the opentofu executor with the local runtime and a fake
   `tofu` script that records arguments and environment (secrets in the environment,
   never in arguments; outputs; artifact contents; destroy; replace counting; lock-file
-  restore; corrupt artifacts; cancel).
+  restore; corrupt artifacts; cancel; the built-in state).
 - `tests/proxmox_executor.rs`: all four proxmox actions against mock-proxmox.
 - `tests/podman_smoke.rs` (ignored by default): real OpenTofu in rootless podman,
   `tofu version` through the container runner and a full preview + apply of a

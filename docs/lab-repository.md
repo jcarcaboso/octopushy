@@ -82,13 +82,13 @@ Everything else lives elsewhere:
 |---|---|
 | Lab repository | Definitions, tool-native files, policies, variable-store key references |
 | Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot, the entries each integration holds for Octopushy, cluster membership as joined |
-| OpenTofu backend | Infrastructure state |
+| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state |
 
 ## Layout
 
 ```text
 lab-repo/
-├── octopushy.yaml                          # repository defaults, named state backends
+├── octopushy.yaml                          # repository defaults, optional state backends
 ├── labs/
 │   ├── home/
 │   │   ├── lab.yaml                        # integrations, DNS zones, windows
@@ -227,7 +227,7 @@ defaults:
   policy:
     approval: automatic           # automatic | manual
     # destructive: unset, so it follows approval
-stateBackends:
+stateBackends:                    # optional: only to keep some state outside Octopushy
   gitlab:
     type: http                    # any OpenTofu backend type
     config:                       # passed to tofu init; {stack} is the guest's address with dots
@@ -241,8 +241,9 @@ stateBackends:
       TF_HTTP_PASSWORD: { store: opentofu/gitlab-token }
 ```
 
-Holds repository-wide defaults and the named OpenTofu state backends that guests
-refer to. Server settings (provider routing, agents, sign-in) stay out of Git. The
+Holds repository-wide defaults and any external OpenTofu state backends. Most labs need
+none: a guest that names no backend has its state kept by Octopushy, with nothing to
+configure ([how it works](opentofu-state.md)). Server settings (provider routing, agents, sign-in) stay out of Git. The
 state backend format, the provisioning recipe file, and template images are the shapes
 [milestone 1](milestone-1.md#definitions) implements.
 
@@ -328,7 +329,7 @@ network:
   gateway: 10.1.0.1
 provision:
   recipe: proxmox-vm
-  state: { backend: gitlab }      # one state per guest, named by its address
+  # state: { backend: gitlab }    # optional: an external backend from octopushy.yaml
 setup:
   recipe: nixos                   # or ansible
   files: nixos/
@@ -344,8 +345,9 @@ Octopushy itself reads the placement and identity. `hardware` and `network` are
 passed to the provisioning recipe as inputs and validated against the recipe's
 schema, so Octopushy does not need a VM model of its own. The recipe also receives
 the host's settings and the installation's connection, so one shared OpenTofu module
-provisions every guest. Each guest has its own state, named by its address, so
-guests are planned, locked, and applied independently. `nodes` does the same today by
+provisions every guest. Each guest has its own state, so guests are planned, locked,
+and applied independently. Octopushy keeps it unless `provision.state` names an external
+backend, where it is named by the guest's address. `nodes` does the same today by
 having each guest's OpenTofu root read `node.json`; here the executor passes the
 values instead.
 

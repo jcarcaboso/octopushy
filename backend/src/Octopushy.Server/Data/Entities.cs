@@ -356,6 +356,9 @@ public sealed class Attempt
     /// <summary>The agent that prepared earlier work for this run, preferred when available.</summary>
     public Guid? PreferredAgentId { get; set; }
 
+    /// <summary>The built-in state version this OpenTofu attempt started from; 0 for none yet.</summary>
+    public int? StateVersion { get; set; }
+
     public Guid? AgentId { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
@@ -468,6 +471,59 @@ public sealed class StoreEntry
 
     /// <summary>Allocation counter; staging a candidate does not move CurrentVersion.</summary>
     public int LatestVersion { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>
+/// The OpenTofu state Octopushy keeps for a guest, keyed by resource so a rename keeps it. The
+/// lock names the apply that may write. It is freed by that apply's result and is taken over
+/// once the holder is no longer running, so a crashed apply cannot wedge the stack.
+/// </summary>
+public sealed class TofuState
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>The current <see cref="TofuStateVersion.Version"/>; 0 before the first write.</summary>
+    public int HeadVersion { get; set; }
+
+    public Guid? LockAttemptId { get; set; }
+
+    public DateTimeOffset? LockedAt { get; set; }
+}
+
+/// <summary>One encrypted OpenTofu state. An apply's snapshots replace each other in one version.</summary>
+public sealed class TofuStateVersion
+{
+    public Guid Id { get; set; }
+
+    public Guid ResourceId { get; set; }
+
+    public int Version { get; set; }
+
+    public long Serial { get; set; }
+
+    public required string Lineage { get; set; }
+
+    /// <summary>How many resources the state tracks.</summary>
+    public int ResourceCount { get; set; }
+
+    public required string Sha256 { get; set; }
+
+    public int Size { get; set; }
+
+    public required byte[] Ciphertext { get; set; }
+
+    public required byte[] WrappedKey { get; set; }
+
+    /// <summary>The apply that wrote this version; null for a restored one.</summary>
+    public Guid? AttemptId { get; set; }
+
+    public int? RestoredFrom { get; set; }
+
+    public string? RestoredBy { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 

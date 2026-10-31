@@ -32,6 +32,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<SecretResolution> SecretResolutions => Set<SecretResolution>();
 
+    public DbSet<TofuState> TofuStates => Set<TofuState>();
+
+    public DbSet<TofuStateVersion> TofuStateVersions => Set<TofuStateVersion>();
+
     public DbSet<Observation> Observations => Set<Observation>();
 
     public DbSet<User> Users => Set<User>();
@@ -140,6 +144,19 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<SecretResolution>(e =>
         {
             e.HasIndex(x => x.AttemptId);
+        });
+
+        model.Entity<TofuState>(e =>
+        {
+            e.HasKey(x => x.ResourceId);
+            e.HasOne<Resource>().WithOne().HasForeignKey<TofuState>(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        model.Entity<TofuStateVersion>(e =>
+        {
+            e.HasIndex(x => new { x.ResourceId, x.Version }).IsUnique();
+            e.Property(x => x.Sha256).HasMaxLength(64);
+            e.HasOne<TofuState>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
         });
 
         model.Entity<Observation>(e =>

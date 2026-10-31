@@ -3,15 +3,17 @@ defaults:
   policy:
     approval: automatic           # automatic | manual
     # destructive: unset, so it follows approval
-stateBackends:
-  gitlab:
-    type: http
-    config:                       # {stack} becomes the guest's address with dots
-      address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}
-      lock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
-      unlock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
-      lock_method: POST
-      unlock_method: DELETE
-    env:                          # credentials go here: OpenTofu does not save them in plans
-      TF_HTTP_USERNAME: octopushy
-      TF_HTTP_PASSWORD: { store: opentofu/gitlab-token }
+# OpenTofu state needs no setup: Octopushy keeps it. To use your own backend instead, define
+# it here and name it in a guest with `provision: { state: { backend: gitlab } }`.
+# stateBackends:
+#   gitlab:
+#     type: http
+#     config:                       # {stack} becomes the guest's address with dots
+#       address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}
+#       lock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
+#       unlock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
+#       lock_method: POST
+#       unlock_method: DELETE
+#     env:                          # credentials go here: OpenTofu does not save them in plans
+#       TF_HTTP_USERNAME: octopushy
+#       TF_HTTP_PASSWORD: { store: opentofu/gitlab-token }

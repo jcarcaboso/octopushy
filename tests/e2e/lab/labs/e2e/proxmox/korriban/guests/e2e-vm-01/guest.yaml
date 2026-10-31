@@ -6,4 +6,3 @@ hardware: { cores: 2, memory: 2048, disks: [{ size: 16 }] }
 network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }
 provision:
   recipe: test-vm
-  state: { backend: postgres }

@@ -122,6 +122,28 @@ public class WorkerDeploymentTests(PostgresFixture postgres)
         config.WorkerDeployment.ImageSha256 = new string('a', 64);
     }
 
+    [Fact]
+    public async Task A_worker_needs_no_state_backend_and_an_unknown_one_is_refused()
+    {
+        using var repository = TestRepository.BuiltInState();
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        await server.SyncAsync();
+        Enable(server);
+        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        var view = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
+        Assert.Empty(view.StateBackends);
+
+        var response = await client.PostAsJsonAsync(Path + "/review", new { selection = Request(view).Selection });
+        response.EnsureSuccessStatusCode();
+        var review = (await response.Content.ReadFromJsonAsync<WorkerReviewDto>())!;
+        var worker = JsonNode.Parse(review.Files["labs/home/proxmox/korriban/guests/worker-01/guest.yaml"])!;
+        Assert.Equal("octopushy-worker-v1", worker["provision"]!["recipe"]!.GetValue<string>());
+        Assert.Null(worker["provision"]!["state"]);
+
+        var unknown = await client.PostAsJsonAsync(Path + "/review", Request(view) with { StateBackend = "nowhere" });
+        Assert.False(unknown.IsSuccessStatusCode);
+    }
+
     private static WorkerDeploymentRequest Request(WorkerPreparationDto view) => new(
         new(view.Revision!.Id, "home/korriban", "korriban", "worker-01", 901, 1, 2, 2048, 8, 16, "local-lvm", "vmbr0", null), "postgres");
 }

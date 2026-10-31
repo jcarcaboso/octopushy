@@ -77,7 +77,16 @@ public sealed record OpenTofuContext(
     Dictionary<string, string> Env,
     Dictionary<string, string> SecretEnv);
 
-public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace);
+public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace)
+{
+    /// <summary>The backend type that means Octopushy keeps the state itself.</summary>
+    public const string BuiltInType = "octopushy";
+
+    public static BackendContext BuiltIn => new(BuiltInType, [], null);
+
+    [JsonIgnore]
+    public bool IsBuiltIn => Type == BuiltInType;
+}
 
 public sealed record ProxmoxContext(
     string Endpoint,
