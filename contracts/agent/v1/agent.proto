@@ -57,6 +57,7 @@ message AgentMessage {
     AttemptStarted started = 3;
     AttemptLog log = 4;
     AttemptResult result = 5;
+    AttemptStateSnapshot state_snapshot = 6;
   }
 }
 
@@ -68,6 +69,9 @@ message Hello {
   repeated string running_attempt_ids = 3;
   // How the agent runs tools: "podman", "docker", or "local".
   string tool_runtime = 4;
+  // Features of this binary that are not executors, such as
+  // "opentofu-builtin-state". Older agents send none.
+  repeated string capabilities = 5;
 }
 
 message Heartbeat {
@@ -109,6 +113,13 @@ message AttemptResult {
   // Why the attempt did not succeed, for people to read.
   string error = 4;
   repeated Artifact artifacts = 5;
+}
+
+// OpenTofu's state while an apply runs, so a lost machine loses little. The newest
+// snapshot replaces earlier ones of the attempt; the final state comes with the result.
+message AttemptStateSnapshot {
+  string attempt_id = 1;
+  Artifact state = 2;
 }
 
 enum Outcome {

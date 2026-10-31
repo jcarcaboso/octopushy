@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::attempts::AttemptManager;
 use crate::connection::{self, Agent};
+use crate::executors::opentofu::state;
 use crate::executors::{EXECUTORS, ExecutorConfig};
 use crate::fsutil::ensure_private_dir;
 use crate::identity;
@@ -78,6 +79,10 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         .filter(|&&name| tools_available || name != "opentofu")
         .map(|&name| name.to_owned())
         .collect();
+    let capabilities = tools_available
+        .then(|| state::CAPABILITY.to_owned())
+        .into_iter()
+        .collect();
     let exec = Arc::new(ExecutorConfig {
         runtime,
         provider_cache,
@@ -96,6 +101,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         manager,
         tool_runtime: opts.tool_runtime,
         executors,
+        capabilities,
     });
     connection::run(agent, shutdown).await
 }

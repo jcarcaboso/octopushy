@@ -70,6 +70,7 @@ async fn podman_tofu_version() {
                 ],
                 env: vec![("SOME_SECRET".into(), "not-a-real-secret-value".into())],
                 capture_stdout: true,
+                stderr_mark: None,
             },
             &log,
             &CancellationToken::new(),
@@ -179,6 +180,7 @@ output "secret" {
             workspace: ws,
             log,
             cancel: CancellationToken::new(),
+            snapshots: Default::default(),
         };
         let cfg = &cfg;
         async move {

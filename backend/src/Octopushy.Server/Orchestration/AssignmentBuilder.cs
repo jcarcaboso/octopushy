@@ -26,6 +26,7 @@ public sealed class AssignmentBuilder(
     VariableStore store,
     RepositoryMirror mirror,
     ArtifactStore artifacts,
+    TofuStateStore states,
     TimeProvider clock,
     IOptions<OctopushyOptions> options)
 {
@@ -129,6 +130,10 @@ public sealed class AssignmentBuilder(
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
         }
 
+        // State leaves the controller under the gates above, like any other credential.
+        var state = action.Executor == "opentofu"
+            ? await states.CheckOutAsync(attempt, run!, context, stepName == StepNames.Apply, cancellationToken)
+            : null;
         var (values, missing) = await store.ResolveForAttemptAsync(
             names.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
             names.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
@@ -179,6 +184,10 @@ public sealed class AssignmentBuilder(
             if (stepName == StepNames.Apply)
             {
                 assignment.Artifacts.Add(approvedPlan!);
+            }
+            if (state is not null)
+            {
+                assignment.Artifacts.Add(state);
             }
         }
         else

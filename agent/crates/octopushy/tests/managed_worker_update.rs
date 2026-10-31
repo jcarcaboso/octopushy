@@ -87,6 +87,7 @@ async fn execute_release(
             Arc::new(Notify::new()),
         ),
         cancel: CancellationToken::new(),
+        snapshots: Default::default(),
     };
     executors::run(&cfg, "managed-worker", &ctx).await
 }

@@ -72,7 +72,7 @@ the server refuses invalid enabled configuration.
 ## What to keep safe
 
 - `secrets/kek`: without it, the values in the variable store, including the agent CA's
-  key, cannot be read. Keep a copy apart from any database backup **and** from any copy
+  key, and the guests' OpenTofu state cannot be read. Keep a copy apart from any database backup **and** from any copy
   of the `data` volume. Anyone holding the key plus the database can decrypt every stored
   secret and the agent CA key, and sign certificates that agents accept.
 - The `data` volume holds the setup code, the Git mirror, artifacts, logs, and the

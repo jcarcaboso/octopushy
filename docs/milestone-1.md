@@ -52,9 +52,11 @@ reads the parts below and accepts, without acting on, the sections that belong t
 later milestones (`integrations`, `dns`, `setup`, `access` beyond SSH keys,
 services, clusters, windows).
 
-**State backends (choice made here).** A state backend names an OpenTofu backend
-type and passes its settings through unchanged, so any backend OpenTofu supports
-works. `{stack}` in a setting is replaced by the guest's stack name, its address
+**State backends (choice made here).** A guest needs none: Octopushy keeps its state
+in its own database ([how it works](opentofu-state.md)). A state backend is the
+optional override for keeping it elsewhere. It names an OpenTofu backend type and
+passes its settings through unchanged, so any backend OpenTofu supports works, and a
+guest opts in with `provision.state`. `{stack}` in a setting is replaced by the guest's stack name, its address
 with dots (`home.korriban.krb-crt-01`). Credentials go in `env`, never in `config`,
 because OpenTofu writes backend settings into saved plans; environment variables
 are not saved.
@@ -228,7 +230,7 @@ arrive as `files_tar_gz`.
   a fake `tofu`; the outbox.
 - End to end: PostgreSQL, the backend, and an agent running real OpenTofu in a
   container against the example repository's `test-vm` recipe (`terraform_data`, no
-  Proxmox needed) with a `pg` state backend, and a mock Proxmox API for observation.
+  Proxmox needed) with the built-in state, and a mock Proxmox API for observation.
   The `proxmox-vm` recipe is checked with `tofu validate`; it has not run against a
   real Proxmox installation.
 
@@ -244,7 +246,7 @@ Built and verified:
   hand, OpenTofu 1.13.1 in rootless podman.
 - Frontend: 39 tests; every page checked in a browser against the backend.
 - End to end (`just e2e`): the backend and a real agent provision the test guest with
-  OpenTofu in rootless podman and a `pg` state backend, observe the installation through
+  OpenTofu in rootless podman and the built-in state, observe the installation through
   the mock Proxmox API, then retire the guest. `just demo` leaves the same setup running
   with manual approval, to try the web interface.
 

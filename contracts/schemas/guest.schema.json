@@ -32,13 +32,14 @@
       "properties": {
         "recipe": { "$ref": "common.schema.json#/$defs/id" },
         "state": {
+          "description": "An external OpenTofu backend from octopushy.yaml. Leave it out to keep the state in Octopushy.",
           "type": "object",
           "properties": { "backend": { "$ref": "common.schema.json#/$defs/id" } },
           "required": ["backend"],
           "additionalProperties": false
         }
       },
-      "required": ["recipe", "state"],
+      "required": ["recipe"],
       "additionalProperties": false
     },
     "setup": {

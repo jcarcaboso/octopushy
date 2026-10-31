@@ -14,7 +14,6 @@ network:
   mode: dhcp
 provision:
   recipe: proxmox-vm
-  state: { backend: gitlab }
 access:
   sshAuthorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example

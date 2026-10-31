@@ -66,8 +66,9 @@ not functionality already supplied.
   `profiles` does not install an agent. There is no worker role today.
 - `ProvisionInputs.Build` constructs public tool variables and an input hash;
   `GuestDefinition.Stack` is the guest address with `/` replaced by `.`.
-  `RunFactory.Guest` substitutes that stack into the configured external
-  OpenTofu backend. Preserve one infrastructure state owner per guest.
+  `RunFactory.Guest` substitutes that stack into an external OpenTofu backend
+  when the guest names one; otherwise the controller keeps the
+  [built-in state](opentofu-state.md). Preserve one infrastructure state owner per guest.
 - `InventoryUpdater.ApplyAsync` reconciles definitions into persistent
   resources and creates revision-triggered runs; `Planner.PlanGuestAsync`
   creates an explicit run. A disappeared definition sets `MissingSince` and
@@ -209,8 +210,8 @@ recipe's tool variables and PVE description/tags, alongside the existing
 address marker. Bindings use Resource/Agent GUIDs, never hostname matching,
 an IP address, labels, or bare VMID across installations.
 
-Git owns **intent**. The external OpenTofu backend owns resource bindings and
-locking. The controller DB owns identity correlation, run/approval/evidence and
+Git owns **intent**. OpenTofu state, built in or in an external backend, owns
+resource bindings and locking. The controller DB owns identity correlation, run/approval/evidence and
 observed phase. The worker state disk owns its private identity and execution
 journals. No one owns the same VM in two OpenTofu states.
 
@@ -375,7 +376,7 @@ unguarded ordinary-guest destroy.
 ### Deploy, bootstrap, enroll, ready
 
 - Preflight requires a connected compatible control worker, verified PVE TLS,
-  independent RO/writer credentials, reachable state backend and image registry,
+  independent RO/writer credentials, reachable image registry and any external state backend,
   approved image digest, explicit host/storage/bridge/VMID, time synchronization
   and guest-to-controller HTTPS reachability. No working prerequisite means
   **Blocked**, not optimistic success.

@@ -42,9 +42,10 @@ public sealed class KeyEncryptionKey
 
         var artifacts = Path.Combine(options.DataDirectory, "artifacts");
         if (await db.StoreVersions.AnyAsync(ct) || await db.StoreEntries.AnyAsync(ct) || await db.Artifacts.AnyAsync(ct) ||
+            await db.TofuStateVersions.AnyAsync(ct) ||
             (Directory.Exists(artifacts) && Directory.EnumerateFiles(artifacts, "*", SearchOption.AllDirectories).Any()))
         {
-            throw new InvalidOperationException("The encryption key is missing from an existing installation. Restore its original key; a new key cannot recover stored values or artifacts.");
+            throw new InvalidOperationException("The encryption key is missing from an existing installation. Restore its original key; a new key cannot recover stored values, OpenTofu state or artifacts.");
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);

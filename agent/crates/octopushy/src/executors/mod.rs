@@ -92,6 +92,8 @@ pub struct ExecContext {
     pub workspace: PathBuf,
     pub log: AttemptLogger,
     pub cancel: CancellationToken,
+    /// Where a running apply leaves its state for the connection to send.
+    pub snapshots: opentofu::state::Snapshots,
 }
 
 impl ExecContext {
@@ -153,6 +155,14 @@ impl Failure {
         Failure::Failed {
             message: message.into(),
             outputs: None,
+        }
+    }
+
+    /// What went wrong, for people to read.
+    pub fn message(&self) -> &str {
+        match self {
+            Failure::Uncertain(message) | Failure::Failed { message, .. } => message,
+            Failure::Cancelled => "cancelled",
         }
     }
 

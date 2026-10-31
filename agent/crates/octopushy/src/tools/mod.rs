@@ -84,6 +84,8 @@ pub struct Invocation<'a> {
     pub env: Vec<(String, String)>,
     /// Capture stdout instead of logging it.
     pub capture_stdout: bool,
+    /// A whole stderr line to report in [`ToolOutput::stderr_marked`].
+    pub stderr_mark: Option<&'a str>,
 }
 
 /// What a tool run produced.
@@ -95,6 +97,8 @@ pub struct ToolOutput {
     pub stdout: Vec<u8>,
     /// The last stderr lines, masked.
     pub stderr_tail: Vec<String>,
+    /// Whether stderr had the line [`Invocation::stderr_mark`] names, anywhere.
+    pub stderr_marked: bool,
     /// Whether the run was cancelled.
     pub cancelled: bool,
 }
@@ -325,9 +329,12 @@ impl ToolRuntime {
         };
         let err_task = {
             let log = log.clone();
+            let mark = inv.stderr_mark.map(str::to_owned);
             tokio::spawn(async move {
                 let mut tail: std::collections::VecDeque<String> = Default::default();
+                let mut marked = false;
                 let _ = lines::for_each_line(stderr, |l| {
+                    marked |= mark.as_deref() == Some(l.trim_end());
                     let masked = log.stderr(&l);
                     if tail.len() == STDERR_TAIL {
                         tail.pop_front();
@@ -335,7 +342,7 @@ impl ToolRuntime {
                     tail.push_back(masked);
                 })
                 .await;
-                tail.into_iter().collect::<Vec<_>>()
+                (tail.into_iter().collect::<Vec<_>>(), marked)
             })
         };
 
@@ -350,11 +357,12 @@ impl ToolRuntime {
             }
         };
         let stdout = out_task.await.context("stdout reader")??;
-        let stderr_tail = err_task.await.context("stderr reader")?;
+        let (stderr_tail, stderr_marked) = err_task.await.context("stderr reader")?;
         Ok(ToolOutput {
             code: status.code(),
             stdout,
             stderr_tail,
+            stderr_marked,
             cancelled,
         })
     }
@@ -432,6 +440,7 @@ mod tests {
             settings: vec![("HOME".into(), "/work/home".into())],
             env: vec![("PG_CONN_STR".into(), "postgres://u:supersecret@db/x".into())],
             capture_stdout: false,
+            stderr_mark: None,
         };
         let cmd = rt.command(&inv).await.unwrap();
         let std = cmd.as_std();

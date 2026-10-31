@@ -22,12 +22,13 @@ use std::time::Instant;
 use anyhow::Result;
 use futures::FutureExt;
 use octopushy_proto::v1::{
-    AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, Outcome,
-    agent_message::Kind,
+    AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, AttemptStateSnapshot,
+    Outcome, agent_message::Kind,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::executors::opentofu::state::{self, Snapshots};
 use crate::executors::{self, ExecContext, ExecutorConfig, Failure, Secrets};
 use crate::identity::now_ms;
 use crate::masking::Masker;
@@ -49,10 +50,13 @@ struct Entry {
     executor: String,
     action: String,
     state: State,
+    /// Whether the executor started. A finished attempt can be one that never did.
+    started: bool,
     mutating: bool,
     cancel: CancellationToken,
     logs: Arc<LogBuffer>,
     logger: AttemptLogger,
+    snapshots: Snapshots,
     /// The server sent the assignment again; resend the result even if this
     /// connection already sent it.
     resend_result: bool,
@@ -103,6 +107,14 @@ impl AttemptManager {
         let count = ids.len();
         let mut entries = self.entries.lock().unwrap();
         for id in ids {
+            // Only a marker that says so rules out a start.
+            let started = !matches!(
+                workspace::read(&workspace::dir(&self.work_dir, &id)),
+                Ok(Some(workspace::Marker {
+                    phase: workspace::Phase::Queued,
+                    ..
+                }))
+            );
             let logs = Arc::new(LogBuffer::default());
             let logger =
                 AttemptLogger::new(logs.clone(), Arc::new(Masker::default()), self.wake.clone());
@@ -113,12 +125,14 @@ impl AttemptManager {
                     executor: String::new(),
                     action: String::new(),
                     state: State::Finished,
+                    started,
                     // The executor and action are unknown after a restart. If the stored result
                     // is later unreadable, that must read as "cannot tell", never as a failure.
                     mutating: true,
                     cancel: CancellationToken::new(),
                     logs,
                     logger,
+                    snapshots: Snapshots::default(),
                     resend_result: false,
                     memory_result: None,
                     on_disk: true,
@@ -179,6 +193,7 @@ impl AttemptManager {
         let logs = Arc::new(LogBuffer::default());
         let logger = AttemptLogger::new(logs.clone(), masker, self.wake.clone());
         let cancel = CancellationToken::new();
+        let snapshots = Snapshots::default();
         let safe = is_safe_id(&id);
         {
             let mut entries = self.entries.lock().unwrap();
@@ -199,10 +214,12 @@ impl AttemptManager {
                     executor: assignment.executor.clone(),
                     action: assignment.action.clone(),
                     state: State::Queued,
+                    started: false,
                     mutating: executors::is_mutating(&assignment.executor, &assignment.action),
                     cancel: cancel.clone(),
                     logs,
                     logger: logger.clone(),
+                    snapshots: snapshots.clone(),
                     resend_result: false,
                     memory_result: None,
                     on_disk: safe,
@@ -241,7 +258,9 @@ impl AttemptManager {
         };
         let manager = self.clone();
         tokio::spawn(async move {
-            manager.run_attempt(assignment, ws, logger, cancel).await;
+            manager
+                .run_attempt(assignment, ws, logger, cancel, snapshots)
+                .await;
         });
     }
 
@@ -251,6 +270,7 @@ impl AttemptManager {
         ws: PathBuf,
         log: AttemptLogger,
         cancel: CancellationToken,
+        snapshots: Snapshots,
     ) {
         let id = assignment.attempt_id.clone();
         let permit = tokio::select! {
@@ -275,6 +295,7 @@ impl AttemptManager {
                 .get_mut(&id)
                 .expect("attempt entry exists while running");
             entry.state = State::Running;
+            entry.started = true;
             entry.mutating
         };
         self.wake.notify_one();
@@ -295,6 +316,7 @@ impl AttemptManager {
             workspace: ws,
             log: log.clone(),
             cancel: cancel.clone(),
+            snapshots,
         };
         let started = Instant::now();
         let run = executors::run(&self.exec, &executor, &ctx);
@@ -331,6 +353,10 @@ impl AttemptManager {
             Err(_) => failed(&id, "internal error: the executor panicked"),
         };
         res.error = log.mask(&res.error);
+        // Whatever the outcome, the state records what the apply did.
+        if executor == "opentofu" && action == "apply" {
+            res.artifacts.extend(state::read(&ctx.workspace));
+        }
         let secs = started.elapsed().as_secs_f64();
         match res.outcome() {
             Outcome::Succeeded => log.agent(format!("succeeded in {secs:.1}s")),
@@ -455,6 +481,7 @@ impl AttemptManager {
             id: String,
             started: bool,
             logs: Arc<LogBuffer>,
+            snapshots: Snapshots,
             result: Option<Option<AttemptResult>>,
             mutating: bool,
         }
@@ -465,8 +492,7 @@ impl AttemptManager {
                 .map(|(id, e)| {
                     // Once per connection for every attempt that started, so a
                     // Started lost with a dropped connection is repaired.
-                    let started =
-                        e.state != State::Queued && cursor.started_sent.insert(id.clone());
+                    let started = e.started && cursor.started_sent.insert(id.clone());
                     let want_result = e.state == State::Finished
                         && (!cursor.results_sent.contains(id)
                             || std::mem::take(&mut e.resend_result));
@@ -476,6 +502,7 @@ impl AttemptManager {
                             id: id.clone(),
                             started,
                             logs: e.logs.clone(),
+                            snapshots: e.snapshots.clone(),
                             result: want_result.then(|| e.memory_result.clone()),
                             mutating: e.mutating,
                         },
@@ -506,6 +533,15 @@ impl AttemptManager {
                 });
             }
             cursor.log_next.insert(p.id.clone(), next);
+
+            if let Some(state) = p.snapshots.take() {
+                out.push(AgentMessage {
+                    kind: Some(Kind::StateSnapshot(AttemptStateSnapshot {
+                        attempt_id: p.id.clone(),
+                        state: Some(state),
+                    })),
+                });
+            }
 
             if let Some(memory) = p.result {
                 let result = match memory {

@@ -249,7 +249,12 @@ public sealed class ServerHarness : IAsyncDisposable
             return RunContext.Parse(attempt.Context!);
         });
 
-    public async Task<FakeAgent> ConnectAgentAsync(params string[] labels)
+    public Task<FakeAgent> ConnectAgentAsync(params string[] labels) => ConnectAsync(labels, [TofuStateStore.AgentCapability]);
+
+    /// <summary>An agent from before built-in state.</summary>
+    public Task<FakeAgent> ConnectOlderAgentAsync(params string[] labels) => ConnectAsync(labels, []);
+
+    private async Task<FakeAgent> ConnectAsync(string[] labels, string[] capabilities)
     {
         var agent = new AgentRecord
         {
@@ -267,7 +272,7 @@ public sealed class ServerHarness : IAsyncDisposable
             db.Agents.Add(agent);
             await db.SaveChangesAsync();
         });
-        var session = new AgentSession(agent.Id, agent.Name, agent.Executors);
+        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities);
         Services.GetRequiredService<AgentConnections>().Add(session);
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         return new FakeAgent(this, agent.Id, session);

@@ -5,7 +5,7 @@ using Octopushy.Agent.V1;
 namespace Octopushy.Server.Agents;
 
 /// <summary>One connected agent's stream: messages to it go through a bounded queue.</summary>
-public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors)
+public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors, IReadOnlyList<string>? capabilities = null)
 {
     private readonly Channel<ServerMessage> _outbound = Channel.CreateBounded<ServerMessage>(new BoundedChannelOptions(256)
     {
@@ -20,6 +20,8 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
     public string Name { get; } = name;
 
     public IReadOnlyList<string> Executors { get; } = executors;
+
+    public IReadOnlyList<string> Capabilities { get; } = capabilities ?? [];
 
     public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UtcNow;
 

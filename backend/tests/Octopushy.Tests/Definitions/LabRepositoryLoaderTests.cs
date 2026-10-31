@@ -186,4 +186,57 @@ public class LabRepositoryLoaderTests
         Assert.False(entry.Valid);
         Assert.Contains(repository.Issues, i => i.Message.StartsWith("Invalid YAML"));
     }
+
+    [Fact]
+    public void A_lab_without_state_backends_is_valid_and_uses_the_built_in_state()
+    {
+        using var test = TestRepository.BuiltInState();
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        Assert.Null(repository.Guests[0].StateBackend);
+        Assert.Null(ProvisionInputs.Build(repository, repository.Guests[0], "abc").Backend);
+    }
+
+    [Fact]
+    public void A_guest_may_stay_built_in_in_a_lab_that_defines_an_external_backend()
+    {
+        using var test = TestRepository.BuiltInState();
+        test.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        Assert.Null(repository.Guests[0].StateBackend);
+    }
+
+    [Fact]
+    public void The_state_backend_only_counts_toward_the_inputs_of_a_guest_that_uses_one()
+    {
+        using var builtIn = TestRepository.BuiltInState();
+        var first = LabRepositoryLoader.Load(builtIn.Root);
+        builtIn.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
+        var second = LabRepositoryLoader.Load(builtIn.Root);
+        Assert.Equal(ProvisionInputs.Build(first, first.Guests[0], "abc").Hash, ProvisionInputs.Build(second, second.Guests[0], "abc").Hash);
+
+        using var external = TestRepository.Minimal();
+        var third = LabRepositoryLoader.Load(external.Root);
+        Assert.NotEqual(ProvisionInputs.Build(first, first.Guests[0], "abc").Hash, ProvisionInputs.Build(third, third.Guests[0], "abc").Hash);
+    }
+
+    [Fact]
+    public void The_built_in_backend_type_cannot_be_declared()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: octopushy }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.Issues, i => i.File == "octopushy.yaml");
+        Assert.False(repository.RepositoryValid);
+    }
+
+    [Fact]
+    public void A_guest_naming_an_undefined_backend_is_still_an_error()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write("octopushy.yaml", "schemaVersion: 1");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.Issues, i => i.Message.Contains("is not defined in octopushy.yaml"));
+    }
 }

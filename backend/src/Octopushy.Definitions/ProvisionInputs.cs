@@ -7,8 +7,8 @@ namespace Octopushy.Definitions;
 /// <summary>
 /// Everything a guest's provisioning run is built from, and a hash of it that changes exactly
 /// when a new plan or reporter setup could differ: the guest's definition, its host and
-/// installation settings, its template, its recipe and root files, its state backend,
-/// and its disk reporter overrides.
+/// installation settings, its template, its recipe and root files, its external state
+/// backend, and its disk reporter overrides.
 /// </summary>
 public sealed record ProvisionInputs(
     GuestDefinition Guest,
@@ -16,7 +16,7 @@ public sealed record ProvisionInputs(
     HostDefinition Host,
     RecipeDefinition Recipe,
     TemplateDefinition? Template,
-    StateBackendDefinition Backend,
+    StateBackendDefinition? Backend,
     JsonObject Variables,
     string Hash)
 {
@@ -31,7 +31,7 @@ public sealed record ProvisionInputs(
         var host = installation.Hosts[guest.Host];
         var recipe = repository.Recipes[guest.Recipe];
         var template = guest.Template is null ? null : repository.Templates[guest.Template];
-        var backend = repository.Settings!.StateBackends[guest.StateBackend];
+        var backend = guest.StateBackend is { } name ? repository.Settings!.StateBackends[name] : null;
 
         var variables = new JsonObject
         {
@@ -104,8 +104,11 @@ public sealed record ProvisionInputs(
             ["recipe"] = recipe.Json.DeepClone(),
             ["recipeFiles"] = TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
             ["rootFiles"] = TreeHash(repository.Root, recipe.Root),
-            ["backend"] = backend.Json.DeepClone(),
         };
+        if (backend is not null)
+        {
+            hashed["backend"] = backend.Json.DeepClone();
+        }
         // Reporter setup changes need a new run, but never become OpenTofu inputs.
         // Omit the key entirely for existing definitions to preserve their hashes.
         if (guest.Json["setup"]?["diskReporter"] is { } diskReporter)

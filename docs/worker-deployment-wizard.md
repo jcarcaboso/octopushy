@@ -71,8 +71,9 @@ NixOS worker itself.
 Open **Agents → Prepare worker deployment** (`/agents/prepare`).
 
 1. Select an already-configured installation and host. Choose the name/VMID,
-   sockets and cores, RAM, datastore, bridge, optional VLAN and existing
-   OpenTofu state backend.
+   sockets and cores, RAM, datastore, bridge and optional VLAN. OpenTofu state needs no
+   choice: Octopushy keeps it, and the field appears only if `octopushy.yaml` defines
+   external backends to choose from instead.
 2. Defaults are 1 socket × 2 cores, 2048 MiB RAM, 8 GiB boot disk and a
    **separate 16 GiB agent-state disk**, with DHCP networking.
 3. **Review deployment** shows the exact files and base commit. Confirm them,
@@ -174,7 +175,9 @@ run rootless tools or access workload backends.
 In the current LAN installation, the existing controller's agent listener and
 OpenTofu PostgreSQL endpoint were previously loopback-only. Those must be
 deliberately qualified before sending real workload assignments to a new VM.
-Do not substitute the controller's database, expose PostgreSQL casually, or
+The built-in state needs no such endpoint: it reaches workers on the agent channel, so
+they never connect to the controller's database. Otherwise, do not substitute the
+controller's database for an external backend, expose PostgreSQL casually, or
 disable TLS on the worker channel to make the smoke test pass.
 
 Before a real creation: retain a matched backup; verify an unused VMID and

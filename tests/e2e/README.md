@@ -25,6 +25,10 @@ to read-only credentials, fall back to privileged credentials, or use
 `-refresh=false`. See the [credential guide](../../docs/proxmox-credentials.md)
 and [pinned research](../../docs/research/proxmox-credential-split.md).
 
+`run.sh` keeps the guest's state in the backend and needs no state database or host
+networking. Set `E2E_TOOL_RUNTIME=docker` or `local` to run OpenTofu without podman, and
+`E2E_DB_CONTAINER_ENGINE=docker` when the development database runs in Docker.
+
 Offline fixture/import checks (no services, builds or harness execution):
 
 ```sh

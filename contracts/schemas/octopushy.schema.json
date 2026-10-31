@@ -14,13 +14,13 @@
       "additionalProperties": false
     },
     "stateBackends": {
-      "description": "Named OpenTofu backends that guests refer to.",
+      "description": "Optional external OpenTofu backends that guests can opt into with provision.state. Without one, Octopushy keeps a guest's state itself.",
       "type": "object",
       "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "type": { "description": "The OpenTofu backend type, such as http, pg, or s3.", "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "type": { "description": "The OpenTofu backend type, such as http, pg, or s3. octopushy is reserved for the built-in state.", "type": "string", "pattern": "^[a-z0-9_]+$", "not": { "const": "octopushy" } },
           "config": {
             "description": "Passed to tofu init as -backend-config. {stack} is replaced by the stack name. Never put credentials here: use env.",
             "type": "object",

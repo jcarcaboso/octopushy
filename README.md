@@ -91,7 +91,7 @@ role routing, approval gates, legacy-run handling, and the pinned provider's
 read-only refresh blocker. This routing foundation is not live rollout approval.
 
 The [remote-worker acceptance mode](tests/remote-worker/README.md) uses a
-separately enrolled worker and dedicated existing controller/state backend.
+separately enrolled worker and dedicated existing controller and external state backend.
 It does not install infrastructure or prove remote connectivity by itself.
 
 `just test` runs the disposable backend/Rust/frontend and offline Python suites.

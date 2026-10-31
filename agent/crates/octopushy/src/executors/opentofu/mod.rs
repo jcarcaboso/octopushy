@@ -7,6 +7,7 @@
 //! <work>/<attempt>/
 //!   attempt.json   marker (see attempts::workspace)
 //!   repo/          the extracted repository snapshot; `root` is inside it
+//!   state/         the built-in state, when there is no external backend
 //!   out/plan.bin   the saved plan
 //!   home/          HOME for OpenTofu
 //!   tmp/           TMPDIR (local runtime only; containers get a tmpfs)
@@ -14,6 +15,7 @@
 
 pub mod archive;
 pub mod plan;
+pub mod state;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -161,6 +163,7 @@ fn write_fresh(path: &Path, contents: &[u8]) -> Result<(), Failure> {
 
 struct Prepared {
     input: Input,
+    built_in: bool,
     root: PathBuf,
     out_dir: PathBuf,
     settings: Vec<(String, String)>,
@@ -176,6 +179,12 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
 
     // Backend.
     let kind = input.backend.kind.as_str();
+    let built_in = kind == state::BACKEND_TYPE;
+    if built_in && (!input.backend.config.is_empty() || input.backend.workspace.is_some()) {
+        return Err(Failure::msg(
+            "the built-in state takes no backend settings or workspace",
+        ));
+    }
     if kind.is_empty()
         || !kind
             .bytes()
@@ -284,7 +293,16 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         .map_err(anyhow::Error::from)?;
     write_fresh(&root.join(TFVARS_FILE), &tfvars)?;
     let mut backends = Map::new();
-    backends.insert(kind.to_owned(), json!({}));
+    if built_in {
+        state::restore(ctx)?;
+        state::record_root(ws, &root)?;
+        backends.insert(
+            "local".to_owned(),
+            json!({ "path": state::backend_path(ws, &root)? }),
+        );
+    } else {
+        backends.insert(kind.to_owned(), json!({}));
+    }
     let backend = json!({ "terraform": { "backend": backends } });
     write_fresh(&root.join(BACKEND_FILE), backend.to_string().as_bytes())?;
 
@@ -296,6 +314,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     ));
     Ok(Prepared {
         input,
+        built_in,
         root,
         out_dir,
         settings,
@@ -334,6 +353,8 @@ impl Tofu<'_> {
                     settings: self.prep.settings.clone(),
                     env: self.prep.env.clone(),
                     capture_stdout: capture,
+                    stderr_mark: (self.prep.built_in && step == "apply")
+                        .then_some(state::NOT_SAVED),
                 },
                 &self.ctx.log,
                 &self.ctx.cancel,
@@ -549,17 +570,46 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     tofu.version().await?;
     tofu.init(saved_lock.is_file()).await?;
     let plan_arg = tofu.path(&plan_path)?;
-    tofu.run_ok(
-        "apply",
-        vec![
-            "apply".into(),
-            "-input=false".into(),
-            "-no-color".into(),
-            plan_arg,
-        ],
-        false,
-    )
-    .await?;
+    let watcher = prep.built_in.then(|| {
+        tokio::spawn(state::watch(
+            ctx.workspace.clone(),
+            cfg.poll_interval,
+            ctx.snapshots.clone(),
+        ))
+    });
+    let applied = tofu
+        .run(
+            "apply",
+            vec![
+                "apply".into(),
+                "-input=false".into(),
+                "-no-color".into(),
+                plan_arg,
+            ],
+            false,
+        )
+        .await;
+    if let Some(watcher) = watcher {
+        watcher.abort();
+    }
+    let applied = applied?;
+    if applied.code != Some(0) {
+        // OpenTofu exits 1 after saving what it did. Anything else, such as being
+        // killed, leaves work done since its last write out of the state.
+        if prep.built_in && applied.code != Some(1) {
+            return Err(Failure::Uncertain(format!(
+                "{}; the state may not include its last changes, so inspect the guest before planning again",
+                step_failed("apply", &applied).message()
+            )));
+        }
+        if prep.built_in && applied.stderr_marked && !state::has_emergency(&ctx.workspace) {
+            return Err(Failure::Uncertain(
+                "OpenTofu could not save its state anywhere; inspect the guest before planning again"
+                    .into(),
+            ));
+        }
+        return Err(step_failed("apply", &applied));
+    }
 
     // The change is made; failing to read outputs does not undo it.
     let (outputs, sensitive) = match tofu

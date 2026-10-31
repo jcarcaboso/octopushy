@@ -50,7 +50,7 @@ public static partial class ManagedWorkerPreparation
         "Publication adds a normal guest and the versioned worker recipe to Git. It does not approve an infrastructure plan.",
         "VM bootstrap creates its private key locally. Ready requires the correlated agent to connect with mTLS, not merely a running VM.",
         "An independent upgraded control worker must provide managed-worker, nixos-rootfs, proxmox and opentofu executors.",
-        "Controller agent ingress and workload endpoints must be guest-reachable. A localhost PostgreSQL backend is not usable by this worker.",
+        "Controller agent ingress and workload endpoints must be guest-reachable. An external OpenTofu backend on localhost is not usable by this worker; the built-in state needs no endpoint.",
         "Live VMID availability, storage, network and capacity are checked by the existing preview/apply flow, not reserved by this wizard.",
         "Deleting an agent revokes enrollment, not its VM. Retirement verification only checks an already removed VM after its Git definition and enrollment are removed; automatic VM destruction and replacement remain disabled.",
     ];

@@ -41,6 +41,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<KeyEncryptionKey>();
 builder.Services.AddSingleton<Envelope>();
 builder.Services.AddScoped<VariableStore>();
+builder.Services.AddScoped<TofuStateStore>();
 builder.Services.AddSingleton<GitCli>();
 builder.Services.AddSingleton<RepositoryMirror>();
 builder.Services.AddSingleton<RevisionCache>();

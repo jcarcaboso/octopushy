@@ -76,7 +76,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         {
             ["PROXMOX_VE_API_TOKEN"] = SecretNames.ProxmoxToken,
         };
-        foreach (var (name, value) in inputs.Backend.Env)
+        foreach (var (name, value) in inputs.Backend?.Env ?? new Dictionary<string, EnvValue>())
         {
             if (value.Store is { } store)
             {
@@ -93,10 +93,15 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             }
         }
 
-        var config = inputs.Backend.Config.ToDictionary(
-            p => p.Key,
-            p => p.Value is JsonValue v && v.TryGetValue<string>(out var text) ? JsonValue.Create(text.Replace("{stack}", guest.Stack)) : p.Value?.DeepClone(),
-            StringComparer.Ordinal);
+        var backend = inputs.Backend is { } external
+            ? new BackendContext(
+                external.Type,
+                external.Config.ToDictionary(
+                    p => p.Key,
+                    p => p.Value is JsonValue v && v.TryGetValue<string>(out var text) ? JsonValue.Create(text.Replace("{stack}", guest.Stack)) : p.Value?.DeepClone(),
+                    StringComparer.Ordinal),
+                external.Workspace?.Replace("{stack}", guest.Stack))
+            : BackendContext.BuiltIn;
 
         var retire = guest.Retired || removal;
         var reporter = options.Value.DiskReporter;
@@ -139,7 +144,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 guest.Stack,
                 inputs.Recipe.Root,
                 inputs.Recipe.Image ?? options.Value.Tools.OpenTofuImage,
-                new BackendContext(inputs.Backend.Type, config, inputs.Backend.Workspace?.Replace("{stack}", guest.Stack)),
+                backend,
                 inputs.Variables,
                 env,
                 secretEnv),

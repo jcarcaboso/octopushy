@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use octopushy::attempts::logs::{AttemptLogger, LogBuffer};
 use octopushy::executors::opentofu::archive;
+use octopushy::executors::opentofu::state::{self, Snapshots};
 use octopushy::executors::{self, ExecContext, ExecutorConfig, Failure, Secrets, Success};
 use octopushy::masking::Masker;
 use octopushy::tools::{RuntimeKind, ToolRuntime};
@@ -24,6 +25,10 @@ set -u
 REC="@REC@"
 printf '%s\n' "$*" >> "$REC/args.log"
 printf '%s\n' "$PWD" >> "$REC/cwd.log"
+state=""
+if [ -f octopushy_backend.tf.json ] && grep -q '"local"' octopushy_backend.tf.json; then
+  state=$(sed -E 's/.*"path":"([^"]*)".*/\1/' octopushy_backend.tf.json)
+fi
 { echo "=== $1"; env | sort; } >> "$REC/env.log"
 last="${@: -1}"
 case "$1" in
@@ -44,6 +49,7 @@ case "$1" in
     out=""; destroy=0
     for a in "$@"; do case "$a" in -out=*) out="${a#-out=}" ;; -destroy) destroy=1 ;; esac; done
     echo "PLAN destroy=$destroy" > "$out"
+    if [ -n "$state" ] && [ -f "$state" ]; then cp "$state" "$REC/state-at-plan.json"; fi
     if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
     echo "Plan: 2 to add, 1 to change, 1 to destroy."
     echo "debug: provider token $PROXMOX_VE_API_TOKEN" >&2
@@ -64,6 +70,17 @@ JSON
     fi ;;
   apply)
     grep -q PLAN "$last" || { echo "not a plan: $last" >&2; exit 1; }
+    if [ -n "$state" ]; then
+      [ -f "$state" ] && cp "$state" "$REC/state-at-apply.json"
+      echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
+    fi
+    if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
+    if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
+    if [ -n "${FAKE_NOT_SAVED:-}" ]; then
+      echo 'Error: Failed to persist state to backend' >&2
+      for i in $(seq 1 30); do echo "more diagnostics $i" >&2; done
+    fi
+    if [ -n "${FAKE_QUOTED:-}" ]; then echo 'Error running command: Failed to persist state to backend' >&2; fi
     echo "Apply complete! Resources: 2 added. token=$PROXMOX_VE_API_TOKEN"
     exit "${FAKE_APPLY_EXIT:-0}" ;;
   output)
@@ -151,6 +168,7 @@ struct Run {
     result: Result<Success, Failure>,
     lines: Vec<(i32, String)>,
     workspace: PathBuf,
+    snapshots: Snapshots,
 }
 
 async fn run(
@@ -180,6 +198,7 @@ async fn run(
         workspace: workspace.clone(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel,
+        snapshots: Default::default(),
     };
     let result = executors::run(&fx.cfg, "opentofu", &ctx).await;
     let lines = buffer
@@ -190,6 +209,7 @@ async fn run(
         result,
         lines,
         workspace,
+        snapshots: ctx.snapshots,
     }
 }
 
@@ -224,6 +244,196 @@ fn env_of(fx: &Fixture, step: &str) -> HashMap<String, String> {
         .filter_map(|l| l.split_once('='))
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect()
+}
+
+fn built_in(extra_env: Value) -> Value {
+    let mut input = input(false, extra_env);
+    input["backend"] = json!({ "type": "octopushy", "config": {}, "workspace": null });
+    input["secretEnv"] = json!({ "PROXMOX_VE_API_TOKEN": "proxmox.token" });
+    input
+}
+
+#[tokio::test]
+async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
+    let fx = Fixture::new();
+    let state_v7 = b"{\"version\":4,\"serial\":7,\"lineage\":\"l\"}\n".to_vec();
+    let state = Artifact {
+        name: state::ARTIFACT.into(),
+        sha256: octopushy::tls::sha256_hex(&state_v7),
+        content: state_v7.clone(),
+    };
+
+    let preview = run(
+        &fx,
+        "p1",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![state.clone()],
+        CancellationToken::new(),
+    )
+    .await;
+    let success = preview.result.as_ref().unwrap();
+    assert_eq!(success.artifacts.len(), 1, "the plan, and no state");
+    assert_eq!(success.artifacts[0].name, "plan.tar.gz");
+    assert!(
+        preview.snapshots.take().is_none(),
+        "a preview writes nothing"
+    );
+    assert_eq!(fx.read("state-at-plan.json").into_bytes(), state_v7);
+    let backend: Value = serde_json::from_str(&fx.read("backend.json")).unwrap();
+    assert_eq!(
+        backend,
+        json!({ "terraform": { "backend": { "local": {
+            "path": "../../../../state/terraform.tfstate"
+        } } } })
+    );
+    let args = fx.read("args.log");
+    assert!(
+        !args.contains("workspace") && !args.contains("-backend-config"),
+        "{args}"
+    );
+
+    let plan = success.artifacts[0].clone();
+    let apply = run(
+        &fx,
+        "a1",
+        "apply",
+        &built_in(json!({ "FAKE_APPLY_SLEEP": "0.2" })),
+        repo_tar(None),
+        vec![plan, state.clone()],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(apply.result.is_ok(), "{:?}", apply.result);
+    assert_eq!(fx.read("state-at-apply.json").into_bytes(), state_v7);
+    let snapshot = apply.snapshots.take().expect("a snapshot during the apply");
+    assert!(String::from_utf8_lossy(&snapshot.content).contains("\"serial\":8"));
+    let left = state::read(&apply.workspace).expect("the state for the result");
+    assert_eq!(left.sha256, snapshot.sha256);
+    assert_no_secrets(&fx, &apply);
+}
+
+#[tokio::test]
+async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state() {
+    let fx = Fixture::new();
+    let preview = run(
+        &fx,
+        "p1",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let plan = preview.result.unwrap().artifacts.remove(0);
+    let apply = run(
+        &fx,
+        "a1",
+        "apply",
+        &built_in(json!({ "FAKE_ERRORED": "1", "FAKE_APPLY_EXIT": "1" })),
+        repo_tar(None),
+        vec![plan],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(apply.result.is_err());
+    let left = state::read(&apply.workspace).expect("the emergency state");
+    assert!(String::from_utf8_lossy(&left.content).contains("\"serial\":9"));
+}
+
+async fn failed_apply(fx: &Fixture, env: Value) -> Result<Success, Failure> {
+    let preview = run(
+        fx,
+        "p1",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let plan = preview.result.unwrap().artifacts.remove(0);
+    run(
+        fx,
+        "a1",
+        "apply",
+        &built_in(env),
+        repo_tar(None),
+        vec![plan],
+        CancellationToken::new(),
+    )
+    .await
+    .result
+}
+
+#[tokio::test]
+async fn an_apply_that_saved_its_state_nowhere_is_uncertain_however_much_follows() {
+    let fx = Fixture::new();
+    let result = failed_apply(
+        &fx,
+        json!({ "FAKE_NOT_SAVED": "1", "FAKE_APPLY_EXIT": "1" }),
+    )
+    .await;
+    assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn an_apply_that_was_killed_is_uncertain() {
+    let fx = Fixture::new();
+    let result = failed_apply(&fx, json!({ "FAKE_APPLY_EXIT": "137" })).await;
+    assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn output_that_quotes_the_failure_is_an_ordinary_failure() {
+    let fx = Fixture::new();
+    let result = failed_apply(&fx, json!({ "FAKE_QUOTED": "1", "FAKE_APPLY_EXIT": "1" })).await;
+    assert!(matches!(&result, Err(Failure::Failed { .. })), "{result:?}");
+}
+
+#[tokio::test]
+async fn built_in_state_refuses_settings_and_a_corrupt_state() {
+    let fx = Fixture::new();
+    let mut bad = built_in(json!({}));
+    bad["backend"]["workspace"] = json!("somewhere");
+    let refused = run(
+        &fx,
+        "s1",
+        "preview",
+        &bad,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&refused.result, Err(Failure::Failed { message, .. }) if message.contains("no backend settings")),
+        "{:?}",
+        refused.result
+    );
+
+    let corrupt = Artifact {
+        name: state::ARTIFACT.into(),
+        sha256: "0".repeat(64),
+        content: b"{}".to_vec(),
+    };
+    let refused = run(
+        &fx,
+        "s2",
+        "preview",
+        &built_in(json!({})),
+        repo_tar(None),
+        vec![corrupt],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&refused.result, Err(Failure::Failed { message, .. }) if message.contains("corrupt")),
+        "{:?}",
+        refused.result
+    );
 }
 
 #[tokio::test]

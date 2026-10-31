@@ -251,7 +251,9 @@ as well; verify compatibility with the actual guest images before adoption.
   operator-managed safety policy, resource projections, observations, notification
   delivery records, and schedule cursors.
 - **OpenTofu backend:** authoritative infrastructure state and backend locks.
-  Do not build a replacement state backend.
+  Do not build a replacement state backend. *Superseded: the
+  [built-in state](adr/0003-built-in-opentofu-state.md) is now the default, so users
+  configure none; external backends remain an option.*
 - **Agents:** bounded temporary workspace and durable local execution journal;
   neither the authoritative configuration store nor the only copy of evidence.
 - **Secrets:** references in definition snapshots; protected files on the selected agent

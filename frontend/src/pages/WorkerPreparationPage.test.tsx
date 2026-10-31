@@ -229,9 +229,35 @@ it("does not confuse a local worker with deployment readiness", async () => {
   expect(screen.queryByRole("button", { name: /^Deploy/ })).not.toBeInTheDocument();
 });
 
+it("offers no state choice without an external backend and defaults to the built-in state with one", async () => {
+  const user = userEvent.setup();
+  const review = () => ({ address: "home/cluster/octopushy-worker-01", generation: "g", branch: "main", baseCommit: "a".repeat(40), reviewSha256: "d".repeat(64), alreadyExists: false, files: {} });
+  const { requests } = mockApi({
+    "GET /api/managed-worker-preparation": () => ({ ...options(), stateBackends: [], deploymentBlockedReason: null, existingWorkers: [] }),
+    "POST /api/managed-worker-preparation/review": review,
+  });
+  const first = renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  await user.click(await screen.findByRole("button", { name: "Review deployment" }));
+  expect(screen.queryByLabelText("OpenTofu state")).not.toBeInTheDocument();
+  await screen.findByText("Add worker to repository");
+  expect(requests.filter((r) => r.method === "POST")[0].body).toMatchObject({ stateBackend: null });
+  first.unmount();
+
+  const { requests: chosen } = mockApi({
+    "GET /api/managed-worker-preparation": () => ({ ...options(), stateBackends: ["postgres"], deploymentBlockedReason: null, existingWorkers: [] }),
+    "POST /api/managed-worker-preparation/review": review,
+  });
+  renderAt(<WorkerPreparationPage />, { path: "/agents/prepare", route: "/agents/prepare" });
+  expect(await screen.findByLabelText("OpenTofu state")).toHaveValue("");
+  await user.selectOptions(screen.getByLabelText("OpenTofu state"), "postgres");
+  await user.click(screen.getByRole("button", { name: "Review deployment" }));
+  await screen.findByText("Add worker to repository");
+  expect(chosen.filter((r) => r.method === "POST")[0].body).toMatchObject({ stateBackend: "postgres" });
+});
+
 it("reviews the exact repository files, requires confirmation and publishes without approving", async () => {
   const user = userEvent.setup();
-  const current = { ...options(), stateBackends: ["postgres"], deploymentBlockedReason: null, existingWorkers: [] };
+  const current = { ...options(), stateBackends: [], deploymentBlockedReason: null, existingWorkers: [] };
   const { requests } = mockApi({
     "GET /api/managed-worker-preparation": () => current,
     "POST /api/managed-worker-preparation/review": () => ({
@@ -252,7 +278,7 @@ it("reviews the exact repository files, requires confirmation and publishes with
   expect(await screen.findByText(/Worker definition published/)).toBeInTheDocument();
   const mutation = requests.filter((r) => r.method === "POST");
   expect(mutation.map((r) => r.path)).toEqual(["/api/managed-worker-preparation/review", "/api/managed-worker-preparation/publish"]);
-  expect(mutation[1].body).toMatchObject({ reviewSha256: "d".repeat(64), confirmRepositoryWrite: true, draft: { stateBackend: "postgres", selection: { vmid: 901, sockets: 1, cores: 2 } } });
+  expect(mutation[1].body).toMatchObject({ reviewSha256: "d".repeat(64), confirmRepositoryWrite: true, draft: { stateBackend: null, selection: { vmid: 901, sockets: 1, cores: 2 } } });
   expect(screen.getByRole("link", { name: "sync" })).toHaveAttribute("href", "/repository");
 });
 
