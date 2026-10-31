@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "mock-proxmox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "octopushy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "octopushy-disk-reporter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "octopushy-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "prost",
  "protox",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "octopushy-proxmox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hyper",
  "mock-proxmox",

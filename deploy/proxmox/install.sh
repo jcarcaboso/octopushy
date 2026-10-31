@@ -44,7 +44,7 @@ for tool in pct pveam pvesm pvesh curl; do
 done
 
 say "Octopushy on a Proxmox LXC container"
-ask OCTOPUSHY_VERSION "Version to install (a release, main, or sha-<commit>)" 0.1.0
+ask OCTOPUSHY_VERSION "Version to install (a release, main, or sha-<commit>)" 0.2.0
 OCTOPUSHY_REF=${OCTOPUSHY_REF:-$(ref_for "$OCTOPUSHY_VERSION")}
 
 ask CTID "Container ID" "$(pvesh get /cluster/nextid)"
