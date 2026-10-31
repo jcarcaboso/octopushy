@@ -14,15 +14,9 @@ public sealed record RevisionDto(
     bool Valid,
     int ErrorCount,
     int WarningCount,
-    DateTimeOffset? TrustedAt,
-    string? TrustedBy,
     bool IsCurrentSource);
 
 public sealed record RevisionDetailDto(RevisionDto Revision, IReadOnlyList<IssueDto> Issues);
-
-public sealed record RevisionReviewDto(RevisionDto Revision, string? BaseCommit, string Diff, bool Truncated, bool CanTrust, string? BlockedReason);
-
-public sealed record TrustRevisionRequest(string Commit, string? BaseCommit);
 
 public sealed record RepositoryDto(
     string? Url,
@@ -167,6 +161,19 @@ public sealed record GuestSummaryDto(
     RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun);
 
+/// <summary>
+/// The endpoints an installation declares now, and those not trusted yet. Credentials are sent
+/// only to trusted endpoints, so an installation with untrusted ones waits for an operator.
+/// </summary>
+public sealed record InstallationTrustDto(
+    IReadOnlyList<string> Endpoints,
+    IReadOnlyList<string> Untrusted,
+    DateTimeOffset? TrustedAt,
+    string? TrustedBy);
+
+/// <summary>The endpoints the operator was shown; trust is refused when the installation declares others by now.</summary>
+public sealed record TrustInstallationRequest(IReadOnlyList<string> Endpoints);
+
 public sealed record InstallationSummaryDto(
     Guid Id,
     string Address,
@@ -183,7 +190,8 @@ public sealed record InstallationSummaryDto(
     string? ProxmoxVersion,
     IReadOnlyList<ObservedHostDto> Hosts,
     IReadOnlyList<GuestSummaryDto> Guests,
-    int UnmanagedCount);
+    int UnmanagedCount,
+    InstallationTrustDto Trust);
 
 public sealed record LabDto(
     Guid Id,

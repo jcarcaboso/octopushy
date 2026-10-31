@@ -689,6 +689,77 @@
         }
       }
     },
+    "/api/installations/{id}/trust": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "trustInstallation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustInstallationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationTrustDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/attempts/{id}/log": {
       "get": {
         "tags": [
@@ -1043,138 +1114,6 @@
           },
           "404": {
             "description": "Not Found"
-          }
-        }
-      }
-    },
-    "/api/repository/revisions/{id}/review": {
-      "get": {
-        "tags": [
-          "Repository"
-        ],
-        "operationId": "reviewRevision",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevisionReviewDto"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/repository/revisions/{id}/trust": {
-      "post": {
-        "tags": [
-          "Repository"
-        ],
-        "operationId": "trustRevision",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TrustRevisionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevisionDto"
-                }
-              }
-            }
           }
         }
       }
@@ -2604,6 +2543,594 @@
         }
       }
     },
+    "/api/repository/drafts": {
+      "get": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "listDrafts",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DraftSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "createDraft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftDetailDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}": {
+      "get": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "getDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "discardDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}/file": {
+      "get": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "getDraftFile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftFileContentDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}/changes": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "changeDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftChangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}/update": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "updateDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}/validate": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "validateDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftValidationDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/repository/drafts/{id}/publish": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "publishDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftPublishedDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/variables": {
       "get": {
         "tags": [
@@ -3309,6 +3836,21 @@
           }
         }
       },
+      "ChangedPath": {
+        "required": [
+          "path",
+          "change"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "change": {
+            "type": "string"
+          }
+        }
+      },
       "CreatedOperatorToken": {
         "required": [
           "id",
@@ -3431,6 +3973,332 @@
           }
         },
         "additionalProperties": false
+      },
+      "DraftChangesRequest": {
+        "required": [
+          "expectedHead",
+          "changes"
+        ],
+        "type": "object",
+        "properties": {
+          "expectedHead": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftFileChange"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftCreateRequest": {
+        "required": [
+          "title"
+        ],
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftDetailDto": {
+        "required": [
+          "draft",
+          "branch",
+          "editBlockedReason",
+          "publishBlockedReason",
+          "changes",
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/DraftSummaryDto"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "editBlockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "publishBlockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedPath"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftFileDto"
+            }
+          }
+        }
+      },
+      "DraftFileChange": {
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "DraftFileContentDto": {
+        "required": [
+          "path",
+          "headCommit",
+          "exists",
+          "kind",
+          "size",
+          "content",
+          "baseExists",
+          "baseContent",
+          "editable"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "headCommit": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "size": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "content": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "baseExists": {
+            "type": "boolean"
+          },
+          "baseContent": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "editable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DraftFileDto": {
+        "required": [
+          "path",
+          "size",
+          "kind"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "DraftPublishRequest": {
+        "required": [
+          "expectedHead",
+          "message",
+          "confirmRepositoryWrite"
+        ],
+        "type": "object",
+        "properties": {
+          "expectedHead": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "confirmRepositoryWrite": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftPublishedDto": {
+        "required": [
+          "commit",
+          "draft"
+        ],
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/DraftSummaryDto"
+          }
+        }
+      },
+      "DraftSummaryDto": {
+        "required": [
+          "id",
+          "title",
+          "status",
+          "baseCommit",
+          "headCommit",
+          "changedFiles",
+          "behind",
+          "conflictPaths",
+          "createdAt",
+          "updatedAt",
+          "publishedCommit",
+          "publishedAt",
+          "publishedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "headCommit": {
+            "type": "string"
+          },
+          "changedFiles": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "behind": {
+            "type": "boolean"
+          },
+          "conflictPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "publishedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "publishedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "publishedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "DraftUpdateRequest": {
+        "required": [
+          "expectedHead"
+        ],
+        "type": "object",
+        "properties": {
+          "expectedHead": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftValidationDto": {
+        "required": [
+          "comparedWith",
+          "valid",
+          "newIssues",
+          "formatIssues"
+        ],
+        "type": "object",
+        "properties": {
+          "comparedWith": {
+            "type": "string"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "newIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "formatIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          }
+        }
       },
       "GuestDetailDto": {
         "required": [
@@ -3799,7 +4667,8 @@
           "proxmoxVersion",
           "hosts",
           "guests",
-          "unmanagedCount"
+          "unmanagedCount",
+          "trust"
         ],
         "type": "object",
         "properties": {
@@ -3882,6 +4751,45 @@
           "unmanagedCount": {
             "type": "integer",
             "format": "int32"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/InstallationTrustDto"
+          }
+        }
+      },
+      "InstallationTrustDto": {
+        "required": [
+          "endpoints",
+          "untrusted",
+          "trustedAt",
+          "trustedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "untrusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "trustedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4698,8 +5606,6 @@
           "valid",
           "errorCount",
           "warningCount",
-          "trustedAt",
-          "trustedBy",
           "isCurrentSource"
         ],
         "type": "object",
@@ -4745,58 +5651,8 @@
             "type": "integer",
             "format": "int32"
           },
-          "trustedAt": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "format": "date-time"
-          },
-          "trustedBy": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "isCurrentSource": {
             "type": "boolean"
-          }
-        }
-      },
-      "RevisionReviewDto": {
-        "required": [
-          "revision",
-          "baseCommit",
-          "diff",
-          "truncated",
-          "canTrust",
-          "blockedReason"
-        ],
-        "type": "object",
-        "properties": {
-          "revision": {
-            "$ref": "#/components/schemas/RevisionDto"
-          },
-          "baseCommit": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "diff": {
-            "type": "string"
-          },
-          "truncated": {
-            "type": "boolean"
-          },
-          "canTrust": {
-            "type": "boolean"
-          },
-          "blockedReason": {
-            "type": [
-              "null",
-              "string"
-            ]
           }
         }
       },
@@ -5204,21 +6060,17 @@
           }
         }
       },
-      "TrustRevisionRequest": {
+      "TrustInstallationRequest": {
         "required": [
-          "commit",
-          "baseCommit"
+          "endpoints"
         ],
         "type": "object",
         "properties": {
-          "commit": {
-            "type": "string"
-          },
-          "baseCommit": {
-            "type": [
-              "null",
-              "string"
-            ]
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

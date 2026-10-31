@@ -44,6 +44,63 @@ public sealed partial class RunEngine
         };
     }
 
+    /// <summary>
+    /// Stops a worker that is being removed from taking work, then waits until none of its
+    /// attempts is active or unresolved. Returns true when the step is done.
+    /// </summary>
+    private async Task<bool> DrainWorkerAsync(OctopushyDb db, Run run, Step step, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        step.StartedAt ??= now;
+        var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, ct);
+        var agent = binding.AgentId is { } id ? await db.Agents.SingleOrDefaultAsync(a => a.Id == id, ct) : null;
+        if (agent is not null)
+        {
+            agent.Draining = true;
+            if (await db.Attempts.AnyAsync(a => a.AgentId == agent.Id
+                && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
+                    || a.Mutating && a.Status == AttemptStatuses.Uncertain && a.Step!.Status == StepStatuses.Uncertain), ct))
+            {
+                step.Status = StepStatuses.Running;
+                step.Detail = run.Detail = "Waiting for the worker to finish its current work; it takes no new work.";
+                run.Status = RunStatuses.Running;
+                return false;
+            }
+        }
+        step.Status = StepStatuses.Succeeded;
+        step.FinishedAt = now;
+        step.Detail = agent is null ? "The worker's enrollment was already removed." : "The worker is drained and takes no new work.";
+        return true;
+    }
+
+    /// <summary>Removes the enrollment of a worker whose VM was verified absent; its identity stays in history.</summary>
+    private async Task<bool> RevokeWorkerAsync(OctopushyDb db, Run run, Step step, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        step.StartedAt ??= now;
+        step.FinishedAt = now;
+        if (run.Steps.SingleOrDefault(s => s.Name == StepNames.VerifyAbsent)?.Status != StepStatuses.Succeeded)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "The VM was not verified absent, so the worker keeps its enrollment.";
+            return false;
+        }
+        var binding = await db.ManagedWorkers.SingleAsync(w => w.ResourceId == run.ResourceId, ct);
+        if (binding.AgentId is { } id && await db.Agents.AnyAsync(a => a.Id == id, ct))
+        {
+            connections.Disconnect(id);
+            await db.Agents.Where(a => a.Id == id).ExecuteDeleteAsync(ct);
+            step.Detail = "The worker's enrollment was removed; its identity is kept in history.";
+        }
+        else
+        {
+            step.Detail = "The worker's enrollment was already removed.";
+        }
+        step.Status = StepStatuses.Succeeded;
+        signal.Wake();
+        return true;
+    }
+
     private async Task ApplyWorkerEffectsAsync(OctopushyDb db, Run run, Step step, Attempt attempt, JsonNode? outputs, CancellationToken ct)
     {
         if (step.Name is StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs)

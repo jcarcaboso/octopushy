@@ -48,7 +48,7 @@ progress without replacing those documents or changing the
 | Guest disk growth | Opt-in `nixos-rootfs` executor, separate growth/capacity verification, targeted retry preserving successful infrastructure work | Only the documented NixOS GPT/ext4 layout via QEMU guest-agent execution; not generic disks, filesystems, or scripts |
 | Remote-worker readiness | Canonical paths, truthful OpenTofu capability advertisement, clearer queue reasons, opt-in remote acceptance harness | Harness configuration is tested; an actual remote run remains pending |
 | Credentials | Encrypted candidate versions, explicit promotion/revocation, pinned run bindings, API/UI controls and migration tests | Not automatic credential verification, guest SSH management, upstream revocation, or master-key rotation |
-| Execution trust | Explicit exact-revision review/trust, repository-source binding, blocked execution before trust, and operator attribution | Separate from apply approval; not signed-commit automation, a sandbox, or purpose/destination credential restrictions |
+| Installation trust | Credentials go only to Proxmox endpoints an operator trusted, once per new installation or endpoint; work from a previous repository source is not sent | Separate from apply approval; revisions are not reviewed in Octopushy; not signed-commit automation, a sandbox, or purpose/destination credential restrictions |
 
 ### Credential milestone in practical terms
 
@@ -156,13 +156,17 @@ authorization to restore or upgrade a retained installation.
 
 ### Trusted-revision slice — October 23, 2026
 
+*Replaced on October 28, 2026 by [installation trust](installation-trust.md):
+revisions no longer need trust; a new Proxmox installation or endpoint does. The
+record below describes the replaced design.*
+
 This bounded change implements the manual execution-trust part of T1 in the
 [foundations plan](review/foundations-plan.md). It separates revision discovery
 and validation from eligibility for credential-bearing execution. Trust records
 the exact loaded revision, repository-source generation, operator and time;
 apply approval remains separate.
 
-The [operator guide](trusted-revisions.md) covers review, blocked work,
+The operator guide covered review, blocked work,
 source changes and upgrade limits. Historical revisions are not automatically
 trusted, and missing legacy provenance is not reconstructed from current settings.
 Already delivered work retains its existing mutation/uncertainty rules.
@@ -360,7 +364,7 @@ documentation push is not that upgrade.
 ### 1. Establish managed guest access
 
 **Prerequisite:** complete the remaining bounded trust controls described above.
-The list below is not permission to skip them simply because revision trust and
+The list below is not permission to skip them simply because installation trust and
 the synthetic recovery rehearsal are available.
 
 Start with access to one disposable NixOS guest, not a generic SSH job runner.

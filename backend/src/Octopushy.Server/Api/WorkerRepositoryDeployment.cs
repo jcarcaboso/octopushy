@@ -118,13 +118,17 @@ public static class WorkerRepositoryDeployment
             throw new GitException("Select a state backend configured in this repository.");
         var address = $"{installation.Address}/{selection.Name}";
         var existing = repository.Guests.SingleOrDefault(g => g.Address == address);
-        var durable = await db.Resources.AsNoTracking().Include(r => r.ManagedWorker)
-            .SingleOrDefaultAsync(r => r.Address == address && r.ManagedWorker != null, ct);
-        if (durable is not null && existing?.ManagedWorker?.Generation != durable.ManagedWorker!.Generation)
-            throw new GitException(durable.RetiredAt is not null
-                ? "This name belongs to a retired worker generation. Choose a new name and unused VMID; historical identities are not reused."
+        var bound = await db.Resources.AsNoTracking().Where(r => r.Address == address && r.ManagedWorker != null)
+            .Select(r => new { r.RetiredAt, r.MissingSince, r.ManagedWorker!.Generation }).ToListAsync(ct);
+        if (bound.SingleOrDefault(b => b.RetiredAt is null) is { } owner && existing?.ManagedWorker?.Generation != owner.Generation)
+            throw new GitException(owner.MissingSince is not null
+                ? "This worker's folder was deleted, but its removal has not finished. Complete the removal before reusing the name."
                 : "A managed worker already owns this resource. Restore its existing definition; replacement is disabled.");
-        var generation = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes($"{revision.SourceId}/worker-v1/{address}"))[..16]);
+        // A name freed by a verified retirement can be reused, but each reuse is a new generation:
+        // retired identities (labels, enrollment, certificates) are never revived.
+        var retired = bound.Count(b => b.RetiredAt is not null);
+        var seed = $"{revision.SourceId}/worker-v1/{address}" + (retired == 0 ? "" : $"#{retired}");
+        var generation = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(seed))[..16]);
         if (existing is not null)
         {
             if (existing.ManagedWorker is not { } worker || worker.Generation != generation

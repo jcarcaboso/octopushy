@@ -1,9 +1,10 @@
-import { Eye } from "lucide-react";
+import { Eye, ShieldCheck } from "lucide-react";
 import { isNotFound } from "../api/client";
 import { Link, useParams } from "react-router";
-import { useInstallation, useObserveInstallation } from "../api/queries";
-import type { ObservedGuest } from "../api/types";
+import { useInstallation, useObserveInstallation, useTrustInstallation } from "../api/queries";
+import type { InstallationSummary, ObservedGuest } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
+import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { DefinitionView } from "../components/DefinitionView";
 import { GuestTable } from "../components/GuestTable";
@@ -72,6 +73,44 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
   );
 }
 
+/** Asks for trust while the installation declares an endpoint its credentials were never sent to. */
+function TrustCallout({ installation }: { installation: InstallationSummary }) {
+  const trust = useTrustInstallation();
+  const { endpoints, untrusted, trustedAt } = installation.trust;
+  if (!installation.valid || untrusted.length === 0) return null;
+  return (
+    <div id="trust">
+      <Callout
+        kind="warning"
+        title={trustedAt ? "New Proxmox endpoint" : "New Proxmox installation"}
+        actions={
+          <button
+            type="button"
+            className="button button--primary"
+            disabled={trust.isPending}
+            onClick={() => trust.mutate({ id: installation.id, endpoints })}
+          >
+            <ShieldCheck size={15} aria-hidden="true" />
+            {trust.isPending ? "Trusting…" : "Trust installation"}
+          </button>
+        }
+      >
+        <p>
+          Plans, applies, and observations wait until you trust{" "}
+          {untrusted.map((endpoint, i) => (
+            <span key={endpoint}>
+              {i > 0 ? ", " : null}
+              <span className="mono break">{endpoint}</span>
+            </span>
+          ))}
+          . Its Proxmox credentials are sent only to trusted endpoints; later commits need no trust unless an endpoint changes.
+        </p>
+        <ErrorMessage error={trust.error} />
+      </Callout>
+    </div>
+  );
+}
+
 export function InstallationPage() {
   const { id = "" } = useParams();
   const { data, error, isPending } = useInstallation(id);
@@ -127,6 +166,7 @@ export function InstallationPage() {
         }
       />
       <div className="stack stack--large">
+        <TrustCallout installation={installation} />
         <ErrorMessage error={observe.error} />
         <WaitingNote text={installation.observeWaiting} />
         <ObserveError installation={installation} />
@@ -156,6 +196,17 @@ export function InstallationPage() {
                 items={[
                   { term: "Type", value: installation.type ? humanize(installation.type) : "—" },
                   { term: "Endpoint", value: <span className="mono break">{installation.endpoint ?? "—"}</span> },
+                  {
+                    term: "Trust",
+                    value: installation.trust.trustedAt ? (
+                      <>
+                        {installation.trust.untrusted.length > 0 ? <Badge tone="warning">New endpoint</Badge> : <Badge tone="success">Trusted</Badge>}{" "}
+                        by {installation.trust.trustedBy} · <RelativeTime value={installation.trust.trustedAt} />
+                      </>
+                    ) : (
+                      <Badge tone="warning">Not trusted</Badge>
+                    ),
+                  },
                   {
                     term: "TLS",
                     value:

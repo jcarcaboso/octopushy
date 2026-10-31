@@ -47,7 +47,7 @@ printf '%s\n' '{"draining":true}' |
   octopushy operator request /api/agents/AGENT_UUID --method PATCH --json-stdin
 ```
 
-Creating a grant does not trust a repository revision or approve any run.
+Creating a grant does not trust an installation or approve any run.
 Mutations still pass through the existing authenticated APIs, trust checks and
 saved-plan approval. Requests record the account and named grant as the actor.
 Do not automate approvals without reviewing their exact target and fingerprints.

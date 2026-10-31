@@ -318,6 +318,19 @@ public sealed partial class RunEngine(
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
+            if (step.Name == StepNames.DrainWorker)
+            {
+                if (await DrainWorkerAsync(db, run, step, cancellationToken)) continue;
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
+            if (step.Name == StepNames.RevokeWorker)
+            {
+                if (await RevokeWorkerAsync(db, run, step, cancellationToken)) continue;
+                Finish(run, RunStatuses.Failed, step.Detail);
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
             if (step.Name == StepNames.WaitUpdatedWorker)
             {
                 var update = context.WorkerUpdate ?? throw new RunException("Missing worker update context.");
@@ -434,7 +447,7 @@ public sealed partial class RunEngine(
             Finish(run, RunStatuses.Failed, step.Detail);
             return false;
         }
-        if (context.ManagedWorker is not null && ManagedWorkerSafety.DestructivePlan(outputs))
+        if (context.ManagedWorker is not null && ManagedWorkerSafety.DestructivePlan(outputs) && !ManagedWorkerSafety.IsWorkerRemoval(run, context))
         {
             step.Status = StepStatuses.Failed;
             step.Detail = "Managed worker deletion/replacement is not supported; preserve the state disk and binding.";

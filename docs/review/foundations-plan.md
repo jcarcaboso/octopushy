@@ -9,7 +9,7 @@ the six rules in *progress and next steps* and adds the rules in section 2.
 **Progress note (October 23, 2026):** this review snapshot remains historical.
 The fixes/implementation were published in PR #1, hosted baseline CI in PR #3,
 and the synthetic matched-recovery rehearsal in PR #4; all three are merged.
-PR #5 is also merged and implements manual [T1](../trusted-revisions.md), not
+PR #5 is also merged and implements manual T1 (since replaced by [installation trust](../installation-trust.md)), not
 signed-commit automation or the whole trust wave. The current
 [T2 routing foundation](../proxmox-credentials.md) separates credential roles,
 but source inspection found a provider refresh permission blocker; live/full

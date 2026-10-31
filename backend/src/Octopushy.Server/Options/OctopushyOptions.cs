@@ -36,6 +36,15 @@ public sealed class OctopushyOptions
     public DiskReporterOptions DiskReporter { get; set; } = new();
 
     public WorkerUpdateOptions WorkerUpdates { get; set; } = new();
+
+    public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
+}
+
+/// <summary>The integrated editor. Drafts always work; pushing them to the lab repository is opt-in.</summary>
+public sealed class RepositoryEditorOptions
+{
+    /// <summary>Explicitly allow publishing drafts as commits pushed with the configured repository credential.</summary>
+    public bool PublishEnabled { get; set; }
 }
 
 /// <summary>One operator-published NixOS closure export. Disabled until image/boot qualification.</summary>

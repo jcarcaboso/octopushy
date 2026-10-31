@@ -20,12 +20,11 @@ public class WorkerPreparationTests(PostgresFixture postgres)
         using var anonymous = server.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(Path)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsJsonAsync(Path, Selection(Guid.NewGuid()))).StatusCode);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         Assert.Null((await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!.Revision);
         await server.SyncAsync();
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.True(options.Revision!.IsCurrentSource);
-        Assert.Null(options.Revision.TrustedAt);
         Assert.Null(options.PreparationBlockedReason);
         Assert.False(Assert.Single(options.Installations).VerifyTls);
         Assert.False(options.Installations[0].SharedToken);
@@ -59,7 +58,6 @@ public class WorkerPreparationTests(PostgresFixture postgres)
         Assert.Equal(runsBefore, await client.GetStringAsync("/api/runs"));
         Assert.Equal(agentsBefore, await client.GetStringAsync("/api/agents"));
         Assert.Equal(tokensBefore, await client.GetStringAsync("/api/agents/tokens"));
-        Assert.Null((await client.GetFromJsonAsync<RepositoryDto>("/api/repository"))!.Revision!.TrustedAt);
 
         server.Repository.Write($"docs/worker-drafts/{draft.FileName}", draft.Content);
         Assert.Single(LabRepositoryLoader.Load(server.Repository.Root).Guests);
@@ -75,7 +73,7 @@ public class WorkerPreparationTests(PostgresFixture postgres)
     public async Task Validation_rejects_unconfigured_targets_collisions_bad_hardware_and_extra_authority_fields()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         await server.SyncAsync();
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         var valid = Selection(options.Revision!.Id);
@@ -122,7 +120,7 @@ public class WorkerPreparationTests(PostgresFixture postgres)
     public async Task Stale_heads_previous_sources_and_disconnected_sources_cannot_be_used_for_preparation()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         await server.SyncAsync();
         var original = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         var selection = Selection(original.Revision!.Id);
@@ -143,7 +141,6 @@ public class WorkerPreparationTests(PostgresFixture postgres)
         var reconnected = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         Assert.Equal(current.Revision.Commit, reconnected.Revision!.Commit);
         Assert.NotEqual(current.Revision.Id, reconnected.Revision.Id);
-        Assert.Null(reconnected.Revision.TrustedAt);
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(Path, selection)).StatusCode);
         (await client.PostAsJsonAsync(Path, selection with { RevisionId = reconnected.Revision.Id })).EnsureSuccessStatusCode();
         (await client.PutAsJsonAsync("/api/repository",
@@ -169,7 +166,7 @@ public class WorkerPreparationTests(PostgresFixture postgres)
                 bridges: [spare-bridge]
             """);
         await using var server = await ServerHarness.StartAsync(postgres, repository, withSecrets: false);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         await server.SyncAsync();
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         var installation = Assert.Single(options.Installations);
@@ -195,7 +192,7 @@ public class WorkerPreparationTests(PostgresFixture postgres)
             .Replace("datastores: { images: local, disks: local-lvm }", "datastores: {}")
             .Replace("bridges: [vmbr0]", "bridges: []"));
         await using var server = await ServerHarness.StartAsync(postgres, repository, withSecrets: false);
-        using var client = await TrustedRevisionTests.AuthenticateAsync(server);
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
         await server.SyncAsync();
         var options = (await client.GetFromJsonAsync<WorkerPreparationDto>(Path))!;
         var host = Assert.Single(Assert.Single(options.Installations).Hosts);

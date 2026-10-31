@@ -19,6 +19,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.104.5",
     "lucide-react": "^1.60.0",
+    "monaco-editor": "0.57.0",
     "openapi-fetch": "^0.17.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

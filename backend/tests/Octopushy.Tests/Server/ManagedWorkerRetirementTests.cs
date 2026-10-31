@@ -111,7 +111,6 @@ public class ManagedWorkerRetirementTests(PostgresFixture postgres)
     [Theory]
     [InlineData("definition-present", HttpStatusCode.Conflict)]
     [InlineData("enrollment-present", HttpStatusCode.Conflict)]
-    [InlineData("untrusted", HttpStatusCode.Conflict)]
     [InlineData("source-changed", HttpStatusCode.Conflict)]
     [InlineData("endpoint-changed", HttpStatusCode.Conflict)]
     [InlineData("wrong-generation", HttpStatusCode.Conflict)]
@@ -132,8 +131,7 @@ public class ManagedWorkerRetirementTests(PostgresFixture postgres)
         {
             File.Delete(Path.Combine(repo.Root, Definitions.ManagedWorkerDefinitionTests.GuestPath));
             server.Commit("Remove worker before verifying retirement");
-            if (reason == "untrusted") await server.SyncAsync();
-            else await server.SyncAndTrustAsync(http);
+            await server.SyncAndTrustAsync(http);
         }
         if (reason == "source-changed")
             await server.WithDbAsync(db => db.RepositorySettings.ExecuteUpdateAsync(u => u.SetProperty(s => s.SourceId, Guid.NewGuid())));
@@ -213,7 +211,7 @@ public class ManagedWorkerRetirementTests(PostgresFixture postgres)
         return preparation["existingWorkers"]!.AsArray().Single(w => w!["address"]!.GetValue<string>() == Guest)!;
     }
 
-    private static async Task<Guid> ReadyAsync(ServerHarness server, HttpClient http, FakeAgent control)
+    internal static async Task<Guid> ReadyAsync(ServerHarness server, HttpClient http, FakeAgent control)
     {
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
