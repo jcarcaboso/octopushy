@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Address and MAC patterns end with a negative lookahead because $ alone can accept a trailing newline.",
+  "title": "technitium-lxc inputs",
+  "type": "object",
+  "properties": {
+    "hardware": {
+      "type": "object",
+      "properties": {
+        "cores": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "memory": { "description": "MiB", "type": "integer", "minimum": 256 },
+        "swap": { "description": "MiB", "type": "integer", "minimum": 0 },
+        "disks": {
+          "description": "The root disk. Declare other storage as mount points.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "size": { "description": "GiB", "type": "integer", "minimum": 1 },
+              "datastore": { "type": "string" }
+            },
+            "required": ["size"],
+            "additionalProperties": false
+          }
+        },
+        "mountPoints": {
+          "description": "Changing one replaces the container, and Proxmox refuses that while it is protected.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/mountPoint" },
+          "contains": {
+            "description": "/etc/dns holds the server's identity, so it lives on a volume of its own.",
+            "type": "object",
+            "properties": { "path": { "const": "/etc/dns" } },
+            "required": ["path"]
+          }
+        }
+      },
+      "required": ["cores", "memory", "disks", "mountPoints"],
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "bridge": { "type": "string" },
+        "mode": {
+          "const": "static",
+          "description": "A DNS server needs an address that does not depend on another service."
+        },
+        "address": { "$ref": "#/$defs/ipv4Cidr" },
+        "gateway": { "$ref": "#/$defs/ipv4" },
+        "vlan": { "type": "integer", "minimum": 1, "maximum": 4094 },
+        "mac": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f][02468AaCcEe](:[0-9A-Fa-f]{2}){5}(?![\\s\\S])",
+          "not": { "const": "00:00:00:00:00:00" }
+        },
+        "dns": {
+          "description": "What the container itself resolves through. Never its own address: it must not depend on the DNS server it runs.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ipv4" }
+        }
+      },
+      "required": ["bridge", "mode", "address", "gateway", "dns"],
+      "additionalProperties": false
+    },
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "startup": { "$ref": "#/$defs/startup" },
+        "technitium": {
+          "description": "Exact pins. Leave it out for the versions the recipe was tested with. Changing one installs again through the normal plan and apply.",
+          "type": "object",
+          "properties": {
+            "version": {
+              "description": "At least 15.6.2, which fixes cluster configuration sync.",
+              "type": "string",
+              "pattern": "^(?:15\\.6\\.(?:[2-9]|[1-9][0-9]+)|15\\.(?:[7-9]|[1-9][0-9]+)(?:\\.[0-9]+)?|(?:1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})\\.[0-9]+(?:\\.[0-9]+)?)(?![\\s\\S])"
+            },
+            "sha256": {
+              "description": "Of DnsServerPortable.tar.gz.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+            },
+            "aspnetcoreVersion": {
+              "description": "The ASP.NET Core 10 runtime.",
+              "type": "string",
+              "pattern": "^10\\.[0-9]+\\.[0-9]+(?![\\s\\S])"
+            },
+            "aspnetcoreSha512": {
+              "description": "Of aspnetcore-runtime-<version>-linux-x64.tar.gz.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{128}(?![\\s\\S])"
+            }
+          },
+          "dependentRequired": {
+            "version": ["sha256"],
+            "sha256": ["version"],
+            "aspnetcoreVersion": ["aspnetcoreSha512"],
+            "aspnetcoreSha512": ["aspnetcoreVersion"]
+          },
+          "additionalProperties": false
+        },
+        "firewall": {
+          "description": "Proxmox firewall rules for UDP/TCP 53, TCP 53443, and SSH, with everything else dropped. Inert unless the datacenter firewall is enabled.",
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "dnsSources": {
+              "description": "Who may query port 53. Everyone by default.",
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "adminSources": {
+              "description": "Who may reach ports 53443 and 22. Everyone by default. Must include the agent for SSH, and the other cluster members for 53443.",
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["hardware", "network"],
+  "$defs": {
+    "ipv4": {
+      "type": "string",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?![\\s\\S])"
+    },
+    "ipv4Cidr": {
+      "type": "string",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(?:[0-9]|[12][0-9]|3[0-2])(?![\\s\\S])"
+    },
+    "mountPoint": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]+(?![\\s\\S])" },
+        "size": {
+          "description": "GiB of a new volume, which Proxmox deletes with the container.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "datastore": {
+          "description": "Where to create the new volume; the host's disks datastore by default.",
+          "type": "string"
+        },
+        "volume": {
+          "description": "An existing volume to mount instead of a new one. Proxmox keeps a volume another VMID owns when it deletes the container.",
+          "type": "string"
+        },
+        "backup": { "description": "Whether a vzdump backup holds the volume. Defaults to true.", "type": "boolean" }
+      },
+      "required": ["path"],
+      "oneOf": [
+        { "required": ["size"] },
+        { "required": ["volume"] }
+      ],
+      "dependentSchemas": {
+        "volume": { "properties": { "datastore": false } }
+      },
+      "additionalProperties": false
+    },
+    "startup": {
+      "description": "When Proxmox starts this container at boot, relative to the host's other guests.",
+      "type": "object",
+      "properties": {
+        "order": { "type": "integer", "minimum": 0 },
+        "upDelay": { "description": "Seconds before the next guest starts.", "type": "integer", "minimum": 0 },
+        "downDelay": { "description": "Seconds before the next guest stops.", "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

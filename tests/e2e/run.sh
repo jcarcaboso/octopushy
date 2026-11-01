@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End to end: the backend, a real agent running OpenTofu, its state kept by the backend, and a
-# mock Proxmox API. Provisions the fixture guest, then retires it. OpenTofu runs in rootless
-# podman on the runtime's default network unless E2E_TOOL_RUNTIME says docker or local.
+# mock Proxmox API. Provisions the fixture VM and container, then retires them. OpenTofu runs in
+# rootless podman on the runtime's default network unless E2E_TOOL_RUNTIME says docker or local.
 # Needs the development PostgreSQL (`just dev-db`), in E2E_DB_CONTAINER_ENGINE (podman by
 # default). Leaves logs in .dev/e2e.
 set -euo pipefail
@@ -79,17 +79,17 @@ pids+=($!)
 
 guest_status() {
   # Empty until the first revision is loaded.
-  call "$api/api/inventory" | jq -r '[.labs[]?.installations[]?.guests[]? | select(.address=="e2e/korriban/e2e-vm-01") | .status][0] // "absent"'
+  call "$api/api/inventory" | jq -r --arg address "$1" '[.labs[]?.installations[]?.guests[]? | select(.address==$address) | .status][0] // "absent"'
 }
 wait_for() {
-  local want=$1 status=""
+  local want=$1 address=${2:-e2e/korriban/e2e-vm-01} status=""
   for _ in $(seq 1 120); do
-    status=$(guest_status)
-    [[ $status == "$want" ]] && { echo "guest is $status"; return 0; }
+    status=$(guest_status "$address")
+    [[ $status == "$want" ]] && { echo "$address is $status"; return 0; }
     [[ $status == failed || $status == uncertain || $status == blocked ]] && break
     sleep 2
   done
-  echo "Expected the guest to be $want, but it is $status."
+  echo "Expected $address to be $want, but it is $status."
   call "$api/api/runs?limit=5" | jq '.[] | {number, operation, status, detail, currentStep}'
   exit 1
 }
@@ -98,11 +98,15 @@ log "Provisioning"
 call -X POST "$api/api/repository/sync" >/dev/null
 trust_fixture_installations "$work/lab" "$(git -C "$work/lab" rev-parse HEAD)"
 wait_for in-sync
-run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision")][0].id')
+wait_for in-sync e2e/korriban/e2e-ct-01
+run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision" and .address=="e2e/korriban/e2e-vm-01")][0].id')
 call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
+run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision" and .address=="e2e/korriban/e2e-ct-01")][0].id')
+steps=$(call "$api/api/runs/$run" | jq -r '[.steps[].name] | join(" ")')
+[[ $steps == "plan approval apply verify" ]] || { echo "Unexpected container steps: $steps"; exit 1; }
 installation=$(call "$api/api/inventory" | jq '.labs[0].installations[0] | {observedAt, unmanagedCount, hosts: [.hosts[].name]}')
 echo "$installation"
-[[ $(jq -r .unmanagedCount <<<"$installation") == 1 ]] || { echo "Expected one unmanaged VM."; exit 1; }
+[[ $(jq -r .unmanagedCount <<<"$installation") == 1 ]] || { echo "Expected one unmanaged guest."; exit 1; }
 [[ $(call "$api/api/runs?limit=500" | jq '[.[] | select(.operation=="observe")] | length') == 0 ]] \
   || { echo "Observing an installation must not start runs."; exit 1; }
 guest=$(call "$api/api/inventory" | jq -r '[.labs[].installations[].guests[] | select(.address=="e2e/korriban/e2e-vm-01")][0].id')
@@ -119,10 +123,16 @@ git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q 
 curl -sk -X DELETE https://127.0.0.1:18006/mock/vms/310 >/dev/null
 call -X POST "$api/api/repository/sync" >/dev/null
 wait_for retired
-run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="retire")][0].id')
+run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="retire" and .address=="e2e/korriban/e2e-vm-01")][0].id')
 call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
 state=$(call "$api/api/guests/$guest/state")
 [[ $(jq -r .headVersion <<<"$state") == 2 && $(jq '.versions[0].resources' <<<"$state") == 0 ]] \
   || { echo "The retirement's state is missing; the guest's earlier state must stay as a version."; exit 1; }
+
+printf 'lifecycle: retired\n' >>"$work/lab/labs/e2e/proxmox/korriban/guests/e2e-ct-01/guest.yaml"
+git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q -am "Retire e2e-ct-01"
+curl -sk -X DELETE https://127.0.0.1:18006/mock/vms/311 >/dev/null
+call -X POST "$api/api/repository/sync" >/dev/null
+wait_for retired e2e/korriban/e2e-ct-01
 
 log "Passed"

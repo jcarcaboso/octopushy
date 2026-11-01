@@ -1,0 +1,8 @@
+schemaVersion: 1
+type: container
+host: korriban
+vmid: 311
+hardware: { cores: 1, memory: 512 }
+network: { bridge: vmbr0, mode: static, address: 10.1.0.32/24, gateway: 10.1.0.1 }
+provision:
+  recipe: test-ct

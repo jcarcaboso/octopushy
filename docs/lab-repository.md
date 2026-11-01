@@ -318,7 +318,7 @@ refresh blocker; these examples do not certify live ACL sufficiency.
 ```yaml
 # labs/home/proxmox/korriban/guests/krb-crt-01/guest.yaml
 schemaVersion: 1
-type: vm                          # Proxmox containers later
+type: vm                          # vm | container
 lifecycle: active                 # active | retired
 host: korriban
 vmid: 210
@@ -351,13 +351,75 @@ policy:
 
 Octopushy itself reads the placement and identity. `hardware` and `network` are
 passed to the provisioning recipe as inputs and validated against the recipe's
-schema, so Octopushy does not need a VM model of its own. The recipe also receives
+schema, so Octopushy does not need a VM model of its own. So is `provision.inputs`,
+which holds settings of the recipe itself and reaches OpenTofu as `guest.inputs`.
+`provision.secrets` names OpenTofu variables of the recipe's root and the store
+entries that fill them (see Containers below). The recipe also receives
 the host's settings and the installation's connection, so one shared OpenTofu module
 provisions every guest. Each guest has its own state, so guests are planned, locked,
 and applied independently. Octopushy keeps it unless `provision.state` names an external
 backend, where it is named by the guest's address. `nodes` does the same today by
 having each guest's OpenTofu root read `node.json`; here the executor passes the
 values instead.
+
+#### Containers
+
+```yaml
+# labs/home/proxmox/korriban/guests/krb-dns-01/guest.yaml
+schemaVersion: 1
+type: container
+host: korriban
+vmid: 320
+template: debian-13-lxc           # a container template, not a disk image
+hardware:
+  cores: 2
+  memory: 2048
+  swap: 512
+  disks:
+    - { size: 8 }                 # the root disk, the only one
+  mountPoints:
+    - { path: /etc/dns, size: 4 } # further storage, each on a volume of its own
+network:
+  bridge: vmbr0
+  mode: static
+  address: 10.1.0.32/24
+  gateway: 10.1.0.1
+  dns: [10.1.0.1]
+provision:
+  recipe: technitium-lxc
+  inputs:
+    startup: { order: 1 }         # validated by the recipe, passed as guest.inputs
+  secrets:
+    admin_password: { store: dns/technitium/admin-password }
+```
+
+A container is a guest like a VM: the same runs, approval, protection, and retire flow,
+with its own recipes, which declare `guestType: container`. A guest and its recipe must
+agree on the type. Verification reads a container's addresses from Proxmox, since it has no
+guest agent. Two things need that agent, so a container has neither:
+
+- **Disk reporter:** no step is scheduled, and `setup.diskReporter` on a container is only
+  a warning. Proxmox has no guest exec for LXC.
+- **`guestFilesystem`** is refused on a container recipe.
+
+A `worker` section is invalid on a container: a managed worker is a NixOS VM.
+
+`recipes/proxmox-lxc` creates an unprivileged container with `nesting` on and `keyctl` off,
+started at boot and protected from deletion. [`recipes/technitium-lxc`](technitium-lxc.md)
+adds a DNS server to it. Proxmox reads a container's SSH keys only when it creates it, and
+changing a mount point replaces the container, which Proxmox refuses while it is protected.
+
+**Store references for a recipe.** A key under `provision.secrets` is the name of an
+OpenTofu variable, and `TF_VAR_<name>` delivers the entry's value. Only the apply receives
+it, after approval, so a saved plan cannot hold it and an unapproved commit cannot read it.
+Declare the variable in the root with a null default, because it is unset while planning,
+and with `ephemeral = true`, so that the state does not hold it either. A variable that
+Octopushy already sets, such as `guest`, cannot be named. A retire run gets none of these.
+Changing the value in the store starts no run. A recipe lists the ones it cannot do without
+as `secrets: [admin_password]`, and a guest that leaves one out is invalid.
+
+A root that uses another module names it in `modules` in `recipe.yaml`, so that a change to
+that module plans the recipe's guests again.
 
 ### Service instance
 

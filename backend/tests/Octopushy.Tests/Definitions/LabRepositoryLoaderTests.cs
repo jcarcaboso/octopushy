@@ -10,7 +10,7 @@ public class LabRepositoryLoaderTests
         var repository = LabRepositoryLoader.Load(TestRepository.ExampleLab);
         Assert.DoesNotContain(repository.Issues, i => i.Severity == IssueSeverity.Error);
         Assert.True(repository.RepositoryValid);
-        Assert.Equal(2, repository.Guests.Count);
+        Assert.Equal(4, repository.Guests.Count);
         Assert.All(repository.Resources, r => Assert.True(r.Valid, r.Address));
         var guest = repository.Guest("home/korriban/krb-app-01")!;
         Assert.Equal(310, guest.Vmid);
@@ -23,7 +23,7 @@ public class LabRepositoryLoaderTests
     {
         var repository = LabRepositoryLoader.Load(Path.Combine(TestRepository.SourceRoot, "tests", "e2e", "lab"));
         Assert.Empty(repository.Issues);
-        Assert.Equal("e2e/korriban/e2e-vm-01", Assert.Single(repository.Guests).Address);
+        Assert.Equal(["e2e/korriban/e2e-ct-01", "e2e/korriban/e2e-vm-01"], repository.Guests.Select(g => g.Address));
     }
 
     [Fact]

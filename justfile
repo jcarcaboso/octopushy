@@ -68,6 +68,10 @@ demo: dev-db
 proxmox-e2e: dev-db
     tests/proxmox/run.sh
 
+# The technitium-lxc root and its install, in disposable local podman containers; no Proxmox.
+technitium-lxc:
+    tests/technitium-lxc/run.sh
+
 # Build the container images by hand, tagged with the given version (releases are manual for now).
 images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .

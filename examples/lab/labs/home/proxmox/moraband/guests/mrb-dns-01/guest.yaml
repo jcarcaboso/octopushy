@@ -1,0 +1,28 @@
+schemaVersion: 1
+type: container
+host: moraband
+vmid: 420
+template: debian-13-lxc
+hardware:
+  cores: 2
+  memory: 2048
+  swap: 512
+  disks:
+    - { size: 8 }
+  mountPoints:
+    - { path: /etc/dns, size: 4 }
+network:
+  bridge: vmbr0
+  mode: static
+  address: 10.1.0.42/24
+  gateway: 10.1.0.1
+  dns: [10.1.0.1]
+provision:
+  recipe: technitium-lxc
+  inputs:
+    startup: { order: 1 }
+  secrets:
+    admin_password: { store: dns/technitium/admin-password }
+access:
+  sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example

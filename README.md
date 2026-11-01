@@ -18,6 +18,8 @@ edits the lab repository in drafts and publishes them as commits. General guest 
 services, and DNS come later. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
+[Native Technitium DNS in Proxmox containers](docs/technitium-lxc.md) is provisioned
+the same way, with its password kept out of saved plans.
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)
 adds separate native growth and capacity-verification steps, with targeted retry.
 This is limited to the documented ext4 base-image layout, not general guest setup

@@ -1,0 +1,8 @@
+schemaVersion: 1
+description: An unprivileged container on a Proxmox host, created from a downloaded template.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/proxmox-lxc   # an OpenTofu root module, relative to this file
+inputs: inputs.schema.json                 # validates each guest's hardware, network, and inputs
+verify: proxmox                            # check the container through the Proxmox API afterwards
+guestType: container

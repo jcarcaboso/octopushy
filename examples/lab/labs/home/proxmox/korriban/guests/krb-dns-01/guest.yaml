@@ -1,0 +1,36 @@
+schemaVersion: 1
+type: container
+lifecycle: active                 # active | retired
+host: korriban
+vmid: 320
+template: debian-13-lxc
+hardware:
+  cores: 2
+  memory: 2048
+  swap: 512
+  disks:
+    - { size: 8 }                 # root disk; datastore from the host
+  mountPoints:
+    - { path: /etc/dns, size: 4 } # Technitium's configuration and zones
+network:
+  bridge: vmbr0
+  mode: static
+  address: 10.1.0.32/24
+  gateway: 10.1.0.1
+  dns: [10.1.0.1]                 # what the container resolves through; never itself
+provision:
+  recipe: technitium-lxc
+  inputs:
+    startup: { order: 1 }         # before the guests that depend on DNS
+    technitium:                   # the recipe's defaults, written out to pin them here
+      version: 15.6.2
+      sha256: 51f2d4ebaf156a85035e820afde5e1d428f1920a37d7f0c65203fb1766917e08
+      aspnetcoreVersion: 10.0.14
+      aspnetcoreSha512: dd024fd2616926a555b75cbf7a836f6dce998199f0596d9d75676dca2b9d59c8ee8673c6ac23473c0f1a4bdd59eb5cd02fe9ab097eeaf2dd8c8bd117c85e7031
+  secrets:
+    admin_password: { store: dns/technitium/admin-password }
+access:
+  sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example
+policy:
+  destructive: manual             # deleting this container and /etc/dns waits for approval

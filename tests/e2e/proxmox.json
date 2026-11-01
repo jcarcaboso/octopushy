@@ -15,6 +15,11 @@
       "maxCpu": 2, "maxMemoryBytes": 2147483648, "uptimeSeconds": 60
     },
     {
+      "vmid": 311, "name": "e2e-ct-01", "node": "korriban", "status": "running", "kind": "lxc",
+      "tags": ["octopushy", "e2e"], "protection": true, "ipv4": ["10.1.0.32"],
+      "maxCpu": 1, "maxMemoryBytes": 536870912, "uptimeSeconds": 60
+    },
+    {
       "vmid": 150, "name": "made-by-hand", "node": "korriban", "status": "stopped",
       "tags": [], "protection": false, "ipv4": null, "maxCpu": 2, "maxMemoryBytes": 2147483648
     }

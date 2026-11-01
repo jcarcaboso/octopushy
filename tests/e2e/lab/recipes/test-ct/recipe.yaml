@@ -1,0 +1,7 @@
+schemaVersion: 1
+description: A stand-in for a container recipe; the mock Proxmox holds the container itself.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/test-vm
+verify: proxmox
+guestType: container

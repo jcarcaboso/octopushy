@@ -55,6 +55,10 @@ A reusable, versioned base from which VMs are created, distinct from the
 configuration applied to a running VM.
 _Avoid_: Machine profile when referring to the base image
 
+**Container template**:
+A filesystem archive from which Proxmox containers are created, declared the same way
+as a VM template.
+
 **Machine profile**:
 A declared role and its required configuration or software, such as a base
 machine, service host, or AI node; a VM can have more than one profile.

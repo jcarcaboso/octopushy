@@ -1,0 +1,10 @@
+schemaVersion: 1
+description: Native Technitium DNS Server in an unprivileged container; see docs/technitium-lxc.md.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/technitium-lxc
+modules: [../../modules/opentofu/proxmox-lxc]   # other files the root uses, so changes reach its guests
+inputs: inputs.schema.json
+secrets: [admin_password]                       # each guest names its store key in provision.secrets
+verify: proxmox
+guestType: container
