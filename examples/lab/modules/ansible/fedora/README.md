@@ -1,10 +1,11 @@
 # Reusable Fedora workflow, first accepted operations
 
-**Native workflow, not controller integration.** These playbooks can be executed
-explicitly with Ansible. Octopushy's server/agent currently schedule only
-Proxmox/OpenTofu work: they do not discover these files, approve their execution,
-schedule services, or store these operations' outcomes. Do not add a provision
-recipe claiming `executor: ansible`; that executor does not exist yet.
+**Native workflow, run by hand.** These playbooks can be executed explicitly with
+Ansible. Octopushy does not run this module: it takes a service and an `operation`,
+and services are not definitions yet. Octopushy can run Ansible for a guest, through
+a recipe with `operation: configure`. See [configuring a guest](../../../../../docs/guest-configuration.md)
+and the [`machine-tools`](../../../recipes/machine-tools/recipe.yaml) example. A
+provision recipe still cannot name `executor: ansible`.
 
 The purpose is to verify reusable guest operations before integrating them as
 independent runs, rather than embedding service deployment in VM provisioning.
@@ -131,7 +132,8 @@ The last command is a **real infrastructure test**: it provisions/resizes one
 disposable VM through Octopushy, runs these native operations, then retires the
 VM through Octopushy. It does not prove controller/agent service integration.
 Fedora's SELinux policy prevents the guest agent from reading the SSH host key;
-the test does not disable or weaken SELinux. The default requires an independently
+the test does not disable or weaken SELinux. [Host key trust](../../../../../docs/guest-configuration.md#host-key-trust)
+says how a configure run deals with that. The default requires an independently
 verified `TEST_SSH_KNOWN_HOSTS` file. For an explicitly disposable trusted-LAN test
 only, `ALLOW_TEST_SSH_TOFU=1` captures the first key over the network and pins it
 for all subsequent connections. **That first key is not authenticated.** This

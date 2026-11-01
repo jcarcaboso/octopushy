@@ -502,6 +502,20 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task The_controller_masks_each_line_of_a_key_as_well()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        var playbook = await agent.NextAsync("run");
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        var masked = logs.Mask(Guid.Parse(playbook.AttemptId), "line b3BlbnNzaC1rZXk printed alone");
+        Assert.Equal("line *** printed alone", masked);
+    }
+
+    [Fact]
     public async Task A_preview_that_changed_since_it_was_approved_is_refused()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository("policy: { destructive: manual }", destructive: "true"));

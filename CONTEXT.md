@@ -72,6 +72,30 @@ with a desired version policy; it need not be a running service.
 An operation establishing or reconciling a machine's declared configuration and
 prerequisites, rather than an action that is necessarily performed only once.
 
+**Configure run**:
+A run of one action of a guest's setup recipe, which reaches the guest over SSH and
+holds no Proxmox credentials.
+_Avoid_: Provisioning when referring to what happens inside an existing machine
+
+**Preview**:
+What a configure run shows before it runs: its tasks, inputs, secret names and host
+key. It says what will run, not what will change.
+_Avoid_: Plan, or dry run, when referring to a configure run
+
+**Prepared snapshot**:
+Values a recipe's prepare step resolved for a run, such as release versions. An
+approval covers them, and they are kept for later actions only after a run succeeds.
+
+**Host key pin**:
+A guest's public SSH host key, read through a trusted channel and set in the variable
+store by an operator. A configure run connects to nothing else.
+_Avoid_: Host key scan, which authenticates nothing
+
+**Declared outcome**:
+A result a playbook reports by name, as its recipe declares, that is neither success
+nor failure, such as work being deferred.
+_Avoid_: Failure when the playbook deliberately stopped
+
 **Machine maintenance**:
 An operation maintaining the guest operating system and its readiness, including
 any explicitly authorized restart.

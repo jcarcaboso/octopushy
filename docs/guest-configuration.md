@@ -240,16 +240,18 @@ are confirmed against the policy in `selinux-policy-targeted-44.11`. So:
    sudo passwd -l ops
    ```
 
-   Put the line in Variables. This is the route for a VM that already exists, such as
-   `pve01-ai`. The chain of authentication is your Proxmox login, then the VM's console,
-   with no network path to the guest involved. It costs a person a minute per VM, and again
-   after a rebuild. It writes to the guest, briefly.
+   Put the line in Variables as a **plain** value. This is the route for a VM that already
+   exists, such as `pve01-ai`. The chain of authentication is your Proxmox login, then the
+   VM's console, with no network path to the guest involved. It costs a person a minute per
+   VM, and again after a rebuild. It writes to the guest, briefly. The policy allows the
+   password change (`virt_qemu_ga_t` can enter `passwd_t`), but this has not been tried on a VM.
 2. **For new VMs, have cloud-init leave a copy the guest agent may read.** A cloud-config
    with `runcmd: [[install, -Dm0644, /etc/ssh/ssh_host_ed25519_key.pub, /etc/octopushy/ssh-host-ed25519.pub]]`
    creates a file labelled `etc_t`, which `virt_qemu_ga_t` can read with no policy change.
    Then `qm guest exec <vmid> -- cat /etc/octopushy/ssh-host-ed25519.pub` gives the key with
    no console password. This needs a cloud-config snippet, which the current `proxmox-vm`
-   module does not use, and the read is by hand for now. An agent step could make it
+   module does not use, and the read is by hand for now. That the guest agent may read such
+   a file comes from the policy's rules, not a test on a VM. An agent step could make it
    automatic later and write to the same pin; nothing here would change.
 
 **The trade-off, plainly.** The pin is exactly as trustworthy as the channel it was read
@@ -345,11 +347,12 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
   inside its own container, so the agreement's "pinned image the agent starts" cannot apply
   to it. `agent/Containerfile` copies the same locked environment into the agent image, as
   it already does for OpenTofu. There, the agent image is the pin: `octopushy-update` moves
-  it, and a recipe's `image:` has no effect and is logged as ignored. This is about 110 MiB
-  on the image.
-- **Footprint.** Ansible runs with one fork and no fact cache. Expect about 250 MiB
-  for the duration of a run on the controller, which matters on a small LXC. The agent
-  announces `ansible` only if the tool works, so older agents are never assigned one.
+  it, and a recipe's `image:` has no effect and is logged as ignored. This adds about 150 MB
+  to the agent image.
+- **Footprint.** Ansible runs with one fork. A 120-task playbook with fact gathering peaked
+  at 109 MiB, measured on a local connection, so each `ssh` it runs comes on top. Nothing
+  stays in memory between runs. The agent announces `ansible` only if the tool works, so
+  an older agent is never assigned one.
 
 ## How this fits other work
 

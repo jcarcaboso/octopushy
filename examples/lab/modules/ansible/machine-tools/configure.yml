@@ -1,0 +1,40 @@
+---
+- name: Configure the machine
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    machine_tools_lock: /run/lock/machine-tools
+  pre_tasks:
+    - name: Require what prepare resolved
+      ansible.builtin.assert:
+        that: [machine_tools_release is defined]
+        fail_msg: This needs the snapshot a prepare step makes.
+    # A killed run leaves this behind, and Octopushy reports it as uncertain. A person decides
+    # that nothing is still running and removes it. Nothing removes it to retry.
+    - name: Take the guest's lock
+      ansible.builtin.command:
+        argv: [mkdir, "{{ machine_tools_lock }}"]
+      changed_when: false
+  tasks:
+    - name: Install, and always release the lock
+      block:
+        - name: Stop if work is active
+          ansible.builtin.import_tasks: tasks/activity.yml
+        - name: Record the release
+          ansible.builtin.copy:
+            content: "{{ machine_tools_release }}\n"
+            dest: /etc/machine-tools-release
+            mode: "0644"
+        # Anything handling a secret needs no_log. Masking is the second line of defence.
+        - name: Keep the token where the tools read it
+          ansible.builtin.copy:
+            content: "{{ machine_tools_token }}"
+            dest: /etc/machine-tools-token
+            mode: "0600"
+          no_log: true
+      always:
+        - name: Release the guest's lock
+          ansible.builtin.file:
+            path: "{{ machine_tools_lock }}"
+            state: absent

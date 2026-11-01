@@ -1,0 +1,4 @@
+---
+# Reuses configuration; only what prepare resolved differs.
+- name: Update the tools
+  ansible.builtin.import_playbook: configure.yml

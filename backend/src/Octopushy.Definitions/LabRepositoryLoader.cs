@@ -420,6 +420,11 @@ public sealed partial class LabRepositoryLoader
         {
             Invalid("At most one action may set onChange.");
         }
+
+        if (configure.Actions.Values.Any(a => a.OnChange && a.UsesAppliedSnapshot))
+        {
+            Invalid("An onChange action cannot reuse a snapshot: a new machine has none.");
+        }
     }
 
     private void CheckInputsSchema(RecipeDefinition recipe, string address)

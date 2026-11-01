@@ -107,7 +107,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             ? await db.Revisions.AsNoTracking().Where(r => r.Id == id).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken)
             : null;
         var changed = applied is null ? null
-            : await mirror.ChangedFilesAsync(applied, revision.Commit, [Path.GetDirectoryName(recipe.File)!, recipe.Root, guest.File], cancellationToken);
+            : await mirror.ChangedFilesAsync(applied, revision.Commit, [Path.GetDirectoryName(recipe.File)!, recipe.Root, guest.Directory], cancellationToken);
         return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed);
     }
 

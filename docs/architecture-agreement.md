@@ -495,7 +495,9 @@ a working proposal awaiting confirmation unless marked as decided or accepted.
   (OpenTofu, Ansible, Nix) runs in a pinned container image that the agent starts
   in a rootless container, with a private workspace per attempt. The agent holds no
   policy and no state beyond its credential, its in-flight attempts, and an outbox
-  of unsent results.
+  of unsent results. An agent that itself runs in a container has no runtime to start
+  one with, so the tools are in its own image, and that image is the pin
+  ([details](guest-configuration.md#image)).
 - **Agent channel (decided for now):** gRPC bidirectional streaming over mutual TLS,
   on a port of its own. One Protobuf contract generates both the .NET and Rust
   sides.

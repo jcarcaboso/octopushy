@@ -111,8 +111,9 @@ OpenTofu registry for providers. OpenTofu state needs no setup: the backend keep
 its database and hands it to the agent over their private channel, so `octopushy-update`
 keeps it and its database dump covers it. Restoring that dump needs the key above.
 
-It runs OpenTofu directly (`--tool-runtime local`) inside its own Docker container, as
-an unprivileged user. It shares only a private network with the backend, so it cannot
+It runs OpenTofu and Ansible directly (`--tool-runtime local`) inside its own Docker
+container, as an unprivileged user. Ansible needs a route to the guests it configures,
+and the `tmpfs` on `/tmp` that `compose.yaml` gives it. It shares only a private network with the backend, so it cannot
 reach PostgreSQL, and it gets neither the key nor the database password. The state it
 works on is decrypted for one attempt of the guest it was assigned. It still runs
 on the same machine as the server. Once you manage more than this lab, or want a

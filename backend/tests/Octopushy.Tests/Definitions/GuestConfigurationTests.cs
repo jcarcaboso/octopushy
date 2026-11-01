@@ -147,6 +147,15 @@ public class GuestConfigurationTests
     }
 
     [Fact]
+    public void An_action_that_follows_changes_cannot_need_a_snapshot()
+    {
+        using var test = Repository();
+        Edit(test, RecipeFile, "    onChange: true\n", "");
+        Edit(test, RecipeFile, "snapshot: applied", "snapshot: applied\n    onChange: true");
+        Assert.Contains("a new machine has none", Errors(test));
+    }
+
+    [Fact]
     public void A_guest_needs_an_address_to_be_configured()
     {
         using var test = Repository();

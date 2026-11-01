@@ -24,10 +24,12 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
     /// <summary>
     /// Remembers the secret values sent with an attempt, so its logs and errors are masked here
-    /// too, not only by the agent.
+    /// too, not only by the agent: each whole value, and each line of a multi-line one.
     /// </summary>
     public void RegisterSecrets(Guid attemptId, IEnumerable<string> values) =>
-        _secrets[attemptId] = values.Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
+        _secrets[attemptId] = values
+            .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 6).Prepend(v) : [v])
+            .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
 
     public string Mask(Guid attemptId, string text)
     {

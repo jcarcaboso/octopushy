@@ -1,0 +1,20 @@
+---
+- name: Update the operating system
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop if work is active
+      ansible.builtin.import_tasks: tasks/activity.yml
+    - name: Update packages
+      ansible.builtin.dnf5:
+        name: "*"
+        state: latest
+        update_cache: true
+    # The host key is unchanged, so the pinned connection comes back by itself.
+    - name: Restart
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+
+- name: Check nothing went backwards
+  ansible.builtin.import_playbook: configure.yml
