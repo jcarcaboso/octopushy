@@ -6,7 +6,7 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
-    "operation": { "enum": ["provision"] },
+    "operation": { "enum": ["provision", "cluster"], "description": "cluster recipes are named <type>-cluster and are used by labs/<lab>/clusters/<id>/cluster.yaml." },
     "executor": { "enum": ["opentofu"] },
     "root": { "description": "The OpenTofu root module, relative to this file.", "type": "string", "minLength": 1 },
     "modules": {

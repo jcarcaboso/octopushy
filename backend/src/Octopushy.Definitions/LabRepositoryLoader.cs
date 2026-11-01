@@ -41,11 +41,12 @@ public sealed partial class LabRepositoryLoader
         var labs = new List<LabDefinition>();
         var installations = new List<InstallationDefinition>();
         var guests = new List<GuestDefinition>();
+        var clusters = new List<ClusterDefinition>();
         var entries = new List<ResourceEntry>();
         var labsDirectory = Path.Combine(_root, "labs");
         foreach (var labDirectory in SubDirectories(labsDirectory))
         {
-            LoadLab(labDirectory, labs, installations, guests, entries);
+            LoadLab(labDirectory, labs, installations, guests, clusters, entries);
         }
 
         foreach (var recipe in recipes.Values)
@@ -105,13 +106,16 @@ public sealed partial class LabRepositoryLoader
                     "A worker generation must belong to exactly one guest.", guest.Address);
         }
 
-        var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, settings) }).ToList();
+        CheckClusters(clusters, guests, installations, recipes, settings);
+
+        var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, clusters, settings) }).ToList();
         return new LabRepository(
             _root,
             _repositoryValid ? settings : null,
             labs,
             installations,
             guests,
+            clusters,
             templates,
             recipes,
             validEntries,
@@ -120,7 +124,7 @@ public sealed partial class LabRepositoryLoader
             _repositoryValid);
     }
 
-    private bool IsValid(ResourceEntry entry, List<GuestDefinition> guests, RepositoryDefinition? settings)
+    private bool IsValid(ResourceEntry entry, List<GuestDefinition> guests, List<ClusterDefinition> clusters, RepositoryDefinition? settings)
     {
         if (!_repositoryValid || settings is null || entry.Json is null)
         {
@@ -138,6 +142,12 @@ public sealed partial class LabRepositoryLoader
             {
                 break;
             }
+        }
+
+        if (entry.Kind == ResourceKind.Cluster)
+        {
+            return clusters.FirstOrDefault(c => c.Address == entry.Address) is { } cluster
+                && !_invalidRecipes.Contains(cluster.Recipe);
         }
 
         if (entry.Kind != ResourceKind.Guest)
@@ -342,6 +352,10 @@ public sealed partial class LabRepositoryLoader
         {
             Error(recipe.File, null, "guestFilesystem works through the QEMU guest agent, so it does not apply to containers.", address);
         }
+        if (recipe.Operation == "cluster" && (recipe.Modules ?? []).Count > 0)
+        {
+            Error(recipe.File, LineOf(recipe.File, "/modules"), "A cluster recipe's root stands alone: trust covers its folder and nothing else.", address);
+        }
         foreach (var module in recipe.Modules ?? [])
         {
             if (!Directory.Exists(Path.Combine(_root, module)))
@@ -375,6 +389,19 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
+        // Its plan runs with the admin password, so trust has to cover all the code that runs:
+        // nothing may come from outside the folder, or be left out of the folder's digest.
+        if (recipe.Operation == "cluster")
+        {
+            if (tofuFiles.Any(f => f.EndsWith(".tf.json", StringComparison.Ordinal)
+                    || ModuleBlock().IsMatch(File.ReadAllText(f)))
+                || Directory.Exists(Path.Combine(rootPath, ".terraform")))
+            {
+                Error(recipe.File, null, $"The root {recipe.Root} of a cluster recipe may hold only .tf files of its own: no module calls, .tf.json, or .terraform.", address);
+                _invalidRecipes.Add(recipe.Id);
+            }
+        }
+
         if (recipe.InputsSchema is { } inputs)
         {
             _inputSchemas[recipe.Id] = null;
@@ -403,6 +430,7 @@ public sealed partial class LabRepositoryLoader
         List<LabDefinition> labs,
         List<InstallationDefinition> installations,
         List<GuestDefinition> guests,
+        List<ClusterDefinition> clusters,
         List<ResourceEntry> entries)
     {
         var id = Path.GetFileName(labDirectory);
@@ -437,6 +465,186 @@ public sealed partial class LabRepositoryLoader
         foreach (var installationDirectory in SubDirectories(Path.Combine(labDirectory, "proxmox")))
         {
             LoadInstallation(id, installationDirectory, installations, guests, entries);
+        }
+
+        foreach (var clusterDirectory in SubDirectories(Path.Combine(labDirectory, "clusters")))
+        {
+            LoadCluster(id, clusterDirectory, clusters, entries);
+        }
+    }
+
+    private void LoadCluster(string lab, string directory, List<ClusterDefinition> clusters, List<ResourceEntry> entries)
+    {
+        var id = Path.GetFileName(directory);
+        var address = $"{lab}/clusters/{id}";
+        var file = Relative(Path.Combine(directory, "cluster.yaml"));
+        if (!CheckId(id, file, address))
+        {
+            return;
+        }
+
+        if (!File.Exists(Path.Combine(directory, "cluster.yaml")))
+        {
+            Warning(file, null, $"The cluster folder {Relative(directory)} has no cluster.yaml and is ignored.", address);
+            return;
+        }
+
+        var (json, document) = ReadDefinition(file, DefinitionKind.Cluster, address);
+        entries.Add(new ResourceEntry(ResourceKind.Cluster, address, lab, file, json, false));
+        if (json is null || document is null)
+        {
+            return;
+        }
+
+        CollectStoreUses(json, address, file, document);
+        clusters.Add(new ClusterDefinition(
+            id,
+            lab,
+            file,
+            json,
+            json["type"]!.GetValue<string>(),
+            ((JsonArray)json["members"]!).Select(m => new ClusterMember(
+                MemberAddress(lab, m!["guest"]!.GetValue<string>()), m["role"]!.GetValue<string>())).ToList(),
+            ParseStoreReference(json["credentials"]!),
+            json["tls"]?["verify"]?.GetValue<bool>() ?? true,
+            ParsePolicy(json["policy"]),
+            ParseLabels(json["execution"])));
+    }
+
+    /// <summary>Inside a lab an address may leave out the lab (rule 5).</summary>
+    private static string MemberAddress(string lab, string guest) =>
+        guest.Count(c => c == '/') == 1 ? $"{lab}/{guest}" : guest;
+
+    private void CheckClusters(
+        List<ClusterDefinition> clusters,
+        List<GuestDefinition> guests,
+        List<InstallationDefinition> installations,
+        Dictionary<string, RecipeDefinition> recipes,
+        RepositoryDefinition? settings)
+    {
+        // The plan of this password's stack runs before approval, so no other route to it may
+        // run repository code that early. Backend environment reaches every guest's plan.
+        var proxmoxKeys = installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key }).ToHashSet(StringComparer.Ordinal);
+        foreach (var backend in settings?.StateBackends.Values ?? [])
+        {
+            foreach (var (name, value) in backend.Env)
+            {
+                if (value.Store is { } reference && clusters.Any(c => c.Credentials.Key == reference.Key))
+                    Error(settings!.File, LineOf(settings.File, $"/stateBackends/{backend.Id}/env/{name}"),
+                        $"A cluster's admin password cannot be used as backend environment '{name}': every guest's plan would receive it.");
+            }
+        }
+
+        foreach (var cluster in clusters)
+        {
+            CheckCluster(cluster, guests, installations, recipes, proxmoxKeys);
+        }
+
+        foreach (var shared in clusters.SelectMany(c => c.Members.Select(m => (Cluster: c, m.Guest))).GroupBy(p => p.Guest).Where(g => g.Count() > 1))
+        {
+            foreach (var (cluster, guest) in shared)
+            {
+                var others = string.Join(", ", shared.Where(p => p.Cluster != cluster).Select(p => p.Cluster.Address));
+                Error(cluster.File, LineOf(cluster.File, "/members"), $"The guest {guest} is also a member of {others}; a guest belongs to at most one cluster.", cluster.Address);
+            }
+        }
+    }
+
+    private void CheckCluster(
+        ClusterDefinition cluster,
+        List<GuestDefinition> guests,
+        List<InstallationDefinition> installations,
+        Dictionary<string, RecipeDefinition> recipes,
+        HashSet<string> proxmoxKeys)
+    {
+        if (!recipes.TryGetValue(cluster.Recipe, out var recipe))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/type"), $"The recipe '{cluster.Recipe}' does not exist under recipes/.", cluster.Address);
+        }
+        else if (recipe.Operation != "cluster")
+        {
+            Error(cluster.File, LineOf(cluster.File, "/type"), $"The recipe '{cluster.Recipe}' does not form clusters.", cluster.Address);
+        }
+
+        if (cluster.Members.Count(m => m.Role == ClusterRoles.Primary) != 1)
+        {
+            Error(cluster.File, LineOf(cluster.File, "/members"), "A cluster has exactly one primary.", cluster.Address);
+        }
+
+        if (cluster.Members.All(m => m.Role != ClusterRoles.Secondary))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/members"), "A cluster has at least one secondary.", cluster.Address);
+        }
+
+        foreach (var repeated in cluster.Members.GroupBy(m => m.Guest).Where(g => g.Count() > 1))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/members"), $"The guest {repeated.Key} is listed more than once.", cluster.Address);
+        }
+
+        if (proxmoxKeys.Contains(cluster.Credentials.Key))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/credentials"), "A Proxmox token cannot be used as a cluster's admin password.", cluster.Address);
+        }
+
+        var hosts = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        for (var i = 0; i < cluster.Members.Count; i++)
+        {
+            var member = cluster.Members[i];
+            var line = LineOf(cluster.File, $"/members/{i}/guest");
+            if (member.Guest.Split('/')[0] != cluster.Lab)
+            {
+                Error(cluster.File, line, $"The member {member.Guest} is not in the lab {cluster.Lab}; a cluster and its members belong to one lab.", cluster.Address);
+                continue;
+            }
+
+            var guest = guests.FirstOrDefault(g => g.Address == member.Guest);
+            if (guest is null)
+            {
+                Error(cluster.File, line, $"The guest {member.Guest} does not exist.", cluster.Address);
+                continue;
+            }
+
+            if (guest.Retired)
+            {
+                Error(guest.File, LineOf(guest.File, "/lifecycle"), $"A guest listed in a cluster cannot be retired; remove it from {cluster.Address} first.", guest.Address);
+                Error(cluster.File, line, $"The guest {member.Guest} is retired; remove it from the cluster.", cluster.Address);
+            }
+
+            if (guest.Json["network"]?["mode"]?.GetValue<string>() != "static" || ProvisionInputs.ExpectedIpv4(guest) is null)
+            {
+                Error(cluster.File, line, $"The member {member.Guest} needs a static address: peers and agents reach it by address.", cluster.Address);
+            }
+
+            if (guest.ProvisionSecrets.TryGetValue("admin_password", out var password) && password.Key != cluster.Credentials.Key)
+            {
+                Error(cluster.File, line, $"The member {member.Guest} sets its admin password from {password.Key}, not {cluster.Credentials.Key}; members share one password.", cluster.Address);
+            }
+
+            var installation = installations.FirstOrDefault(n => n.Address == guest.InstallationAddress);
+            var failureDomain = installation?.Type == "standalone" ? guest.InstallationAddress : $"{guest.InstallationAddress}/{guest.Host}";
+            if (!hosts.TryGetValue(failureDomain, out var sharing))
+            {
+                hosts[failureDomain] = sharing = [];
+            }
+
+            sharing.Add(member.Guest);
+        }
+
+        foreach (var (host, sharing) in hosts.Where(h => h.Value.Count > 1))
+        {
+            Warning(cluster.File, LineOf(cluster.File, "/members"), $"{string.Join(" and ", sharing)} share the Proxmox host {host}, so that host is one failure domain for them.", cluster.Address);
+        }
+
+        var settings = cluster.Json["settings"]!;
+        foreach (var repeated in ClusterInputs.ForwardZones(settings).GroupBy(z => z.Zone).Where(g => g.Count() > 1))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/settings/forwardZones"), $"The forward zone {repeated.Key} is listed more than once.", cluster.Address);
+        }
+
+        if (settings["blocking"]?["control"]?.GetValue<string>() is { } control
+            && (control.EndsWith(".test", StringComparison.Ordinal) || control.EndsWith(".test.", StringComparison.Ordinal)))
+        {
+            Error(cluster.File, LineOf(cluster.File, "/settings/blocking/control"), "A .test name answers NXDOMAIN everywhere, so it cannot show that a server resolves.", cluster.Address);
         }
     }
 
@@ -844,4 +1052,7 @@ public sealed partial class LabRepositoryLoader
 
     [GeneratedRegex(@"^\s*backend\s+""", RegexOptions.Multiline)]
     private static partial Regex BackendBlock();
+
+    [GeneratedRegex(@"^\s*module\s+""", RegexOptions.Multiline)]
+    private static partial Regex ModuleBlock();
 }

@@ -1,0 +1,5 @@
+schemaVersion: 1
+description: A Technitium DNS cluster on guests of the technitium-lxc recipe; see docs/technitium-lxc.md.
+operation: cluster
+executor: opentofu
+root: ../../modules/opentofu/technitium-cluster

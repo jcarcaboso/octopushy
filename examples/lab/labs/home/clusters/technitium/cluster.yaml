@@ -1,0 +1,20 @@
+schemaVersion: 1
+type: technitium
+members:
+  - { guest: korriban/krb-dns-01, role: primary }
+  - { guest: moraband/mrb-dns-01, role: secondary }
+settings:
+  clusterDomain: cluster.home.arpa   # permanent once formed; changing it is refused
+  recursion: { policy: UseSpecifiedNetworkACL, networks: [10.1.0.0/24] }
+  forwardZones:
+    - { zone: home.arpa, forwarder: 10.1.0.1 }
+  blocking:
+    enabled: true
+    type: NxDomain
+    updateIntervalHours: 24
+    lists: [https://example.invalid/list.txt]
+    blocked: [bad.example.com]
+    allowed: [false-positive.example.com]
+credentials: { store: dns/technitium/admin-password }
+tls: { verify: false }               # members serve a self-signed certificate
+policy: { approval: manual }

@@ -27,6 +27,13 @@ public static class PolicyResolver
     public static EffectivePolicy For(LabRepository repository, InstallationDefinition installation) =>
         Resolve(Chain(repository, installation.Lab, installation));
 
+    /// <summary>A cluster sits directly under its lab; a setting on it does not reach its member guests.</summary>
+    public static EffectivePolicy For(LabRepository repository, ClusterDefinition cluster) =>
+        Resolve(Chain(repository, cluster.Lab, null).Append((cluster.Address, cluster.Policy)));
+
+    public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, ClusterDefinition cluster) =>
+        ResolveLabels(LabelChain(repository, cluster.Lab, null).Append((cluster.Address, cluster.AgentLabels)));
+
     /// <summary>The labels an agent needs to act on the guest; empty means any agent.</summary>
     public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, GuestDefinition guest) =>
         ResolveLabels(LabelChain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))

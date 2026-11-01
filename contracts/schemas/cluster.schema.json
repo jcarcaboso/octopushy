@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/cluster.schema.json",
+  "title": "Application cluster (labs/<lab>/clusters/<cluster>/cluster.yaml)",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "type": { "enum": ["technitium"], "description": "Selects the recipe recipes/<type>-cluster." },
+    "members": {
+      "description": "The guests of this cluster. Exactly one primary and at least one secondary, all in this lab.",
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "properties": {
+          "guest": {
+            "description": "The guest's address, with or without its lab, such as korriban/krb-dns-01.",
+            "type": "string",
+            "pattern": "^[a-z0-9-]+(?:/[a-z0-9-]+){1,2}(?![\\s\\S])"
+          },
+          "role": { "enum": ["primary", "secondary"] }
+        },
+        "required": ["guest", "role"],
+        "additionalProperties": false
+      }
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "clusterDomain": {
+          "description": "Permanent once the cluster is formed; a change is refused.",
+          "type": "string",
+          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?![\\s\\S])"
+        },
+        "recursion": {
+          "type": "object",
+          "properties": {
+            "policy": { "enum": ["Allow", "Deny", "AllowOnlyForPrivateNetworks", "UseSpecifiedNetworkACL"] },
+            "networks": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          },
+          "required": ["policy"],
+          "additionalProperties": false
+        },
+        "forwardZones": {
+          "description": "Forwarder zones in the cluster catalog, so that every member serves them.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "zone": { "type": "string", "minLength": 1 },
+              "forwarder": { "type": "string", "minLength": 1 },
+              "protocol": { "enum": ["Udp", "Tcp", "Tls", "Https", "Quic"] }
+            },
+            "required": ["zone", "forwarder"],
+            "additionalProperties": false
+          }
+        },
+        "blocking": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "type": { "enum": ["NxDomain", "AnyAddress"] },
+            "updateIntervalHours": { "type": "integer", "minimum": 1, "maximum": 168 },
+            "lists": { "type": "array", "items": { "type": "string", "pattern": "^https?://" }, "uniqueItems": true },
+            "blocked": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "allowed": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "control": {
+              "description": "A name every member must resolve, checked next to each blocked name. Left out, it is the primary's name in the cluster zone, which needs no internet.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["clusterDomain"],
+      "additionalProperties": false
+    },
+    "credentials": {
+      "description": "The admin password every member shares. It must be the store entry the members' provision.secrets.admin_password names.",
+      "$ref": "common.schema.json#/$defs/storeRef"
+    },
+    "tls": {
+      "description": "Members serve a self-signed certificate, so verify: false is what a new cluster needs.",
+      "type": "object",
+      "properties": { "verify": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "execution": { "$ref": "common.schema.json#/$defs/execution" },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" }
+  },
+  "required": ["schemaVersion", "type", "members", "settings", "credentials"],
+  "additionalProperties": false
+}

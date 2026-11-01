@@ -16,6 +16,7 @@ public enum ResourceKind
     Lab,
     Installation,
     Guest,
+    Cluster,
 }
 
 /// <summary>A variable-store key with an optional exact version, written as <c>{ store: key, version: 2 }</c>.</summary>
@@ -140,6 +141,44 @@ public static class GuestTypes
 {
     public const string Vm = "vm";
     public const string Container = "container";
+}
+
+public static class ClusterRoles
+{
+    public const string Primary = "primary";
+    public const string Secondary = "secondary";
+}
+
+/// <summary>A guest of an application cluster, by its full address.</summary>
+public sealed record ClusterMember(string Guest, string Role);
+
+/// <summary>
+/// An application cluster: guests of one lab that a recipe forms into one application. Each
+/// member stays an ordinary guest; this relates them and holds what they share.
+/// </summary>
+public sealed record ClusterDefinition(
+    string Id,
+    string Lab,
+    string File,
+    JsonObject Json,
+    string Type,
+    IReadOnlyList<ClusterMember> Members,
+    StoreReference Credentials,
+    bool VerifyTls,
+    PolicySettings? Policy,
+    IReadOnlyList<string>? AgentLabels)
+{
+    public string Address => $"{Lab}/clusters/{Id}";
+
+    /// <summary>The name of the cluster's OpenTofu state: its address with dots.</summary>
+    public string Stack => Address.Replace('/', '.');
+
+    /// <summary>The recipe that implements <see cref="Type"/>.</summary>
+    public string Recipe => $"{Type}-cluster";
+
+    public string ClusterDomain => Json["settings"]!["clusterDomain"]!.GetValue<string>();
+
+    public ClusterMember? Primary => Members.FirstOrDefault(m => m.Role == ClusterRoles.Primary);
 }
 
 public sealed record ManagedWorkerSettings(int TemplateVersion, Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency);
