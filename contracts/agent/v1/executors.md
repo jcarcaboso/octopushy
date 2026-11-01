@@ -256,7 +256,8 @@ Input (the same for both actions):
     "TF_VAR_admin_password": "recipe.TF_VAR_admin_password"
   },
   "destroy": false,
-  "retainNoChangesPlan": false
+  "retainNoChangesPlan": false,
+  "replace": []
 }
 ```
 
@@ -350,6 +351,10 @@ is not logged or returned, because it can hold configuration values.
 
 `variables.guest.inputs` holds the guest's `provision.inputs`, when it has any.
 
+Optional `replace` lists resource addresses, each passed as `-replace=<address>`. It is for what
+only the controller knows must happen again, so that it is in the preview and follows approval. An
+address that is not in the state changes nothing.
+
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers
@@ -380,6 +385,130 @@ Sensitive outputs are listed by name in `sensitiveOutputs` and left out of
 `outputs`. A failed apply is `failed`; OpenTofu's state records what it did, and the
 next plan shows what is left. An apply interrupted by an agent restart is reported
 as `uncertain` once the agent is back.
+
+## `technitium`
+
+Works on one application cluster through each member's own API at `https://<address>:53443`, as
+`admin`, with the secret `technitium.password`. It never receives Proxmox tokens or a repository
+bundle. The controller releases the password only for endpoints trusted for the cluster
+([how](../../../docs/installation-trust.md#application-clusters)). Every action takes:
+
+```json
+{
+  "cluster": "home/clusters/technitium",
+  "verifyTls": false,
+  "clusterDomain": "cluster.home.arpa",
+  "minimumVersion": "15.6.2",
+  "formed": true,
+  "members": [
+    { "guest": "home/korriban/krb-dns-01", "role": "primary", "address": "10.1.0.32",
+      "endpoint": "https://10.1.0.32:53443" }
+  ],
+  "settings": {
+    "enableBlocking": true, "blockingType": "NxDomain", "blockListUrls": [],
+    "blockListUpdateIntervalHours": 24, "recursion": "UseSpecifiedNetworkACL",
+    "recursionNetworkACL": ["10.1.0.0/24"]
+  },
+  "blocked": ["bad.example.com"], "allowed": [], "forwardZones": ["home.arpa"],
+  "control": null,
+  "syncWaitSeconds": 90
+}
+```
+
+`verifyTls` false accepts the self-signed certificate and sets `ignoreCertificateErrors` on a join.
+`settings` is compared key by key with `/api/settings/get`, and lists as sets; a list a member never
+held reads as `null` and equals an empty one. A member's optional `dnsPort` defaults to 53.
+`syncWaitSeconds` defaults to 90. Each session is closed with `/api/user/logout`.
+
+### `inspect`
+
+Read-only; runs before the plan. Fails when the primary cannot be reached or refuses the password,
+saying that the secondaries keep answering, and when `formed` is true and the primary reports no
+cluster: forming again would split it.
+
+```json
+{
+  "formed": true,
+  "members": [{ "guest": "home/moraband/mrb-dns-01", "address": "10.1.0.42", "state": "joined" }],
+  "undeclared": { "blocked": ["hand.example.com"], "allowed": [] }
+}
+```
+
+`members` holds the secondaries, each in one state: `joined`; `moved`, joined at another address than
+the primary has for it; `absent`, not in a cluster and not listed, so it can be joined; `stale`, not
+in a cluster but listed by the primary, which is a rebuilt member; `foreign`, in a cluster the primary
+does not list it in; `unreachable`; or `refused`, when it refuses the password. `undeclared` is what
+the primary's blocked and allowed lists hold beyond `blocked` and `allowed`. The provider reads only
+the entries it knows, so a plan cannot find these.
+
+The controller turns `absent` into `replace: ["terraform_data.secondary[\"<guest>\"]"]` and anything
+in `undeclared` into `replace: ["terraform_data.undeclared_entries"]` on the `preview` that follows.
+
+### `reconcile`
+
+**Mutating and not cancellable.** Takes `join` and `remove`, guest addresses from the approved plan's
+changes to `terraform_data.secondary`, and `pruneEntries`, true when the plan replaced
+`terraform_data.undeclared_entries`.
+
+- `join`: an `absent` member joins with `initJoin` on the member itself, with the primary's name in
+  `primaryNodeUrl` and its address in `primaryNodeIpAddress`. An IP-literal URL is refused upstream.
+  A `moved` member calls `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`, or unreachable
+  one fails with its recovery and does not stop the others.
+- `remove`: secondaries the primary lists and no member matches go, with `removeSecondary`, or
+  `deleteSecondary` when that fails, as it does for a peer that cannot answer. If there are more of
+  them than `remove` names, none goes. With an empty `remove`, none is looked at.
+- `pruneEntries`: deletes undeclared blocked and allowed entries on the primary.
+
+Output: `{ "joined": [...], "removed": [...] }`. A known failure lists `failed` in its outputs. A join
+whose answer is lost is checked for up to 120 s, and is `uncertain` if the member still reports no
+cluster. The password is a form field of `initJoin`, never in a URL.
+
+### `refresh-block-lists`
+
+**Mutating.** Calls `forceUpdateBlockLists` on the primary, which covers every member. Runs after an
+approved plan changed `terraform_data.block_lists`. Output: `{ "refreshed": true }`.
+
+### `verify`
+
+Read-only. Runs on every cluster run, including with no changes, and for a cluster's background
+observation. It connects to every member and checks, on each:
+
+| Check | Passes when |
+| --- | --- |
+| `reachable`, `login` | The API answers, and takes the password |
+| `cluster` | `clusterInitialized` is true, in `clusterDomain` |
+| `version` | At least `minimumVersion` |
+| `membership` | Its `clusterNodes` are the declared members, in their roles |
+| `peers` | Each is `Connected`. A peer that is down or rebuilt is reported as itself, not here |
+| `settings` | `settings` matches |
+| `blocked`, `allowed` | Its lists are exactly the declared ones |
+| `zones` | It serves `forwardZones` |
+| `blocking` | Up to 5 `blocked` names answer with extended DNS error 15, when blocking is enabled |
+| `control` | `control`, or the primary's name in the cluster zone, resolves |
+
+`blocking` and `control` are raw UDP DNS to that member. Extended DNS error 15, "Blocked", is what
+proves a block: Technitium sends it whatever the blocking type and whether or not the name exists,
+while NXDOMAIN alone also answers a name nobody registered.
+
+What can be sync lag is checked again every `poll_interval` for `syncWaitSeconds`. What cannot,
+such as a member that reports no cluster, fails at once.
+
+```json
+{
+  "ok": false,
+  "members": [
+    { "guest": "home/korriban/krb-dns-01", "address": "10.1.0.32", "role": "primary", "ok": true,
+      "version": "15.6.2", "checks": [{ "name": "cluster", "ok": true, "detail": "in cluster.home.arpa" }] },
+    { "guest": "home/moraband/mrb-dns-01", "address": "10.1.0.42", "role": "secondary", "ok": false,
+      "version": "15.6.2",
+      "checks": [{ "name": "cluster", "ok": false, "detail": "it reports clusterInitialized=false, ..." }],
+      "recovery": "the primary still lists it as Unreachable with id 22. Sign in to ..." }
+  ]
+}
+```
+
+A failure carries these outputs, and its message names each failing member with its recovery. It
+never calls `deleteSecondary`: that decision is the operator's.
 
 ## `nixos-rootfs`
 

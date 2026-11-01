@@ -315,6 +315,26 @@ public class ClusterDefinitionTests
     }
 
     [Fact]
+    public void The_root_declares_exactly_what_the_inputs_send()
+    {
+        var repository = LabRepositoryLoader.Load(TestRepository.ExampleLab);
+        var inputs = ClusterInputs.Build(repository, repository.Cluster(Cluster)!, "abc");
+        var declared = File.ReadAllText(Path.Combine(TestRepository.ExampleLab, "modules/opentofu/technitium-cluster/variables.tf"));
+        void Check(System.Text.Json.Nodes.JsonObject sent)
+        {
+            foreach (var (name, value) in sent)
+            {
+                if (name.Contains('/')) { Check(value!.AsObject()); continue; }
+                Assert.Matches($@"(?m)^\s*{name}\s+=", declared);
+                if (value is System.Text.Json.Nodes.JsonObject child) Check(child);
+            }
+        }
+
+        Check(inputs.Variables["octopushy"]!.AsObject());
+        Check(inputs.Variables["cluster"]!.AsObject());
+    }
+
+    [Fact]
     public void The_defaults_of_an_empty_settings_block_are_complete()
     {
         using var test = Repository("""

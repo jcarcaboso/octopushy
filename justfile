@@ -72,6 +72,10 @@ proxmox-e2e: dev-db
 technitium-lxc:
     tests/technitium-lxc/run.sh
 
+# A Technitium cluster on two real servers in disposable podman containers, with the real provider.
+technitium-cluster:
+    tests/technitium-cluster/run.sh
+
 # Build the container images by hand, tagged with the given version (releases are manual for now).
 images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .
