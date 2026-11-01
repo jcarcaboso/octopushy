@@ -48,6 +48,15 @@ variable "guest" {
     error_message = "A DNS server needs a static address: set network.mode to static."
   }
 
+  # The address reaches the install's shell and its certificate, so it is only ever an address.
+  validation {
+    condition = (
+      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$", var.guest.network.address))
+      && can(cidrhost(var.guest.network.address, 0))
+    )
+    error_message = "network.address must be an IPv4 address with its prefix length, like 10.1.0.32/24."
+  }
+
   validation {
     condition = alltrue([
       for server in var.guest.network.dns :

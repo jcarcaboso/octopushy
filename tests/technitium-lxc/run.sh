@@ -131,9 +131,38 @@ printf '{"terraform":{"backend":{"local":{"path":"../../../state/terraform.tfsta
   >"$work/run/repo/$module/octopushy_backend.tf.json"
 tofu init -input=false -no-color -lockfile=readonly | tail -1
 
+log "An address that is not an address never reaches a shell"
+tfvars=$work/run/repo/$module/octopushy.auto.tfvars.json
+cp "$tfvars" "$work/tfvars.kept"
+for hostile in "$address/24; touch /pwned #" "$address/24 && touch /pwned" '$(touch /pwned)/24' "$address" "$address/24 "; do
+  python3 -I - "$tfvars" "$hostile" <<'PY'
+import json, sys
+variables = json.load(open(sys.argv[1]))
+variables["guest"]["network"]["address"] = sys.argv[2]
+json.dump(variables, open(sys.argv[1], "w"))
+PY
+  if tofu plan -input=false -no-color >"$work/hostile.log" 2>&1; then fail "the address '$hostile' was accepted"; fi
+  grep -q 'network.address' "$work/hostile.log" || { tail -5 "$work/hostile.log"; fail "unexpected failure for the address '$hostile'"; }
+done
+cp "$work/tfvars.kept" "$tfvars"
+in_ct '! test -e /pwned'
+echo "five addresses refused"
+
 log "First apply"
+# What a local user of the container could read while the first start is under way.
+in_ct 'rm -f /root/samples /root/stop-sampling
+( while [ ! -e /root/stop-sampling ]; do
+    systemctl show dns.service -p Environment -p EnvironmentFiles; cat /run/systemd/system/dns.service.d/*.conf
+    ls -l /run/systemd/system/dns.service.d /run/octopushy-technitium; sleep 0.1
+  done >>/root/samples 2>&1 ) >/dev/null 2>&1 &'
 plan | tail -1
 installs
+sleep 1
+in_ct 'touch /root/stop-sampling; sleep 1'
+grep -q 'DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443' <(in_ct 'cat /root/samples') || fail "the sampling did not see the first start"
+if in_ct 'grep -E "[0-9a-f]{48}" /root/samples' >/dev/null; then fail "the TLS password was visible to local users during the first start"; fi
+in_ct 'rm -f /root/samples /root/stop-sampling'
+echo "the TLS password was not readable"
 in_ct 'systemctl is-enabled dns.service dns-http-guard.service; systemctl is-active dns.service dns-http-guard.service'
 [[ $(plan | grep -c 'No changes') == 1 ]] || fail "a second plan should have no changes"
 

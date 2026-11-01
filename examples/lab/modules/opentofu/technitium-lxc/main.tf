@@ -106,11 +106,12 @@ resource "terraform_data" "install" {
 
   provisioner "remote-exec" {
     inline = [join(" ", [
-      "TECHNITIUM_VERSION=${local.technitium.version}",
-      "TECHNITIUM_SHA256=${local.technitium.sha256}",
-      "ASPNETCORE_VERSION=${local.technitium.aspnetcoreVersion}",
-      "ASPNETCORE_SHA512=${local.technitium.aspnetcoreSha512}",
-      "GUEST_ADDRESS=${local.address}",
+      # Every value is quoted: what reaches a shell is data, whatever the variables check.
+      "TECHNITIUM_VERSION='${local.technitium.version}'",
+      "TECHNITIUM_SHA256='${local.technitium.sha256}'",
+      "ASPNETCORE_VERSION='${local.technitium.aspnetcoreVersion}'",
+      "ASPNETCORE_SHA512='${local.technitium.aspnetcoreSha512}'",
+      "GUEST_ADDRESS='${local.address}'",
       "NAMESERVERS='${join(" ", var.guest.network.dns)}'",
       "bash ${local.work}/install.sh",
     ])]

@@ -250,13 +250,19 @@ if [[ ! -e $config/auth.config ]]; then
     chown dns-server:dns-server "$certificate"
     chmod 0640 "$certificate"
   fi
-  install -d -m 0755 "$first_run_drop_in"
+  # The certificate's password is a secret, so it is not in the drop-in: systemd shows what a
+  # unit sets with `systemctl show` to every local user, and the drop-in is a file of its own.
+  # An environment file is read by systemd as root, it is not listed, and only root can read it.
+  install -d -m 0700 "$first_run_drop_in"
+  (umask 077 && printf 'DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PASSWORD=%s\n' "$(<"$work/tls.password")" >"$work/first-run.env")
+  chown root:root "$work/first-run.env"
+  chmod 0600 "$work/first-run.env"
   cat >"$first_run_drop_in/first-run.conf" <<CONF
 [Service]
+EnvironmentFile=$work/first-run.env
 Environment="DNS_SERVER_ADMIN_PASSWORD_FILE=$password"
 Environment="DNS_SERVER_WEB_SERVICE_ENABLE_HTTPS=true"
 Environment="DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH=$certificate"
-Environment="DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PASSWORD=$(<"$work/tls.password")"
 Environment="DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443"
 CONF
   systemctl stop "$service" 2>/dev/null || true
