@@ -65,7 +65,7 @@ start_container() {
   in_ct 'systemctl enable --now ssh >/dev/null 2>&1'
 }
 
-identity() { in_ct 'cd /etc/dns && sha256sum self-signed-cert.pfx && ls -1'; }
+identity() { in_ct 'cd /etc/dns && sha256sum octopushy-https.pfx && ls -1'; }
 
 # What the container and OpenTofu download from, as docs/technitium-lxc.md lists them.
 reachable() {
@@ -252,8 +252,10 @@ if podman exec -e TECHNITIUM_VERSION=15.6.2 \
   fail "the fallback to admin/admin was not noticed"
 fi
 in_ct '! test -e /etc/dns/auth.config; ! test -e /run/octopushy-technitium'
+certificate=$(in_ct 'sha256sum /etc/dns/octopushy-https.pfx')
 plan -replace=terraform_data.install | tail -1
 installs
+[[ $(in_ct 'sha256sum /etc/dns/octopushy-https.pfx') == "$certificate" ]] || fail "a second first start changed the certificate"
 
 log "A new root disk with the same /etc/dns"
 before=$(identity)

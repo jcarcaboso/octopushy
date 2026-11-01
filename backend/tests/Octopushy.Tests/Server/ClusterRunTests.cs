@@ -688,17 +688,23 @@ public class ClusterRunTests(PostgresFixture postgres)
         await FormAsync(server, agent);
         var planner = server.Services.GetRequiredService<Planner>();
         var guestRun = await planner.PlanGuestAsync(GuestId(server, ClusterDefinitionTests.Secondary), CancellationToken.None);
+        await server.TickAsync();
+        Assert.NotEmpty(agent.TakeAssignments());
 
         // As after a restart: the guest's attempt is queued, and a started cluster run holds it.
         var clusterRun = await server.LatestRunAsync(Cluster, Operations.Cluster);
         await server.WithDbAsync(async db =>
         {
+            await db.Attempts.Where(a => a.RunId == guestRun).ExecuteUpdateAsync(u => u
+                .SetProperty(a => a.Status, AttemptStatuses.Queued).SetProperty(a => a.AgentId, (Guid?)null).SetProperty(a => a.AssignedAt, (DateTimeOffset?)null));
             await db.Runs.Where(r => r.Id == clusterRun.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, RunStatuses.Running));
         });
         await server.Engine.DispatchAsync(CancellationToken.None);
-        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
+        Assert.Empty(agent.TakeAssignments());
         var waiting = await server.QueryAsync(db => db.Attempts.Where(a => a.RunId == guestRun).Select(a => a.WaitingReason).FirstOrDefaultAsync());
-        Assert.Null(waiting is null ? null : Assert.Single(new[] { waiting }, w => w.Contains("Waiting for cluster run")) is null ? "" : null);
+        Assert.Contains("Waiting for cluster run", waiting);
+        var blocked = await server.QueryAsync(db => db.Runs.FirstAsync(r => r.Id == guestRun));
+        Assert.Equal(RunStatuses.Blocked, blocked.Status);
     }
 
     [Fact]

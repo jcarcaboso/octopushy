@@ -268,11 +268,9 @@ public class ProtectedSecretTests(PostgresFixture postgres)
         server.Commit("Sync again");
         await server.TickAsync();
 
-        var run = await server.LatestRunAsync(Secondary, Operations.Provision);
         var seen = await DriveAsync(server, agent);
         Assert.DoesNotContain(seen, a => a.Action is "preview" or "apply");
         Assert.Contains("proxmox/korriban/read-only-token", (await server.LatestRunAsync(Secondary, Operations.Provision)).Detail);
-        Assert.NotNull(run);
     }
 
     [Fact]

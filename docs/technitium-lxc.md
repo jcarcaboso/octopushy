@@ -174,7 +174,8 @@ connect. Turning this on for an existing server restarts its container.
 **These rules are inert unless the firewall is also enabled for the datacenter** (Datacenter,
 Firewall, Options), which Octopushy does not do. Port 5380 does not rely on them: the container's
 own rule keeps it closed, and DNS does not start without that rule, so a guard that fails is an
-outage of that member, not an open port.
+outage of that member, not an open port. Stopping or restarting `dns-http-guard.service` does the
+same to DNS; to reload the rule, use `systemctl reload`, as the install does.
 
 In a cluster, members talk to each other on 53443 and 53 in both directions, and Technitium's
 cluster traffic does not work through a proxy. Limit the sources to your LAN if you like, but keep
@@ -369,7 +370,8 @@ once formed, and OpenTofu's `prevent_destroy` stops it a second time.
 
 ### Removing things
 
-Take a member out of `members` to remove it. The plan shows a delete, so `policy.destructive`
+Take a member out of `members` to remove it. The member list is part of what was trusted, so the
+run first waits for **Trust cluster** again. The plan then shows a delete, so `policy.destructive`
 applies. After approval the member leaves the cluster **before** the apply, identified by what
 Octopushy recorded when it joined, and never by looking undeclared: a peer nobody approved removing
 stays, and verification reports it. If it fails, nothing was applied, so the next plan shows the

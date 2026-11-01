@@ -79,11 +79,21 @@ class PasswordTests(unittest.TestCase):
         self.assertRegex(unit, r"(?m)^After=.*dns-http-guard\.service")
         self.assertNotRegex(unit, r"(?m)^Wants=.*dns-http-guard")
 
+    def test_installing_again_does_not_restart_dns_through_its_guard(self):
+        # Requires= passes a restart of the guard on to DNS; a reload stays where it is.
+        self.assertIn("ExecReload=/usr/sbin/nft -f /etc/dns-http-guard.nft", INSTALL)
+        self.assertIn("systemctl reload dns-http-guard.service", INSTALL)
+        self.assertNotRegex(INSTALL, r"systemctl (try-)?restart dns-http-guard")
+
     def test_the_certificate_names_the_address_so_it_can_be_pinned(self):
         # A certificate with only a common name cannot anchor the provider's connection.
         self.assertIn("subjectAltName=IP:$address", INSTALL)
         self.assertIn("DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH", INSTALL)
         self.assertNotIn("DNS_SERVER_WEB_SERVICE_USE_SELF_SIGNED_CERT=true", INSTALL)
+
+    def test_a_second_first_start_keeps_the_certificate_dns_config_can_open(self):
+        # dns.config keeps the password, and the variables are read only when it is absent.
+        self.assertIn('if [[ ! -e $config/dns.config || ! -e $certificate ]]; then', INSTALL)
 
     def test_both_logins_are_checked_and_the_file_is_removed_on_exit(self):
         self.assertIn("trap cleanup EXIT", INSTALL)

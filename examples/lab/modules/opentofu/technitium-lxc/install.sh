@@ -141,6 +141,7 @@ Before=$service
 Type=oneshot
 RemainAfterExit=true
 ExecStart=/usr/sbin/nft -f /etc/dns-http-guard.nft
+ExecReload=/usr/sbin/nft -f /etc/dns-http-guard.nft
 
 [Install]
 WantedBy=multi-user.target
@@ -210,9 +211,9 @@ if [[ $changed == true ]]; then
   ln -sfn "$runtime_dir" "$base/aspnetcore"
 fi
 systemctl daemon-reload
-systemctl enable --now dns-http-guard.service \
+# A reload, because DNS requires this unit: restarting it would restart DNS on every install.
+systemctl enable --now dns-http-guard.service && systemctl reload dns-http-guard.service \
   || fail "cannot load the nftables rule that keeps port 5380 on loopback; is nf_tables available on the Proxmox host?"
-systemctl restart dns-http-guard.service
 
 # The first start, the only one that reads these. They live in /run, so a reboot can never
 # start the server with them, and a file that names the password file holds no secret.
@@ -223,15 +224,19 @@ if [[ ! -e $config/auth.config ]]; then
   chown dns-server "$password"
   chmod 0400 "$password"
   # Technitium's own certificate has only a common name, which nothing can verify. This one
-  # names the address, so that an operator can pin it for the provider and the agent.
-  (umask 077 && openssl rand -hex 24 >"$work/tls.password")
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
-    -subj "/CN=$address" -addext "subjectAltName=IP:$address" \
-    -keyout "$work/tls.key" -out "$work/tls.crt" 2>/dev/null
-  openssl pkcs12 -export -inkey "$work/tls.key" -in "$work/tls.crt" -out "$certificate" \
-    -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout "file:$work/tls.password"
-  chown dns-server:dns-server "$certificate"
-  chmod 0640 "$certificate"
+  # names the address, so that an operator can pin it for the provider and the agent. After a
+  # failed first start dns.config holds its password, and a new one would lock HTTPS out.
+  : >"$work/tls.password"
+  if [[ ! -e $config/dns.config || ! -e $certificate ]]; then
+    (umask 077 && openssl rand -hex 24 >"$work/tls.password")
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+      -subj "/CN=$address" -addext "subjectAltName=IP:$address" \
+      -keyout "$work/tls.key" -out "$work/tls.crt" 2>/dev/null
+    openssl pkcs12 -export -inkey "$work/tls.key" -in "$work/tls.crt" -out "$certificate" \
+      -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout "file:$work/tls.password"
+    chown dns-server:dns-server "$certificate"
+    chmod 0640 "$certificate"
+  fi
   install -d -m 0755 "$first_run_drop_in"
   cat >"$first_run_drop_in/first-run.conf" <<CONF
 [Service]
