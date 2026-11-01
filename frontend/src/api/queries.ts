@@ -9,6 +9,7 @@ import type {
   RepositoryUpdate,
   RunDetail,
   TokenRequest,
+  TrustClusterRequest,
   TrustInstallationRequest,
   VariableCandidate,
   VariablePromotion,
@@ -113,6 +114,14 @@ export function useInstallation(id: string) {
   return useQuery({
     queryKey: keys.installation(id),
     queryFn: () => unwrap(api.GET("/api/installations/{id}", { params: { path: { id } } })),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCluster(id: string) {
+  return useQuery({
+    queryKey: ["cluster", id],
+    queryFn: () => unwrap(api.GET("/api/clusters/{id}", { params: { path: { id } } })),
     refetchInterval: 10_000,
   });
 }
@@ -253,7 +262,7 @@ function useRefreshRuns() {
   const client = useQueryClient();
   return () =>
     Promise.all(
-      ["overview", "inventory", "guest", "installation", "runs", "run"].map((key) =>
+      ["overview", "inventory", "guest", "installation", "cluster", "runs", "run"].map((key) =>
         client.invalidateQueries({ queryKey: [key] }),
       ),
     );
@@ -263,6 +272,14 @@ export function usePlanGuest() {
   const refresh = useRefreshRuns();
   return useMutation({
     mutationFn: (id: string) => unwrap(api.POST("/api/guests/{id}/plan", { params: { path: { id } } })),
+    onSuccess: () => refresh(),
+  });
+}
+
+export function usePlanCluster() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/clusters/{id}/plan", { params: { path: { id } } })),
     onSuccess: () => refresh(),
   });
 }
@@ -508,6 +525,16 @@ export function useTrustInstallation() {
     retry: false,
     mutationFn: ({ id, ...body }: TrustInstallationRequest & { id: string }) =>
       unwrap(api.POST("/api/installations/{id}/trust", { params: { path: { id } }, body })),
+    onSuccess: () => refreshRuns(),
+  });
+}
+
+export function useTrustCluster() {
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, ...body }: TrustClusterRequest & { id: string }) =>
+      unwrap(api.POST("/api/clusters/{id}/trust", { params: { path: { id } }, body })),
     onSuccess: () => refreshRuns(),
   });
 }

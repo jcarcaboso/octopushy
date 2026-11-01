@@ -93,7 +93,7 @@ describe("installation trust", () => {
   it("marks installations that need trust in the inventory", async () => {
     const inventory: Inventory = {
       revision: null,
-      labs: [{ id: "lab-1", address: "home", name: "Home", valid: true, issues: [], installations: [summary()] }],
+      labs: [{ id: "lab-1", address: "home", name: "Home", valid: true, issues: [], installations: [summary()], clusters: [] }],
     };
     mockApi({ "GET /api/inventory": () => inventory });
     renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory" });

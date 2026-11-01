@@ -36,6 +36,7 @@ const statuses: Record<string, StatusStyle> = {
   "awaiting-approval": { label: "Awaiting approval", tone: "attention", icon: "hand" },
   blocked: { label: "Blocked", tone: "warning", icon: "ban" },
   failed: { label: "Failed", tone: "danger", icon: "x" },
+  "verification-failed": { label: "Verification failed", tone: "danger", icon: "alert" },
   uncertain: { label: "Uncertain", tone: "uncertain", icon: "question" },
   invalid: { label: "Invalid", tone: "danger", icon: "alert" },
   missing: { label: "Missing", tone: "warning", icon: "missing" },

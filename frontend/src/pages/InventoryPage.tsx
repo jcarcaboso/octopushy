@@ -1,7 +1,7 @@
 import { GitBranch, Server } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
 import { useInventory } from "../api/queries";
-import type { InstallationSummary, Lab } from "../api/types";
+import type { ClusterSummary, InstallationSummary, Lab } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { GuestTable } from "../components/GuestTable";
@@ -85,6 +85,32 @@ function InstallationCard({ installation, filter }: { installation: Installation
   );
 }
 
+function ClusterCard({ cluster }: { cluster: ClusterSummary }) {
+  const needsTrust = cluster.valid && (cluster.trust.untrusted.length > 0 || cluster.trust.codeChanged);
+  return (
+    <Card
+      title={
+        <Link to={`/clusters/${cluster.id}`} className="card__title-link">
+          {cluster.name}
+        </Link>
+      }
+      meta={cluster.type ? `${humanize(cluster.type)} cluster` : "Application cluster"}
+      actions={<StatusBadge status={cluster.status} />}
+      className="installation"
+    >
+      <div className="installation__facts">
+        <span className="mono muted break">{cluster.clusterDomain ?? "No domain"}</span>
+        <span className="muted">{plural(cluster.members.length, "member")}</span>
+        {needsTrust ? (
+          <Link to={`/clusters/${cluster.id}#trust`}>
+            <Badge tone="warning">Needs trust</Badge>
+          </Link>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
 function LabSection({ lab, filter }: { lab: Lab; filter: string[] | null }) {
   const installations = filter
     ? lab.installations.filter((i) => i.guests.some((g) => filter.includes(g.status)))
@@ -109,6 +135,13 @@ function LabSection({ lab, filter }: { lab: Lab; filter: string[] | null }) {
         <div className="stack stack--large">
           {installations.map((installation) => (
             <InstallationCard key={installation.id} installation={installation} filter={filter} />
+          ))}
+        </div>
+      )}
+      {filter || lab.clusters.length === 0 ? null : (
+        <div className="stack stack--large">
+          {lab.clusters.map((cluster) => (
+            <ClusterCard key={cluster.id} cluster={cluster} />
           ))}
         </div>
       )}

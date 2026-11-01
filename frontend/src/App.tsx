@@ -7,6 +7,7 @@ import { keys, signedOut } from "./api/queries";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { AgentsPage } from "./pages/AgentsPage";
+import { ClusterPage } from "./pages/ClusterPage";
 import { GuestPage } from "./pages/GuestPage";
 import { InstallationPage } from "./pages/InstallationPage";
 import { InventoryPage } from "./pages/InventoryPage";
@@ -42,6 +43,7 @@ export function AppRoutes() {
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="guests/:id" element={<GuestPage />} />
         <Route path="installations/:id" element={<InstallationPage />} />
+        <Route path="clusters/:id" element={<ClusterPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunPage />} />
         <Route path="agents" element={<AgentsPage />} />

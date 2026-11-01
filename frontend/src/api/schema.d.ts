@@ -228,6 +228,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/clusters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCluster"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/clusters/{id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["planCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/clusters/{id}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["trustCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/guests/{id}/state": {
         parameters: {
             query?: never;
@@ -906,6 +954,67 @@ export interface components {
             path: string;
             change: string;
         };
+        ClusterDetailDto: {
+            cluster: components["schemas"]["ClusterSummaryDto"];
+            definitionFile: null | string;
+            definitionText: null | string;
+            issues: components["schemas"]["IssueDto"][];
+            policy: null | components["schemas"]["PolicyDto"];
+            agentLabels: string[];
+            agentLabelsSetBy: null | string;
+            desiredCommit: null | string;
+            checkedCommit: null | string;
+            /** Format: date-time */
+            checkedAt: null | string;
+            appliedCommit: null | string;
+            /** Format: date-time */
+            appliedAt: null | string;
+            verification: null | components["schemas"]["JsonNode"];
+            /** Format: date-time */
+            missingSince: null | string;
+            runs: components["schemas"]["RunSummaryDto"][];
+        };
+        ClusterMemberDto: {
+            guest: string;
+            role: string;
+            address: null | string;
+            /** Format: uuid */
+            guestId: null | string;
+            guestStatus: null | string;
+        };
+        ClusterSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            address: string;
+            name: string;
+            type: null | string;
+            clusterDomain: null | string;
+            status: string;
+            statusDetail: null | string;
+            valid: boolean;
+            /** Format: int32 */
+            issueCount: number;
+            members: components["schemas"]["ClusterMemberDto"][];
+            activeRun: null | components["schemas"]["RunSummaryDto"];
+            lastRun: null | components["schemas"]["RunSummaryDto"];
+            trust: components["schemas"]["ClusterTrustDto"];
+            /** Format: date-time */
+            verifiedAt: null | string;
+            /** Format: date-time */
+            observedAt: null | string;
+            observeError: null | string;
+            /** Format: date-time */
+            observeErrorAt: null | string;
+        };
+        ClusterTrustDto: {
+            endpoints: string[];
+            untrusted: string[];
+            codeDigest: null | string;
+            codeChanged: boolean;
+            /** Format: date-time */
+            trustedAt: null | string;
+            trustedBy: null | string;
+        };
         CreatedOperatorToken: {
             /** Format: uuid */
             id: string;
@@ -1138,6 +1247,7 @@ export interface components {
             valid: boolean;
             issues: components["schemas"]["IssueDto"][];
             installations: components["schemas"]["InstallationSummaryDto"][];
+            clusters: components["schemas"]["ClusterSummaryDto"][];
         };
         LogDto: {
             lines: components["schemas"]["LogLineRecord"][];
@@ -1169,6 +1279,8 @@ export interface components {
             error: string;
             /** Format: date-time */
             at: null | string;
+            /** @default installation */
+            kind: string;
         };
         ObservedGuestDto: {
             /** Format: int32 */
@@ -1469,6 +1581,10 @@ export interface components {
             maxConcurrency: null | number;
             /** Format: int32 */
             expiresInMinutes: null | number;
+        };
+        TrustClusterRequest: {
+            endpoints: string[];
+            codeDigest: string;
         };
         TrustInstallationRequest: {
             endpoints: string[];
@@ -2307,6 +2423,164 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstallationTrustDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterDetailDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    planCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    trustCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustClusterRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterTrustDto"];
                 };
             };
             /** @description Bad Request */

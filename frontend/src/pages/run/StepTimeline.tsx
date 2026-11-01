@@ -31,6 +31,10 @@ const stepNames: Record<string, string> = {
   "wait-updated-worker": "Wait for the original worker to reconnect",
   "drain-worker": "Drain the worker",
   "revoke-worker": "Remove the worker's enrollment",
+  "inspect-cluster": "Inspect members",
+  "reconcile-cluster": "Join and remove members",
+  "refresh-block-lists": "Download block lists",
+  "verify-cluster": "Verify every member",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -38,6 +42,8 @@ function describe(step: Step, operation: string): string | null {
     case "plan":
       return operation === "retire"
         ? "OpenTofu plans destroying the guest; the saved plan is what gets applied."
+        : operation === "cluster"
+        ? "OpenTofu plans the cluster's settings and members; the saved plan is what gets applied."
         : "OpenTofu plans the change; the saved plan is what gets applied.";
     case "approval":
       return "The saved plan is approved by policy or by you.";
@@ -63,6 +69,14 @@ function describe(step: Step, operation: string): string | null {
       return "Stops the worker taking new work and waits for its current work to finish. Another worker removes its VM.";
     case "revoke-worker":
       return "Once the VM is verified absent, removes the worker's enrollment; its identity stays in history.";
+    case "inspect-cluster":
+      return "Asks every member what it reports, so that the plan shows a member out of the cluster or an entry nobody declared.";
+    case "reconcile-cluster":
+      return "Joins and removes exactly the members the approved plan changed. The admin password stays out of OpenTofu.";
+    case "refresh-block-lists":
+      return "A new list URL is not enforced until the lists are downloaded.";
+    case "verify-cluster":
+      return "Connects to every member directly and asks each one, including over DNS. This runs on every cluster run.";
     default:
       return null;
   }

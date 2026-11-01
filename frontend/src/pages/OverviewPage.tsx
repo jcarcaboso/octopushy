@@ -129,8 +129,11 @@ function AttentionList({ runs, observeErrors }: { runs: RunSummary[]; observeErr
           <StatusBadge status={isCredentialBlock(failure.error) ? "blocked" : "failed"} />
           <div className="attention__main">
             <div>
-              <Link to={`/installations/${failure.installationId}`} className="strong-link">
-                Observing {failure.name}
+              <Link
+                to={`/${failure.kind === "cluster" ? "clusters" : "installations"}/${failure.installationId}`}
+                className="strong-link"
+              >
+                {failure.kind === "cluster" ? "Checking" : "Observing"} {failure.name}
               </Link>{" "}
               <span className="mono small muted">{failure.address}</span>
             </div>

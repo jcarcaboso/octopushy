@@ -57,6 +57,8 @@ export function runResourcePath(run: { resourceKind: string; resourceId: string 
       return `/guests/${run.resourceId}`;
     case "installation":
       return `/installations/${run.resourceId}`;
+    case "cluster":
+      return `/clusters/${run.resourceId}`;
     default:
       return "/inventory";
   }
