@@ -108,6 +108,9 @@ pub struct RunArgs {
     /// The `tofu` binary for `--tool-runtime local`.
     #[arg(long, default_value = "tofu")]
     pub tofu_binary: PathBuf,
+    /// The `octopushy-ansible` program for `--tool-runtime local`.
+    #[arg(long, default_value = "octopushy-ansible")]
+    pub ansible_binary: PathBuf,
     /// The podman or docker binary (default: from PATH).
     #[arg(long)]
     pub container_binary: Option<PathBuf>,

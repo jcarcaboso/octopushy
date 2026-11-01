@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Runs ansible-playbook for the agent, on every tool runtime.
+
+Arguments go to ansible-playbook unchanged. When OCTOPUSHY_STDIN is set, stdin holds one
+JSON document with what must not be in argv, the environment or a file on disk:
+
+    {"sshKey": "...", "secretVars": {"name": "value"}, "secretFiles": {"name": "value"}}
+
+The SSH key goes into a private ssh-agent. Secret vars and files go into a private directory
+under /tmp, which has to be a tmpfs, and are removed when Ansible ends.
+"""
+import ctypes
+import json
+import os
+import pwd
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+TMP = "/tmp"
+# What a run needs to be safe whatever a repository's ansible.cfg says.
+FIXED_ENVIRONMENT = {
+    "ANSIBLE_CALLBACK_PLUGINS": HERE,
+    "ANSIBLE_CALLBACKS_ENABLED": "octopushy_recap",
+    "ANSIBLE_DEBUG": "False",
+    "ANSIBLE_DIFF_ALWAYS": "False",
+    "ANSIBLE_DISPLAY_ARGS_TO_STDOUT": "False",
+    "ANSIBLE_FORCE_COLOR": "False",
+    "ANSIBLE_FORKS": "1",
+    "ANSIBLE_HOST_KEY_CHECKING": "True",
+    "ANSIBLE_KEEP_REMOTE_FILES": "False",
+    "ANSIBLE_LOG_PATH": "/dev/null",
+    "ANSIBLE_NOCOLOR": "True",
+    "ANSIBLE_NO_TARGET_SYSLOG": "True",
+    # Module arguments cross the SSH channel instead of temporary files on both sides.
+    "ANSIBLE_PIPELINING": "True",
+    "ANSIBLE_RETRY_FILES_ENABLED": "False",
+    "ANSIBLE_STDOUT_CALLBACK": "default",
+    "ANSIBLE_VERBOSITY": "0",
+    "PYTHONUNBUFFERED": "1",
+}
+
+
+def fail(message):
+    print(f"octopushy-ansible: {message}", file=sys.stderr, flush=True)
+    sys.exit(78)
+
+
+def die_with_parent():
+    """Nothing started here outlives this process, not even after a hard kill."""
+    ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0)
+
+
+def tmp_is_memory():
+    """Whether /tmp is backed by memory: the last mount over it in mountinfo decides."""
+    kind = None
+    best = -1
+    with open("/proc/self/mountinfo", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            before, _, after = line.partition(" - ")
+            mount = before.split()[4]
+            if (mount == TMP or mount == "/" or TMP.startswith(mount + "/")) and len(mount) >= best:
+                best = len(mount)
+                kind = after.split()[0]
+    return kind in ("tmpfs", "ramfs")
+
+
+def yaml_unsafe(value):
+    """A YAML string Ansible will not template. A JSON string is a YAML double-quoted scalar."""
+    return "!unsafe " + json.dumps(value)
+
+
+def write_private(path, content):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(content)
+
+
+def start_ssh_agent(private, key, environment):
+    # A socket holds nothing, but its path has a short limit, so this stays directly in /tmp.
+    socket = os.path.join(private, "agent")
+    agent = subprocess.Popen(
+        ["ssh-agent", "-D", "-a", socket],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        preexec_fn=die_with_parent,
+    )
+    environment["SSH_AUTH_SOCK"] = socket
+    for _ in range(100):
+        if os.path.exists(socket):
+            break
+        time.sleep(0.02)
+    normalized = key.replace("\r\n", "\n").strip() + "\n"
+    added = subprocess.run(
+        ["ssh-add", "-q", "-"],
+        input=normalized.encode(),
+        env=environment,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if added.returncode != 0:
+        agent.kill()
+        fail("the SSH private key could not be loaded; it must be an unencrypted OpenSSH key")
+    return agent
+
+
+def write_secrets(private, secrets):
+    """Writes the extra-vars file; returns the ansible-playbook arguments that load it."""
+    lines = []
+    for name, value in secrets.get("secretVars", {}).items():
+        lines.append(f"{json.dumps(name)}: {yaml_unsafe(value)}")
+    files = os.path.join(private, "files")
+    os.mkdir(files, 0o700)
+    for index, (name, value) in enumerate(secrets.get("secretFiles", {}).items()):
+        path = os.path.join(files, str(index))
+        write_private(path, value)
+        lines.append(f"{json.dumps(name)}: {json.dumps(path)}")
+    if not lines:
+        return []
+    path = os.path.join(private, "secrets.yml")
+    write_private(path, "\n".join(lines) + "\n")
+    return ["-e", f"@{path}"]
+
+
+def ensure_user(private, environment):
+    """ssh needs a passwd entry, which an arbitrary --user on a read-only image does not have."""
+    uid = os.getuid()
+    try:
+        pwd.getpwuid(uid)
+    except KeyError:
+        passwd = os.path.join(private, "passwd")
+        group = os.path.join(private, "group")
+        write_private(passwd, f"octopushy:x:{uid}:{os.getgid()}::{environment.get('HOME', TMP)}:/bin/sh\n")
+        write_private(group, f"octopushy:x:{os.getgid()}:\n")
+        environment.update(
+            LD_PRELOAD="libnss_wrapper.so", NSS_WRAPPER_PASSWD=passwd, NSS_WRAPPER_GROUP=group
+        )
+
+
+def run(arguments, environment):
+    """Runs ansible-playbook as a child, reaping whatever is orphaned while this is PID 1."""
+    playbook = os.path.join(os.path.dirname(sys.executable), "ansible-playbook")
+    child = subprocess.Popen(
+        [playbook, *arguments], env=environment, stdin=subprocess.DEVNULL, preexec_fn=die_with_parent
+    )
+
+    def forward(number, _frame):
+        child.send_signal(number)
+
+    signal.signal(signal.SIGTERM, forward)
+    signal.signal(signal.SIGINT, forward)
+    while True:
+        pid, status = os.wait()
+        if pid == child.pid:
+            code = os.waitstatus_to_exitcode(status)
+            return code if code >= 0 else 128 - code
+
+
+def main():
+    arguments = sys.argv[1:]
+    environment = {**os.environ, **FIXED_ENVIRONMENT}
+    if arguments == ["--version"]:
+        playbook = os.path.join(os.path.dirname(sys.executable), "ansible-playbook")
+        os.execve(playbook, [playbook, "--version"], environment)
+
+    private = os.environ.get("OCTOPUSHY_SECRET_DIR") or tempfile.mkdtemp(prefix="octopushy-", dir=TMP)
+    os.makedirs(private, mode=0o700, exist_ok=True)
+    agent = None
+    try:
+        environment["ANSIBLE_LOCAL_TEMP"] = os.path.join(private, "local")
+        environment["TMPDIR"] = private
+        ensure_user(private, environment)
+        if os.environ.get("OCTOPUSHY_STDIN"):
+            if not tmp_is_memory():
+                fail(f"{TMP} is not a tmpfs, so secrets would reach a disk; mount one there")
+            secrets = json.load(sys.stdin)
+            arguments = [*arguments, *write_secrets(private, secrets)]
+            if secrets.get("sshKey"):
+                agent = start_ssh_agent(private, secrets["sshKey"], environment)
+            del secrets
+        return run(arguments, environment)
+    finally:
+        if agent is not None:
+            agent.kill()
+        shutil.rmtree(private, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,8 +4,12 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
 use crate::attempts::logs::MAX_LINE_BYTES;
 
+/// Longest line read. It is more than a log line keeps, so that a secret across
+/// [`MAX_LINE_BYTES`] reaches the masker whole: whatever is cut here was never going to be kept.
+pub const MAX_READ_BYTES: usize = 2 * MAX_LINE_BYTES;
+
 /// Calls `f` for each line of `reader` (lossy UTF-8, without the newline).
-/// Lines longer than [`MAX_LINE_BYTES`] are cut; the rest of such a line is
+/// Lines longer than [`MAX_READ_BYTES`] are cut; the rest of such a line is
 /// skipped.
 pub async fn for_each_line<R: AsyncRead + Unpin>(
     reader: R,
@@ -26,7 +30,7 @@ pub async fn for_each_line<R: AsyncRead + Unpin>(
             Some(i) => (&buf[..i], i + 1, true),
             None => (buf, buf.len(), false),
         };
-        let room = MAX_LINE_BYTES.saturating_sub(line.len());
+        let room = MAX_READ_BYTES.saturating_sub(line.len());
         if chunk.len() > room {
             line.extend_from_slice(&chunk[..room]);
             truncated = true;
@@ -59,7 +63,7 @@ mod tests {
 
     #[tokio::test]
     async fn splits_and_caps() {
-        let long = "y".repeat(MAX_LINE_BYTES + 10);
+        let long = "y".repeat(MAX_READ_BYTES + 10);
         let input = format!("one\r\ntwo\n{long}\nlast");
         let mut lines = Vec::new();
         for_each_line(input.as_bytes(), |l| lines.push(l))

@@ -1,9 +1,10 @@
-//! Running tools (OpenTofu) for attempts: in a rootless container (`podman`,
-//! `docker`) or directly (`local`, for development and tests).
+//! Running tools (OpenTofu, Ansible) for attempts: in a rootless container
+//! (`podman`, `docker`) or directly (`local`).
 //!
 //! Secrets never appear on a command line, where `/proc/<pid>/cmdline` would
 //! show them: the tool's environment is set on the child process, and container
 //! runtimes get only `-e NAME` so they copy the value from their own environment.
+//! A tool that takes secrets on stdin gets `-i` and a pipe.
 
 mod lines;
 
@@ -12,7 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +47,22 @@ impl RuntimeKind {
     }
 }
 
+/// Which tool an [`Invocation`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    OpenTofu,
+    Ansible,
+}
+
+impl Tool {
+    fn label(self) -> &'static str {
+        match self {
+            Tool::OpenTofu => "tofu",
+            Tool::Ansible => "ansible-playbook",
+        }
+    }
+}
+
 /// How tools are started.
 #[derive(Debug)]
 pub struct ToolRuntime {
@@ -54,6 +71,8 @@ pub struct ToolRuntime {
     pub container_binary: PathBuf,
     /// The `tofu` binary for the `local` runtime.
     pub tofu_binary: PathBuf,
+    /// The `octopushy-ansible` program for the `local` runtime.
+    pub ansible_binary: PathBuf,
     /// `--network` for containers.
     pub network: Option<String>,
     /// How long a cancelled tool gets to exit after SIGTERM.
@@ -64,6 +83,7 @@ pub struct ToolRuntime {
 /// One tool run.
 #[derive(Debug)]
 pub struct Invocation<'a> {
+    pub tool: Tool,
     /// Container name, unique per run.
     pub name: String,
     /// The image (container runtimes only).
@@ -73,7 +93,7 @@ pub struct Invocation<'a> {
     /// Working directory; must be inside `workspace`.
     pub workdir: &'a Path,
     /// The provider cache (mounted at [`CONTAINER_PLUGIN_CACHE`]).
-    pub plugin_cache: &'a Path,
+    pub plugin_cache: Option<&'a Path>,
     /// Tool arguments, with paths already translated by [`ToolRuntime::path`].
     pub args: Vec<String>,
     /// Settings the agent chose itself (`HOME`, `TF_PLUGIN_CACHE_DIR`, ...).
@@ -82,6 +102,8 @@ pub struct Invocation<'a> {
     pub settings: Vec<(String, String)>,
     /// The input's `env` and `secretEnv`, passed by name only.
     pub env: Vec<(String, String)>,
+    /// Written to the tool's stdin, then closed. Without it stdin is empty.
+    pub stdin: Option<Vec<u8>>,
     /// Capture stdout instead of logging it.
     pub capture_stdout: bool,
     /// A whole stderr line to report in [`ToolOutput::stderr_marked`].
@@ -128,6 +150,7 @@ impl ToolRuntime {
             kind,
             container_binary: container_binary.unwrap_or_else(|| PathBuf::from(kind.as_str())),
             tofu_binary,
+            ansible_binary: PathBuf::from("octopushy-ansible"),
             network,
             kill_grace: Duration::from_secs(10),
             docker_rootless: OnceCell::new(),
@@ -191,6 +214,39 @@ impl ToolRuntime {
             .to_owned())
     }
 
+    /// Whether Ansible can run. A container runtime pulls its image when it is needed.
+    pub async fn probe_ansible(&self) -> Result<String> {
+        if self.is_container() {
+            return Ok("from its image".to_owned());
+        }
+        let out = Command::new(&self.ansible_binary)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .with_context(|| format!("cannot run {}", self.ansible_binary.display()))?;
+        if !out.status.success() {
+            bail!(
+                "{} --version exited with {}",
+                self.ansible_binary.display(),
+                out.status
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_owned())
+    }
+
+    fn local_binary(&self, tool: Tool) -> &Path {
+        match tool {
+            Tool::OpenTofu => &self.tofu_binary,
+            Tool::Ansible => &self.ansible_binary,
+        }
+    }
+
     async fn docker_is_rootless(&self) -> bool {
         *self
             .docker_rootless
@@ -219,7 +275,7 @@ impl ToolRuntime {
         let mut cmd;
         match self.kind {
             RuntimeKind::Local => {
-                cmd = Command::new(&self.tofu_binary);
+                cmd = Command::new(self.local_binary(inv.tool));
                 cmd.args(&inv.args).current_dir(inv.workdir).env_clear();
                 if let Some(path) = std::env::var_os("PATH") {
                     cmd.env("PATH", path);
@@ -230,7 +286,10 @@ impl ToolRuntime {
                 if inv.image.trim().is_empty() {
                     bail!("the input names no container image");
                 }
-                for p in [inv.workspace, inv.plugin_cache] {
+                for p in [Some(inv.workspace), inv.plugin_cache]
+                    .into_iter()
+                    .flatten()
+                {
                     let s = p.to_string_lossy();
                     if s.contains(':') || s.contains(',') {
                         bail!("{s} cannot be mounted: it contains ':' or ','");
@@ -238,6 +297,9 @@ impl ToolRuntime {
                 }
                 cmd = Command::new(&self.container_binary);
                 cmd.args(["run", "--rm"]);
+                if inv.stdin.is_some() {
+                    cmd.arg("-i");
+                }
                 cmd.args(["--name", &inv.name]);
                 cmd.args(["--label", "io.octopushy.attempt=true"]);
                 // The tool's output may contain secrets; keep it out of the
@@ -254,10 +316,12 @@ impl ToolRuntime {
                     "-v".to_owned(),
                     format!("{}:{CONTAINER_WORKSPACE}:Z", inv.workspace.display()),
                 ]);
-                cmd.args([
-                    "-v".to_owned(),
-                    format!("{}:{CONTAINER_PLUGIN_CACHE}:z", inv.plugin_cache.display()),
-                ]);
+                if let Some(cache) = inv.plugin_cache {
+                    cmd.args([
+                        "-v".to_owned(),
+                        format!("{}:{CONTAINER_PLUGIN_CACHE}:z", cache.display()),
+                    ]);
+                }
                 cmd.args(["-w".to_owned(), self.path(inv.workspace, inv.workdir)?]);
                 if self.kind == RuntimeKind::Podman {
                     // Run as the agent's own UID so written files stay its own.
@@ -280,33 +344,46 @@ impl ToolRuntime {
                 }
                 cmd.envs(inv.env.iter().map(|(k, v)| (k, v)));
                 cmd.arg(inv.image);
-                // The image's entrypoint is `tofu`.
+                // The image's entrypoint is the tool.
                 cmd.args(&inv.args);
             }
         }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            // Own process group: a Ctrl-C at the agent's terminal does not reach
-            // the tool, and cancel can signal the whole group.
-            .process_group(0);
+        cmd.stdin(if inv.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        // Own process group: a Ctrl-C at the agent's terminal does not reach
+        // the tool, and cancel can signal the whole group.
+        .process_group(0);
         Ok(cmd)
     }
 
     /// Runs the tool, streaming its output into the attempt log.
     pub async fn run(
         &self,
-        inv: Invocation<'_>,
+        mut inv: Invocation<'_>,
         log: &AttemptLogger,
         cancel: &CancellationToken,
     ) -> Result<ToolOutput> {
-        log.agent(format!("$ tofu {}", inv.args.join(" ")));
+        log.agent(format!("$ {} {}", inv.tool.label(), inv.args.join(" ")));
         let mut cmd = self.command(&inv).await?;
         let mut child = cmd.spawn().with_context(|| match self.kind {
-            RuntimeKind::Local => format!("cannot start {}", self.tofu_binary.display()),
+            RuntimeKind::Local => {
+                format!("cannot start {}", self.local_binary(inv.tool).display())
+            }
             _ => format!("cannot start {}", self.container_binary.display()),
         })?;
+        if let Some(input) = inv.stdin.take() {
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            // On its own task: a tool that exits early must not leave this waiting on a full pipe.
+            tokio::spawn(async move {
+                let _ = stdin.write_all(&input).await;
+            });
+        }
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -431,14 +508,16 @@ mod tests {
         let workdir = ws.join("repo/root");
         let cache = PathBuf::from("/srv/cache");
         let inv = Invocation {
+            tool: Tool::OpenTofu,
             name: "octopushy-att-1-init".into(),
             image: "ghcr.io/opentofu/opentofu:1.13.1",
             workspace: &ws,
             workdir: &workdir,
-            plugin_cache: &cache,
+            plugin_cache: Some(&cache),
             args: vec!["init".into(), "-input=false".into()],
             settings: vec![("HOME".into(), "/work/home".into())],
             env: vec![("PG_CONN_STR".into(), "postgres://u:supersecret@db/x".into())],
+            stdin: None,
             capture_stdout: false,
             stderr_mark: None,
         };

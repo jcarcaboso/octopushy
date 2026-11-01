@@ -25,12 +25,17 @@ impl Masker {
     /// Builds a masker for `secrets`. Empty values are skipped. Besides each
     /// whole value it masks fragments that tools are known to print on their own:
     /// each line of a multi-line value, and the part after the first `=` (the
-    /// secret of a Proxmox token `USER@REALM!TOKENID=SECRET`).
+    /// secret of a Proxmox token `USER@REALM!TOKENID=SECRET`). Each is also masked
+    /// as JSON escapes it, which is how Ansible prints what a task returned.
     pub fn new<'a>(secrets: impl IntoIterator<Item = &'a str>) -> Self {
         let mut patterns: Vec<String> = Vec::new();
         let mut add = |p: &str| {
-            if !p.is_empty() && p != MASK && !patterns.iter().any(|q| q == p) {
-                patterns.push(p.to_owned());
+            let escaped = serde_json::to_string(p).unwrap_or_default();
+            let escaped = escaped.trim_matches('"');
+            for p in [p, escaped] {
+                if !p.is_empty() && p != MASK && !patterns.iter().any(|q| q == p) {
+                    patterns.push(p.to_owned());
+                }
             }
         };
         for secret in secrets {
@@ -117,6 +122,23 @@ mod tests {
             m.mask("line MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8"),
             "line ***"
         );
+    }
+
+    #[test]
+    fn masks_a_value_as_json_escapes_it() {
+        let m = Masker::new([r#"pa"ss\word"#]);
+        assert_eq!(m.mask(r#"{"msg": "pa\"ss\\word"}"#), r#"{"msg": "***"}"#);
+    }
+
+    #[test]
+    fn masks_a_whole_private_key_printed_on_one_json_line() {
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nabc=\n-----END OPENSSH PRIVATE KEY-----\n";
+        let m = Masker::new([key]);
+        let printed = serde_json::to_string(key).unwrap();
+        assert_eq!(m.mask(&printed), "\"***\"");
+        // Line by line, a fragment under six characters stays: this is the documented limit.
+        let text = m.mask("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nabc=");
+        assert_eq!(text, "***\n***\nabc=");
     }
 
     #[test]
