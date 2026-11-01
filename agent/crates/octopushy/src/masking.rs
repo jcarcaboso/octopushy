@@ -56,6 +56,25 @@ impl Masker {
         Self { patterns }
     }
 
+    /// Masks every string in a JSON value, keys included. Serialized text will not do: a value
+    /// holding a quote or a backslash is escaped there, and no longer matches.
+    pub fn mask_json(&self, value: serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match value {
+            Value::String(text) => Value::String(self.mask(&text).into_owned()),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|v| self.mask_json(v)).collect())
+            }
+            Value::Object(fields) => Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (self.mask(&k).into_owned(), self.mask_json(v)))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
     /// Whether there is nothing to mask.
     pub fn is_empty(&self) -> bool {
         self.patterns.is_empty()
@@ -76,6 +95,24 @@ impl Masker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_is_masked_at_any_depth_even_where_text_would_be_escaped() {
+        let m = Masker::new([r#"pass"word\here"#]);
+        let value = serde_json::json!({
+            "ok": false,
+            "members": [{ "checks": [{ "detail": r#"refused pass"word\here for you"#, "n": 3 }] }],
+            r#"pass"word\here"#: true,
+        });
+        let masked = m.mask_json(value);
+        assert_eq!(
+            masked["members"][0]["checks"][0]["detail"],
+            "refused *** for you"
+        );
+        assert_eq!(masked["members"][0]["checks"][0]["n"], 3);
+        assert_eq!(masked["***"], true);
+        assert!(!masked.to_string().contains("word"));
+    }
 
     #[test]
     fn masks_every_occurrence_longest_first() {

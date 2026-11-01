@@ -46,4 +46,5 @@ wiremock.workspace = true
 mock-proxmox.workspace = true
 tempfile.workspace = true
 axum.workspace = true
+tokio-rustls.workspace = true
 rcgen = { workspace = true, features = ["x509-parser"] }

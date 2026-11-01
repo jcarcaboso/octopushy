@@ -42,7 +42,7 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
             | ("nixos-rootfs", "grow")
             | ("guest", "install-disk-reporter")
             | ("managed-worker", "prepare" | "install" | "update-os")
-            | ("technitium", "reconcile" | "refresh-block-lists")
+            | ("technitium", "detach" | "reconcile" | "refresh-block-lists")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 

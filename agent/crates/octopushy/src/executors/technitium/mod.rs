@@ -1,7 +1,11 @@
 //! The `technitium` executor: what OpenTofu cannot do for an application cluster, and what it
-//! cannot see. `inspect` tells the plan what the members report, `reconcile` joins and removes
-//! the members an approved plan changed, `refresh-block-lists` forces a download, and `verify`
-//! connects to every member directly, because a rebuilt secondary is invisible from the primary.
+//! cannot see. `certificates` reads what members present, with no credentials. `inspect` tells
+//! the plan what they report, `detach` takes out the members an approved plan removes, `reconcile`
+//! joins the ones it adds, `refresh-block-lists` forces a download, and `verify` connects to every
+//! member directly, because a rebuilt secondary is invisible from the primary.
+//!
+//! The admin password goes only over a connection to the exact certificate an operator trusted
+//! for that member. There is no way to turn that off.
 
 mod api;
 mod dns;
@@ -10,11 +14,11 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use api::{Api, ApiError, ClusterState, Peer};
+use api::{Api, ApiError, ClusterState, Offered, Peer, sha256_hex};
 
 use super::{ExecContext, ExecResult, ExecutorConfig, Failure, Success};
 
@@ -29,8 +33,6 @@ const RECOVERY_DOC: &str = "docs/technitium-lxc.md";
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Input {
-    #[serde(default = "yes")]
-    verify_tls: bool,
     cluster_domain: String,
     minimum_version: String,
     members: Vec<Member>,
@@ -43,25 +45,30 @@ struct Input {
     blocked: Vec<String>,
     #[serde(default)]
     allowed: Vec<String>,
+    /// Names on the downloaded lists, which is what shows they are enforced.
+    #[serde(default)]
+    list_probes: Vec<String>,
     #[serde(default)]
     forward_zones: Vec<String>,
     control: Option<String>,
     #[serde(default = "default_sync_wait")]
     sync_wait_seconds: u64,
+    #[serde(default = "default_join_settle")]
+    join_settle_seconds: u64,
     #[serde(default)]
     join: Vec<String>,
     #[serde(default)]
-    remove: Vec<String>,
+    remove: Vec<Removal>,
     #[serde(default)]
     prune_entries: bool,
 }
 
-fn yes() -> bool {
-    true
-}
-
 fn default_sync_wait() -> u64 {
     90
+}
+
+fn default_join_settle() -> u64 {
+    JOIN_TIMEOUT.as_secs()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,10 +80,22 @@ struct Member {
     endpoint: String,
     #[serde(default = "default_dns_port")]
     dns_port: u16,
+    /// The certificate an operator trusted for this member. Nothing is sent without one.
+    certificate_sha256: Option<String>,
 }
 
 fn default_dns_port() -> u16 {
     53
+}
+
+/// A member the approved plan removes, as it was bound when it joined.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Removal {
+    guest: String,
+    address: Option<String>,
+    peer_id: Option<i64>,
+    peer_name: Option<String>,
 }
 
 impl Member {
@@ -102,19 +121,75 @@ impl Input {
     }
 }
 
+/// What every action needs to reach a member.
+struct Access<'a> {
+    password: &'a str,
+    timeout: Duration,
+}
+
 pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let input: Input = ctx.input()?;
-    let password = ctx.secrets.get(PASSWORD)?;
-    let http = api::http_client(input.verify_tls, cfg.proxmox_timeout)?;
+    if ctx.action == "certificates" {
+        return certificates(cfg, &input).await;
+    }
+    let access = Access {
+        password: ctx.secrets.get(PASSWORD)?,
+        timeout: cfg.proxmox_timeout,
+    };
     match ctx.action.as_str() {
-        "inspect" => inspect(ctx, &input, &http, password).await,
-        "reconcile" => reconcile(ctx, &input, &http, password).await,
-        "refresh-block-lists" => refresh(&input, &http, password).await,
-        "verify" => verify(cfg, ctx, &input, &http, password).await,
+        "inspect" => inspect(ctx, &input, &access).await,
+        "detach" => detach(ctx, &input, &access).await,
+        "reconcile" => reconcile(ctx, &input, &access).await,
+        "refresh-block-lists" => refresh(&input, &access).await,
+        "verify" => verify(cfg, ctx, &input, &access).await,
         other => Err(Failure::msg(format!(
-            "unknown technitium action {other:?}; expected inspect, reconcile, refresh-block-lists, or verify"
+            "unknown technitium action {other:?}; expected certificates, inspect, detach, reconcile, refresh-block-lists, or verify"
         ))),
     }
+}
+
+fn pem(der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|l| std::str::from_utf8(l).unwrap_or_default())
+        .collect();
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        lines.join("\n")
+    )
+}
+
+fn certificate_report(member: &Member, der: &[u8]) -> Value {
+    json!({
+        "guest": member.guest,
+        "endpoint": member.endpoint,
+        "sha256": sha256_hex(der),
+        "pem": pem(der),
+    })
+}
+
+/// Reads what each member presents. This client sends nothing but a bare request, so it can
+/// run before anything is trusted; what it finds is only a candidate until an operator trusts it.
+async fn certificates(cfg: &ExecutorConfig, input: &Input) -> ExecResult {
+    let mut found = Vec::new();
+    let mut unreachable = Vec::new();
+    for member in &input.members {
+        let (http, offered) = api::http_client(None, cfg.proxmox_timeout)?;
+        let answered = http.get(format!("{}/", member.endpoint)).send().await;
+        let der = offered.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match der {
+            Some(der) => found.push(certificate_report(member, &der)),
+            None => unreachable.push(json!({
+                "guest": member.guest,
+                "error": answered.err().map(|e| e.to_string()).unwrap_or_else(|| "it offered no certificate".into()),
+            })),
+        }
+    }
+    Ok(Success::outputs(
+        json!({ "certificates": found, "unreachable": unreachable }),
+    ))
 }
 
 /// What a member says about itself, or why it says nothing.
@@ -122,37 +197,70 @@ enum Seen {
     Down(String),
     Refused(String),
     Broken(String),
+    /// It presented another certificate than the trusted one, so it was sent nothing.
+    Impostor(Vec<u8>),
     Up(Api, ClusterState),
 }
 
-async fn connect(http: &Client, member: &Member, password: &str) -> Seen {
-    let api = match Api::login(http, &member.endpoint, password).await {
+fn offered_elsewhere(offered: &Offered, member: &Member) -> Option<Vec<u8>> {
+    let der = offered.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let pin = member.certificate_sha256.as_deref()?;
+    (!sha256_hex(&der).eq_ignore_ascii_case(pin)).then_some(der)
+}
+
+async fn connect(member: &Member, access: &Access<'_>) -> Result<Seen, Failure> {
+    // Fail closed: a client without a pin would accept anyone.
+    let pin = member.certificate_sha256.as_deref().ok_or_else(|| {
+        Failure::msg(format!(
+            "no certificate is trusted for {}, so its password was not sent",
+            member.label()
+        ))
+    })?;
+    let (http, offered) = api::http_client(Some(pin), access.timeout)?;
+    let api = match Api::login(&http, &member.endpoint, access.password).await {
         Ok(api) => api,
-        Err(ApiError::Refused(e)) => return Seen::Refused(e),
-        Err(ApiError::Unreachable(e)) => return Seen::Down(e),
-        Err(ApiError::Api(e)) => return Seen::Broken(e),
+        Err(error) => {
+            if let Some(der) = offered_elsewhere(&offered, member) {
+                return Ok(Seen::Impostor(der));
+            }
+            return Ok(match error {
+                ApiError::Refused(e) => Seen::Refused(e),
+                ApiError::Unreachable(e) => Seen::Down(e),
+                ApiError::Api(e) | ApiError::Lost(e) => Seen::Broken(e),
+            });
+        }
     };
-    match api.cluster_state().await {
+    Ok(match api.cluster_state().await {
         Ok(state) => Seen::Up(api, state),
         Err(ApiError::Unreachable(e)) => Seen::Down(e),
         Err(e) => Seen::Broken(e.to_string()),
-    }
+    })
+}
+
+fn impostor_recovery(member: &Member) -> String {
+    format!(
+        "{} presents another certificate than the one trusted, so it was sent nothing. If it was rebuilt, compare the new certificate on the cluster's page with the member's, and Trust cluster; if not, something else is answering at this address. See 'A changed certificate' in {RECOVERY_DOC}.",
+        member.label()
+    )
 }
 
 /// The primary's session and state; without one nothing about the cluster can be decided.
 async fn primary_session(
     input: &Input,
-    http: &Client,
-    password: &str,
+    access: &Access<'_>,
 ) -> Result<(Api, ClusterState), Failure> {
     let primary = input.primary()?;
-    match connect(http, primary, password).await {
+    match connect(primary, access).await? {
         Seen::Up(api, state) => Ok((api, state)),
         Seen::Down(e) | Seen::Broken(e) => Err(primary_down(primary, &e)),
         Seen::Refused(e) => Err(Failure::msg(format!(
             "The primary {} refused the admin password ({e}). Set the store entry to the password the cluster uses; see 'The admin password' in {RECOVERY_DOC}.",
             primary.label()
         ))),
+        Seen::Impostor(der) => Err(Failure::with_outputs(
+            impostor_recovery(primary),
+            json!({ "certificates": [certificate_report(primary, &der)] }),
+        )),
     }
 }
 
@@ -192,12 +300,15 @@ enum Standing {
     Foreign,
     Unreachable,
     Refused,
+    /// Its certificate is not the trusted one.
+    Unverified,
 }
 
 fn standing(member: &Member, seen: &Seen, primary: &ClusterState, domain: &str) -> Standing {
     match seen {
         Seen::Down(_) | Seen::Broken(_) => Standing::Unreachable,
         Seen::Refused(_) => Standing::Refused,
+        Seen::Impostor(_) => Standing::Unverified,
         Seen::Up(_, state) if !state.cluster_initialized => {
             if peer_of(primary, member, None).is_some() {
                 Standing::Stale
@@ -233,20 +344,34 @@ fn rebuilt_primary(primary: &Member) -> Failure {
     ))
 }
 
-async fn inspect(ctx: &ExecContext, input: &Input, http: &Client, password: &str) -> ExecResult {
-    let (primary_api, primary) = primary_session(input, http, password).await?;
+async fn inspect(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> ExecResult {
+    let (primary_api, primary) = primary_session(input, access).await?;
     if input.formed && !primary.cluster_initialized {
         primary_api.logout().await;
         return Err(rebuilt_primary(input.primary()?));
     }
     let mut members = Vec::new();
+    let mut changed = Vec::new();
     for member in input.secondaries() {
-        let seen = connect(http, member, password).await;
+        let seen = connect(member, access).await?;
         let found = standing(member, &seen, &primary, &input.cluster_domain);
         ctx.log.agent(format!("{}: {found:?}", member.label()));
-        members.push(json!({ "guest": member.guest, "address": member.address, "state": found }));
-        if let Seen::Up(api, _) = seen {
-            api.logout().await;
+        let name = match &seen {
+            Seen::Up(_, state) => Some(state.dns_server_domain.as_str()),
+            _ => None,
+        };
+        let peer = peer_of(&primary, member, name);
+        members.push(json!({
+            "guest": member.guest,
+            "address": member.address,
+            "state": found,
+            "peerId": peer.map(|p| p.id),
+            "peerName": peer.map(|p| p.name.as_str()),
+        }));
+        match seen {
+            Seen::Up(api, _) => api.logout().await,
+            Seen::Impostor(der) => changed.push(certificate_report(member, &der)),
+            _ => {}
         }
     }
     let (blocked, allowed) = if primary.cluster_initialized {
@@ -261,11 +386,95 @@ async fn inspect(ctx: &ExecContext, input: &Input, http: &Client, password: &str
         "formed": primary.cluster_initialized,
         "members": members,
         "undeclared": { "blocked": blocked, "allowed": allowed },
+        "certificates": changed,
     })))
 }
 
-async fn reconcile(ctx: &ExecContext, input: &Input, http: &Client, password: &str) -> ExecResult {
-    let (primary_api, state) = primary_session(input, http, password).await?;
+/// The peer this removal stands for, and no other: its id on the primary, or both its name and
+/// its address. Being undeclared says nothing about whose it is.
+fn exact_peer<'a>(state: &'a ClusterState, removal: &Removal) -> Option<&'a Peer> {
+    let secondaries = || state.cluster_nodes.iter().filter(|p| p.kind == "Secondary");
+    if let Some(id) = removal.peer_id
+        && let Some(peer) = secondaries().find(|p| p.id == id)
+    {
+        return Some(peer);
+    }
+    let has_address = |p: &Peer| {
+        removal
+            .address
+            .as_ref()
+            .is_some_and(|a| p.ip_addresses.contains(a))
+    };
+    match (&removal.peer_name, removal.peer_id) {
+        (Some(name), _) => secondaries().find(|p| &p.name == name && has_address(p)),
+        // Only an address was ever known: the join never reported back.
+        (None, None) => secondaries().find(|p| has_address(p)),
+        (None, Some(_)) => None,
+    }
+}
+
+async fn detach(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> ExecResult {
+    let (primary, state) = primary_session(input, access).await?;
+    let mut failed = Vec::new();
+    let mut detached = Vec::new();
+    for removal in &input.remove {
+        let Some(peer) = exact_peer(&state, removal) else {
+            ctx.log.agent(format!("{} has already left", removal.guest));
+            detached.push(removal.guest.clone());
+            continue;
+        };
+        if input
+            .secondaries()
+            .any(|m| peer.ip_addresses.contains(&m.address))
+        {
+            failed.push(format!(
+                "{} holds the address of a declared member, so {} was not removed.",
+                peer.name, removal.guest
+            ));
+            continue;
+        }
+        ctx.log
+            .agent(format!("removing {} from the cluster", peer.name));
+        let id = peer.id.to_string();
+        let form = [("secondaryNodeId", id.as_str())];
+        if let Err(error) = primary
+            .call("/api/admin/cluster/primary/removeSecondary", &form)
+            .await
+        {
+            // This removal is approved, and removeSecondary needs the peer to answer. Only the
+            // record is left to delete; a peer that answers later still believes it is a member.
+            ctx.log.agent(format!(
+                "{} did not leave ({error}); deleting it from the primary",
+                peer.name
+            ));
+            let _ = primary
+                .call("/api/admin/cluster/primary/deleteSecondary", &form)
+                .await;
+        }
+        // What the primary lists decides, not what a call answered.
+        match primary.cluster_state().await {
+            Ok(after) if exact_peer(&after, removal).is_none() => {
+                detached.push(removal.guest.clone());
+            }
+            Ok(_) => failed.push(format!("{} is still in the cluster.", peer.name)),
+            Err(e) => failed.push(format!(
+                "Whether {} left is unknown: {e}. The next plan tries again.",
+                peer.name
+            )),
+        }
+    }
+    primary.logout().await;
+    let outputs = json!({ "detached": detached });
+    if failed.is_empty() {
+        Ok(Success::outputs(outputs))
+    } else {
+        // The plan still holds these removals, because the apply has not run.
+        Err(Failure::with_outputs(failed.join(" "), outputs))
+    }
+}
+
+async fn reconcile(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> ExecResult {
+    let (primary_api, state) = primary_session(input, access).await?;
     if !state.cluster_initialized {
         primary_api.logout().await;
         return Err(Failure::msg(format!(
@@ -274,8 +483,7 @@ async fn reconcile(ctx: &ExecContext, input: &Input, http: &Client, password: &s
         )));
     }
     let mut failed = Vec::new();
-
-    let mut moved = Vec::new();
+    let mut joined = Vec::new();
     for guest in &input.join {
         let Some(member) = input
             .members
@@ -285,42 +493,9 @@ async fn reconcile(ctx: &ExecContext, input: &Input, http: &Client, password: &s
             failed.push(format!("{guest} is not a secondary of this cluster."));
             continue;
         };
-        match join(ctx, input, member, http, password, &state).await? {
-            Ok(Some(name)) => moved.push(name),
-            Ok(None) => {}
+        match join(ctx, input, member, access, &state).await? {
+            Ok(()) => joined.push(guest.clone()),
             Err(problem) => failed.push(problem),
-        }
-    }
-
-    // Only as many as the approved plan removed: anything more is somebody else's peer. A peer
-    // nobody approved removing is not this step's business; verification reports it.
-    if !input.remove.is_empty() {
-        let extras: Vec<&Peer> = state
-            .cluster_nodes
-            .iter()
-            .filter(|p| p.kind == "Secondary" && !moved.contains(&p.name))
-            .filter(|p| {
-                !input
-                    .secondaries()
-                    .any(|m| p.ip_addresses.contains(&m.address))
-            })
-            .collect();
-        if extras.len() > input.remove.len() {
-            failed.push(format!(
-                "The cluster has undeclared peers ({}) beyond the {} removal(s) this plan approved, so none was removed.",
-                extras
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                input.remove.len()
-            ));
-        } else {
-            for peer in extras {
-                ctx.log
-                    .agent(format!("removing {} from the cluster", peer.name));
-                remove_peer(ctx, &primary_api, peer, &mut failed).await;
-            }
         }
     }
 
@@ -341,56 +516,39 @@ async fn reconcile(ctx: &ExecContext, input: &Input, http: &Client, password: &s
             }
         }
     }
-    primary_api.logout().await;
-    if failed.is_empty() {
-        Ok(Success::outputs(
-            json!({ "joined": input.join, "removed": input.remove }),
-        ))
-    } else {
-        Err(Failure::with_outputs(
-            failed.join(" "),
-            json!({ "failed": failed }),
-        ))
-    }
-}
 
-async fn remove_peer(ctx: &ExecContext, primary: &Api, peer: &Peer, failed: &mut Vec<String>) {
-    let id = peer.id.to_string();
-    let form = [("secondaryNodeId", id.as_str())];
-    let Err(error) = primary
-        .call("/api/admin/cluster/primary/removeSecondary", &form)
-        .await
-    else {
-        return;
-    };
-    // This removal is approved, and removeSecondary needs the peer to answer. Only the record is
-    // left to delete; a peer that does answer afterwards still believes it is a member.
-    ctx.log.agent(format!(
-        "{} did not leave ({error}); deleting it from the primary",
-        peer.name
-    ));
-    if let Err(e) = primary
-        .call("/api/admin/cluster/primary/deleteSecondary", &form)
-        .await
-    {
-        failed.push(format!("Removing {} failed: {e}.", peer.name));
+    // The peers as they stand now, so that a member is known by more than its address.
+    let after = primary_api.cluster_state().await.ok();
+    primary_api.logout().await;
+    let members: Vec<Value> = joined
+        .iter()
+        .filter_map(|guest| {
+            let member = input.members.iter().find(|m| &m.guest == guest)?;
+            let peer = peer_of(after.as_ref()?, member, None)?;
+            Some(json!({ "guest": guest, "peerId": peer.id, "peerName": peer.name }))
+        })
+        .collect();
+    let outputs = json!({ "joined": joined, "members": members });
+    if failed.is_empty() {
+        Ok(Success::outputs(outputs))
+    } else {
+        Err(Failure::with_outputs(failed.join(" "), outputs))
     }
 }
 
 /// `Err` only when the outcome is unknown; a known failure is the inner error, so that one
-/// member's trouble does not stop the others. Gives the name of a member that moved.
+/// member's trouble does not stop the others.
 async fn join(
     ctx: &ExecContext,
     input: &Input,
     member: &Member,
-    http: &Client,
-    password: &str,
+    access: &Access<'_>,
     primary: &ClusterState,
-) -> Result<Result<Option<String>, String>, Failure> {
-    let seen = connect(http, member, password).await;
+) -> Result<Result<(), String>, Failure> {
+    let seen = connect(member, access).await?;
     let found = standing(member, &seen, primary, &input.cluster_domain);
     let result = match (&seen, found) {
-        (_, Standing::Joined) => Ok(None),
+        (_, Standing::Joined) => Ok(()),
         (Seen::Up(api, _), Standing::Moved) => {
             ctx.log.agent(format!(
                 "{}: telling the cluster its new address",
@@ -401,22 +559,24 @@ async fn join(
                 &[("ipAddresses", &member.address)],
             )
             .await
-            .map(|_| Some(state_name(&seen)))
+            .map(|_| ())
             .map_err(|e| format!("Updating the address of {} failed: {e}.", member.label()))
         }
         (Seen::Up(api, _), Standing::Absent) => {
             ctx.log.agent(format!("{}: joining", member.label()));
-            let joined = send_join(input, member, api, password, primary).await;
-            match joined {
-                Ok(()) => Ok(None),
-                Err(ApiError::Unreachable(e)) => {
-                    return settle_lost_join(ctx, member, http, password, &e)
-                        .await
-                        .map(|()| Ok(None));
+            match send_join(input, member, api, access.password, primary).await {
+                Ok(()) => Ok(()),
+                // Only a refusal says the join did not happen.
+                Err(ApiError::Api(e) | ApiError::Refused(e)) => {
+                    Err(format!("Joining {} failed: {e}.", member.label()))
                 }
-                Err(e) => Err(format!("Joining {} failed: {e}.", member.label())),
+                Err(lost @ (ApiError::Unreachable(_) | ApiError::Lost(_))) => {
+                    settle_lost_join(ctx, input, member, access, &lost.to_string()).await?;
+                    Ok(())
+                }
             }
         }
+        (Seen::Impostor(_), _) => Err(impostor_recovery(member)),
         (_, other) => Err(format!(
             "{} cannot be joined: {}",
             member.label(),
@@ -427,13 +587,6 @@ async fn join(
         api.logout().await;
     }
     Ok(result)
-}
-
-fn state_name(seen: &Seen) -> String {
-    match seen {
-        Seen::Up(_, state) => state.dns_server_domain.clone(),
-        _ => String::new(),
-    }
 }
 
 async fn send_join(
@@ -448,17 +601,19 @@ async fn send_join(
         .primary()
         .map_err(|f| ApiError::Api(f.message().to_owned()))?
         .address;
-    let ignore = if input.verify_tls { "false" } else { "true" };
-    api.call(
+    // Technitium has no way to pin here: the secondary takes the primary as it finds it, which
+    // is the one leg an operator's trust does not cover. It is in docs/technitium-lxc.md.
+    api.call_within(
         "/api/admin/cluster/initJoin",
         &[
             ("secondaryNodeIpAddresses", member.address.as_str()),
             ("primaryNodeUrl", url.as_str()),
             ("primaryNodeIpAddress", address.as_str()),
-            ("ignoreCertificateErrors", ignore),
+            ("ignoreCertificateErrors", "true"),
             ("primaryNodeUsername", "admin"),
             ("primaryNodePassword", password),
         ],
+        Some(JOIN_TIMEOUT),
     )
     .await
     .map(|_| ())
@@ -473,34 +628,43 @@ fn api_port(input: &Input) -> u16 {
         .unwrap_or(53443)
 }
 
-/// A join restarts the member's web service, so its answer can be lost after it joined. Ask.
+/// A join restarts the member's web service, so its answer can be lost after it joined. Both
+/// nodes have to agree that it did; otherwise nobody knows, and the attempt says so.
 async fn settle_lost_join(
     ctx: &ExecContext,
+    input: &Input,
     member: &Member,
-    http: &Client,
-    password: &str,
+    access: &Access<'_>,
     error: &str,
 ) -> Result<(), Failure> {
-    let deadline = Instant::now() + JOIN_TIMEOUT;
-    while Instant::now() < deadline {
-        if let Seen::Up(api, state) = connect(http, member, password).await {
-            let joined = state.cluster_initialized;
+    let primary = input.primary()?;
+    let deadline = Instant::now() + Duration::from_secs(input.join_settle_seconds);
+    loop {
+        let mut joined = false;
+        if let Seen::Up(api, state) = connect(member, access).await? {
+            joined = state.cluster_initialized;
             api.logout().await;
-            if joined {
+        }
+        if joined && let Seen::Up(api, state) = connect(primary, access).await? {
+            let listed = peer_of(&state, member, None).is_some();
+            api.logout().await;
+            if listed {
                 return Ok(());
             }
-            break;
         }
-        ctx.sleep(Duration::from_secs(5)).await?;
+        if Instant::now() >= deadline {
+            return Err(Failure::Uncertain(format!(
+                "The answer to joining {} was lost ({error}), and the two nodes do not show it joined. Check both before planning again.",
+                member.label()
+            )));
+        }
+        ctx.sleep(Duration::from_millis(500).min(Duration::from_secs(5)))
+            .await?;
     }
-    Err(Failure::Uncertain(format!(
-        "The answer to joining {} was lost ({error}), and it does not report a cluster. Check both nodes before planning again.",
-        member.label()
-    )))
 }
 
-async fn refresh(input: &Input, http: &Client, password: &str) -> ExecResult {
-    let (api, _) = primary_session(input, http, password).await?;
+async fn refresh(input: &Input, access: &Access<'_>) -> ExecResult {
+    let (api, _) = primary_session(input, access).await?;
     let result = api.get("/api/settings/forceUpdateBlockLists").await;
     api.logout().await;
     result
@@ -557,6 +721,8 @@ struct MemberReport {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+    /// Whether a question over DNS showed this member blocking. No question, no claim.
+    blocking_verified: bool,
     checks: Vec<Check>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<String>,
@@ -566,15 +732,15 @@ async fn verify(
     cfg: &ExecutorConfig,
     ctx: &ExecContext,
     input: &Input,
-    http: &Client,
-    password: &str,
+    access: &Access<'_>,
 ) -> ExecResult {
     let deadline = Instant::now() + Duration::from_secs(input.sync_wait_seconds);
     loop {
         ctx.check_cancelled()?;
-        let reports = pass(input, http, password).await?;
+        let (reports, changed) = pass(input, access).await?;
         let failing: Vec<&MemberReport> = reports.iter().filter(|r| !r.ok).collect();
-        let outputs = json!({ "ok": failing.is_empty(), "members": reports });
+        let outputs =
+            json!({ "ok": failing.is_empty(), "members": reports, "certificates": changed });
         if failing.is_empty() {
             return Ok(Success::outputs(outputs));
         }
@@ -610,10 +776,13 @@ async fn verify(
     }
 }
 
-async fn pass(input: &Input, http: &Client, password: &str) -> Result<Vec<MemberReport>, Failure> {
+async fn pass(
+    input: &Input,
+    access: &Access<'_>,
+) -> Result<(Vec<MemberReport>, Vec<Value>), Failure> {
     let mut members = Vec::new();
     for member in &input.members {
-        members.push((member, connect(http, member, password).await));
+        members.push((member, connect(member, access).await?));
     }
     let primary = members.iter().find_map(|(member, seen)| match seen {
         Seen::Up(_, state) if member.is_primary() => Some(state.clone()),
@@ -627,10 +796,14 @@ async fn pass(input: &Input, http: &Client, password: &str) -> Result<Vec<Member
         .map(|(member, _)| member.address.clone())
         .collect();
     let mut reports = Vec::new();
+    let mut changed = Vec::new();
     for (member, seen) in members {
+        if let Seen::Impostor(der) = &seen {
+            changed.push(certificate_report(member, der));
+        }
         reports.push(report(input, member, seen, primary.as_ref(), &broken).await);
     }
-    Ok(reports)
+    Ok((reports, changed))
 }
 
 async fn report(
@@ -670,6 +843,13 @@ async fn report(
                 "members share the store entry named by credentials; see 'The admin password' in {RECOVERY_DOC}."
             )),
         ),
+        Seen::Impostor(_) => (
+            vec![Check::fail(
+                "certificate",
+                "it presents another certificate than the one trusted",
+            )],
+            Some(impostor_recovery(member)),
+        ),
         Seen::Up(api, state) => {
             version = Some(state.version.clone());
             let primary_name = primary.map(|p| p.dns_server_domain.as_str());
@@ -679,12 +859,14 @@ async fn report(
             (checks, recovery)
         }
     };
+    let queried: Vec<&Check> = checks.iter().filter(|c| c.name == "blocking").collect();
     MemberReport {
         guest: member.guest.clone(),
         address: member.address.clone(),
         role: member.role.clone(),
         ok: checks.iter().all(|c| c.ok),
         version,
+        blocking_verified: !queried.is_empty() && queried.iter().all(|c| c.ok),
         checks,
         recovery,
     }
@@ -754,6 +936,11 @@ fn recovery_for(
         return Some(format!(
             "update this guest's technitium inputs to at least {}.",
             input.minimum_version
+        ));
+    }
+    if failed.contains(&"blocking") && !input.list_probes.is_empty() {
+        return Some(format!(
+            "if a list is the reason, check that it downloads and still holds its listProbes, then Plan now; see 'Changing a blocklist' in {RECOVERY_DOC}."
         ));
     }
     Some(format!(
@@ -979,8 +1166,25 @@ async fn dns_checks(input: &Input, member: &Member, primary_name: Option<&str>) 
         .get("enableBlocking")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let lists = input
+        .settings
+        .get("blockListUrls")
+        .and_then(Value::as_array)
+        .is_some_and(|l| !l.is_empty());
     if enabled {
-        for name in input.blocked.iter().take(MAX_BLOCKED_PROBES) {
+        if lists && input.list_probes.is_empty() {
+            // Never a pass by silence: a declared entry says nothing about a list.
+            checks.push(Check::fail(
+                "lists",
+                "block lists are declared with no listProbes, so nothing shows they are enforced",
+            ));
+        }
+        let names = input
+            .blocked
+            .iter()
+            .take(MAX_BLOCKED_PROBES)
+            .chain(input.list_probes.iter().take(MAX_BLOCKED_PROBES));
+        for name in names {
             checks.push(match dns::query(server, name, DNS_TIMEOUT).await {
                 Ok(answer) if answer.blocked => {
                     Check::pass("blocking", format!("{name} is blocked"))
@@ -1032,5 +1236,56 @@ mod tests {
         assert!(same(Some(&json!(["b", "a"])), &json!(["a", "b"])));
         assert!(!same(Some(&Value::Null), &json!(["a"])));
         assert!(!same(Some(&json!(false)), &json!(true)));
+    }
+
+    #[test]
+    fn a_certificate_prints_as_pem() {
+        let text = pem(&[1u8; 100]);
+        assert!(text.starts_with("-----BEGIN CERTIFICATE-----\n"));
+        assert!(
+            text.lines()
+                .all(|l| l.len() <= 64 || l.starts_with("-----"))
+        );
+    }
+
+    fn state(peers: Value) -> ClusterState {
+        serde_json::from_value(json!({ "clusterNodes": peers })).unwrap()
+    }
+
+    #[test]
+    fn a_removal_only_ever_matches_its_own_peer() {
+        let live = state(json!([
+            { "id": 1, "name": "p", "ipAddresses": ["10.0.0.1"], "type": "Primary" },
+            { "id": 2, "name": "d", "ipAddresses": ["10.0.0.4"], "type": "Secondary" },
+        ]));
+        let removal = |id, name: Option<&str>, address: &str| Removal {
+            guest: "g".into(),
+            address: Some(address.into()),
+            peer_id: id,
+            peer_name: name.map(str::to_owned),
+        };
+        assert!(exact_peer(&live, &removal(Some(9), Some("b"), "10.0.0.2")).is_none());
+        // Its address was taken over, by a node of another name.
+        assert!(exact_peer(&live, &removal(Some(9), Some("b"), "10.0.0.4")).is_none());
+        // Never the primary, whatever it was told.
+        assert!(exact_peer(&live, &removal(Some(1), Some("p"), "10.0.0.1")).is_none());
+        assert_eq!(
+            exact_peer(&live, &removal(Some(2), None, "x"))
+                .unwrap()
+                .name,
+            "d"
+        );
+        assert_eq!(
+            exact_peer(&live, &removal(None, Some("d"), "10.0.0.4"))
+                .unwrap()
+                .name,
+            "d"
+        );
+        assert_eq!(
+            exact_peer(&live, &removal(None, None, "10.0.0.4"))
+                .unwrap()
+                .name,
+            "d"
+        );
     }
 }

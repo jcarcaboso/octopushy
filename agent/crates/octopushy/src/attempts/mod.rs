@@ -325,7 +325,7 @@ impl AttemptManager {
             Ok(Ok(success)) => AttemptResult {
                 attempt_id: id.clone(),
                 outcome: Outcome::Succeeded as i32,
-                outputs_json: success.outputs.to_string(),
+                outputs_json: log.masker().mask_json(success.outputs).to_string(),
                 error: String::new(),
                 artifacts: success.artifacts,
             },
@@ -340,7 +340,7 @@ impl AttemptManager {
                 attempt_id: id.clone(),
                 outcome: Outcome::Failed as i32,
                 outputs_json: outputs
-                    .map(|o| o.to_string())
+                    .map(|o| log.masker().mask_json(o).to_string())
                     .unwrap_or_else(|| "{}".into()),
                 error: message,
                 artifacts: Vec::new(),

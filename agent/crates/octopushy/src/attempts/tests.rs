@@ -378,3 +378,31 @@ async fn an_attempt_that_never_ran_does_not_claim_to_have_started() {
         .collect();
     assert_eq!(started, ["running-1"]);
 }
+
+#[tokio::test]
+async fn a_secret_reflected_into_outputs_is_masked_at_the_boundary_for_every_executor() {
+    let h = harness();
+    let mut reflected = assignment(
+        "masked",
+        "test",
+        "echo",
+        r#"{"members":[{"checks":[{"detail":"refused quo\"ted-secret here"}]}],"ok":false}"#,
+    );
+    reflected
+        .secrets
+        .insert("s".into(), "quo\"ted-secret".into());
+    h.manager.accept(reflected);
+    let mut c = Collector::default();
+    let result = c.result(&h.manager, "masked").await;
+    assert_eq!(result.outcome(), Outcome::Succeeded);
+    assert!(
+        !result.outputs_json.contains("ted-secret"),
+        "{}",
+        result.outputs_json
+    );
+    let outputs: serde_json::Value = serde_json::from_str(&result.outputs_json).unwrap();
+    assert_eq!(
+        outputs["members"][0]["checks"][0]["detail"],
+        "refused *** here"
+    );
+}

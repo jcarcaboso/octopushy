@@ -56,6 +56,9 @@ struct Input {
     /// Resource addresses for `-replace`, for what only the controller knows must happen again.
     #[serde(default)]
     replace: Vec<String>,
+    /// Files written into the root, by name, for what OpenTofu reads by path.
+    #[serde(default)]
+    files: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,6 +311,20 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     }
     let backend = json!({ "terraform": { "backend": backends } });
     write_fresh(&root.join(BACKEND_FILE), backend.to_string().as_bytes())?;
+    for (name, content) in &input.files {
+        let plain = !name.is_empty()
+            && !name.starts_with('.')
+            && !name.ends_with(".tf")
+            && !name.ends_with(".tofu")
+            && !name.ends_with(".json")
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+        if !plain {
+            return Err(Failure::msg(format!("invalid file name {name:?}")));
+        }
+        write_fresh(&root.join(name), content.as_bytes())?;
+    }
 
     ctx.log.agent(format!(
         "tool runtime {}; environment: TF_IN_AUTOMATION, TF_INPUT, TF_PLUGIN_CACHE_DIR, HOME{}{}",
