@@ -272,6 +272,35 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_lift_with_no_clear_answer_restores_protection_once_it_is_closed()
+    {
+        await using var server = await StartAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await FailFirstApplyAsync(server, agent);
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, VmPlan(Replace, Tainted), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Uncertain, error: "the change could not be confirmed");
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Uncertain, run.Status);
+        Assert.Equal(StepStatuses.Pending, run.Steps.Single(s => s.Name == StepNames.Apply).Status);
+        Assert.Empty(agent.TakeAssignments());
+
+        await server.Engine.CloseUncertainAsync(run.Id, "ops", CancellationToken.None);
+        var reprotect = await agent.NextAsync("set-protection");
+        Assert.True(JsonNode.Parse(reprotect.InputJson)!["protection"]!.GetValue<bool>());
+        await agent.ReportAsync(reprotect, Outcome.Succeeded, Restored);
+        await server.TickAsync();
+
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("back on", run.Detail);
+        Assert.Empty(run.Steps.Single(s => s.Name == StepNames.Apply).Attempts);
+        await ReplaceToSuccessAsync(server, agent);
+    }
+
+    [Fact]
     public async Task A_lost_restore_stays_uncertain_until_it_is_closed()
     {
         await using var server = await StartAsync();

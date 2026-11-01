@@ -556,7 +556,17 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             .await
             .map_err(|e| protection_failure(e, input.vmid))?;
     }
-    let now = c.vm_config(&vm.node, input.vmid).await?.protection;
+    let now = match c.vm_config(&vm.node, input.vmid).await {
+        Ok(config) => config.protection,
+        // Proxmox accepted the write, so a failed read-back cannot mean nothing changed.
+        Err(e) if previous != input.protection => {
+            return Err(Failure::Uncertain(format!(
+                "{e}; Proxmox accepted the change to the protection of VM {} but it could not be confirmed",
+                input.vmid
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    };
     if now != input.protection {
         return Err(Failure::with_outputs(
             format!(

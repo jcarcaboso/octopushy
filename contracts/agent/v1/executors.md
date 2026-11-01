@@ -216,7 +216,9 @@ Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "protection": 
 Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the VM's
 `protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`. Succeeds with
 `{ "absent": true, "previous": null, "protection": null }` when the VM does not exist,
-and fails when it is on another node than `node`.
+and fails when it is on another node than `node`. It is `uncertain` when the write may
+have reached Proxmox, or was accepted and could not be read back, because a plain failure
+tells the controller that protection did not change.
 
 The controller sends it for the `unprotect` step with `protection: false` and for the
 `reprotect` step with `protection: true`, always with the run's own `node` and `vmid`.
