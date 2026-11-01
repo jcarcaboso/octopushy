@@ -439,7 +439,8 @@ public class ClusterRunTests(PostgresFixture postgres)
         var reconcile = await agent.NextAsync("reconcile");
         var reconcileInput = JsonNode.Parse(reconcile.InputJson)!;
         Assert.Equal(ClusterDefinitionTests.Secondary, reconcileInput["join"]![0]!.GetValue<string>());
-        Assert.False(reconcileInput["pruneEntries"]!.GetValue<bool>());
+        Assert.Empty(reconcileInput["pruneBlocked"]!.AsArray());
+        Assert.Empty(reconcileInput["pruneAllowed"]!.AsArray());
         await agent.ReportAsync(reconcile, Outcome.Succeeded, new JsonObject());
 
         await agent.ReportAsync(await agent.NextAsync("refresh-block-lists"), Outcome.Succeeded, new JsonObject { ["refreshed"] = true });
@@ -529,7 +530,10 @@ public class ClusterRunTests(PostgresFixture postgres)
         Assert.Equal("terraform_data.undeclared_entries", JsonNode.Parse(preview.InputJson)!["replace"]![0]!.GetValue<string>());
         await ApplyAsync(agent, await agent.NextAsync("apply"));
         var reconcile = await agent.NextAsync("reconcile");
-        Assert.True(JsonNode.Parse(reconcile.InputJson)!["pruneEntries"]!.GetValue<bool>());
+        var removing = JsonNode.Parse(reconcile.InputJson)!;
+        // Exactly what the approval named: anything that appeared since is not approved.
+        Assert.Equal(["hand.example.com"], removing["pruneBlocked"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Empty(removing["pruneAllowed"]!.AsArray());
         await agent.ReportAsync(reconcile, Outcome.Succeeded, new JsonObject());
         await agent.ReportAsync(await VerifyAsync(server, agent), Outcome.Succeeded, new JsonObject { ["ok"] = true });
         await server.TickAsync();
@@ -618,6 +622,100 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_member_the_primary_only_forgot_stays_protected_until_an_operator_says_it_left()
+    {
+        // removeSecondary failed, so all that happened is that the primary's record was deleted.
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository);
+        await using var _ = server;
+        await ReplaceSecondaryAsync(server, repository, agent, client);
+        repository.Delete("labs/home/proxmox/moraband/guests/mrb-dns-01");
+        server.Commit("Delete the old guest");
+        await server.SyncAsync();
+        await server.TickAsync();
+
+        await agent.ReportAsync(await agent.NextAsync("inspect"), Outcome.Succeeded, Inspection("absent"));
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            PlanOf((Secondary(), ["delete"]), (Secondary("home/moraband/mrb-dns-02"), ["create"])), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("detach"), Outcome.Succeeded, new JsonObject
+        {
+            ["detached"] = new JsonArray(),
+            ["unconfirmed"] = new JsonArray(ClusterDefinitionTests.Secondary),
+        });
+        await ApplyAsync(agent, await agent.NextAsync("apply"));
+        await agent.ReportAsync(await agent.NextAsync("reconcile"), Outcome.Succeeded, new JsonObject());
+        await agent.ReportAsync(await VerifyAsync(server, agent), Outcome.Succeeded, new JsonObject { ["ok"] = true });
+        await server.TickAsync();
+
+        var retire = await server.LatestRunAsync(ClusterDefinitionTests.Secondary, Operations.Retire);
+        Assert.Equal(RunStatuses.Blocked, retire.Status);
+        Assert.Contains("nothing saw it leave", retire.Detail);
+        var cluster = (await ClusterSummaryAsync(client))["id"]!.GetValue<Guid>();
+        var detail = (await client.GetFromJsonAsync<JsonObject>($"/api/clusters/{cluster}"))!;
+        var leaving = detail["leaving"]!.AsArray().Single(l => l!["guest"]!.GetValue<string>() == ClusterDefinitionTests.Secondary)!;
+        Assert.True(leaving["unconfirmed"]!.GetValue<bool>());
+
+        // Only an operator's word ends this, and the guest can then go.
+        var guest = leaving["guestId"]!.GetValue<Guid>();
+        (await client.PostAsJsonAsync($"/api/clusters/{cluster}/members/{guest}/detached", new { note = "rebuilt from nothing" })).EnsureSuccessStatusCode();
+        await server.TickAsync();
+        Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(ClusterDefinitionTests.Secondary, Operations.Retire)).Status);
+    }
+
+    [Fact]
+    public async Task A_background_check_reads_certificates_first_and_releases_nothing_to_a_changed_one()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository);
+        await using var _ = server;
+        await FormAsync(server, agent);
+        var planner = server.Services.GetRequiredService<Planner>();
+        var released = await server.QueryAsync(db => db.SecretResolutions.CountAsync());
+
+        // It is due and nothing has looked lately: the look comes first, and takes no secret.
+        await CheckDueAsync(server, certificatesRead: false);
+        await planner.ScheduleObservesAsync(CancellationToken.None);
+        var read = await agent.NextKeepingOthersAsync("certificates");
+        Assert.Empty(read.Secrets);
+        var changed = Certificate(SecondaryEndpoint);
+        changed["sha256"] = new string('c', 64);
+        await agent.ReportAsync(read, Outcome.Succeeded, new JsonObject { ["certificates"] = new JsonArray(Certificate(PrimaryEndpoint), changed) });
+        await server.TickAsync();
+
+        // It stays that way however often the check comes round.
+        await planner.ScheduleObservesAsync(CancellationToken.None);
+        await server.TickAsync();
+        await planner.ScheduleObservesAsync(CancellationToken.None);
+        await server.TickAsync();
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "verify");
+        Assert.Equal(released, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
+
+        var cluster = await ClusterSummaryAsync(client);
+        Assert.Equal("verification-failed", cluster["status"]!.GetValue<string>());
+        Assert.Contains("another certificate", cluster["statusDetail"]!.GetValue<string>());
+        var detail = (await client.GetFromJsonAsync<JsonObject>($"/api/clusters/{cluster["id"]}"))!;
+        Assert.False(detail["verification"]!["ok"]!.GetValue<bool>());
+        Assert.DoesNotContain(detail["verification"]!["members"]!.AsArray(), m => m!["ok"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_background_check_of_unchanged_certificates_goes_on_to_the_check_itself()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var __ = server;
+        await FormAsync(server, agent);
+        var planner = server.Services.GetRequiredService<Planner>();
+        await CheckDueAsync(server, certificatesRead: false);
+        await planner.ScheduleObservesAsync(CancellationToken.None);
+        var read = await agent.NextKeepingOthersAsync("certificates");
+        await agent.ReportAsync(read, Outcome.Succeeded, new JsonObject { ["certificates"] = new JsonArray(Certificate(PrimaryEndpoint), Certificate(SecondaryEndpoint)) });
+        await server.TickAsync();
+        await planner.ScheduleObservesAsync(CancellationToken.None);
+        Assert.Equal(Password, (await VerifyAsync(server, agent)).Secrets[SecretNames.ClusterPassword]);
+    }
+
+    [Fact]
     public async Task A_guest_can_be_retired_once_its_cluster_saw_it_leave()
     {
         using var repository = ClusterDefinitionTests.Repository();
@@ -667,7 +765,9 @@ public class ClusterRunTests(PostgresFixture postgres)
         Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(ClusterDefinitionTests.Secondary, Operations.Retire)).Status);
 
         var detail = (await client.GetFromJsonAsync<JsonObject>($"/api/clusters/{cluster}"))!;
-        Assert.Equal(ClusterDefinitionTests.Secondary, detail["leaving"]![0]!["guest"]!.GetValue<string>());
+        // Sorted, and both are leaving: the whole cluster went.
+        Assert.Equal([ClusterDefinitionTests.Primary, ClusterDefinitionTests.Secondary],
+            detail["leaving"]!.AsArray().Select(l => l!["guest"]!.GetValue<string>()));
         Assert.Equal(HttpStatusCode.Conflict,
             (await client.PostAsJsonAsync($"/api/clusters/{cluster}/members/{guest}/detached", new { note = " " })).StatusCode);
         (await acknowledge()).EnsureSuccessStatusCode();
@@ -878,10 +978,14 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     /// <summary>Makes the cluster's background check due, as time passing would.</summary>
-    private static Task CheckDueAsync(ServerHarness server) => server.WithDbAsync(async db =>
+    private static Task CheckDueAsync(ServerHarness server, bool certificatesRead = true) => server.WithDbAsync(async db =>
     {
         foreach (var resource in await db.Resources.Where(r => r.Kind == ResourceKinds.Cluster).ToListAsync())
+        {
             resource.ObserveRequestedAt = DateTimeOffset.UtcNow.AddDays(-1);
+            resource.CertificatesReadAt = certificatesRead ? DateTimeOffset.UtcNow : null;
+        }
+
         await db.SaveChangesAsync();
     });
 

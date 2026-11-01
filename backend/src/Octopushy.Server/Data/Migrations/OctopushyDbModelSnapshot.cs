@@ -322,6 +322,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("role");
 
+                    b.Property<DateTimeOffset?>("UnconfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("unconfirmed_at");
+
                     b.HasKey("ClusterId", "GuestId")
                         .HasName("pk_cluster_bindings");
 
@@ -881,6 +885,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<int?>("BoundVmid")
                         .HasColumnType("integer")
                         .HasColumnName("bound_vmid");
+
+                    b.Property<DateTimeOffset?>("CertificatesReadAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("certificates_read_at");
 
                     b.Property<DateTimeOffset?>("CheckedAt")
                         .HasColumnType("timestamp with time zone")

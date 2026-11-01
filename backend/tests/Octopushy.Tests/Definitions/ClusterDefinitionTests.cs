@@ -238,6 +238,108 @@ public class ClusterDefinitionTests
         Assert.False(repository.RepositoryValid);
     }
 
+    private const string Template = """
+        schemaVersion: 1
+        os: debian
+        source:
+          url: https://images.example.invalid/one.tar.zst
+          checksum: sha512:{{SUM}}
+        availableOn: [home/moraband]
+        """;
+
+    private static string MemberDigest(TestRepository test)
+    {
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var inputs = ClusterInputs.Build(repository, repository.Cluster(Cluster)!, "commit");
+        return inputs.Members.Single(m => m.Guest == Secondary).CodeDigest;
+    }
+
+    public static TheoryData<string, string, string> WhereThePasswordGoes => new()
+    {
+        { "the state backend", "octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres:\n    type: pg\n    config: { schema_name: elsewhere }\n" },
+        { "a secret's variable", SecondaryFile, Guest("moraband", 420, "10.1.0.42").Replace("admin_password:", "another_name:") },
+        { "the agents", SecondaryFile, Guest("moraband", 420, "10.1.0.42", "execution: { agentLabels: [elsewhere] }") },
+        { "the inputs", SecondaryFile, Guest("moraband", 420, "10.1.0.42").Replace("  recipe: test-ct\n", "  recipe: test-ct\n  inputs: { technitium: { aspnetcoreVersion: x } }\n") },
+        { "the address", SecondaryFile, Guest("moraband", 420, "10.1.0.77") },
+    };
+
+    /// <summary>Code stays the same in each of these, and each decides who ends up with the password.</summary>
+    [Theory]
+    [MemberData(nameof(WhereThePasswordGoes))]
+    public void What_decides_where_a_password_goes_is_part_of_what_is_granted(string change, string file, string content)
+    {
+        using var test = Repository();
+        var before = MemberDigest(test);
+        test.Write(file, content);
+        Assert.True(before != MemberDigest(test), $"{change} changed nothing that a grant covers");
+    }
+
+    [Fact]
+    public void A_template_is_part_of_what_is_granted()
+    {
+        using var test = Repository();
+        var sum = new string('a', 128);
+        test.Write("templates/base/template.yaml", Template.Replace("{{SUM}}", sum));
+        var guest = Guest("moraband", 420, "10.1.0.42").Replace("host: moraband\n", "host: moraband\ntemplate: base\n");
+        test.Write(SecondaryFile, guest);
+        var before = MemberDigest(test);
+        test.Write("templates/base/template.yaml", Template.Replace("{{SUM}}", new string('b', 128)));
+        Assert.NotEqual(before, MemberDigest(test));
+    }
+
+    [Fact]
+    public void What_cannot_reach_the_password_needs_no_new_trust()
+    {
+        using var test = Repository();
+        var before = MemberDigest(test);
+        test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.42").Replace("cores: 1", "cores: 2"));
+        Assert.Equal(before, MemberDigest(test));
+    }
+
+    [Theory]
+    [InlineData("allowed: [fine.example.com]", "listProbes: [FINE.EXAMPLE.COM.]", "also in allowed")]
+    [InlineData("blocked: [bad.example.com]", "listProbes: [Bad.Example.Com]", "also in blocked")]
+    [InlineData("blocked: [BAD.example.com.]", "listProbes: [bad.example.com]", "also in blocked")]
+    [InlineData("blocked: [bad.example.com]", "listProbes: [x.bad.example.com]", "also in blocked")]
+    [InlineData("allowed: [fine.example.com]", "listProbes: [X.FINE.example.com.]", "also in allowed")]
+    public void A_probe_says_nothing_when_a_declared_entry_decides_it_however_it_is_written(string entry, string probe, string expected)
+    {
+        var field = entry.Split(':')[0];
+        using var test = Repository(Definition
+            .Replace(field == "blocked" ? "blocked: [bad.example.com]" : "allowed: [fine.example.com]", entry)
+            .Replace("listProbes: [listed.example.com]", probe));
+        Assert.Contains(Errors(test, Cluster), e => e.Contains(expected));
+    }
+
+    [Fact]
+    public void A_forward_zone_repeated_in_another_case_is_repeated()
+    {
+        using var test = Repository(Definition.Replace(
+            "- { zone: home.arpa, forwarder: 10.1.0.1 }",
+            "- { zone: home.arpa, forwarder: 10.1.0.1 }\n    - { zone: HOME.arpa., forwarder: 10.1.0.1 }"));
+        Assert.Contains(Errors(test, Cluster), e => e.Contains("more than once"));
+    }
+
+    [Fact]
+    public void A_test_name_is_refused_as_a_control_however_it_is_written()
+    {
+        using var test = Repository(Definition.Replace("listProbes: [listed.example.com]", "listProbes: [listed.example.com]\n    control: CONTROL.TEST."));
+        Assert.Contains(Errors(test, Cluster), e => e.Contains(".test name"));
+    }
+
+    [Fact]
+    public void Names_reach_the_run_as_a_server_keeps_them()
+    {
+        using var test = Repository(Definition
+            .Replace("blocked: [bad.example.com]", "blocked: [BAD.Example.com.]")
+            .Replace("- { zone: home.arpa,", "- { zone: HOME.arpa.,"));
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var inputs = ClusterInputs.Build(repository, repository.Cluster(Cluster)!, "commit");
+        var settings = inputs.Variables["cluster"]!["settings"]!;
+        Assert.Equal("bad.example.com", settings["blocking"]!["blocked"]![0]!.GetValue<string>());
+        Assert.Equal("home.arpa", settings["forwardZones"]![0]!["zone"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("main.tf", "module \"other\" {\n  source = \"../other\"\n}\n")]
     [InlineData("main.tf", "/* comment */ module \"outside\" { source = \"../outside\" }\n")]
@@ -429,9 +531,10 @@ public class ClusterDefinitionTests
         Assert.Equal(digest, Digest(test));
         test.Write(ClusterFile, Definition);
 
+        // Where a member is decides where the password goes, so it is reviewed like code.
         test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.43"));
         Assert.NotEqual(hash, Hash(test));
-        Assert.Equal(digest, Digest(test));
+        Assert.NotEqual(digest, Digest(test));
         test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.42"));
 
         test.Write("modules/opentofu/cluster/main.tf", "# another root\n");

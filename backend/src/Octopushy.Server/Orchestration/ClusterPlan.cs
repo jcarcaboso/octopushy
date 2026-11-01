@@ -74,6 +74,9 @@ public static partial class ClusterPlan
         if (run.Operation == Operations.Retire && bound.Count > 0)
         {
             var clusters = await db.Resources.AsNoTracking().Where(r => bound.Select(b => b.ClusterId).Contains(r.Id)).Select(r => r.Address).ToListAsync(ct);
+            if (bound.All(b => b.UnconfirmedAt is not null))
+                return $"Waiting for the guest to leave: {string.Join(", ", clusters)} no longer lists it, but nothing saw it leave, and it may still believe it is a member. "
+                    + "Check it, then acknowledge that on the cluster's page.";
             return $"Waiting for the guest to leave: it is still joined to {string.Join(", ", clusters)}. "
                 + "Take it out of members and let that cluster's run finish, or, if it was taken out by hand, acknowledge that on the cluster's page.";
         }
@@ -123,6 +126,7 @@ public static partial class ClusterPlan
             binding.DetachedAt = null;
             binding.DetachedBy = null;
             binding.DetachNote = null;
+            binding.UnconfirmedAt = null;
         }
     }
 
@@ -153,6 +157,7 @@ public static partial class ClusterPlan
         var current = await db.Resources.AsNoTracking().Where(r => ids.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r.Address, ct);
         var members = RunContext.Parse(run.Context).Cluster!.Members.Select(m => m.Guest).ToHashSet(StringComparer.Ordinal);
         return new JsonArray(bindings.Where(b => !members.Contains(current.GetValueOrDefault(b.GuestId, b.Guest)))
+            .OrderBy(b => b.Guest, StringComparer.Ordinal)
             .Select(b => (JsonNode?)new JsonObject
             {
                 ["guest"] = b.Guest,
@@ -162,14 +167,26 @@ public static partial class ClusterPlan
             }).ToArray());
     }
 
-    /// <summary>Marks the guests a run saw leave, which is what lets them be retired.</summary>
+    /// <summary>
+    /// Marks the guests a run saw leave, which is what lets them be retired. That the primary no
+    /// longer lists one is not the same thing: it may never have been told, so it stays bound
+    /// until an operator has looked.
+    /// </summary>
     public static async Task RecordDetachedAsync(OctopushyDb db, Run run, JsonNode? outputs, DateTimeOffset now, CancellationToken ct)
     {
-        var left = (outputs?["detached"] as JsonArray)?.Select(g => g?.GetValue<string>()).ToList() ?? [];
-        foreach (var binding in await db.ClusterBindings.Where(b => b.ClusterId == run.ResourceId && b.DetachedAt == null && left.Contains(b.Guest)).ToListAsync(ct))
+        List<string?> Named(string field) => (outputs?[field] as JsonArray)?.Select(g => g?.GetValue<string>()).ToList() ?? [];
+        var (left, unconfirmed) = (Named("detached"), Named("unconfirmed"));
+        foreach (var binding in await db.ClusterBindings.Where(b => b.ClusterId == run.ResourceId && b.DetachedAt == null).ToListAsync(ct))
         {
-            binding.DetachedAt = now;
-            binding.DetachedBy = $"run #{run.Number}";
+            if (left.Contains(binding.Guest))
+            {
+                binding.DetachedAt = now;
+                binding.DetachedBy = $"run #{run.Number}";
+            }
+            else if (unconfirmed.Contains(binding.Guest))
+            {
+                binding.UnconfirmedAt = now;
+            }
         }
     }
 
@@ -197,6 +214,10 @@ public static partial class ClusterPlan
         Secondaries(plan).Where(s => s.Removed).Select(s => s.Guest).ToList();
 
     public static bool PrunesEntries(JsonNode? plan) => Addresses(plan).Any(c => c.Address == UndeclaredEntries);
+
+    /// <summary>What inspection found in one list that nobody declared, as it was approved.</summary>
+    public static JsonArray Undeclared(JsonNode? inspection, string list) =>
+        new((inspection?["undeclared"]?[list] as JsonArray)?.Select(e => e?.DeepClone()).ToArray() ?? []);
 
     /// <summary>What inspection found that nobody declared, to name in an approval.</summary>
     public static IReadOnlyList<string> UndeclaredEntriesIn(JsonNode? inspection) =>

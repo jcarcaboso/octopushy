@@ -263,7 +263,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         var missing = new List<string>();
         // Every release of a key a definition names comes through here, whatever bound it.
-        if (await ProtectedSecrets.WithheldAsync(db, secretNamesToKeys.Values.Select(r => r.Key), release.ResourceId, release.CodeDigest, release.Address, cancellationToken) is { } withheld)
+        if (await ProtectedSecrets.WithheldAsync(db, secretNamesToKeys.Select(s => KeyValuePair.Create(s.Key, s.Value.Key)).ToList(), release.ResourceId, release.CodeDigest, release.Address, cancellationToken) is { } withheld)
             return (values, [withheld]);
         foreach (var (name, reference) in secretNamesToKeys)
         {

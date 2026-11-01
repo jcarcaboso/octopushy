@@ -218,10 +218,17 @@ public sealed record ClusterCertificateDto(string Endpoint, string? Sha256, stri
 /// <summary>What the operator was shown; trust is refused when the cluster declares something else by now.</summary>
 public sealed record TrustClusterRequest(IReadOnlyList<string> Endpoints, string CodeDigest, IReadOnlyDictionary<string, string>? Certificates = null);
 
-public sealed record ClusterMemberDto(string Guest, string Role, string? Address, Guid? GuestId, string? GuestStatus, string? CodeDigest = null);
+/// <summary>
+/// <see cref="Execution"/> is how the guest's run would use the password, beyond its code: state
+/// backend, variables, agents, Proxmox connection, template, inputs and network. Trust covers it.
+/// </summary>
+public sealed record ClusterMemberDto(string Guest, string Role, string? Address, Guid? GuestId, string? GuestStatus, string? CodeDigest = null, JsonNode? Execution = null);
 
-/// <summary>A guest the cluster has joined, or is still taking out, that it no longer declares.</summary>
-public sealed record ClusterLeavingDto(Guid GuestId, string Guest, string Address, string? PeerName);
+/// <summary>
+/// A guest the cluster has joined, or is still taking out, that it no longer declares.
+/// <see cref="Unconfirmed"/> means the primary no longer lists it, but nothing saw it leave.
+/// </summary>
+public sealed record ClusterLeavingDto(Guid GuestId, string Guest, string Address, string? PeerName, bool Unconfirmed);
 
 public sealed record AcknowledgeDetachRequest(string Note);
 

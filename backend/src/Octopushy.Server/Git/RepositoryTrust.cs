@@ -55,7 +55,7 @@ public static class RepositoryTrust
             return "Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.";
         }
         // Whatever bound them: this is what the store checks again when it releases them.
-        if (await ProtectedSecrets.WithheldAsync(db, context.Secrets.Values, resourceId, context.CodeDigest, context.Address, ct) is { } withheld)
+        if (await ProtectedSecrets.WithheldAsync(db, context.Secrets.ToList(), resourceId, context.CodeDigest, context.Address, ct) is { } withheld)
             return withheld;
         if (context.Cluster is { } cluster)
             return await ClusterBlockedReasonAsync(db, context.Address, cluster, resourceId, ct);
@@ -81,7 +81,7 @@ public static class RepositoryTrust
         if (unknown.Count > 0)
             return $"{WaitingForCluster}: {string.Join(", ", unknown)} is a new member endpoint of {address}. Trust the cluster again on its page before its admin password is sent there.";
         if (trust.CodeDigest != cluster.CodeDigest)
-            return $"{WaitingForCluster}: the recipe code of {address} or of a member changed, and it runs with the admin password. Review the change, then trust the cluster again on its page.";
+            return $"{WaitingForCluster}: the recipe code of {address} or of a member, or how a member runs, changed, and it runs with the admin password. Review the change, then trust the cluster again on its page.";
         var trusted = ClusterCertificates.Parse(trust.Certificates);
         var missing = cluster.Endpoints.Where(e => !trusted.ContainsKey(e)).ToList();
         if (missing.Count > 0)
@@ -89,11 +89,7 @@ public static class RepositoryTrust
         var observed = resourceId is { } id
             ? await db.Resources.AsNoTracking().Where(r => r.Id == id).Select(r => r.MemberCertificates).FirstOrDefaultAsync(ct)
             : null;
-        var changed = ClusterCertificates.Parse(observed).Where(c => trusted.TryGetValue(c.Key, out var known) && known.Sha256 != c.Value.Sha256)
-            .Select(c => c.Key).Order(StringComparer.Ordinal).ToList();
-        return changed.Count > 0
-            ? $"{WaitingForCluster}: {string.Join(", ", changed)} presents another certificate than the one trusted, so it may not be that member. If it was rebuilt, check the new certificate on the cluster's page and trust the cluster again."
-            : null;
+        return ClusterCertificates.ChangedReason(trust.Certificates, observed);
     }
 }
 
@@ -107,4 +103,15 @@ public static class ClusterCertificates
 
     public static string Serialize(IReadOnlyDictionary<string, MemberCertificate> certificates) =>
         System.Text.Json.JsonSerializer.Serialize(certificates, RunContext.Json);
+
+    /// <summary>What to tell an operator about members presenting something other than what was trusted, or null.</summary>
+    public static string? ChangedReason(string? trustedJson, string? observed)
+    {
+        var trusted = Parse(trustedJson);
+        var changed = Parse(observed).Where(c => trusted.TryGetValue(c.Key, out var known) && known.Sha256 != c.Value.Sha256)
+            .Select(c => c.Key).Order(StringComparer.Ordinal).ToList();
+        return changed.Count > 0
+            ? $"{RepositoryTrust.WaitingForCluster}: {string.Join(", ", changed)} presents another certificate than the one trusted, so it may not be that member. If it was rebuilt, check the new certificate on the cluster's page and trust the cluster again."
+            : null;
+    }
 }

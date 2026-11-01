@@ -1054,6 +1054,7 @@ export interface components {
             guest: string;
             address: string;
             peerName: null | string;
+            unconfirmed: boolean;
         };
         ClusterMemberDto: {
             guest: string;
@@ -1063,6 +1064,7 @@ export interface components {
             guestId: null | string;
             guestStatus: null | string;
             codeDigest?: null | string;
+            execution?: unknown;
         };
         ClusterSummaryDto: {
             /** Format: uuid */

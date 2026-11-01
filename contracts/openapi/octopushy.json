@@ -4577,7 +4577,8 @@
           "guestId",
           "guest",
           "address",
-          "peerName"
+          "peerName",
+          "unconfirmed"
         ],
         "type": "object",
         "properties": {
@@ -4596,6 +4597,9 @@
               "null",
               "string"
             ]
+          },
+          "unconfirmed": {
+            "type": "boolean"
           }
         }
       },
@@ -4639,7 +4643,8 @@
               "null",
               "string"
             ]
-          }
+          },
+          "execution": { }
         }
       },
       "ClusterSummaryDto": {

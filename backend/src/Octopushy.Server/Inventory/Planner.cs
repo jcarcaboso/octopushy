@@ -66,7 +66,9 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     /// <summary>
     /// What a cluster's background work is now. Until every member's certificate is trusted that
     /// is reading them, as often as the check runs, since an operator is waiting on it. After
-    /// that it is a check of the cluster on the usual schedule, once it has been formed.
+    /// that it is a check of the cluster on the usual schedule, once it has been formed. That
+    /// check needs the password, so it looks first with what needs none: a member with a new
+    /// certificate is then found without the password leaving the store, and waits for trust.
     /// </summary>
     private static async Task<Orchestration.RunContext?> ClusterWorkAsync(Data.OctopushyDb db, Data.Resource resource, Definitions.LabRepository repository,
         Definitions.ClusterDefinition cluster, Data.DefinitionRevision revision, DateTimeOffset cutoff, CancellationToken cancellationToken)
@@ -76,7 +78,11 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
         var trusted = ClusterCertificates.Parse(trust?.Certificates);
         if (!endpoints.All(trusted.ContainsKey))
             return RunFactory.ClusterProbe(repository, cluster, revision);
-        return resource.AppliedAt is not null && (resource.ObserveRequestedAt is null || resource.ObserveRequestedAt < cutoff)
+        if (resource.AppliedAt is null || resource.ObserveRequestedAt >= cutoff)
+            return null;
+        if (resource.CertificatesReadAt is null || resource.CertificatesReadAt < cutoff)
+            return RunFactory.ClusterProbe(repository, cluster, revision);
+        return ClusterCertificates.ChangedReason(trust?.Certificates, resource.MemberCertificates) is null
             ? RunFactory.ClusterObservation(repository, cluster, revision)
             : null;
     }

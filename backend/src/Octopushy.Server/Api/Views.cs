@@ -251,7 +251,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             LatestCheck(resource, runs, observation),
             resource.MissingSince,
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Cluster)).ToList(),
-            bindings.Where(b => !declared.Contains(b.Guest)).Select(b => new ClusterLeavingDto(b.GuestId, b.Guest, b.Address, b.PeerName)).ToList());
+            bindings.Where(b => !declared.Contains(b.Guest)).OrderBy(b => b.Guest, StringComparer.Ordinal)
+                .Select(b => new ClusterLeavingDto(b.GuestId, b.Guest, b.Address, b.PeerName, b.UnconfirmedAt is not null)).ToList());
     }
 
     /// <summary>
@@ -389,7 +390,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             }
 
             var known = addresses.GetValueOrDefault(full);
-            return new ClusterMemberDto(full, m["role"]!.GetValue<string>(), known?.Address, match?.Id, memberStatus, known?.CodeDigest);
+            return new ClusterMemberDto(full, m["role"]!.GetValue<string>(), known?.Address, match?.Id, memberStatus, known?.CodeDigest, known?.Execution.DeepClone());
         }).ToList();
         return new ClusterSummaryDto(
             resource.Id,

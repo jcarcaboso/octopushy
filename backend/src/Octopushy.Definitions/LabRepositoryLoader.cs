@@ -693,14 +693,13 @@ public sealed partial class LabRepositoryLoader
         foreach (var field in new[] { "blocked", "allowed" })
         {
             var entries = (blocking?[field] as JsonArray)?.Select(p => p!.GetValue<string>()).ToList() ?? [];
-            foreach (var probe in probes.Where(entries.Contains))
+            foreach (var probe in probes.Where(p => entries.Any(e => DnsName.Covers(e, p))))
             {
                 Error(cluster.File, LineOf(cluster.File, "/settings/blocking/listProbes"), $"{probe} is also in {field}, so it says nothing about the lists.", cluster.Address);
             }
         }
 
-        if (blocking?["control"]?.GetValue<string>() is { } control
-            && (control.EndsWith(".test", StringComparison.Ordinal) || control.EndsWith(".test.", StringComparison.Ordinal)))
+        if (blocking?["control"]?.GetValue<string>() is { } control && DnsName.Key(control).EndsWith(".test", StringComparison.Ordinal))
         {
             Error(cluster.File, LineOf(cluster.File, "/settings/blocking/control"), "A .test name answers NXDOMAIN everywhere, so it cannot show that a server resolves.", cluster.Address);
         }

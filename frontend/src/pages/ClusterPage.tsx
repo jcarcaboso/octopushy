@@ -99,6 +99,7 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
               {cluster.members.map((member) => (
                 <li key={member.guest}>
                   <span className="mono">{member.guest}</span>: <span className="mono">{shortened(member.codeDigest)}</span>
+                  <Execution of={member.execution} />
                 </li>
               ))}
             </ul>
@@ -139,6 +140,47 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
   );
 }
 
+/** How a member would use the password beyond its code. Each of these is covered by trust. */
+function Execution({ of }: { of: unknown }) {
+  if (typeof of !== "object" || of === null) return null;
+  const run = of as {
+    backend?: { type?: string; config?: unknown; env?: unknown };
+    secrets?: Record<string, string>;
+    agentLabels?: string[];
+    proxmox?: { endpoint?: string | null; verifyTls?: boolean | null };
+    template?: { source?: { url?: string } } | null;
+  };
+  const backend = run.backend ?? {};
+  return (
+    <ul className="small">
+      <li>
+        State: <span className="mono">{backend.type ?? "?"}</span>
+        {backend.config || backend.env ? <span className="mono break"> {JSON.stringify({ config: backend.config, env: backend.env })}</span> : null}
+      </li>
+      <li>
+        Variables from the store:{" "}
+        <span className="mono">
+          {Object.entries(run.secrets ?? {})
+            .map(([variable, key]) => `${variable} = ${key}`)
+            .join(", ") || "none"}
+        </span>
+      </li>
+      <li>
+        Agents: <span className="mono">{(run.agentLabels ?? []).join(", ") || "any"}</span>
+      </li>
+      <li>
+        Proxmox: <span className="mono">{run.proxmox?.endpoint ?? "?"}</span>
+        {run.proxmox?.verifyTls === false ? ", its certificate not verified" : ""}
+      </li>
+      {run.template?.source?.url ? (
+        <li>
+          Template: <span className="mono break">{run.template.source.url}</span>
+        </li>
+      ) : null}
+    </ul>
+  );
+}
+
 function Leaving({ cluster, leaving }: { cluster: ClusterSummary; leaving: ClusterDetail["leaving"] }) {
   const acknowledge = useAcknowledgeDetach();
   const [note, setNote] = useState("");
@@ -157,6 +199,9 @@ function Leaving({ cluster, leaving }: { cluster: ClusterSummary; leaving: Clust
         {leaving.map((guest) => (
           <li key={guest.guestId}>
             <span className="mono">{guest.guest}</span> ({guest.address}){" "}
+            {guest.unconfirmed ? (
+              <>The primary no longer lists it, but nothing saw it leave, so it may still believe it is a member. Check it first. </>
+            ) : null}
             <button
               type="button"
               className="button button--small"

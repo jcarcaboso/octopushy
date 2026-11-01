@@ -254,7 +254,10 @@ public sealed class AssignmentBuilder(
                 ArgumentNullException.ThrowIfNull(run);
                 var plan = await StepOutputsAsync(run, StepNames.Plan, cancellationToken);
                 input["join"] = new JsonArray(ClusterPlan.Joins(plan).Select(g => (JsonNode?)g).ToArray());
-                input["pruneEntries"] = ClusterPlan.PrunesEntries(plan);
+                // What the approval named, as inspection found it, and nothing that appeared since.
+                var inspection = ClusterPlan.PrunesEntries(plan) ? await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken) : null;
+                input["pruneBlocked"] = ClusterPlan.Undeclared(inspection, "blocked");
+                input["pruneAllowed"] = ClusterPlan.Undeclared(inspection, "allowed");
             }
         }
         else

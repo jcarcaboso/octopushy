@@ -190,6 +190,38 @@ public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths)
     }
 }
 
+/// <summary>
+/// What a grant of a protected secret covers for a guest: its reviewed code, and everything that
+/// decides who ends up with the secret when that code does not change. A commit can leave every
+/// line of a root alone and still change where its state goes, which variable a secret becomes,
+/// which agent runs it, what container it is installed in, or what reaches the install's shell.
+/// <see cref="Execution"/> is that, as an operator is shown it before trusting.
+/// </summary>
+public sealed record ReleaseBinding(string Digest, JsonObject Execution)
+{
+    public static ReleaseBinding Of(LabRepository repository, GuestDefinition guest)
+    {
+        var code = repository.Recipes.TryGetValue(guest.Recipe, out var recipe) ? ReviewedCode.Of(repository, recipe).Digest : "";
+        var installation = repository.Installation(guest.InstallationAddress);
+        var endpoint = installation is not null && installation.Hosts.TryGetValue(guest.Host, out var host)
+            ? ProvisionInputs.EndpointFor(installation, host) : null;
+        var backend = guest.StateBackend is { } name && repository.Settings?.StateBackends.TryGetValue(name, out var declared) == true ? declared : null;
+        var template = guest.Template is { } id && repository.Templates.TryGetValue(id, out var found) ? found : null;
+        var execution = new JsonObject
+        {
+            ["backend"] = backend?.Json.DeepClone() ?? new JsonObject { ["type"] = "built-in" },
+            ["secrets"] = new JsonObject(guest.ProvisionSecrets.OrderBy(s => s.Key, StringComparer.Ordinal)
+                .Select(s => KeyValuePair.Create(s.Key, (JsonNode?)s.Value.Key))),
+            ["agentLabels"] = new JsonArray(PolicyResolver.AgentLabels(repository, guest).Value.Select(l => (JsonNode?)l).ToArray()),
+            ["proxmox"] = new JsonObject { ["endpoint"] = endpoint, ["verifyTls"] = installation?.Connection.VerifyTls },
+            ["template"] = template?.Json.DeepClone(),
+            ["inputs"] = guest.Json["provision"]?["inputs"]?.DeepClone(),
+            ["network"] = guest.Json["network"]?.DeepClone(),
+        };
+        return new ReleaseBinding(Canonical.Hash(new JsonObject { ["code"] = code, ["execution"] = execution.DeepClone() }), execution);
+    }
+}
+
 /// <summary>Canonical JSON (keys sorted, no whitespace) and its SHA-256, for change detection.</summary>
 public static class Canonical
 {

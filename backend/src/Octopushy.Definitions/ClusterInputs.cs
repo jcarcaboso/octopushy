@@ -2,14 +2,18 @@ using System.Text.Json.Nodes;
 
 namespace Octopushy.Definitions;
 
-/// <summary>A member with what its guest declares about where it is, and the digest of the code that provisions it.</summary>
-public sealed record ClusterMemberAddress(string Guest, string Role, string Address, string Endpoint, string CodeDigest);
+/// <summary>
+/// A member with what its guest declares about where it is, and what a grant of the password has
+/// to cover for it: <see cref="ReleaseBinding"/>'s digest, and what that digest stands for.
+/// </summary>
+public sealed record ClusterMemberAddress(string Guest, string Role, string Address, string Endpoint, string CodeDigest, JsonObject Execution);
 
 /// <summary>
 /// Everything a cluster's run is built from. <see cref="Hash"/> changes exactly when a new plan
 /// could differ. <see cref="Endpoints"/> and <see cref="CodeDigest"/> are what an operator trusts:
-/// where the admin password goes, and the code that receives it: the cluster's recipe, which holds
-/// it before approval, and each member's, which holds it during an apply nobody has to approve.
+/// where the admin password goes, and what receives it: the cluster's recipe, which holds it
+/// before approval, and each member's <see cref="ReleaseBinding"/>, for an apply nobody has to
+/// approve. It is a digest of what was reviewed and says nothing about what that does.
 /// </summary>
 public sealed record ClusterInputs(
     ClusterDefinition Cluster,
@@ -39,7 +43,8 @@ public sealed record ClusterInputs(
         {
             var guest = repository.Guest(m.Guest) ?? throw new InvalidOperationException($"{m.Guest} is not a guest.");
             var address = ProvisionInputs.ExpectedIpv4(guest) ?? throw new InvalidOperationException($"{m.Guest} has no static address.");
-            return new ClusterMemberAddress(m.Guest, m.Role, address, Endpoint(address), repository.Recipes.TryGetValue(guest.Recipe, out var provisioned) ? ReviewedCode.Of(repository, provisioned).Digest : "missing");
+            var binding = ReleaseBinding.Of(repository, guest);
+            return new ClusterMemberAddress(m.Guest, m.Role, address, Endpoint(address), binding.Digest, binding.Execution);
         }).ToList();
         var primary = members.Single(m => m.Role == ClusterRoles.Primary);
         var settings = cluster.Json["settings"]!;
@@ -81,8 +86,8 @@ public sealed record ClusterInputs(
                         ["type"] = blocking?["type"]?.GetValue<string>() ?? "NxDomain",
                         ["updateIntervalHours"] = blocking?["updateIntervalHours"]?.GetValue<int>() ?? 24,
                         ["lists"] = Strings(blocking?["lists"]),
-                        ["blocked"] = Strings(blocking?["blocked"]),
-                        ["allowed"] = Strings(blocking?["allowed"]),
+                        ["blocked"] = Names(blocking?["blocked"]),
+                        ["allowed"] = Names(blocking?["allowed"]),
                     },
                 },
             },
@@ -98,6 +103,7 @@ public sealed record ClusterInputs(
         var codeDigest = Canonical.Hash(new JsonObject
         {
             ["cluster"] = code.Digest,
+            ["agentLabels"] = new JsonArray(PolicyResolver.AgentLabels(repository, cluster).Value.Select(l => (JsonNode?)l).ToArray()),
             ["members"] = new JsonObject(members.OrderBy(m => m.Guest, StringComparer.Ordinal)
                 .Select(m => KeyValuePair.Create(m.Guest, (JsonNode?)m.CodeDigest))),
         });
@@ -115,7 +121,11 @@ public sealed record ClusterInputs(
 
     public static IEnumerable<(string Zone, string Forwarder, string Protocol)> ForwardZones(JsonNode settings) =>
         (settings["forwardZones"] as JsonArray)?.Select(z =>
-            (z!["zone"]!.GetValue<string>(), z["forwarder"]!.GetValue<string>(), z["protocol"]?.GetValue<string>() ?? "Udp")) ?? [];
+            (DnsName.Key(z!["zone"]!.GetValue<string>()), z["forwarder"]!.GetValue<string>(), z["protocol"]?.GetValue<string>() ?? "Udp")) ?? [];
 
     private static JsonArray Strings(JsonNode? list) => list?.DeepClone() as JsonArray ?? [];
+
+    /// <summary>As a server keeps them, or OpenTofu would see a difference that is not there.</summary>
+    private static JsonArray Names(JsonNode? list) =>
+        new((list as JsonArray)?.Select(n => (JsonNode?)DnsName.Key(n!.GetValue<string>())).ToArray() ?? []);
 }

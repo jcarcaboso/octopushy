@@ -198,7 +198,9 @@ public static class SecretNames
     /// <summary>A cluster's admin password. Unlike the Proxmox tokens, its role and wire name are the same.</summary>
     public const string ClusterPassword = "technitium.password";
 
-    public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
+    public const string BackendPrefix = "backend.";
+
+    public static string Backend(string environmentVariable) => $"{BackendPrefix}{environmentVariable}";
 
     private const string RecipePrefix = "recipe.";
 

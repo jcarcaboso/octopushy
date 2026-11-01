@@ -134,6 +134,26 @@ describe("ClusterPage", () => {
     expect(screen.getByText("Passed")).toBeInTheDocument();
   });
 
+  it("shows how a member would run before it is trusted", async () => {
+    const members = summary().members.map((member) => ({
+      ...member,
+      execution: {
+        backend: { type: "http", config: { address: "https://state.example.invalid/" } },
+        secrets: { admin_password: "dns/admin" },
+        agentLabels: ["home"],
+        proxmox: { endpoint: "https://10.1.0.10:8006/", verifyTls: false },
+        template: { source: { url: "https://images.example.invalid/one.tar.zst" } },
+      },
+    }));
+    const changed = summary({ members, trust: { ...summary().trust, codeChanged: true, codeDigest: "digest2" } });
+    mockApi({ [`GET /api/clusters/${id}`]: () => detail(changed) });
+    render();
+    expect((await screen.findAllByText(/state\.example\.invalid/)).length).toBe(2);
+    expect(screen.getAllByText("admin_password = dns/admin")).toHaveLength(2);
+    expect(screen.getAllByText(/its certificate not verified/)).toHaveLength(2);
+    expect(screen.getAllByText(/images\.example\.invalid/)).toHaveLength(2);
+  });
+
   it("shows no member as passed when the latest check failed without saying why", async () => {
     mockApi({
       [`GET /api/clusters/${id}`]: () =>
@@ -160,9 +180,20 @@ describe("ClusterPage", () => {
     expect(await screen.findByText(/Mark it protected under Variables/)).toBeInTheDocument();
   });
 
+  it("says when nothing saw a guest leave", async () => {
+    mockApi({
+      [`GET /api/clusters/${id}`]: () => ({
+        ...detail(summary()),
+        leaving: [{ guestId: "g2", guest: "home/moraband/mrb-dns-01", address: "10.1.0.42", peerName: null, unconfirmed: true }],
+      }),
+    });
+    render();
+    expect(await screen.findByText(/nothing saw it leave/)).toBeInTheDocument();
+  });
+
   it("asks how a guest left before acknowledging it", async () => {
     const { requests } = mockApi({
-      [`GET /api/clusters/${id}`]: () => ({ ...detail(summary()), leaving: [{ guestId: "g2", guest: "home/moraband/mrb-dns-01", address: "10.1.0.42", peerName: null }] }),
+      [`GET /api/clusters/${id}`]: () => ({ ...detail(summary()), leaving: [{ guestId: "g2", guest: "home/moraband/mrb-dns-01", address: "10.1.0.42", peerName: null, unconfirmed: false }] }),
       [`POST /api/clusters/${id}/members/g2/detached`]: () => undefined,
     });
     render();

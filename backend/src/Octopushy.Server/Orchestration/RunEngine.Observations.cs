@@ -56,7 +56,9 @@ public sealed partial class RunEngine
         }
         else
         {
-            installation.ObserveRequestedAt = now;
+            // Reading certificates comes before a cluster's check; it is not that check.
+            if (context.Cluster?.Probe != true)
+                installation.ObserveRequestedAt = now;
             var action = AssignmentBuilder.ActionFor(work);
             db.Attempts.Add(new Attempt
             {
@@ -124,8 +126,17 @@ public sealed partial class RunEngine
         switch (attempt.Status)
         {
             case AttemptStatuses.Succeeded when attempt.Action == "certificates":
-                // What members present is not a check of them, so it clears and adds nothing.
+                // What members present is not a check of them, so it clears and adds nothing,
+                // but a member that presents something else is news, and is all it takes to fail.
                 MergeCertificates(installation, outputs);
+                installation.CertificatesReadAt = now;
+                var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == installation.Address, cancellationToken);
+                if (Git.ClusterCertificates.ChangedReason(trust?.Certificates, installation.MemberCertificates) is { } changed)
+                {
+                    installation.ObserveError = changed;
+                    installation.ObserveErrorAt = now;
+                }
+
                 break;
             case AttemptStatuses.Succeeded:
                 installation.ObserveError = null;

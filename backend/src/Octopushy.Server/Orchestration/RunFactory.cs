@@ -172,7 +172,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
-            CodeDigest = inputs.Code.Digest,
+            CodeDigest = ReleaseBinding.Of(repository, guest).Digest,
             ReviewedPaths = inputs.Code.Paths,
             RootDiskBytes = inputs.Recipe.GuestFilesystem is null ? null
                 : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),

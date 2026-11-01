@@ -164,6 +164,9 @@ public sealed class ClusterBinding
     /// <summary>Set once it is known to have left: by a run that saw it gone, or an operator who says so.</summary>
     public DateTimeOffset? DetachedAt { get; set; }
 
+    /// <summary>When a run found the primary no longer lists it, without seeing it leave. Only an operator settles that.</summary>
+    public DateTimeOffset? UnconfirmedAt { get; set; }
+
     public string? DetachedBy { get; set; }
 
     public string? DetachNote { get; set; }
@@ -280,6 +283,9 @@ public sealed class Resource
 
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
+
+    /// <summary>A cluster's: when what its members present was last read, which takes no password.</summary>
+    public DateTimeOffset? CertificatesReadAt { get; set; }
 
     /// <summary>Why the installation's latest observation did not succeed; cleared when one does.</summary>
     public string? ObserveError { get; set; }
