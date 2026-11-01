@@ -106,7 +106,7 @@ public class ContainerGuestTests
         var vm = repository.Guest("home/korriban/krb-app-01")!;
 
         var run = Build(repository, guest, WithReporter());
-        Assert.Equal(["plan", "approval", "apply", "verify"], run.Steps.Select(s => s.Name));
+        Assert.Equal(["plan", "approval", "unprotect", "apply", "verify"], run.Steps.Select(s => s.Name));
         var context = RunContext.Parse(run.Context);
         Assert.Null(context.DiskReporter);
         Assert.Equal("lxc", context.Proxmox.GuestKind);
@@ -124,7 +124,7 @@ public class ContainerGuestTests
         var issue = Assert.Single(repository.Issues);
         Assert.Equal(IssueSeverity.Warning, issue.Severity);
         Assert.Contains("QEMU guest agent", issue.Message);
-        Assert.Equal(4, Build(repository, repository.Guest(Guest)!, WithReporter()).Steps.Count);
+        Assert.Equal(5, Build(repository, repository.Guest(Guest)!, WithReporter()).Steps.Count);
     }
 
     [Fact]

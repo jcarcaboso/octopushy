@@ -10,6 +10,7 @@ function entry(key: string, overrides: Partial<Variable> = {}): Variable {
     version: 1,
     latestVersion: 1,
     revoked: false,
+    protected: false,
     updatedAt: "2026-10-20T12:00:00Z",
     value: null,
     usedBy: [],

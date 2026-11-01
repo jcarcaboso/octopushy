@@ -105,7 +105,7 @@ run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provisio
 call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
 run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision" and .address=="e2e/korriban/e2e-ct-01")][0].id')
 steps=$(call "$api/api/runs/$run" | jq -r '[.steps[].name] | join(" ")')
-[[ $steps == "plan approval apply verify" ]] || { echo "Unexpected container steps: $steps"; exit 1; }
+[[ $steps == "plan approval unprotect apply verify" ]] || { echo "Unexpected container steps: $steps"; exit 1; }
 installation=$(call "$api/api/inventory" | jq '.labs[0].installations[0] | {observedAt, unmanagedCount, hosts: [.hosts[].name]}')
 echo "$installation"
 [[ $(jq -r .unmanagedCount <<<"$installation") == 1 ]] || { echo "Expected one unmanaged guest."; exit 1; }
