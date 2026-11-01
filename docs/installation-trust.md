@@ -80,8 +80,10 @@ OpenTofu to them: it needs a `.terraform.lock.hcl` and no `.terraform`, runs `to
 `-lockfile=readonly` so a provider cannot be unpinned, and with `-get=false` when no module is listed
 so that nothing is fetched. With listed modules it reads `.terraform/modules/modules.json` after the
 init and before the plan, and fails if a module is not local or resolves outside the listed folders.
-A listed module is installed by `init`; a remote one in a file the reader missed is therefore fetched
-before the check fails, and never planned. Runs that hold no protected secret are not changed.
+A listed module is installed by `init`, which runs with the run's environment, the password included;
+a remote one in a file the reader missed is therefore fetched before the check fails, and never
+planned. A fetch is not running the module's code, but what a hostile source can do during one was
+not tested here. Runs that hold no protected secret are not changed.
 
 1. A new cluster shows **Needs trust**. Its runs and checks wait, and receive no password.
 2. On the cluster's page, review the code and choose **Trust cluster**. This also records the grants
