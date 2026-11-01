@@ -21,7 +21,12 @@ trust_fixture_installations() {
     echo "Fixture trust refused: expected commit was not loaded." >&2
     return 1
   }
-  inventory=$(call "$api/api/inventory") || return 1
+  # The inventory follows the revision a moment later.
+  for _ in {1..30}; do
+    inventory=$(call "$api/api/inventory") || return 1
+    jq -e '[.labs[].installations[]] | any(.valid)' <<<"$inventory" >/dev/null && break
+    sleep 1
+  done
   # Trust exactly the endpoints shown; the server refuses them if the definition moved on.
   jq -c '.labs[].installations[] | select(.valid and (.trust.untrusted | length) > 0)
     | {id, body: {endpoints: .trust.endpoints}}' <<<"$inventory" |
