@@ -12,6 +12,10 @@
 //!   home/          HOME for OpenTofu
 //!   tmp/           TMPDIR (local runtime only; containers get a tmpfs)
 //! ```
+//!
+//! Providers listen on a Unix socket in TMPDIR, and such a path is short. When `tmp/` is too far
+//! down for one, TMPDIR is a short link to it in /tmp: everything still lands in the attempt's
+//! private workspace, and all a crash can leave behind is a link to nothing.
 
 pub mod archive;
 pub mod plan;
@@ -173,6 +177,8 @@ struct Prepared {
     root: PathBuf,
     out_dir: PathBuf,
     settings: Vec<(String, String)>,
+    /// TMPDIR's short name, if it needs one: it has to outlive every OpenTofu step.
+    _short_tmp: Option<ShortPath>,
     env: Vec<(String, String)>,
     backend_args: Vec<String>,
 }
@@ -238,10 +244,13 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         ),
         ("HOME".into(), rt.path(ws, &home)?),
     ];
+    let mut short_tmp = None;
     if !rt.is_container() {
         let tmp = ws.join("tmp");
         mk(&tmp)?;
-        settings.push(("TMPDIR".into(), tmp.to_string_lossy().into_owned()));
+        let (dir, short) = temp_dir(&tmp, Path::new("/tmp"))?;
+        settings.push(("TMPDIR".into(), dir));
+        short_tmp = short;
     }
     let mut env: Vec<(String, String)> = Vec::new();
     let mut names: Vec<String> = Vec::new();
@@ -340,7 +349,66 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         settings,
         env,
         backend_args,
+        _short_tmp: short_tmp,
     })
+}
+
+/// What a Unix socket's path can hold on Linux, without the NUL that ends it.
+const SOCKET_PATH_MAX: usize = 107;
+/// What go-plugin adds to TMPDIR for a provider's socket.
+const PLUGIN_SOCKET_NAME: usize = "/plugin0123456789".len();
+
+/// A short name for an attempt's temporary directory, for as long as the attempt lasts.
+struct ShortPath(PathBuf);
+
+impl Drop for ShortPath {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// TMPDIR for `tmp`, through a link in `links` if a provider's socket would not fit under it.
+/// The name is random and made atomically, because `links` is shared with everyone on the host.
+fn temp_dir(tmp: &Path, links: &Path) -> Result<(String, Option<ShortPath>), Failure> {
+    let text = tmp.to_string_lossy().into_owned();
+    if text.len() + PLUGIN_SOCKET_NAME <= SOCKET_PATH_MAX {
+        return Ok((text, None));
+    }
+    let too_long = |cause: String| {
+        Failure::msg(format!(
+            "{text} is too long to hold a provider's Unix socket ({} bytes, and such a path holds {SOCKET_PATH_MAX}), and {cause}. Give the agent a shorter --work-dir.",
+            text.len() + PLUGIN_SOCKET_NAME
+        ))
+    };
+    for _ in 0..8 {
+        let mut bytes = [0u8; 8];
+        rustls::crypto::ring::default_provider()
+            .secure_random
+            .fill(&mut bytes)
+            .map_err(|_| too_long("there is no secure randomness to name a link with".into()))?;
+        let link = links.join(format!("octopushy-{}", hex::encode(bytes)));
+        match std::os::unix::fs::symlink(tmp, &link) {
+            Ok(()) => {
+                let short = link.to_string_lossy().into_owned();
+                if short.len() + PLUGIN_SOCKET_NAME > SOCKET_PATH_MAX {
+                    drop(ShortPath(link));
+                    return Err(too_long(format!("{} is too long as well", links.display())));
+                }
+                return Ok((short, Some(ShortPath(link))));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(too_long(format!(
+                    "no shorter link can be made in {}: {e}",
+                    links.display()
+                )));
+            }
+        }
+    }
+    Err(too_long(format!(
+        "no free name was found in {}",
+        links.display()
+    )))
 }
 
 /// Runs OpenTofu steps for one attempt.
@@ -666,6 +734,43 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A provider listens on a Unix socket in TMPDIR, named as go-plugin names it.
+    #[test]
+    fn a_long_work_directory_still_fits_a_providers_socket() {
+        let base = tempfile::tempdir().unwrap();
+        let long = base.path().join("a-very-long-state-directory-".repeat(5));
+        let tmp = long.join("tmp");
+        fs::create_dir_all(&tmp).unwrap();
+        let (dir, short) = temp_dir(&tmp, Path::new("/tmp")).unwrap();
+        assert!(dir.len() + PLUGIN_SOCKET_NAME <= SOCKET_PATH_MAX, "{dir}");
+        let socket = format!("{dir}/plugin1234567890");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        // The attempt's isolation stays: what goes in TMPDIR is inside its workspace.
+        assert!(tmp.join("plugin1234567890").exists());
+        drop(listener);
+        drop(short);
+        assert!(fs::symlink_metadata(&dir).is_err(), "the name is left over");
+    }
+
+    #[test]
+    fn a_short_work_directory_keeps_its_temporary_directory_as_it_is() {
+        let base = tempfile::tempdir().unwrap();
+        let tmp = base.path().join("tmp");
+        fs::create_dir_all(&tmp).unwrap();
+        let (dir, short) = temp_dir(&tmp, Path::new("/tmp")).unwrap();
+        assert_eq!(dir, tmp.to_string_lossy());
+        assert!(short.is_none());
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_shortened_says_what_is_wrong() {
+        let long = Path::new("/nowhere").join("x".repeat(120)).join("tmp");
+        let error = temp_dir(&long, Path::new("/nowhere/at/all")).err().unwrap();
+        let message = error.message();
+        assert!(message.contains("Unix socket"), "{message}");
+        assert!(message.contains("--work-dir"), "{message}");
+    }
 
     #[test]
     fn env_names() {
