@@ -20,6 +20,7 @@ import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { WaitingNote } from "../components/WaitingNote";
 import { humanize, plural } from "../lib/format";
+import { folderLink } from "./variables/folders";
 
 function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
   return (
@@ -215,7 +216,7 @@ export function InstallationPage() {
                   {
                     term: "Token",
                     value: data.tokenKey ? (
-                      <Link to="/variables" className="mono">
+                      <Link to={folderLink(data.tokenKey)} className="mono">
                         {data.tokenKey}
                       </Link>
                     ) : (

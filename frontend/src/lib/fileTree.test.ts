@@ -12,6 +12,14 @@ describe("buildTree", () => {
       ["lab.yaml", false],
     ]);
   });
+
+  it("keeps a path that is both a file and a folder as two nodes", () => {
+    const tree = buildTree(["a/b", "a/b/c"]);
+    expect(tree[0].children!.map((n) => [n.path, Boolean(n.children)])).toEqual([
+      ["a/b", true],
+      ["a/b", false],
+    ]);
+  });
 });
 
 describe("parentFolders", () => {

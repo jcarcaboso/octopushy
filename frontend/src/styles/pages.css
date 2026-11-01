@@ -536,7 +536,45 @@
 }
 
 .table--variables td:nth-child(3) {
-  min-width: 12rem;
+  min-width: 10rem;
+}
+
+.variable-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.variable-tools input[type="search"] {
+  width: 14rem;
+}
+
+.folder-path {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.folder-path > [aria-hidden="true"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.folder-link,
+.entry-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.folder-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .change__address {
