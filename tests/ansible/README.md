@@ -8,8 +8,9 @@ just e2e-ansible          # the Ansible image, built here, in rootless podman
 just e2e-ansible local    # the same program run directly, as the internal agent does
 ```
 
-`local` needs `/tmp` on a tmpfs, because the program refuses to run otherwise. Both need the
-development PostgreSQL, which `just` starts. Logs stay in `.dev/ansible`.
+`local` needs `/tmp` on a tmpfs, because the program refuses to run otherwise. Each run starts
+its own PostgreSQL and uses its own ports, so it can run beside `just e2e` and whatever else uses
+the development database. Logs stay in `.dev/ansible`.
 
 It proves, against real tools:
 

@@ -4,17 +4,22 @@
 #
 # E2E_TOOL_RUNTIME=podman (the default) starts the Ansible image built from agent/ansible.
 # E2E_TOOL_RUNTIME=local runs the same program directly, as the internal agent does; it needs
-# a /tmp on tmpfs. Needs the development PostgreSQL (`just dev-db`). Leaves logs in .dev/ansible.
+# a /tmp on tmpfs. It has its own PostgreSQL and ports, so it can run beside anything else that
+# uses the development database. Leaves logs in .dev/ansible.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$root/.dev/ansible
 runtime=${E2E_TOOL_RUNTIME:-podman}
-api=http://127.0.0.1:18080
+api_port=18180
+agent_port=18543
+proxmox_port=18106
+pg_port=55442
+api=http://127.0.0.1:$api_port
 port=12222
 target=octopushy-ansible-target
+database=octopushy-ansible-pg
 image=localhost/octopushy-ansible:e2e
-pg=(podman exec octopushy-dev-pg psql -q -U octopushy -d octopushy -v ON_ERROR_STOP=1)
 guest=e2e/korriban/e2e-vm-01
 password='pa"ss\word-with-{{ braces }}'
 pids=()
@@ -24,7 +29,7 @@ fail() { echo "FAILED: $*" >&2; exit 1; }
 cleanup() {
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
-  podman rm -f "$target" >/dev/null 2>&1 || true
+  podman rm -f -v "$target" "$database" >/dev/null 2>&1 || true
   podman ps -q --filter label=io.octopushy.attempt=true | xargs -r podman rm -f >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -71,12 +76,20 @@ for _ in $(seq 1 30); do
 done
 [[ -n ${host_key:-} ]] || fail "no host key"
 
-log "Databases"
-"${pg[@]}" -c "DROP DATABASE IF EXISTS ansible_octopushy" -c "CREATE DATABASE ansible_octopushy"
+log "Database"
+podman run -d --replace --name "$database" -p "127.0.0.1:$pg_port:5432" --tmpfs /var/lib/postgresql \
+  -e POSTGRES_USER=octopushy -e POSTGRES_PASSWORD=octopushy -e POSTGRES_DB=octopushy \
+  docker.io/library/postgres:18-alpine >/dev/null
+for _ in $(seq 1 60); do
+  podman exec "$database" pg_isready -q -h 127.0.0.1 -U octopushy -d octopushy && break
+  sleep 1
+done
+podman exec "$database" pg_isready -q -h 127.0.0.1 -U octopushy -d octopushy || fail "PostgreSQL did not start"
 
 log "Lab repository"
 cp -r "$root/tests/e2e/lab" "$work/lab"
 cp -r "$root/tests/ansible/lab/." "$work/lab/"
+grep -rlF 18006 "$work/lab" | xargs -r sed -i "s/18006/$proxmox_port/g"
 guest_dir=$work/lab/labs/e2e/proxmox/korriban/guests/e2e-vm-01
 echo 'From the guest folder.' >"$guest_dir/motd"
 cat >>"$guest_dir/guest.yaml" <<YAML
@@ -99,19 +112,19 @@ git -C "$work/lab" add -A
 git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q -m "Initial definitions"
 
 log "Mock Proxmox"
-"$root/agent/target/debug/mock-proxmox" --listen 127.0.0.1:18006 --fixture "$root/tests/e2e/proxmox.json" \
+"$root/agent/target/debug/mock-proxmox" --listen "127.0.0.1:$proxmox_port" --fixture "$root/tests/e2e/proxmox.json" \
   --tls-self-signed >"$work/mock.log" 2>&1 &
 pids+=($!)
 
 log "Backend"
 (
   cd "$root/backend/src/Octopushy.Server/bin/Debug/net10.0"
-  ConnectionStrings__Octopushy="Host=127.0.0.1;Port=55432;Database=ansible_octopushy;Username=octopushy;Password=octopushy" \
+  ConnectionStrings__Octopushy="Host=127.0.0.1;Port=$pg_port;Database=octopushy;Username=octopushy;Password=octopushy" \
   Octopushy__DataDirectory="$work/server" \
-  Octopushy__ApiPort=18080 \
-  Octopushy__AgentChannel__Port=18443 \
+  Octopushy__ApiPort=$api_port \
+  Octopushy__AgentChannel__Port=$agent_port \
   Octopushy__AgentChannel__BindAddress=127.0.0.1 \
-  Octopushy__AgentChannel__PublicUrl=https://127.0.0.1:18443 \
+  Octopushy__AgentChannel__PublicUrl=https://127.0.0.1:$agent_port \
   Octopushy__MigrateOnStart=true \
   Octopushy__Scheduling__VerifyWaitSeconds=30 \
   Octopushy__Tools__AnsibleImage=$image \
@@ -144,7 +157,7 @@ call -X PUT "$api/api/repository" -d "{\"url\":\"$work/lab\",\"branch\":\"main\"
 log "Agent"
 token=$(call -X POST "$api/api/agents/tokens" -d '{"name":"e2e-agent","labels":["e2e"]}' | jq -r .token)
 OCTOPUSHY_ENROLLMENT_TOKEN=$token "$root/agent/target/debug/octopushy" agent enroll \
-  --server https://127.0.0.1:18443 --name e2e-agent --state-dir "$work/agent" >"$work/enroll.log" 2>&1
+  --server "https://127.0.0.1:$agent_port" --name e2e-agent --state-dir "$work/agent" >"$work/enroll.log" 2>&1
 start_agent() {
   "$root/agent/target/debug/octopushy" agent run --state-dir "$work/agent" "${agent_args[@]}" >>"$work/agent.log" 2>&1 &
   agent_pid=$!
