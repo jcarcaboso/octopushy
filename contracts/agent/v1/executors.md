@@ -231,7 +231,12 @@ Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the V
 `protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`, or the same path under
 `lxc`. Succeeds with `{ "absent": true, "previous": null, "protection": null }` when the VM
 does not exist, and fails when it is on another node than `node`. It also fails for a
-container that is a template or whose name is not `name`.
+container that is a template or whose name is not `name`. It is `uncertain` when the write may
+have reached Proxmox, or was accepted and could not be read back, because a plain failure
+tells the controller that protection did not change.
+
+The controller sends it for the `unprotect` step with `protection: false` and for the
+`reprotect` step with `protection: true`, always with the run's own `node` and `vmid`.
 
 ## `opentofu`
 
@@ -369,6 +374,13 @@ name may not start with a dot or end in `.tf`, `.tofu`, or `.json`, so this cann
 Optional `replace` lists resource addresses, each passed as `-replace=<address>`. It is for what
 only the controller knows must happen again, so that it is in the preview and follows approval. An
 address that is not in the state changes nothing.
+
+A change also carries `actionReason`, OpenTofu's `action_reason`, when the plan gives
+one, such as `replace_because_tainted`. A change to a
+`proxmox_virtual_environment_vm` that exists carries `vmId` and `node`, the `vm_id` and
+`node_name` its state holds. The controller lifts a provision run's protection only for
+a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
+them out never gets that VM's protection lifted, and the apply fails on it as before.
 
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding

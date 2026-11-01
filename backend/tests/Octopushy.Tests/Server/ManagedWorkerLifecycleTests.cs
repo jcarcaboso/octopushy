@@ -596,6 +596,7 @@ public class ManagedWorkerLifecycleTests(PostgresFixture postgres)
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest);
         Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.DoesNotContain(run.Steps, s => s.Name == StepNames.Unprotect);
         Assert.Empty(control.TakeAssignments());
         await server.Engine.ExecuteAsync(async (db, services) =>
         {

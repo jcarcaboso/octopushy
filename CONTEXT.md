@@ -93,6 +93,12 @@ Octopushy's key/value dictionary of values kept outside Git, each either plain
 or secret, referenced from definitions by key.
 _Avoid_: Credential store when plain values are included
 
+**Store folder**:
+A `/`-separated prefix that variable-store keys share, shown as a folder in the
+interface. It is not stored and has no identity of its own, so it exists exactly
+while a key below it does; a key is always its full path.
+_Avoid_: Using a folder as a reference target; references name keys
+
 **Secret**:
 A variable-store entry whose value is concealed once saved and is delivered only
 to operations that reference it.

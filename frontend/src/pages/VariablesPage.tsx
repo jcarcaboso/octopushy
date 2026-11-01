@@ -1,29 +1,52 @@
-import { History, KeyRound, Lock, Pencil, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { FolderTree, KeyRound, List, Plus } from "lucide-react";
+import { Fragment, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { useDeleteVariable, useSetVariableProtection, useVariables } from "../api/queries";
 import type { Variable } from "../api/types";
-import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
-import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
 import { Table } from "../components/Table";
+import { EntriesTable, UsedBy } from "./variables/EntriesTable";
+import { folderHref, foldersOn, lastSegment, listFolder, matchesSearch } from "./variables/folders";
 import { VariableDialog } from "./variables/VariableDialog";
 import { VariableVersionsDialog } from "./variables/VariableVersionsDialog";
 
 type Editing = { existing: Variable | null; presetKey?: string } | null;
+type View = "folders" | "all";
 
-function UsedBy({ usedBy }: { usedBy: string[] }) {
-  if (usedBy.length === 0) return <span className="muted">Not referenced</span>;
+const viewStorageKey = "octopushy.variables.view";
+
+function storedView(): View {
+  try {
+    return window.localStorage.getItem(viewStorageKey) === "all" ? "all" : "folders";
+  } catch {
+    return "folders";
+  }
+}
+
+function storeView(view: View) {
+  try {
+    window.localStorage.setItem(viewStorageKey, view);
+  } catch {
+    // The choice then lasts only until the page is left.
+  }
+}
+
+/** Phrasing content, because a card title is a heading. */
+function FolderPath({ path }: { path: string }) {
+  if (!path) return "Entries";
   return (
-    <ul className="used-by">
-      {usedBy.map((u) => (
-        <li key={u} className="mono small">
-          {u}
-        </li>
+    <span role="navigation" aria-label="Folder" className="folder-path">
+      <Link to={folderHref("")}>Entries</Link>
+      {foldersOn(path).map((folder) => (
+        <Fragment key={folder}>
+          <span aria-hidden="true">/</span>
+          {folder === path ? <span aria-current="page">{lastSegment(folder)}</span> : <Link to={folderHref(folder)}>{lastSegment(folder)}</Link>}
+        </Fragment>
       ))}
-    </ul>
+    </span>
   );
 }
 
@@ -31,6 +54,10 @@ export function VariablesPage() {
   const { data, error, isPending } = useVariables();
   const protection = useSetVariableProtection();
   const remove = useDeleteVariable();
+  const [params, setParams] = useSearchParams();
+  const [preferredView, setPreferredView] = useState(storedView);
+  // Kept out of the URL: a value pasted here by mistake must not reach the history.
+  const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<Variable | null>(null);
   const [managing, setManaging] = useState<string | null>(null);
@@ -38,12 +65,53 @@ export function VariablesPage() {
   const missing = data?.missing.filter((entry) => !entry.key.startsWith("system/")) ?? [];
   const managed = entries.find((entry) => entry.key === managing);
 
+  const folderParam = params.get("folder");
+  const view = folderParam === null ? preferredView : "folders";
+  const listing = listFolder(entries, folderParam ?? "");
+  const query = search.trim().toLowerCase();
+  const results = query ? entries.filter((entry) => matchesSearch(entry, query)) : null;
+  const browsing = view === "folders" && !results;
+
+  function chooseView(next: View) {
+    storeView(next);
+    setPreferredView(next);
+    if (next === "all") setParams({});
+  }
+
   const setButton = (
     <button type="button" className="button button--primary" onClick={() => setEditing({ existing: null })}>
       <Plus size={15} aria-hidden="true" />
       Set a variable
     </button>
   );
+
+  const tools = (
+    <div className="variable-tools">
+      <input
+        type="search"
+        placeholder="Search all keys"
+        aria-label="Search all keys"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <nav className="segmented segmented--inline" aria-label="View">
+        <button type="button" className="segmented__item" aria-current={view === "folders" ? "page" : undefined} onClick={() => chooseView("folders")}>
+          <FolderTree size={14} aria-hidden="true" /> Folders
+        </button>
+        <button type="button" className="segmented__item" aria-current={view === "all" ? "page" : undefined} onClick={() => chooseView("all")}>
+          <List size={14} aria-hidden="true" /> All keys
+        </button>
+      </nav>
+    </div>
+  );
+
+  const rowActions = {
+    onUpdate: (existing: Variable) => setEditing({ existing }),
+    onVersions: (entry: Variable) => setManaging(entry.key),
+    onProtect: (entry: Variable) => protection.mutate({ key: entry.key, protected: !entry.protected }),
+    protecting: protection.isPending,
+    onDelete: setDeleting,
+  };
 
   return (
     <>
@@ -90,105 +158,36 @@ export function VariablesPage() {
               </Table>
             </Card>
           ) : null}
-          <Card title="Entries" meta={entries.length || undefined} flush>
+          <Card
+            title={browsing ? <FolderPath path={listing.path} /> : "Entries"}
+            meta={results ? `${results.length} of ${entries.length}` : (browsing ? listing.total : entries.length) || undefined}
+            actions={entries.length > 0 ? tools : undefined}
+            flush
+          >
             {entries.length === 0 ? (
               <EmptyState icon={KeyRound} title="The store is empty" actions={setButton}>
                 Set the Proxmox tokens and state-backend credentials your definitions reference.
               </EmptyState>
+            ) : results?.length === 0 ? (
+              <EmptyState compact title="No key matches this search">
+                Searches keys, descriptions, and what uses them, never values.
+              </EmptyState>
+            ) : browsing ? (
+              <EntriesTable folders={listing.folders} entries={listing.entries} byName {...rowActions} />
             ) : (
-              <Table label="Variable store entries" className="table--variables">
-                <thead>
-                  <tr>
-                    <th scope="col">Key</th>
-                    <th scope="col">Visibility</th>
-                    <th scope="col">Description</th>
-                    <th scope="col">Value</th>
-                    <th scope="col">Active version</th>
-                    <th scope="col">Updated</th>
-                    <th scope="col">Used by</th>
-                    <th scope="col">
-                      <span className="visually-hidden">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {entries.map((v) => (
-                    <tr key={v.key}>
-                      <th scope="row" className="mono">
-                        {v.key}
-                      </th>
-                      <td>
-                        {v.visibility === "secret" ? (
-                          <Badge tone="attention" icon={Lock}>
-                            Secret
-                          </Badge>
-                        ) : (
-                          <Badge tone="neutral">Plain</Badge>
-                        )}{" "}
-                        {v.protected ? <Badge tone="warning">Protected</Badge> : null}
-                      </td>
-                      <td>{v.description ?? <span className="muted">—</span>}</td>
-                      <td className="cell-value">
-                        {v.visibility === "plain" ? (
-                          <code className="mono value-preview" title={v.value ?? ""}>
-                            {v.value}
-                          </code>
-                        ) : (
-                          <span className="muted">Concealed</span>
-                        )}
-                      </td>
-                      <td className="num">
-                        v{v.version}
-                        {v.latestVersion > v.version ? <div className="muted small">Latest: v{v.latestVersion}</div> : null}
-                        {v.revoked ? <Badge tone="danger">Revoked</Badge> : null}
-                      </td>
-                      <td className="nowrap">
-                        <RelativeTime value={v.updatedAt} />
-                      </td>
-                      <td>
-                        <UsedBy usedBy={v.usedBy} />
-                      </td>
-                      <td className="cell-actions">
-                        <div className="button-row button-row--tight">
-                          <button type="button" className="button button--small" onClick={() => setEditing({ existing: v })} aria-label={`Update ${v.key}`}>
-                            <Pencil size={14} aria-hidden="true" />
-                            Update
-                          </button>
-                          <button
-                            type="button"
-                            className="button button--small"
-                            disabled={protection.isPending}
-                            onClick={() => protection.mutate({ key: v.key, protected: !v.protected })}
-                            aria-label={`${v.protected ? "Stop protecting" : "Protect"} ${v.key}`}
-                          >
-                            {v.protected ? "Unprotect" : "Protect"}
-                          </button>
-                          {v.visibility === "secret" ? (
-                            <button type="button" className="button button--small" onClick={() => setManaging(v.key)} aria-label={`Versions of ${v.key}`}>
-                              <History size={14} aria-hidden="true" />
-                              Versions
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="button button--small button--danger-outline"
-                            onClick={() => setDeleting(v)}
-                            aria-label={`Delete ${v.key}`}
-                          >
-                            <Trash2 size={14} aria-hidden="true" />
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
+              <EntriesTable entries={results ?? entries} {...rowActions} />
             )}
           </Card>
         </div>
       )}
-      {editing ? <VariableDialog existing={editing.existing} presetKey={editing.presetKey} onClose={() => setEditing(null)} /> : null}
+      {editing ? (
+        <VariableDialog
+          existing={editing.existing}
+          presetKey={editing.presetKey}
+          folder={browsing ? listing.path : undefined}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
       {managed ? <VariableVersionsDialog existing={managed} onClose={() => setManaging(null)} /> : null}
       <ConfirmDialog
         open={deleting !== null}

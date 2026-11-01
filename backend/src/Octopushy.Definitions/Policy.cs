@@ -3,8 +3,11 @@ namespace Octopushy.Definitions;
 /// <summary>A resolved setting and the place it was set, shown so the user can find it.</summary>
 public sealed record ResolvedSetting<T>(T Value, string SetBy);
 
-/// <summary>The approval and destructive settings that apply to one resource.</summary>
-public sealed record EffectivePolicy(ResolvedSetting<string> Approval, ResolvedSetting<string> Destructive)
+/// <summary>
+/// The approval and destructive settings that apply to one resource.
+/// <paramref name="DestructiveExplicit"/> says someone set destructive, rather than it following approval.
+/// </summary>
+public sealed record EffectivePolicy(ResolvedSetting<string> Approval, ResolvedSetting<string> Destructive, bool DestructiveExplicit)
 {
     public bool ApprovalRequired => Approval.Value == "manual";
 
@@ -87,7 +90,8 @@ public static class PolicyResolver
 
         return new EffectivePolicy(
             approval,
-            destructive ?? new ResolvedSetting<string>(approval.Value, $"{approval.SetBy}, following approval"));
+            destructive ?? new ResolvedSetting<string>(approval.Value, $"{approval.SetBy}, following approval"),
+            destructive is not null);
     }
 
     private static ResolvedSetting<IReadOnlyList<string>> ResolveLabels(IEnumerable<(string SetBy, IReadOnlyList<string>? Labels)> chain)

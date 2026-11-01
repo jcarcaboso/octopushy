@@ -19,9 +19,18 @@ no-op. Existing VM plan/apply approval policy remains unchanged. Do not enable
 this recipe if every guest-side repair requires its own separate approval;
 guest-specific approval gates are not implemented.
 
-The first version supports only the common NixOS base image: GPT, 512-byte sectors,
-`/dev/sda1` EFI/vfat followed by `/dev/sda2` ext4 labelled `nixos`, with no other
-partitions on that disk. The root partition must start within the first GiB.
+The first version supports only the common NixOS base image on a SCSI disk: GPT,
+512-byte sectors, partition 1 EFI/vfat followed by partition 2 ext4 labelled `nixos`,
+with no other partitions on that disk. The root partition must start within the first
+GiB.
+
+The disk is found from the mounted root, not by name: Linux can call the boot disk
+`sda` on one boot and `sdb` on the next when a VM has a second disk, as a managed
+worker does. Partition 2 must be the mounted root, the only device labelled `nixos`,
+and hold the mounted filesystem's UUID, because the native `growpart.service` follows
+that label. The disk's capacity is then compared with the desired `hardware.disks[0]`
+size, so the worker state disk is never measured or resized in its place.
+
 It rejects other layouts, encryption, LVM, other filesystems, unexpected VM
 identity, templates, and a virtual disk whose capacity differs from the desired
 capacity. It never formats, shrinks, changes mounts, rebuilds the OS, or reboots.
@@ -84,6 +93,9 @@ also destroys guest-local service data; this feature does not provide backups.
   retry, preserved history, no-op checks, stale and uncertain retry refusal.
 - Agent tests exercise the wire/executor boundary, ownership checks, real
   capacity expectations, known failures, and lost execution status.
+- `agent/crates/octopushy/tests/nixos_rootfs_guest.rs` runs the guest program itself
+  as the executor submits it, with stubbed disk tools: both disk orders, growth and
+  no-change paths, and each refusal, always leaving the state disk alone.
 - Live testing should verify actual filesystem growth, a deliberately blocked
   guest step followed by targeted retry, Portainer/data continuity, a final no-op,
   and unrelated guest isolation. Local mocked checks alone do not establish

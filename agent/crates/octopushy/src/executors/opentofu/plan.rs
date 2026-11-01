@@ -7,6 +7,9 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+/// The resource type of a Proxmox VM, whose identity a summary reports.
+const VM_RESOURCE_TYPE: &str = "proxmox_virtual_environment_vm";
+
 /// One entry of `changes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Change {
@@ -15,6 +18,16 @@ pub struct Change {
     pub kind: String,
     pub name: String,
     pub actions: Vec<String>,
+    /// Why OpenTofu chose this action, such as `replace_because_tainted`.
+    #[serde(rename = "actionReason", skip_serializing_if = "Option::is_none")]
+    pub action_reason: Option<String>,
+    /// The VMID the state holds for a Proxmox VM. The controller lifts a VM's
+    /// protection only for a change that names that guest's own VMID and node.
+    #[serde(rename = "vmId", skip_serializing_if = "Option::is_none")]
+    pub vm_id: Option<u64>,
+    /// The node the state holds for a Proxmox VM.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -60,11 +73,24 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
             _ => {} // e.g. "forget": listed, not counted
         }
         let text = |key: &str| rc.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+        let kind = text("type");
+        let before = rc
+            .pointer("/change/before")
+            .filter(|_| kind == VM_RESOURCE_TYPE);
         summary.changes.push(Change {
             address: text("address"),
-            kind: text("type"),
             name: text("name"),
             actions,
+            action_reason: rc
+                .get("action_reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            vm_id: before.and_then(|b| b.get("vm_id")).and_then(Value::as_u64),
+            node: before
+                .and_then(|b| b.get("node_name"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            kind,
         });
     }
     Ok(summary)
@@ -130,6 +156,42 @@ mod tests {
         assert_eq!(s.changes[0].kind, "a");
         assert!(summarize(b"{}").unwrap().changes.is_empty());
         assert!(summarize(b"nope").is_err());
+    }
+
+    #[test]
+    fn reports_which_proxmox_vm_a_change_touches_and_why() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "action_reason":"replace_because_tainted",
+             "change":{"actions":["delete","create"],
+                       "before":{"vm_id":200,"node_name":"pve01","cloud_init":"secret user data"},
+                       "after":{"vm_id":200,"node_name":"pve01"}}},
+            {"address":"proxmox_virtual_environment_vm.new","type":"proxmox_virtual_environment_vm","name":"new",
+             "change":{"actions":["create"],"before":null,"after":{"vm_id":201}}},
+            {"address":"proxmox_virtual_environment_firewall_options.vm","type":"proxmox_virtual_environment_firewall_options","name":"vm",
+             "change":{"actions":["delete","create"],"before":{"vm_id":200,"node_name":"pve01"}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let vm = &s.changes[0];
+        assert_eq!(vm.action_reason.as_deref(), Some("replace_because_tainted"));
+        assert_eq!((vm.vm_id, vm.node.as_deref()), (Some(200), Some("pve01")));
+        // A VM being created has no identity yet, and only a VM resource reports one.
+        assert_eq!(
+            (s.changes[1].vm_id, s.changes[1].action_reason.as_deref()),
+            (None, None)
+        );
+        assert_eq!(
+            (s.changes[2].vm_id, s.changes[2].node.as_deref()),
+            (None, None)
+        );
+
+        let wire = serde_json::to_string(&s.changes).unwrap();
+        assert!(
+            wire.contains(r#""actionReason":"replace_because_tainted","vmId":200,"node":"pve01""#)
+        );
+        assert!(!wire.contains("secret user data"));
+        // Absent values stay off the wire instead of appearing as nulls.
+        assert!(!wire.contains("null"));
     }
 
     #[test]

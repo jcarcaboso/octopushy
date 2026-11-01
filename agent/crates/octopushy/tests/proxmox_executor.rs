@@ -12,6 +12,8 @@ use octopushy::tools::{RuntimeKind, ToolRuntime};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn mock(fixture: Fixture) -> RunningMock {
     mock_proxmox::start(
@@ -533,4 +535,72 @@ async fn set_protection() {
     let (r, _) = exec("set-protection", input(310, "korriban", false), &t).await;
     assert!(failed(r).0.contains("is on moraband"));
     assert!(m.vm(310).unwrap().protection);
+}
+
+/// A Proxmox that reports `protection` once, then fails every later read of the VM's config.
+async fn config_read_fails_after_the_first(protection: u8) -> MockServer {
+    let server = MockServer::start().await;
+    let data = |value: Value| ResponseTemplate::new(200).set_body_json(json!({ "data": value }));
+    Mock::given(method("GET"))
+        .and(path("/api2/json/access/permissions"))
+        .respond_with(data(json!({ "/vms/210": { "VM.Audit": 1 } })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/cluster/resources"))
+        .respond_with(data(
+            json!([{ "vmid": 210, "name": "vm", "node": "n1", "type": "qemu", "status": "running" }]),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(data(json!({ "protection": protection })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn a_change_proxmox_accepted_but_could_not_confirm_is_uncertain() {
+    let server = config_read_fails_after_the_first(1).await;
+    Mock::given(method("PUT"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": null })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let input = json!({
+        "connection": { "endpoint": server.uri(), "verifyTls": false },
+        "node": "n1", "vmid": 210, "protection": false,
+    });
+
+    let (r, _) = exec("set-protection", input, "u@pve!t=s").await;
+
+    match r {
+        Err(Failure::Uncertain(message)) => assert!(message.contains("could not be confirmed")),
+        Err(Failure::Failed { message, .. }) => panic!("a plain failure: {message}"),
+        _ => panic!("expected an uncertain outcome"),
+    }
+}
+
+#[tokio::test]
+async fn a_failed_read_after_no_change_is_a_plain_failure() {
+    let server = config_read_fails_after_the_first(0).await;
+    let input = json!({
+        "connection": { "endpoint": server.uri(), "verifyTls": false },
+        "node": "n1", "vmid": 210, "protection": false,
+    });
+
+    let (r, _) = exec("set-protection", input, "u@pve!t=s").await;
+
+    assert!(matches!(r, Err(Failure::Failed { .. })));
 }

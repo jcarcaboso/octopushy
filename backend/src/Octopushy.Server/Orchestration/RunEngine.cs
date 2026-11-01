@@ -190,7 +190,9 @@ public sealed partial class RunEngine(
                 step.Detail = (step.Detail is null ? "" : step.Detail + " ") + $"Closed by {user}.";
             }
 
-            Finish(run, RunStatuses.Failed, $"Closed by {user} after an uncertain outcome. Plan again to see the current state.");
+            var context = RunContext.Parse(run.Context);
+            if (!RestoringProtection(db, run, context))
+                Finish(run, RunStatuses.Failed, $"Closed by {user} after an uncertain outcome. Plan again to see the current state." + ProtectionOutcome(run, context));
             await db.SaveChangesAsync(cancellationToken);
             signal.Wake();
         }, cancellationToken);
@@ -232,7 +234,17 @@ public sealed partial class RunEngine(
             attempt.LeaseExpiresAt = null;
         }
 
-        Finish(run, RunStatuses.Cancelled, reason);
+        // A run that lifted protection and will not apply must not leave the VM unprotected.
+        var context = RunContext.Parse(run.Context);
+        if (run.Steps.All(s => s.Name != StepNames.Reprotect) && LiftedProtection(run))
+        {
+            var waiting = run.Steps.Single(s => s.Name == StepNames.Apply);
+            waiting.Status = StepStatuses.Cancelled;
+            waiting.Detail = reason;
+            RestoringProtection(db, run, context);
+        }
+        else
+            Finish(run, RunStatuses.Cancelled, reason + ProtectionOutcome(run, context));
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -372,7 +384,7 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (DecideApproval(run, step, context))
+                    if (await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
                         continue;
                     }
@@ -417,14 +429,16 @@ public sealed partial class RunEngine(
                     break;
                 case StepStatuses.Failed:
                     // What a member reports is not a failed deployment: the change went through.
-                    Finish(run, RunStatuses.Failed, step.Name == StepNames.VerifyCluster ? $"Verification failed: {step.Detail}" : $"The {step.Name} step failed: {step.Detail}");
+                    if (!RestoringProtection(db, run, context))
+                        Finish(run, RunStatuses.Failed, (step.Name == StepNames.VerifyCluster ? $"Verification failed: {step.Detail}" : $"The {step.Name} step failed: {step.Detail}") + ProtectionOutcome(run, context));
                     break;
                 case StepStatuses.Uncertain:
                     run.Status = RunStatuses.Uncertain;
                     run.Detail = step.Detail;
                     break;
                 case StepStatuses.Cancelled:
-                    Finish(run, RunStatuses.Cancelled, step.Detail ?? "Cancelled.");
+                    if (!RestoringProtection(db, run, context))
+                        Finish(run, RunStatuses.Cancelled, (step.Detail ?? "Cancelled.") + ProtectionOutcome(run, context));
                     break;
             }
 
@@ -442,7 +456,7 @@ public sealed partial class RunEngine(
     }
 
     /// <summary>Applies the policy to the plan; returns true when the approval step is settled.</summary>
-    private bool DecideApproval(Run run, Step step, RunContext context)
+    private async Task<bool> DecideApprovalAsync(OctopushyDb db, Run run, Step step, RunContext context, CancellationToken cancellationToken)
     {
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
@@ -480,7 +494,18 @@ public sealed partial class RunEngine(
         // A replacement in the plan, but it deletes what someone added to a live server.
         var prunes = run.Operation == Operations.Cluster && ClusterPlan.PrunesEntries(outputs, InspectionOf(run));
         var destructiveManual = (deletes > 0 || prunes) && policy.Destructive == "manual";
-        step.ApprovalRequired = manual || destructiveManual;
+        // Lifting protection is what lets a provision plan destroy a VM, so a VM that may hold data
+        // goes only with a person's approval, or where destructive was set to automatic on purpose.
+        // A VM that never finished its first apply holds nothing yet, and rerunning recreates it.
+        var removesVm = run.Operation == Operations.Provision && GuestVmPlan.RemovesVm(outputs);
+        var recoversVm = removesVm && GuestVmPlan.RecreatesFailedVm(outputs, context)
+            && await db.Resources.AnyAsync(r => r.Id == run.ResourceId
+                && r.AppliedAt == null && r.VerifiedAt == null && r.BoundVmid == null, cancellationToken);
+        var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
+        var vmNote = recoversVm ? $" The plan recreates VM {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
+            : removesVm ? " The plan destroys a VM and its disks."
+            : "";
+        step.ApprovalRequired = manual || destructiveManual || vmHeld;
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
@@ -488,9 +513,9 @@ public sealed partial class RunEngine(
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = resourceChanges == 0 && !privilegedRemains
                 ? "The plan changes no resources, so it needs no approval."
-                : deletes > 0 || prunes
+                : (deletes > 0 || prunes || removesVm && !recoversVm
                     ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
-                    : $"Approval is automatic (set by {policy.ApprovalSetBy}).";
+                    : $"Approval is automatic (set by {policy.ApprovalSetBy}).") + vmNote;
             step.Status = StepStatuses.Succeeded;
             step.StartedAt = step.FinishedAt = clock.GetUtcNow();
             return true;
@@ -498,11 +523,13 @@ public sealed partial class RunEngine(
 
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();
-        step.Detail = destructiveManual && !manual
-            ? deletes > 0
-                ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
-                : $"The plan removes entries from the server and destructive is manual (set by {policy.DestructiveSetBy})."
-            : $"Approval is manual (set by {policy.ApprovalSetBy}).";
+        step.Detail = vmHeld && !manual
+            ? $"The plan destroys a VM and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
+            : (destructiveManual && !manual
+                ? deletes > 0
+                    ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
+                    : $"The plan removes entries from the server and destructive is manual (set by {policy.DestructiveSetBy})."
+                : $"Approval is manual (set by {policy.ApprovalSetBy}).") + vmNote;
         if (prunes)
             step.Detail += $" It removes what nobody declared: {string.Join(", ", ClusterPlan.UndeclaredEntriesIn(InspectionOf(run)))}.";
         if (context.DiskReporter is not null)
@@ -604,6 +631,14 @@ public sealed partial class RunEngine(
                     refresh.Detail = "The declared lists are downloaded.";
                 }
 
+                if (run.Operation == Operations.Provision
+                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect
+                    && !GuestVmPlan.RemovesGuestVm(outputs, RunContext.Parse(run.Context)))
+                {
+                    unprotect.Status = StepStatuses.Skipped;
+                    unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                }
+
                 break;
             case StepNames.InspectCluster or StepNames.ReconcileCluster:
                 await ClusterPlan.RecordPeersAsync(db, run, outputs, cancellationToken);
@@ -666,6 +701,72 @@ public sealed partial class RunEngine(
                 resource.BoundInstallation = null;
                 break;
         }
+    }
+
+    /// <summary>
+    /// Whether this provision run took protection off a VM and did not apply. A successful apply needs
+    /// no help: the module recreates the VM with protection on. A lift that left no answer counts.
+    /// </summary>
+    private static bool LiftedProtection(Run run) =>
+        run.Operation == Operations.Provision
+        && run.Steps.All(s => s.Name != StepNames.Apply || s.Status != StepStatuses.Succeeded)
+        && run.Steps.Where(s => s.Name == StepNames.Unprotect).SelectMany(s => s.Attempts).Any(a =>
+            a.Status == AttemptStatuses.Uncertain
+            || a.Status == AttemptStatuses.Succeeded && a.Outputs is { } outputs
+                && JsonNode.Parse(outputs)?["previous"] is JsonValue previous && previous.TryGetValue<bool>(out var wasOn) && wasOn);
+
+    /// <summary>
+    /// Keeps a run that lifted protection and did not apply open until protection is back, on whatever
+    /// VM holds the guest's VMID by then. Returns false once there is nothing left to wait for. The
+    /// run stays unfinished meanwhile, so a rerun waits and cannot race this step.
+    /// </summary>
+    private bool RestoringProtection(OctopushyDb db, Run run, RunContext context)
+    {
+        var restore = run.Steps.SingleOrDefault(s => s.Name == StepNames.Reprotect);
+        if (restore is null)
+        {
+            if (!LiftedProtection(run))
+                return false;
+            restore = new Step
+            {
+                Id = Guid.CreateVersion7(),
+                RunId = run.Id,
+                Ordinal = run.Steps.Max(s => s.Ordinal) + 1,
+                Name = StepNames.Reprotect,
+                Kind = StepKinds.Agent,
+                Status = StepStatuses.Queued,
+            };
+            run.Steps.Add(restore);
+            db.Steps.Add(restore);
+            CreateAttempt(db, run, restore, context);
+            signal.Wake();
+        }
+
+        if (restore.Status == StepStatuses.Uncertain)
+        {
+            run.Status = RunStatuses.Uncertain;
+            run.Detail = restore.Detail;
+            return true;
+        }
+        if (restore.Status is not (StepStatuses.Queued or StepStatuses.Running))
+            return false;
+        run.Status = RunStatuses.Running;
+        run.Detail = $"Restoring the protection of VM {context.Proxmox.Vmid}: the plan was not applied in full.";
+        return true;
+    }
+
+    /// <summary>What became of the protection this run lifted, for the end of the run's detail.</summary>
+    private static string ProtectionOutcome(Run run, RunContext context)
+    {
+        var vmid = context.Proxmox.Vmid;
+        return run.Steps.SingleOrDefault(s => s.Name == StepNames.Reprotect) switch
+        {
+            null => "",
+            { Status: StepStatuses.Succeeded, Outputs: var outputs } when outputs is not null && JsonNode.Parse(outputs)?["absent"] is JsonValue absent
+                && absent.TryGetValue<bool>(out var gone) && gone => $" VM {vmid} no longer exists, so there was no protection to restore. Plan again to create it.",
+            { Status: StepStatuses.Succeeded } => $" Protection of VM {vmid} is back on. Plan again to retry.",
+            _ => $" Protection of VM {vmid} could not be restored and may still be off. Plan again to retry, or turn it on in Proxmox.",
+        };
     }
 
     private void Finish(Run run, string status, string? detail)

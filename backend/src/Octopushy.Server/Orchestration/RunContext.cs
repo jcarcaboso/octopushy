@@ -85,7 +85,7 @@ public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string>
 
 public sealed record WorkerUpdateContext(Guid AgentId, string ArchiveUrl, string ArchiveSha256, string SystemPath, string ImageSha256, string? CaCertificatePem);
 
-public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy);
+public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy, bool DestructiveExplicit = false);
 
 public sealed record OpenTofuContext(
     string Stack,
@@ -158,6 +158,8 @@ public static class StepNames
     public const string Approval = "approval";
     public const string Unprotect = "unprotect";
     public const string Apply = "apply";
+    /// <summary>Added to a provision run whose apply did not finish after it lifted the VM's protection.</summary>
+    public const string Reprotect = "reprotect";
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";
