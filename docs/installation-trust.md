@@ -53,12 +53,15 @@ guarantee, and more, because code the repository controls holds it. Trust is key
 address (`lab/clusters/id`), and covers:
 
 - **Endpoints:** every member's `https://<address>:53443`.
-- **Certificates:** each member's, by fingerprint. The agent and the provider talk to that exact
-  certificate and nothing else, and there is no setting that turns this off, because a commit could
-  use it. A member presenting another one is sent nothing.
-- **Code:** a digest of the cluster's recipe and root, and of each member's, with what they use. A
-  cluster's plan holds the password before anyone approves it, and a member's apply can run with
-  no person approving it, so a commit must not be able to run code of its own in either place.
+- **Certificates:** each member's, by fingerprint. The agent talks to that exact certificate and
+  nothing else, and the provider takes it as its only root, and there is no setting that turns this
+  off, because a commit could use it. A member presenting another one is sent nothing.
+- **Code and how it runs:** a digest of the cluster's recipe and root, of each member's, with what
+  they use, and of how each member runs: its state backend, which variable gets the password, its
+  agents, its Proxmox connection, its template, inputs and network. A cluster's plan holds the
+  password before anyone approves it, and a member's apply can run with no person approving it, so
+  a commit must not be able to run code of its own in either place, or send unchanged code somewhere
+  new. The cluster's page shows this for each member before you trust it.
 
 A cluster's root may hold only its own `.tf` files, and a root that receives the password has to pin
 its providers with a lock file and call only modules its recipe lists. They are read as HCL, not by
@@ -91,9 +94,11 @@ delete the cluster and bind the password somewhere else. So protection is not in
 An operator can mark a store entry **Protected**, when creating it or later, under **Variables** or
 with `POST /api/variables/protection`. The flag is in the database. No definition can set it, and
 changing or deleting a definition does not remove it. A protected entry is released only for a
-**grant**: this resource, running code with this digest. The check is where the store releases keys,
-so it holds for every way a key can be bound, on every attempt, including retries. A run waiting
-for one shows *Waiting for trust*, whatever its `policy`.
+**grant**: this resource, running code with this digest, which also covers how a guest runs. The
+check is where the store releases keys, so it holds for every way a key can be bound, on every
+attempt, including retries. A run waiting for one shows *Waiting for trust*, whatever its `policy`.
+A state backend never receives a protected entry, even with a grant: its environment reaches
+OpenTofu during init, before there is a plan, so give a backend an entry of its own.
 
 **Trust cluster** records grants for the cluster and for each member using its password. Other
 resources use `POST /api/variables/grants` with `{ "key": "...", "resourceId": "...", "codeDigest":

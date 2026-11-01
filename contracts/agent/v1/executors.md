@@ -484,25 +484,31 @@ next plan. Takes `remove`, the members the approved plan deletes, as they were b
                "peerName": "umb-dns-01.cluster.home.arpa" }] }
 ```
 
-A peer is matched by `peerId`, or by both `peerName` and `address`, or by `address` when nothing else
-was ever known, and only among secondaries. A peer it does not find has already left, and no other is
-touched: being undeclared says nothing about whose a peer is. A match that holds a declared member's
-address is refused. It goes with `removeSecondary`, or `deleteSecondary` when that fails, as it does
-for a peer that cannot answer, and what the primary lists afterwards decides. Output:
-`{ "detached": [...] }`, also on failure.
+A peer is matched by `peerId`, or by both `peerName` and `address`, and only among secondaries. A
+removal with neither is refused and removes nothing: an address does not say who is there now. Being
+undeclared says nothing about whose a peer is, and no other peer is touched. A match that holds a
+declared member's address is refused. It goes with `removeSecondary`, or `deleteSecondary` when that
+fails, as it does for a peer that cannot answer, and what the primary lists afterwards decides. Output,
+also on failure: `{ "detached": [...], "unconfirmed": [...] }`. `detached` was told to leave and is
+gone. `unconfirmed` is not listed by the primary, and nothing saw it leave: its record was deleted, or
+was already gone. Only `detached` ends a guest's binding.
 
 ### `reconcile`
 
 **Mutating and not cancellable.** Runs after the apply. Takes `join`, guest addresses from the approved
-plan's changes to `terraform_data.secondary`, and `pruneEntries`, true when the plan replaced
-`terraform_data.undeclared_entries`.
+plan's changes to `terraform_data.secondary`, and `pruneBlocked` and `pruneAllowed`, what inspection
+named as undeclared when the plan replaced `terraform_data.undeclared_entries`, and otherwise empty.
 
-- `join`: an `absent` member joins with `initJoin` on the member itself, with the primary's name in
-  `primaryNodeUrl` and its address in `primaryNodeIpAddress`. An IP-literal URL is refused upstream.
-  `ignoreCertificateErrors` is always true, because Technitium cannot pin there: this one leg is not
-  covered by trust. A `moved` member calls `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`,
-  or unreachable one fails with its recovery and does not stop the others.
-- `pruneEntries`: deletes undeclared blocked and allowed entries on the primary.
+- `join`: an `absent` member joins with `initJoin` on the member itself, with the declared
+  `<primary guest id>.<clusterDomain>` in `primaryNodeUrl` and the declared address in
+  `primaryNodeIpAddress`. An IP-literal URL is refused upstream, and no value a node reports is used.
+  `ignoreCertificateErrors` is always true, because Technitium cannot pin there, so this leg carries
+  no admin password: the agent creates the administrator `octopushy-cluster-join` on the primary with
+  a random password for that join, and deletes it afterwards whatever happened. A `moved` member calls
+  `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`, or unreachable one fails with its
+  recovery and does not stop the others.
+- `pruneBlocked`, `pruneAllowed`: deletes exactly these on the primary. Entries that appeared since
+  inspection stay, for verification to report and the next plan to show.
 
 Output: `{ "joined": [...], "members": [{ "guest": ..., "peerId": ..., "peerName": ... }] }`. Only an
 explicit refusal is a known failure of a join. An answer that was lost, cut off, or cannot be read says

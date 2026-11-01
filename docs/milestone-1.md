@@ -256,7 +256,8 @@ Not done or not verified yet:
   installation. Its image must run the QEMU guest agent for verification to see an
   address.
 - A custom CA for Proxmox (`tls.caCertificate`) reaches the agent's own Proxmox client,
-  but not OpenTofu's provider, which uses the system trust store.
+  but not OpenTofu's provider, which uses the system trust store: with `verify` on it fails
+  with an unknown authority unless that store accepts the certificate.
 - If the apply of a retire run fails after protection was lifted, the VM stays
   unprotected until its next provision run restores it.
 - The agent binary links against glibc (no musl target here), its systemd unit has not
