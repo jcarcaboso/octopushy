@@ -29,5 +29,5 @@ mod types;
 
 pub use client::{ApiToken, Client, ClientConfig};
 pub use error::{Error, Result};
-pub use tls::{AcceptAnyCertificate, Tls};
+pub use tls::{AcceptAnyCertificate, Tls, client_config as tls_client_config};
 pub use types::*;

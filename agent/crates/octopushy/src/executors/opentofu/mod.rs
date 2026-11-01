@@ -53,6 +53,9 @@ struct Input {
     destroy: bool,
     #[serde(default)]
     retain_no_changes_plan: bool,
+    /// Resource addresses for `-replace`, for what only the controller knows must happen again.
+    #[serde(default)]
+    replace: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -452,6 +455,12 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     if prep.input.destroy {
         args.push("-destroy".into());
     }
+    args.extend(
+        prep.input
+            .replace
+            .iter()
+            .map(|address| format!("-replace={address}")),
+    );
     let out = tofu.run("plan", args, false).await?;
     let has_changes = match out.code {
         Some(0) => false,

@@ -135,9 +135,16 @@ async fn hello_only_advertises_usable_tool_capabilities() {
                 "nixos-rootfs",
                 "guest",
                 "managed-worker",
+                "technitium",
             ]
         } else {
-            vec!["proxmox", "nixos-rootfs", "guest", "managed-worker"]
+            vec![
+                "proxmox",
+                "nixos-rootfs",
+                "guest",
+                "managed-worker",
+                "technitium",
+            ]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
         let capabilities: &[&str] = if available {
@@ -216,7 +223,13 @@ async fn enroll_connect_observe_ack() {
     // /bin/false fails the runtime probe; native executors remain available.
     assert_eq!(
         hello.executors,
-        ["proxmox", "nixos-rootfs", "guest", "managed-worker"]
+        [
+            "proxmox",
+            "nixos-rootfs",
+            "guest",
+            "managed-worker",
+            "technitium"
+        ]
     );
     assert_eq!(hello.tool_runtime, "local");
     assert!(hello.running_attempt_ids.is_empty());

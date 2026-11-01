@@ -8,6 +8,7 @@ pub mod managed_worker;
 pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
+pub mod technitium;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ pub const EXECUTORS: &[&str] = &[
     "nixos-rootfs",
     "guest",
     "managed-worker",
+    "technitium",
 ];
 
 /// Actions that change infrastructure. They are never cancelled, and an
@@ -40,6 +42,7 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
             | ("nixos-rootfs", "grow")
             | ("guest", "install-disk-reporter")
             | ("managed-worker", "prepare" | "install" | "update-os")
+            | ("technitium", "reconcile" | "refresh-block-lists")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -51,7 +54,7 @@ pub struct ExecutorConfig {
     pub provider_cache: PathBuf,
     /// How often `verify-guest` and `verify-absent` poll.
     pub poll_interval: Duration,
-    /// Timeout of each Proxmox API request.
+    /// Timeout of each Proxmox or Technitium API request.
     pub proxmox_timeout: Duration,
 }
 
@@ -196,6 +199,7 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
         "opentofu" => opentofu::run(cfg, ctx).await,
         "managed-worker" => managed_worker::run(cfg, ctx).await,
         "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
+        "technitium" => technitium::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,
         other => Err(Failure::msg(format!(

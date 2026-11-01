@@ -36,7 +36,7 @@ pub(crate) fn provider() -> Arc<CryptoProvider> {
 }
 
 /// Builds the rustls configuration for `tls`.
-pub(crate) fn client_config(tls: &Tls) -> Result<ClientConfig, Error> {
+pub fn client_config(tls: &Tls) -> Result<ClientConfig, Error> {
     let provider = provider();
     let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
