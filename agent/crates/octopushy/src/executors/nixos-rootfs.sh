@@ -1,5 +1,7 @@
 # Fixed executor program, not repository-supplied shell. Runs as root via QGA.
-# Intentionally supports only our GPT /dev/sda1 EFI + /dev/sda2 ext4 base image.
+# Intentionally supports only our GPT EFI + ext4 base image, on a SCSI disk. Disks are named
+# in probe order, so a VM with a data disk can boot from sda or sdb: find the disk from the
+# mounted root, and never assume its name or look for it among the other disks.
 set -euo pipefail
 export PATH=/run/current-system/sw/bin
 export LC_ALL=C
@@ -11,22 +13,37 @@ mode=$1 expected=$2
 [[ $ID == nixos ]] || fail "Only NixOS is supported"
 [[ $(id -u) == 0 ]] || fail "Guest-agent root access is required"
 [[ $(findmnt -n -o FSTYPE /) == ext4 ]] || fail "Root is not ext4"
-[[ $(readlink -f "$(findmnt -n -o SOURCE /)") == /dev/sda2 ]] || fail "Unsupported root device"
-[[ $(readlink -f /dev/disk/by-label/nixos) == /dev/sda2 ]] || fail "Unexpected root label"
-[[ $(lsblk -dn -o PTTYPE /dev/sda) == gpt ]] || fail "Only GPT is supported"
-[[ $(lsblk -nr -o NAME /dev/sda) == $'sda\nsda1\nsda2' ]] || fail "Unexpected disk layout"
-[[ $(lsblk -dn -o FSTYPE /dev/sda1) == vfat ]] || fail "Unexpected EFI partition"
-[[ $(blockdev --getss /dev/sda) == 512 ]] || fail "Unsupported sector size"
-disk=$(blockdev --getsize64 /dev/sda)
+root=$(readlink -f "$(findmnt -n -o SOURCE /)") || fail "Unsupported root device"
+[[ $root =~ ^/dev/(sd[a-z]+)2$ ]] || fail "Unsupported root device"
+name=${BASH_REMATCH[1]}
+root_disk=/dev/$name
+sys=/sys/class/block
+[[ $(lsblk -dn -o TYPE "$root") == part ]] || fail "Unsupported root device"
+[[ $(lsblk -dn -o PKNAME "$root") == "$name" ]] || fail "Unsupported root device"
+[[ $(lsblk -dn -o TYPE "$root_disk") == disk ]] || fail "Unsupported root device"
+# growpart.service finds its target through this label, so it must name the mounted root.
+[[ $(readlink -f /dev/disk/by-label/nixos) == "$root" ]] || fail "Unexpected root label"
+[[ $(lsblk -nrp -o NAME,LABEL | awk '$2 == "nixos" {print $1}') == "$root" ]] || fail "Unexpected root label"
+[[ $(readlink -f /dev/disk/by-id/opy-worker-state-v1) != "$root_disk" ]] || fail "The root disk is the worker state disk"
+[[ $(lsblk -dn -o PTTYPE "$root_disk") == gpt ]] || fail "Only GPT is supported"
+[[ $(lsblk -nr -o NAME "$root_disk") == "$name"$'\n'"${name}1"$'\n'"${name}2" ]] || fail "Unexpected disk layout"
+[[ $(lsblk -dn -o FSTYPE "/dev/${name}1") == vfat ]] || fail "Unexpected EFI partition"
+[[ $(blockdev --getss "$root_disk") == 512 ]] || fail "Unsupported sector size"
+disk=$(blockdev --getsize64 "$root_disk")
 [[ $disk == "$expected" ]] || fail "Guest disk capacity does not match the approved desired disk"
-start=$(cat /sys/class/block/sda2/start)
+start=$(cat "$sys/${name}2/start")
 [[ $start =~ ^[0-9]+$ ]] && (( start > 0 && start * 512 <= 1073741824 )) || fail "Unexpected partition offset"
+efi_start=$(cat "$sys/${name}1/start")
+efi_sectors=$(cat "$sys/${name}1/size")
+[[ $efi_start =~ ^[0-9]+$ && $efi_sectors =~ ^[0-9]+$ ]] && (( efi_start + efi_sectors <= start )) || fail "Unexpected partition offset"
 uuid=$(findmnt -n -o UUID /)
 [[ $uuid =~ ^[a-fA-F0-9-]{36}$ ]] || fail "Missing root filesystem identity"
 measure() {
-    partition=$(blockdev --getsize64 /dev/sda2)
+    partition=$(blockdev --getsize64 "$root")
     # Read the ext4 superblock's real block count, not df's metadata-adjusted capacity.
-    header=$(dumpe2fs -h /dev/sda2 2>/dev/null)
+    header=$(dumpe2fs -h "$root" 2>/dev/null)
+    [[ $(awk '/^Filesystem UUID:/ {print $3}' <<<"$header") == "$uuid" ]] || fail "Root partition is not the mounted filesystem"
+    [[ $(awk '/^Filesystem volume name:/ {print $4}' <<<"$header") == nixos ]] || fail "Unexpected root label"
     blocks=$(awk '/^Block count:/ {print $3}' <<<"$header")
     blocksize=$(awk '/^Block size:/ {print $3}' <<<"$header")
     [[ $blocks =~ ^[0-9]+$ && $blocksize =~ ^[0-9]+$ ]] || fail "Cannot read ext4 capacity"
