@@ -273,11 +273,74 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("attempts", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ClusterBinding", b =>
+                {
+                    b.Property<Guid>("ClusterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cluster_id");
+
+                    b.Property<Guid>("GuestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("guest_id");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("address");
+
+                    b.Property<DateTimeOffset>("BoundAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bound_at");
+
+                    b.Property<string>("DetachNote")
+                        .HasColumnType("text")
+                        .HasColumnName("detach_note");
+
+                    b.Property<DateTimeOffset?>("DetachedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("detached_at");
+
+                    b.Property<string>("DetachedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("detached_by");
+
+                    b.Property<string>("Guest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("guest");
+
+                    b.Property<long?>("PeerId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("peer_id");
+
+                    b.Property<string>("PeerName")
+                        .HasColumnType("text")
+                        .HasColumnName("peer_name");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("role");
+
+                    b.HasKey("ClusterId", "GuestId")
+                        .HasName("pk_cluster_bindings");
+
+                    b.HasIndex("GuestId")
+                        .HasDatabaseName("ix_cluster_bindings_guest_id");
+
+                    b.ToTable("cluster_bindings", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.ClusterTrust", b =>
                 {
                     b.Property<string>("Address")
                         .HasColumnType("text")
                         .HasColumnName("address");
+
+                    b.Property<string>("Certificates")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("certificates");
 
                     b.Property<string>("CodeDigest")
                         .IsRequired()
@@ -795,6 +858,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("applied_revision_id");
 
+                    b.Property<string>("BlockListsRefreshed")
+                        .HasColumnType("text")
+                        .HasColumnName("block_lists_refreshed");
+
                     b.Property<DateTimeOffset?>("BoundAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");
@@ -865,6 +932,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<Guid?>("LastRevisionId")
                         .HasColumnType("uuid")
                         .HasColumnName("last_revision_id");
+
+                    b.Property<string>("MemberCertificates")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("member_certificates");
 
                     b.Property<DateTimeOffset?>("MissingSince")
                         .HasColumnType("timestamp with time zone")
@@ -1002,6 +1073,38 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_runs_resource_id_created_at");
 
                     b.ToTable("runs", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.SecretGrant", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("CodeDigest")
+                        .HasColumnType("text")
+                        .HasColumnName("code_digest");
+
+                    b.Property<DateTimeOffset>("GrantedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("granted_at");
+
+                    b.Property<string>("GrantedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("granted_by");
+
+                    b.HasKey("Key", "ResourceId")
+                        .HasName("pk_secret_grants");
+
+                    b.HasIndex("ResourceId")
+                        .HasDatabaseName("ix_secret_grants_resource_id");
+
+                    b.ToTable("secret_grants", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.SecretResolution", b =>
@@ -1150,6 +1253,18 @@ namespace Octopushy.Server.Data.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("integer")
                         .HasColumnName("latest_version");
+
+                    b.Property<bool>("Protected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("protected");
+
+                    b.Property<DateTimeOffset?>("ProtectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("protected_at");
+
+                    b.Property<string>("ProtectedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("protected_by");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -1367,6 +1482,23 @@ namespace Octopushy.Server.Data.Migrations
                     b.Navigation("Step");
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ClusterBinding", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("ClusterId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_cluster_bindings_resources_cluster_id");
+
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("GuestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_cluster_bindings_resources_guest_id");
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
                 {
                     b.HasOne("Octopushy.Server.Data.Resource", null)
@@ -1395,6 +1527,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_operator_tokens_users_user_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.SecretGrant", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_secret_grants_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Step", b =>

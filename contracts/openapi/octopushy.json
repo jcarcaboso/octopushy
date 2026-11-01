@@ -956,6 +956,133 @@
         }
       }
     },
+    "/api/clusters/{id}/certificates": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "readClusterCertificates",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/members/{guestId}/detached": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "acknowledgeClusterDetach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "guestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeDetachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/guests/{id}/state": {
       "get": {
         "tags": [
@@ -3604,6 +3731,112 @@
         }
       }
     },
+    "/api/variables/protection": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "setVariableProtection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/variables/grants": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "grantVariable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/variables/candidates": {
       "post": {
         "tags": [
@@ -3836,6 +4069,17 @@
   },
   "components": {
     "schemas": {
+      "AcknowledgeDetachRequest": {
+        "required": [
+          "note"
+        ],
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        }
+      },
       "AgentDto": {
         "required": [
           "id",
@@ -4172,6 +4416,35 @@
           }
         }
       },
+      "ClusterCertificateDto": {
+        "required": [
+          "endpoint",
+          "sha256",
+          "trustedSha256",
+          "trusted"
+        ],
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "trustedSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        }
+      },
       "ClusterDetailDto": {
         "required": [
           "cluster",
@@ -4188,7 +4461,8 @@
           "appliedAt",
           "verification",
           "missingSince",
-          "runs"
+          "runs",
+          "leaving"
         ],
         "type": "object",
         "properties": {
@@ -4289,6 +4563,39 @@
             "items": {
               "$ref": "#/components/schemas/RunSummaryDto"
             }
+          },
+          "leaving": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterLeavingDto"
+            }
+          }
+        }
+      },
+      "ClusterLeavingDto": {
+        "required": [
+          "guestId",
+          "guest",
+          "address",
+          "peerName"
+        ],
+        "type": "object",
+        "properties": {
+          "guestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guest": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "peerName": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4322,6 +4629,12 @@
             "format": "uuid"
           },
           "guestStatus": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "codeDigest": {
             "type": [
               "null",
               "string"
@@ -4454,7 +4767,9 @@
           "codeDigest",
           "codeChanged",
           "trustedAt",
-          "trustedBy"
+          "trustedBy",
+          "certificates",
+          "passwordProtected"
         ],
         "type": "object",
         "properties": {
@@ -4491,6 +4806,15 @@
               "null",
               "string"
             ]
+          },
+          "certificates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterCertificateDto"
+            }
+          },
+          "passwordProtected": {
+            "type": "boolean"
           }
         }
       },
@@ -6864,6 +7188,15 @@
           },
           "codeDigest": {
             "type": "string"
+          },
+          "certificates": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       },
@@ -6967,6 +7300,33 @@
           },
           "revoked": {
             "type": "boolean"
+          },
+          "protected": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "VariableGrantRequest": {
+        "required": [
+          "key",
+          "resourceId",
+          "codeDigest"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "codeDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -6992,6 +7352,21 @@
           },
           "verificationNote": {
             "type": "string"
+          }
+        }
+      },
+      "VariableProtectionRequest": {
+        "required": [
+          "key",
+          "protected"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
           }
         }
       },
@@ -7044,6 +7419,10 @@
               "null",
               "string"
             ]
+          },
+          "protected": {
+            "type": "boolean",
+            "default": false
           }
         }
       },

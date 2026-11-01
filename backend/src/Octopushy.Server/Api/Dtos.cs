@@ -207,12 +207,23 @@ public sealed record ClusterTrustDto(
     string? CodeDigest,
     bool CodeChanged,
     DateTimeOffset? TrustedAt,
-    string? TrustedBy);
+    string? TrustedBy,
+    /// <summary>What each endpoint presents now, as an agent read it, and whether that is trusted.</summary>
+    IReadOnlyList<ClusterCertificateDto> Certificates,
+    /// <summary>Whether the password's store entry is protected. Without that, only the cluster's own work is gated.</summary>
+    bool PasswordProtected);
+
+public sealed record ClusterCertificateDto(string Endpoint, string? Sha256, string? TrustedSha256, bool Trusted);
 
 /// <summary>What the operator was shown; trust is refused when the cluster declares something else by now.</summary>
-public sealed record TrustClusterRequest(IReadOnlyList<string> Endpoints, string CodeDigest);
+public sealed record TrustClusterRequest(IReadOnlyList<string> Endpoints, string CodeDigest, IReadOnlyDictionary<string, string>? Certificates = null);
 
-public sealed record ClusterMemberDto(string Guest, string Role, string? Address, Guid? GuestId, string? GuestStatus);
+public sealed record ClusterMemberDto(string Guest, string Role, string? Address, Guid? GuestId, string? GuestStatus, string? CodeDigest = null);
+
+/// <summary>A guest the cluster has joined, or is still taking out, that it no longer declares.</summary>
+public sealed record ClusterLeavingDto(Guid GuestId, string Guest, string Address, string? PeerName);
+
+public sealed record AcknowledgeDetachRequest(string Note);
 
 public sealed record ClusterSummaryDto(
     Guid Id,
@@ -246,10 +257,11 @@ public sealed record ClusterDetailDto(
     DateTimeOffset? CheckedAt,
     string? AppliedCommit,
     DateTimeOffset? AppliedAt,
-    /// <summary>What the latest check reported about each member.</summary>
+    /// <summary>What the latest check of any kind reported, with what it could say about each member.</summary>
     JsonNode? Verification,
     DateTimeOffset? MissingSince,
-    IReadOnlyList<RunSummaryDto> Runs);
+    IReadOnlyList<RunSummaryDto> Runs,
+    IReadOnlyList<ClusterLeavingDto> Leaving);
 
 public sealed record LabDto(
     Guid Id,
@@ -362,7 +374,13 @@ public sealed record VariableDto(
     string? Value,
     IReadOnlyList<string> UsedBy,
     int LatestVersion,
-    bool Revoked);
+    bool Revoked,
+    bool Protected = false);
+
+public sealed record VariableProtectionRequest(string Key, bool Protected);
+
+/// <summary>Lets a resource running this code receive a protected entry. A null digest is for work that runs no repository code.</summary>
+public sealed record VariableGrantRequest(string Key, Guid ResourceId, string? CodeDigest);
 
 public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy);
 
@@ -370,7 +388,7 @@ public sealed record SystemVariableDto(string Key, string Visibility, DateTimeOf
 
 public sealed record VariablesDto(IReadOnlyList<VariableDto> Entries, IReadOnlyList<MissingVariableDto> Missing, IReadOnlyList<SystemVariableDto> System);
 
-public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description);
+public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description, bool Protected = false);
 
 public sealed record VariableCandidateRequest(string Key, string Value, string? Description);
 

@@ -312,9 +312,12 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
 {
     public Guid Id { get; } = id;
 
+    private readonly List<Assignment> _kept = [];
+
     public List<Assignment> TakeAssignments()
     {
-        var result = new List<Assignment>();
+        var result = new List<Assignment>(_kept);
+        _kept.Clear();
         while (session.Outbound.TryRead(out var message))
         {
             if (message.KindCase == ServerMessage.KindOneofCase.Assignment)
@@ -333,6 +336,24 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         {
             await harness.TickAsync();
             var assignment = TakeAssignments().FirstOrDefault(a => a.Action == action);
+            if (assignment is not null)
+            {
+                return assignment;
+            }
+        }
+
+        throw new InvalidOperationException($"No {action} assignment arrived.");
+    }
+
+    /// <summary>Like <see cref="NextAsync"/>, for when other work is arriving at the same time: it stays to be taken.</summary>
+    public async Task<Assignment> NextKeepingOthersAsync(string action)
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            await harness.TickAsync();
+            var assignments = TakeAssignments();
+            var assignment = assignments.FirstOrDefault(a => a.Action == action);
+            _kept.AddRange(assignments.Where(a => a != assignment));
             if (assignment is not null)
             {
                 return assignment;

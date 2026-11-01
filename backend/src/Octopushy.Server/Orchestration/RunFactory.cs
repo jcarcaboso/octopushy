@@ -172,6 +172,8 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
+            CodeDigest = inputs.Code.Digest,
+            ReviewedPaths = inputs.Code.Paths,
             RootDiskBytes = inputs.Recipe.GuestFilesystem is null ? null
                 : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),
             DiskReporter = installReporter ? new DiskReporterContext(
@@ -266,7 +268,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         context.Cluster!.Input["formed"] = resource.BoundPrimary is not null;
         var run = NewRun(resource, Operations.Cluster, revision, reason, context);
         run.InputsHash = inputs.Hash;
-        AddSteps(run, [StepNames.InspectCluster, StepNames.Plan, StepNames.Approval, StepNames.Apply,
+        AddSteps(run, [StepNames.InspectCluster, StepNames.Plan, StepNames.Approval, StepNames.DetachMembers, StepNames.Apply,
             StepNames.ReconcileCluster, StepNames.RefreshBlockLists, StepNames.VerifyCluster]);
         return run;
     }
@@ -274,6 +276,20 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     /// <summary>What a background check of a cluster's members is built from.</summary>
     public static RunContext ClusterObservation(LabRepository repository, ClusterDefinition cluster, DefinitionRevision revision) =>
         ClusterBase(repository, ClusterInputs.Build(repository, cluster, revision.Commit), revision);
+
+    /// <summary>What reading the members' certificates is built from: no password, so no trust is needed.</summary>
+    public static RunContext ClusterProbe(LabRepository repository, ClusterDefinition cluster, DefinitionRevision revision)
+    {
+        var context = ClusterObservation(repository, cluster, revision);
+        return context with
+        {
+            Cluster = context.Cluster! with { Probe = true },
+            Secrets = [],
+            RequestedSecretVersions = [],
+            CodeDigest = null,
+            ReviewedPaths = null,
+        };
+    }
 
     private static RunContext ClusterBase(LabRepository repository, ClusterInputs inputs, DefinitionRevision revision)
     {
@@ -291,7 +307,6 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var input = new JsonObject
         {
             ["cluster"] = cluster.Address,
-            ["verifyTls"] = cluster.VerifyTls,
             ["clusterDomain"] = cluster.ClusterDomain,
             ["minimumVersion"] = ClusterInputs.MinimumVersion,
             ["members"] = new JsonArray(inputs.Members.Select(m => (JsonNode?)new JsonObject
@@ -312,6 +327,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             },
             ["blocked"] = variables["blocking"]!["blocked"]!.DeepClone(),
             ["allowed"] = variables["blocking"]!["allowed"]!.DeepClone(),
+            ["listProbes"] = blocking?["listProbes"]?.DeepClone() ?? new JsonArray(),
             ["forwardZones"] = new JsonArray(ClusterInputs.ForwardZones(settings).Select(z => (JsonNode?)z.Zone).ToArray()),
             ["control"] = blocking?["control"]?.GetValue<string>(),
         };
@@ -328,7 +344,10 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 inputs.Members.Select(m => new ClusterMemberContext(m.Guest, m.Role, m.Address)).ToList(),
                 inputs.Endpoints,
                 inputs.CodeDigest,
-                input),
+                input,
+                Canonical.Hash(variables["blocking"]!["lists"])),
+            CodeDigest = inputs.CodeDigest,
+            ReviewedPaths = inputs.Code.Paths,
             Secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.ClusterPassword] = cluster.Credentials.Key },
             RequestedSecretVersions = requestedVersions,
         };

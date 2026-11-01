@@ -18,7 +18,8 @@ public sealed record ProvisionInputs(
     TemplateDefinition? Template,
     StateBackendDefinition? Backend,
     JsonObject Variables,
-    string Hash)
+    string Hash,
+    ReviewedCode Code)
 {
     /// <summary>Guest fields excluded from the infrastructure hash; reporter setup is hashed separately.</summary>
     private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
@@ -123,7 +124,8 @@ public sealed record ProvisionInputs(
             hashed["diskReporter"] = diskReporter.DeepClone();
         }
 
-        return new ProvisionInputs(guest, installation, host, recipe, template, backend, variables, Canonical.Hash(hashed));
+        return new ProvisionInputs(guest, installation, host, recipe, template, backend, variables, Canonical.Hash(hashed),
+            ReviewedCode.Of(repository, recipe));
     }
 
     /// <summary>The API endpoint for a host: its own when set, otherwise the installation's.</summary>
@@ -164,6 +166,27 @@ public sealed record ProvisionInputs(
         }
 
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+}
+
+/// <summary>
+/// The code an operator reviews for a recipe: what <see cref="Digest"/> covers, and the only
+/// folders a run holding a protected secret receives, so nothing outside it can execute.
+/// </summary>
+public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths)
+{
+    public static ReviewedCode Of(LabRepository repository, RecipeDefinition recipe)
+    {
+        var folder = Path.GetDirectoryName(recipe.File)!.Replace('\\', '/');
+        var modules = recipe.Modules ?? [];
+        var hashed = new JsonObject
+        {
+            ["recipe"] = recipe.Json.DeepClone(),
+            ["recipeFiles"] = ProvisionInputs.TreeHash(repository.Root, folder),
+            ["rootFiles"] = ProvisionInputs.TreeHash(repository.Root, recipe.Root),
+            ["moduleFiles"] = new JsonArray(modules.Select(m => (JsonNode?)ProvisionInputs.TreeHash(repository.Root, m)).ToArray()),
+        };
+        return new ReviewedCode(Canonical.Hash(hashed), [folder, recipe.Root, .. modules]);
     }
 }
 

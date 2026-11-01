@@ -173,6 +173,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var observing = await ObservingAsync(cancellationToken);
         var trusts = await db.InstallationTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
         var clusterTrusts = await db.ClusterTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
+        var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
         var head = await HeadRepositoryAsync(cancellationToken);
         var labs = resources.Where(r => r.Kind == ResourceKinds.Lab && r.RetiredAt == null).OrderBy(r => r.Address)
             .Select(lab => new LabDto(
@@ -190,7 +191,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                     .Select(c =>
                     {
                         var (active, last) = runs.GetValueOrDefault(c.Id);
-                        return ClusterSummary(c, resources, head, active, last, observations.GetValueOrDefault(c.Id), clusterTrusts.GetValueOrDefault(c.Address), runs);
+                        return ClusterSummary(c, resources, head, new[] { active, last }.OfType<Run>().ToList(), active, last, observations.GetValueOrDefault(c.Id), clusterTrusts.GetValueOrDefault(c.Address), runs, guarded);
                     })
                     .ToList()))
             .ToList();
@@ -217,7 +218,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == resource.Address, cancellationToken);
         var active = runs.FirstOrDefault(r => !RunStatuses.IsTerminal(r.Status));
         var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
-        var summary = ClusterSummary(resource, guests, head, active, last, observation, trust, guestRuns);
+        var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+        var summary = ClusterSummary(resource, guests, head, runs, active, last, observation, trust, guestRuns, guarded);
 
         PolicyDto? policy = null;
         ResolvedSetting<IReadOnlyList<string>>? labels = null;
@@ -230,11 +232,9 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
         var text = head is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(head.Commit, resource.DefinitionFile, cancellationToken);
         var commits = await CommitsAsync([resource.DesiredRevisionId, resource.CheckedRevisionId, resource.AppliedRevisionId], cancellationToken);
-        var verify = runs.SelectMany(r => r.Steps).Where(s => s.Name == StepNames.VerifyCluster && s.Outputs is not null).MaxBy(s => s.FinishedAt);
-        var observed = observation?.ContainsKey("members") == true ? observation : null;
-        var verification = observed?["observedAt"]?.GetValue<DateTimeOffset>() is { } at && at >= (verify?.FinishedAt ?? DateTimeOffset.MinValue)
-            ? observed
-            : verify is null ? null : JsonNode.Parse(verify.Outputs!);
+        var bindings = await db.ClusterBindings.AsNoTracking().Where(b => b.ClusterId == id && b.DetachedAt == null).ToListAsync(cancellationToken);
+        var definition = resource.MissingSince is not null ? null : head?.Repository.Cluster(resource.Address);
+        var declared = definition?.Members.Select(m => m.Guest).ToHashSet(StringComparer.Ordinal) ?? [];
         return new ClusterDetailDto(
             summary,
             resource.DefinitionFile,
@@ -248,9 +248,56 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.CheckedAt,
             commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty),
             resource.AppliedAt,
-            verification?.DeepClone(),
+            LatestCheck(resource, runs, observation),
             resource.MissingSince,
-            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Cluster)).ToList());
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Cluster)).ToList(),
+            bindings.Where(b => !declared.Contains(b.Guest)).Select(b => new ClusterLeavingDto(b.GuestId, b.Guest, b.Address, b.PeerName)).ToList());
+    }
+
+    /// <summary>
+    /// The newest thing known about the members, from a run or the background. A check that
+    /// failed replaces older results, even with nothing to say about each member: older
+    /// results are not what anyone should read while the latest check says otherwise.
+    /// </summary>
+    private static JsonObject? LatestCheck(Resource resource, IEnumerable<Run> runs, JsonObject? observation)
+    {
+        var step = runs.SelectMany(r => r.Steps)
+            .Where(s => s.Name == StepNames.VerifyCluster && s.Status is StepStatuses.Succeeded or StepStatuses.Failed && s.FinishedAt is not null)
+            .MaxBy(s => s.FinishedAt);
+        var observedAt = observation?["observedAt"]?.GetValue<DateTimeOffset>();
+        JsonObject? check = null;
+        DateTimeOffset? at = null;
+        if (step is not null)
+        {
+            check = (step.Outputs is null ? null : JsonNode.Parse(step.Outputs)) as JsonObject ?? [];
+            check["ok"] = step.Status == StepStatuses.Succeeded;
+            if (step.Status == StepStatuses.Failed)
+                check["error"] = step.Detail;
+            check["source"] = "run";
+            at = step.FinishedAt;
+        }
+
+        if (observation?.ContainsKey("members") == true && observedAt >= (at ?? DateTimeOffset.MinValue))
+        {
+            check = observation.DeepClone().AsObject();
+            check.Remove("observedAt");
+            check["source"] = "background";
+            at = observedAt;
+        }
+
+        if (resource.ObserveError is { } error && resource.ObserveErrorAt is { } failedAt && failedAt > (at ?? DateTimeOffset.MinValue))
+        {
+            check = new JsonObject { ["ok"] = false, ["error"] = error, ["members"] = new JsonArray(), ["source"] = "background" };
+            at = failedAt;
+        }
+
+        if (check is not null)
+        {
+            check["checkedAt"] = at;
+            check["members"] ??= new JsonArray();
+        }
+
+        return check;
     }
 
     /// <summary>What the latest revision declares for a cluster's trust, or null when it cannot be built.</summary>
@@ -273,27 +320,37 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         return latest is null ? null : new HeadRepository(latest.Commit, await revisions.GetAsync(latest.Commit, cancellationToken));
     }
 
-    public static ClusterTrustDto ClusterTrust(ClusterInputs? inputs, ClusterTrust? trust)
+    public static ClusterTrustDto ClusterTrust(ClusterInputs? inputs, ClusterTrust? trust, Resource resource, bool passwordProtected)
     {
         var endpoints = inputs?.Endpoints ?? [];
+        var seen = ClusterCertificates.Parse(resource.MemberCertificates);
+        var trusted = ClusterCertificates.Parse(trust?.Certificates);
         return new ClusterTrustDto(
             endpoints,
             endpoints.Where(e => trust?.Endpoints.Contains(e) != true).ToList(),
             inputs?.CodeDigest,
             inputs is not null && trust is not null && trust.CodeDigest != inputs.CodeDigest,
             trust?.TrustedAt,
-            trust?.TrustedBy);
+            trust?.TrustedBy,
+            endpoints.Select(e => new ClusterCertificateDto(
+                e,
+                seen.GetValueOrDefault(e)?.Sha256,
+                trusted.GetValueOrDefault(e)?.Sha256,
+                trusted.TryGetValue(e, out var known) && seen.GetValueOrDefault(e)?.Sha256 is { } sha256 && known.Sha256 == sha256)).ToList(),
+            passwordProtected);
     }
 
     private static ClusterSummaryDto ClusterSummary(
         Resource resource,
         IReadOnlyList<Resource> resources,
         HeadRepository? head,
+        IReadOnlyList<Run> clusterRuns,
         Run? active,
         Run? last,
         JsonObject? observation,
         ClusterTrust? trust,
-        IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs)
+        IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs,
+        IReadOnlySet<string> guarded)
     {
         var definition = resource.Definition is null ? null : JsonNode.Parse(resource.Definition);
         var (status, detail) = GuestStatus(resource, active, last);
@@ -301,13 +358,24 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         {
             detail = "cluster.yaml was deleted. The cluster keeps running and nothing was removed, but Octopushy no longer manages it. Restore the file to manage it again.";
         }
-        else if (active is null && status == GuestStatuses.Failed && last?.Steps.Any(s => s.Name == StepNames.VerifyCluster && s.Status == StepStatuses.Failed) == true)
+        else if (active is null && status is GuestStatuses.Failed or GuestStatuses.InSync)
         {
-            status = GuestStatuses.VerificationFailed;
+            // The newest check decides, whoever ran it, so the page never reads as two answers.
+            var verifyFailed = last?.Steps.Any(s => s.Name == StepNames.VerifyCluster && s.Status == StepStatuses.Failed) == true;
+            var check = LatestCheck(resource, clusterRuns, observation);
+            if (check?["ok"]?.GetValue<bool>() == false)
+            {
+                status = GuestStatuses.VerificationFailed;
+                detail = check["error"]?.GetValue<string>() ?? detail;
+            }
+            else if (check is not null && verifyFailed)
+            {
+                (status, detail) = (GuestStatuses.InSync, null);
+            }
         }
 
         var inputs = head is null ? null : Inputs(resource, head);
-        var addresses = inputs?.Members.ToDictionary(m => m.Guest, m => m.Address) ?? [];
+        var addresses = inputs?.Members.ToDictionary(m => m.Guest) ?? [];
         var members = ((definition?["members"] as JsonArray)?.OfType<JsonObject>() ?? []).Select(m =>
         {
             var guest = m["guest"]!.GetValue<string>();
@@ -320,7 +388,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 memberStatus = GuestStatus(match, memberActive, memberLast).Status;
             }
 
-            return new ClusterMemberDto(full, m["role"]!.GetValue<string>(), addresses.GetValueOrDefault(full), match?.Id, memberStatus);
+            var known = addresses.GetValueOrDefault(full);
+            return new ClusterMemberDto(full, m["role"]!.GetValue<string>(), known?.Address, match?.Id, memberStatus, known?.CodeDigest);
         }).ToList();
         return new ClusterSummaryDto(
             resource.Id,
@@ -335,7 +404,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             members,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
-            ClusterTrust(inputs, trust),
+            ClusterTrust(inputs, trust, resource, inputs is not null && guarded.Contains(inputs.Cluster.Credentials.Key)),
             resource.VerifiedAt,
             observation?["observedAt"]?.GetValue<DateTimeOffset>(),
             resource.ObserveError,

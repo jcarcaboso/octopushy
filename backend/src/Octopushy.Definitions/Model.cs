@@ -164,7 +164,6 @@ public sealed record ClusterDefinition(
     string Type,
     IReadOnlyList<ClusterMember> Members,
     StoreReference Credentials,
-    bool VerifyTls,
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {

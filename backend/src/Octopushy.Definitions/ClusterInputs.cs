@@ -2,13 +2,14 @@ using System.Text.Json.Nodes;
 
 namespace Octopushy.Definitions;
 
-/// <summary>A member with what its guest declares about where it is.</summary>
-public sealed record ClusterMemberAddress(string Guest, string Role, string Address, string Endpoint);
+/// <summary>A member with what its guest declares about where it is, and the digest of the code that provisions it.</summary>
+public sealed record ClusterMemberAddress(string Guest, string Role, string Address, string Endpoint, string CodeDigest);
 
 /// <summary>
 /// Everything a cluster's run is built from. <see cref="Hash"/> changes exactly when a new plan
 /// could differ. <see cref="Endpoints"/> and <see cref="CodeDigest"/> are what an operator trusts:
-/// where the admin password goes, and the only code that runs with it before approval.
+/// where the admin password goes, and the code that receives it: the cluster's recipe, which holds
+/// it before approval, and each member's, which holds it during an apply nobody has to approve.
 /// </summary>
 public sealed record ClusterInputs(
     ClusterDefinition Cluster,
@@ -17,7 +18,8 @@ public sealed record ClusterInputs(
     JsonObject Variables,
     IReadOnlyList<string> Endpoints,
     string CodeDigest,
-    string Hash)
+    string Hash,
+    ReviewedCode Code)
 {
     /// <summary>The port members serve their API on. Part A keeps plain HTTP off the network.</summary>
     public const int ApiPort = 53443;
@@ -37,7 +39,7 @@ public sealed record ClusterInputs(
         {
             var guest = repository.Guest(m.Guest) ?? throw new InvalidOperationException($"{m.Guest} is not a guest.");
             var address = ProvisionInputs.ExpectedIpv4(guest) ?? throw new InvalidOperationException($"{m.Guest} has no static address.");
-            return new ClusterMemberAddress(m.Guest, m.Role, address, Endpoint(address));
+            return new ClusterMemberAddress(m.Guest, m.Role, address, Endpoint(address), repository.Recipes.TryGetValue(guest.Recipe, out var provisioned) ? ReviewedCode.Of(repository, provisioned).Digest : "missing");
         }).ToList();
         var primary = members.Single(m => m.Role == ClusterRoles.Primary);
         var settings = cluster.Json["settings"]!;
@@ -56,7 +58,6 @@ public sealed record ClusterInputs(
             {
                 ["id"] = cluster.Id,
                 ["domain"] = cluster.ClusterDomain,
-                ["tls"] = new JsonObject { ["verify"] = cluster.VerifyTls },
                 ["primary"] = new JsonObject { ["guest"] = primary.Guest, ["address"] = primary.Address },
                 ["secondaries"] = new JsonObject(members.Where(m => m.Role == ClusterRoles.Secondary)
                     .OrderBy(m => m.Guest, StringComparer.Ordinal)
@@ -93,13 +94,13 @@ public sealed record ClusterInputs(
             definition.Remove(field);
         }
 
-        var code = new JsonObject
+        var code = ReviewedCode.Of(repository, recipe);
+        var codeDigest = Canonical.Hash(new JsonObject
         {
-            ["recipe"] = recipe.Json.DeepClone(),
-            ["recipeFiles"] = ProvisionInputs.TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
-            ["rootFiles"] = ProvisionInputs.TreeHash(repository.Root, recipe.Root),
-        };
-        var codeDigest = Canonical.Hash(code);
+            ["cluster"] = code.Digest,
+            ["members"] = new JsonObject(members.OrderBy(m => m.Guest, StringComparer.Ordinal)
+                .Select(m => KeyValuePair.Create(m.Guest, (JsonNode?)m.CodeDigest))),
+        });
         var hashed = new JsonObject
         {
             ["cluster"] = definition,
@@ -109,7 +110,7 @@ public sealed record ClusterInputs(
         };
         return new ClusterInputs(cluster, recipe, members, variables,
             members.Select(m => m.Endpoint).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
-            codeDigest, Canonical.Hash(hashed));
+            codeDigest, Canonical.Hash(hashed), code);
     }
 
     public static IEnumerable<(string Zone, string Forwarder, string Protocol)> ForwardZones(JsonNode settings) =>

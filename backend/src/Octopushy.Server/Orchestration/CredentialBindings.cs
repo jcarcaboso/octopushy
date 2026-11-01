@@ -68,6 +68,8 @@ internal static class CredentialBindings
     private static List<string> ValidateCluster(RunContext context)
     {
         var problems = new List<string>();
+        if (context.Cluster!.Probe)
+            return context.Secrets.Count == 0 ? problems : ["Reading certificates carries no credentials"];
         if (context.Secrets.Keys.Any(k => k != SecretNames.ClusterPassword) || !context.Secrets.ContainsKey(SecretNames.ClusterPassword))
             problems.Add("A cluster's run carries only its admin password; inspect and replan");
         if (context.OpenTofu is { } tofu)

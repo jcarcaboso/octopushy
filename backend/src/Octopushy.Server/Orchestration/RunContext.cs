@@ -38,6 +38,12 @@ public sealed record RunContext
     /// <summary>The application cluster the work acts on, instead of a Proxmox installation.</summary>
     public ClusterContext? Cluster { get; init; }
 
+    /// <summary>The digest of the code the work runs, which a grant of a protected secret must match.</summary>
+    public string? CodeDigest { get; init; }
+
+    /// <summary>The folders that digest covers: all a run holding a protected secret receives.</summary>
+    public IReadOnlyList<string>? ReviewedPaths { get; init; }
+
     public DiskReporterContext? DiskReporter { get; init; }
 
     /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>
@@ -125,7 +131,11 @@ public sealed record ClusterContext(
     IReadOnlyList<ClusterMemberContext> Members,
     IReadOnlyList<string> Endpoints,
     string CodeDigest,
-    JsonObject Input);
+    JsonObject Input,
+    /// <summary>The hash of the declared list URLs, to tell whether they were ever downloaded.</summary>
+    string BlockListsHash = "",
+    /// <summary>Reads certificates only: it carries no password, so it needs no trust.</summary>
+    bool Probe = false);
 
 public sealed record ClusterMemberContext(string Guest, string Role, string Address);
 
@@ -163,12 +173,16 @@ public static class StepNames
     public const string RevokeWorker = "revoke-worker";
     /// <summary>Reads what the members report, for the plan to show what a run must do about them.</summary>
     public const string InspectCluster = "inspect-cluster";
-    /// <summary>Joins and removes the members the approved plan changed, and removes undeclared entries.</summary>
+    /// <summary>Takes the members the approved plan removes out of the cluster, before the apply forgets them.</summary>
+    public const string DetachMembers = "detach-members";
+    /// <summary>Joins the members the approved plan changed, and removes undeclared entries.</summary>
     public const string ReconcileCluster = "reconcile-cluster";
     public const string RefreshBlockLists = "refresh-block-lists";
     public const string VerifyCluster = "verify-cluster";
     /// <summary>Not a step: the work of a cluster's observation.</summary>
     public const string ObserveCluster = "observe-cluster";
+    /// <summary>Not a step: reading what certificates a cluster's members present, with no credentials.</summary>
+    public const string ProbeCluster = "probe-cluster";
 }
 
 /// <summary>The secret names executors look for.</summary>

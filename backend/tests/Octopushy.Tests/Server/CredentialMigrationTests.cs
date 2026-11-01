@@ -45,7 +45,7 @@ public class CredentialMigrationTests(PostgresFixture postgres)
         Assert.Equal(("legacy-value-2", 2), await store.GetAsync(key, CancellationToken.None));
         var (values, missing) = await store.ResolveForAttemptAsync(
             new Dictionary<string, Octopushy.Definitions.StoreReference> { ["token"] = new(key, 1) },
-            new HashSet<string> { "token" }, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
+            new HashSet<string> { "token" }, Guid.NewGuid(), Guid.NewGuid(), new SecretRelease(null, null, "test"), CancellationToken.None);
         Assert.Empty(missing);
         Assert.Equal("legacy-value-1", values["token"]);
         Assert.False(db.Database.HasPendingModelChanges());

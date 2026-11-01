@@ -48,6 +48,39 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             return run.Id;
         }, cancellationToken);
 
+    /// <summary>Reads what certificates a cluster's members present now, for an operator to trust.</summary>
+    public Task ReadCertificatesAsync(Guid resourceId, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, _) =>
+        {
+            var resource = await db.Resources.FirstOrDefaultAsync(r => r.Id == resourceId && r.Kind == ResourceKinds.Cluster, cancellationToken)
+                ?? throw new RunException("There is no such cluster.");
+            var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
+                ?? throw new RunException("Sync the current repository source first.");
+            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            if (!repository.IsValid(resource.Address) || repository.Cluster(resource.Address) is not { } cluster)
+                throw new RunException("The definition is invalid; fix the issues first.");
+            await engine.ObserveAsync(db, resource, revision, RunFactory.ClusterProbe(repository, cluster, revision), cancellationToken);
+            return 0;
+        }, cancellationToken);
+
+    /// <summary>
+    /// What a cluster's background work is now. Until every member's certificate is trusted that
+    /// is reading them, as often as the check runs, since an operator is waiting on it. After
+    /// that it is a check of the cluster on the usual schedule, once it has been formed.
+    /// </summary>
+    private static async Task<Orchestration.RunContext?> ClusterWorkAsync(Data.OctopushyDb db, Data.Resource resource, Definitions.LabRepository repository,
+        Definitions.ClusterDefinition cluster, Data.DefinitionRevision revision, DateTimeOffset cutoff, CancellationToken cancellationToken)
+    {
+        var endpoints = Definitions.ClusterInputs.Build(repository, cluster, revision.Commit).Endpoints;
+        var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == resource.Address, cancellationToken);
+        var trusted = ClusterCertificates.Parse(trust?.Certificates);
+        if (!endpoints.All(trusted.ContainsKey))
+            return RunFactory.ClusterProbe(repository, cluster, revision);
+        return resource.AppliedAt is not null && (resource.ObserveRequestedAt is null || resource.ObserveRequestedAt < cutoff)
+            ? RunFactory.ClusterObservation(repository, cluster, revision)
+            : null;
+    }
+
     /// <summary>
     /// Checks a cluster after a member guest changed. Replacing a container can leave an empty
     /// server that OpenTofu sees nothing wrong with, so the cluster's run looks at every member.
@@ -106,8 +139,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
 
             var cutoff = clock.GetUtcNow().AddMinutes(-options.Value.Scheduling.ObserveMinutes);
             var due = await db.Resources
-                .Where(r => r.RetiredAt == null && (r.Kind == ResourceKinds.Installation || r.Kind == ResourceKinds.Cluster && r.AppliedAt != null))
-                .Where(r => r.ObserveRequestedAt == null || r.ObserveRequestedAt < cutoff)
+                .Where(r => r.RetiredAt == null && (r.Kind == ResourceKinds.Installation || r.Kind == ResourceKinds.Cluster))
+                .Where(r => r.ObserveRequestedAt == null || r.ObserveRequestedAt < cutoff || r.Kind == ResourceKinds.Cluster)
                 .ToListAsync(cancellationToken);
             if (due.Count == 0) return 0;
 
@@ -119,7 +152,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                 if (repository.Resource(resource.Address)?.Valid != true)
                     continue;
                 var context = repository.Installation(resource.Address) is { } installation ? RunFactory.Observation(repository, installation, revision)
-                    : repository.Cluster(resource.Address) is { } cluster ? RunFactory.ClusterObservation(repository, cluster, revision)
+                    : repository.Cluster(resource.Address) is { } cluster ? await ClusterWorkAsync(db, resource, repository, cluster, revision, cutoff, cancellationToken)
                     : null;
                 if (context is not null)
                 {

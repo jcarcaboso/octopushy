@@ -65,6 +65,12 @@
             "lists": { "type": "array", "items": { "type": "string", "pattern": "^https?://" }, "uniqueItems": true },
             "blocked": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
             "allowed": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "listProbes": {
+              "description": "Names that are on the downloaded lists and nowhere else here, one for each list. Required with lists: verification asks every member for them, because a list URL says nothing about what a member enforces.",
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
             "control": {
               "description": "A name every member must resolve, checked next to each blocked name. Left out, it is the primary's name in the cluster zone, which needs no internet.",
               "type": "string",
@@ -80,12 +86,6 @@
     "credentials": {
       "description": "The admin password every member shares. It must be the store entry the members' provision.secrets.admin_password names.",
       "$ref": "common.schema.json#/$defs/storeRef"
-    },
-    "tls": {
-      "description": "Members serve a self-signed certificate, so verify: false is what a new cluster needs.",
-      "type": "object",
-      "properties": { "verify": { "type": "boolean" } },
-      "additionalProperties": false
     },
     "execution": { "$ref": "common.schema.json#/$defs/execution" },
     "policy": { "$ref": "common.schema.json#/$defs/policy" }

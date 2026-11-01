@@ -124,12 +124,67 @@ public sealed class ClusterTrust
     /// <summary>Every member endpoint the cluster declared when it was trusted, sorted.</summary>
     public List<string> Endpoints { get; set; } = [];
 
-    /// <summary>The digest of the recipe and its root when it was trusted.</summary>
+    /// <summary>The digest of the recipes and roots, the cluster's and its members', when it was trusted.</summary>
     public required string CodeDigest { get; set; }
+
+    /// <summary>JSON: each member's certificate as it was trusted, by endpoint, with <c>sha256</c> and <c>pem</c>.</summary>
+    public string Certificates { get; set; } = "{}";
 
     public DateTimeOffset TrustedAt { get; set; }
 
     public required string TrustedBy { get; set; }
+}
+
+/// <summary>
+/// A guest that has been, or is being, joined to a cluster, with what identifies it there. OpenTofu's
+/// record of a member is what is wanted; this is what was done, so it outlives the member's place
+/// in cluster.yaml, and cluster.yaml itself, until the guest is known to have left.
+/// </summary>
+public sealed class ClusterBinding
+{
+    public Guid ClusterId { get; set; }
+
+    public Guid GuestId { get; set; }
+
+    /// <summary>The guest's address when it was bound, which is also its key in the OpenTofu state.</summary>
+    public required string Guest { get; set; }
+
+    public required string Role { get; set; }
+
+    /// <summary>The address it joined at.</summary>
+    public required string Address { get; set; }
+
+    /// <summary>Its node id on the primary, once something has reported it.</summary>
+    public long? PeerId { get; set; }
+
+    public string? PeerName { get; set; }
+
+    public DateTimeOffset BoundAt { get; set; }
+
+    /// <summary>Set once it is known to have left: by a run that saw it gone, or an operator who says so.</summary>
+    public DateTimeOffset? DetachedAt { get; set; }
+
+    public string? DetachedBy { get; set; }
+
+    public string? DetachNote { get; set; }
+}
+
+/// <summary>
+/// An operator's decision that this resource, running the code with this digest, may receive a
+/// protected store entry. Definitions cannot create, change, or remove one.
+/// </summary>
+public sealed class SecretGrant
+{
+    public required string Key { get; set; }
+
+    public Guid ResourceId { get; set; }
+
+    /// <summary>Null for work that runs no repository code, such as an observation.</summary>
+    public string? CodeDigest { get; set; }
+
+    public required string GrantedBy { get; set; }
+
+    public DateTimeOffset GrantedAt { get; set; }
 }
 
 public static class ResourceKinds
@@ -216,6 +271,12 @@ public sealed class Resource
 
     /// <summary>The domain a cluster was formed with, which cannot change.</summary>
     public string? BoundClusterDomain { get; set; }
+
+    /// <summary>The hash of the list URLs a cluster last downloaded. OpenTofu's marker is gone once they are applied.</summary>
+    public string? BlockListsRefreshed { get; set; }
+
+    /// <summary>JSON: the certificate each endpoint of a cluster last presented, with <c>sha256</c> and <c>pem</c>.</summary>
+    public string? MemberCertificates { get; set; }
 
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
@@ -543,6 +604,13 @@ public sealed class StoreEntry
     public string Visibility { get; set; } = Visibilities.Secret;
 
     public string? Description { get; set; }
+
+    /// <summary>Released only to a resource with a matching grant. Set by an operator, never by a definition.</summary>
+    public bool Protected { get; set; }
+
+    public DateTimeOffset? ProtectedAt { get; set; }
+
+    public string? ProtectedBy { get; set; }
 
     public int CurrentVersion { get; set; }
 

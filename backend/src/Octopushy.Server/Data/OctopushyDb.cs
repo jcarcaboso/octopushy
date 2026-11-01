@@ -14,6 +14,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ClusterTrust> ClusterTrusts => Set<ClusterTrust>();
 
+    public DbSet<ClusterBinding> ClusterBindings => Set<ClusterBinding>();
+
+    public DbSet<SecretGrant> SecretGrants => Set<SecretGrant>();
+
     public DbSet<Resource> Resources => Set<Resource>();
 
     public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
@@ -77,10 +81,26 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<ClusterTrust>(e =>
         {
             e.HasKey(x => x.Address);
+            e.Property(x => x.Certificates).HasColumnType("jsonb");
+        });
+
+        model.Entity<ClusterBinding>(e =>
+        {
+            e.HasKey(x => new { x.ClusterId, x.GuestId });
+            e.HasIndex(x => x.GuestId);
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ClusterId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.GuestId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        model.Entity<SecretGrant>(e =>
+        {
+            e.HasKey(x => new { x.Key, x.ResourceId });
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
         });
 
         model.Entity<Resource>(e =>
         {
+            e.Property(x => x.MemberCertificates).HasColumnType("jsonb");
             // A retired resource keeps its address for history; a new folder with the same
             // name later is a new resource.
             e.HasIndex(x => x.Address).IsUnique().HasFilter("retired_at IS NULL");

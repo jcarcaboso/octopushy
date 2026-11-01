@@ -77,6 +77,38 @@ public sealed partial class RunEngine
         signal.Wake();
     }
 
+    private static async Task KeepObservationAsync(OctopushyDb db, Resource resource, Attempt attempt, string data, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        db.Observations.Add(new Observation
+        {
+            Id = Guid.CreateVersion7(),
+            ResourceId = resource.Id,
+            AttemptId = attempt.Id,
+            ObservedAt = now,
+            Data = data,
+        });
+        var oldObservations = await db.Observations
+            .Where(o => o.ResourceId == resource.Id)
+            .OrderByDescending(o => o.ObservedAt)
+            .Skip(KeptObservations - 1)
+            .Select(o => o.Id)
+            .ToListAsync(cancellationToken);
+        await db.Observations.Where(o => oldObservations.Contains(o.Id)).ExecuteDeleteAsync(cancellationToken);
+    }
+
+    /// <summary>Remembers the certificates an agent saw, which is what an operator is shown to trust.</summary>
+    internal static void MergeCertificates(Resource cluster, JsonNode? outputs)
+    {
+        var seen = Git.ClusterCertificates.Parse(cluster.MemberCertificates);
+        foreach (var member in (outputs?["certificates"] as JsonArray)?.OfType<JsonObject>() ?? [])
+        {
+            if (member["endpoint"]?.GetValue<string>() is { } endpoint && member["sha256"]?.GetValue<string>() is { } sha256)
+                seen[endpoint] = new Git.MemberCertificate(sha256, member["pem"]?.GetValue<string>() ?? "");
+        }
+
+        cluster.MemberCertificates = Git.ClusterCertificates.Serialize(seen);
+    }
+
     /// <summary>Records a finished observation attempt on its installation; the caller saves.</summary>
     private async Task FinishObservationAsync(OctopushyDb db, Attempt attempt, JsonNode? outputs, CancellationToken cancellationToken)
     {
@@ -91,30 +123,29 @@ public sealed partial class RunEngine
         var now = clock.GetUtcNow();
         switch (attempt.Status)
         {
+            case AttemptStatuses.Succeeded when attempt.Action == "certificates":
+                // What members present is not a check of them, so it clears and adds nothing.
+                MergeCertificates(installation, outputs);
+                break;
             case AttemptStatuses.Succeeded:
                 installation.ObserveError = null;
                 installation.ObserveErrorAt = null;
-                db.Observations.Add(new Observation
-                {
-                    Id = Guid.CreateVersion7(),
-                    ResourceId = installation.Id,
-                    AttemptId = attempt.Id,
-                    ObservedAt = now,
-                    Data = outputs?.ToJsonString() ?? "{}",
-                });
-                var oldObservations = await db.Observations
-                    .Where(o => o.ResourceId == installation.Id)
-                    .OrderByDescending(o => o.ObservedAt)
-                    .Skip(KeptObservations - 1)
-                    .Select(o => o.Id)
-                    .ToListAsync(cancellationToken);
-                await db.Observations.Where(o => oldObservations.Contains(o.Id)).ExecuteDeleteAsync(cancellationToken);
+                await KeepObservationAsync(db, installation, attempt, outputs?.ToJsonString() ?? "{}", now, cancellationToken);
                 break;
             case AttemptStatuses.Cancelled:
                 break;
             default:
                 installation.ObserveError = attempt.Error ?? "The observation failed.";
                 installation.ObserveErrorAt = now;
+                // A cluster's check says what each member failed, and that replaces what an
+                // older one said about it. An installation's failure has nothing to show.
+                if (attempt.Executor == "technitium" && attempt.Action == "verify" && outputs is JsonObject failed)
+                {
+                    failed["error"] = installation.ObserveError;
+                    MergeCertificates(installation, outputs);
+                    await KeepObservationAsync(db, installation, attempt, failed.ToJsonString(), now, cancellationToken);
+                }
+
                 break;
         }
 

@@ -152,11 +152,37 @@ public sealed partial class RepositoryMirror
         }
 
         Directory.CreateDirectory(BundlesDirectory);
+        var bundle = await WriteBundleAsync(snapshot, Directory.EnumerateFiles(snapshot, "*", SearchOption.AllDirectories), cancellationToken);
+        var temporary = path + ".tmp" + Guid.NewGuid().ToString("N");
+        await File.WriteAllBytesAsync(temporary, bundle, cancellationToken);
+        File.Move(temporary, path, overwrite: true);
+        return bundle;
+    }
+
+    /// <summary>
+    /// Only these folders of a commit, without anything a digest skips, for a run that holds a
+    /// protected secret. What was not reviewed is not there to run.
+    /// </summary>
+    public async Task<byte[]> BundleAsync(string commit, IReadOnlyList<string> folders, CancellationToken cancellationToken)
+    {
+        var snapshot = await SnapshotAsync(commit, cancellationToken);
+        var files = folders.SelectMany(f =>
+        {
+            var folder = Path.GetFullPath(Path.Combine(snapshot, f));
+            return folder.StartsWith(snapshot + Path.DirectorySeparatorChar, StringComparison.Ordinal) && Directory.Exists(folder)
+                ? Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                : throw new GitException($"The reviewed folder {f} is not in {commit}.");
+        }).Where(f => !Path.GetRelativePath(snapshot, f).Split(Path.DirectorySeparatorChar).Contains(".terraform")).Distinct(StringComparer.Ordinal);
+        return await WriteBundleAsync(snapshot, files, cancellationToken);
+    }
+
+    private static async Task<byte[]> WriteBundleAsync(string snapshot, IEnumerable<string> files, CancellationToken cancellationToken)
+    {
         var buffer = new MemoryStream();
         await using (var gzip = new GZipStream(buffer, CompressionLevel.Optimal, leaveOpen: true))
         await using (var tar = new TarWriter(gzip, TarEntryFormat.Pax, leaveOpen: true))
         {
-            foreach (var file in Directory.EnumerateFiles(snapshot, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            foreach (var file in files.Order(StringComparer.Ordinal))
             {
                 var name = Path.GetRelativePath(snapshot, file).Replace(Path.DirectorySeparatorChar, '/');
                 if (new FileInfo(file).LinkTarget is not null)
@@ -175,11 +201,7 @@ public sealed partial class RepositoryMirror
             }
         }
 
-        var bytes = buffer.ToArray();
-        var temporary = path + ".partial";
-        await File.WriteAllBytesAsync(temporary, bytes, cancellationToken);
-        File.Move(temporary, path, overwrite: true);
-        return bytes;
+        return buffer.ToArray();
     }
 
     /// <summary>Removes snapshots and bundles of commits not in <paramref name="keep"/>.</summary>

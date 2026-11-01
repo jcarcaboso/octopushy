@@ -60,7 +60,7 @@ public sealed partial class RunEngine
                 var run = step?.Run;
                 var context = RunContext.Parse(run?.Context ?? attempt.Context!);
                 if (await (run is null
-                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, attempt.ResourceId, cancellationToken)
                         : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
                 {
                     attempt.WaitingReason = trustReason;
@@ -69,6 +69,14 @@ public sealed partial class RunEngine
                         run.Status = RunStatuses.Blocked;
                         run.Detail = trustReason;
                     }
+                    continue;
+                }
+                // Checked here too: this attempt may have been queued before the lock was taken.
+                if (run is not null && await ClusterPlan.BlockedReasonAsync(db, run, cancellationToken) is { } lockReason)
+                {
+                    attempt.WaitingReason = lockReason;
+                    run.Status = RunStatuses.Blocked;
+                    run.Detail = lockReason;
                     continue;
                 }
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
@@ -416,6 +424,9 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Failed;
                         step.Detail = attempt.Error ?? "The attempt failed.";
                         step.Outputs = outputs?.ToJsonString();
+                        // A certificate that changed is what the next trust has to show.
+                        if (attempt.Executor == "technitium")
+                            MergeCertificates(await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken), outputs);
                         break;
                 }
 

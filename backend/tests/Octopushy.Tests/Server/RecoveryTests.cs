@@ -68,7 +68,7 @@ public class RecoveryTests(PostgresFixture postgres) : IDisposable
         {
             var (values, missing) = await store.ResolveForAttemptAsync(
                 new Dictionary<string, StoreReference> { ["token"] = new(Token, version) },
-                new HashSet<string> { "token" }, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
+                new HashSet<string> { "token" }, Guid.NewGuid(), Guid.NewGuid(), new SecretRelease(null, null, "test"), CancellationToken.None);
             Assert.Empty(values);
             Assert.Single(missing);
         }

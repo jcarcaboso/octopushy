@@ -6,6 +6,9 @@ using Octopushy.Server.Data;
 
 namespace Octopushy.Server.Store;
 
+/// <summary>What a release of store entries is for: who receives them, running what code.</summary>
+public sealed record SecretRelease(Guid? ResourceId, string? CodeDigest, string Address);
+
 public class StoreException(string message) : Exception(message);
 
 public sealed class StoreConflictException(string message) : StoreException(message);
@@ -254,10 +257,14 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         IReadOnlySet<string> requireSecret,
         Guid attemptId,
         Guid agentId,
+        SecretRelease release,
         CancellationToken cancellationToken)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         var missing = new List<string>();
+        // Every release of a key a definition names comes through here, whatever bound it.
+        if (await ProtectedSecrets.WithheldAsync(db, secretNamesToKeys.Values.Select(r => r.Key), release.ResourceId, release.CodeDigest, release.Address, cancellationToken) is { } withheld)
+            return (values, [withheld]);
         foreach (var (name, reference) in secretNamesToKeys)
         {
             var key = reference.Key;

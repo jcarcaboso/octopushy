@@ -394,6 +394,8 @@ public sealed partial class RunEngine(
                         break;
                     }
 
+                    if (step.Name == StepNames.Apply && context.Cluster is { } members)
+                        await ClusterPlan.BindMembersAsync(db, run, members, clock.GetUtcNow(), cancellationToken);
                     CreateAttempt(db, run, step, context);
                     step.Status = StepStatuses.Queued;
                     step.Detail = null;
@@ -475,7 +477,9 @@ public sealed partial class RunEngine(
         }
         var manual = (context.ManagedWorker is not null || policy.Approval == "manual") && (resourceChanges > 0
             || outputs?["hasChanges"]?.GetValue<bool>() == true || privilegedRemains);
-        var destructiveManual = deletes > 0 && policy.Destructive == "manual";
+        // A replacement in the plan, but it deletes what someone added to a live server.
+        var prunes = run.Operation == Operations.Cluster && ClusterPlan.PrunesEntries(outputs);
+        var destructiveManual = (deletes > 0 || prunes) && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
         if (!step.ApprovalRequired)
         {
@@ -484,7 +488,7 @@ public sealed partial class RunEngine(
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = resourceChanges == 0 && !privilegedRemains
                 ? "The plan changes no resources, so it needs no approval."
-                : deletes > 0
+                : deletes > 0 || prunes
                     ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
                     : $"Approval is automatic (set by {policy.ApprovalSetBy}).";
             step.Status = StepStatuses.Succeeded;
@@ -495,8 +499,12 @@ public sealed partial class RunEngine(
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();
         step.Detail = destructiveManual && !manual
-            ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
+            ? deletes > 0
+                ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
+                : $"The plan removes entries from the server and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
+        if (prunes && run.Steps.Single(s => s.Name == StepNames.InspectCluster).Outputs is { } inspected)
+            step.Detail += $" It removes what nobody declared: {string.Join(", ", ClusterPlan.UndeclaredEntriesIn(JsonNode.Parse(inspected)))}.";
         if (context.DiskReporter is not null)
         {
             step.Detail += " This run also installs the disk reporter inside the VM after verification.";
@@ -559,7 +567,7 @@ public sealed partial class RunEngine(
                     var needsGuestApproval = run.Operation == Operations.Provision
                         && (planContext.RootDiskBytes is not null || planContext.ManagedWorker is not null || planContext.DiskReporter is not null);
                     foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
-                        or StepNames.ReconcileCluster or StepNames.RefreshBlockLists
+                        or StepNames.DetachMembers or StepNames.ReconcileCluster
                         || s.Name == StepNames.Approval && !needsGuestApproval))
                     {
                         later.Status = StepStatuses.Skipped;
@@ -568,21 +576,40 @@ public sealed partial class RunEngine(
                 }
                 else if (run.Operation == Operations.Cluster)
                 {
-                    if (ClusterPlan.Joins(outputs).Count == 0 && ClusterPlan.Removals(outputs).Count == 0 && !ClusterPlan.PrunesEntries(outputs))
+                    if ((await ClusterPlan.RemovalsAsync(db, run, outputs, cancellationToken)).Count == 0)
+                    {
+                        var detach = run.Steps.Single(s => s.Name == StepNames.DetachMembers);
+                        detach.Status = StepStatuses.Skipped;
+                        detach.Detail = "The plan removes no member.";
+                    }
+
+                    if (ClusterPlan.Joins(outputs).Count == 0 && !ClusterPlan.PrunesEntries(outputs))
                     {
                         var reconcile = run.Steps.Single(s => s.Name == StepNames.ReconcileCluster);
                         reconcile.Status = StepStatuses.Skipped;
                         reconcile.Detail = "The plan changes no member.";
                     }
-
-                    if (!ClusterPlan.ChangesBlockLists(outputs))
-                    {
-                        var refresh = run.Steps.Single(s => s.Name == StepNames.RefreshBlockLists);
-                        refresh.Status = StepStatuses.Skipped;
-                        refresh.Detail = "The plan changes no list URL.";
-                    }
                 }
 
+                // What says the lists were downloaded is kept here, not in the plan, so that a
+                // download that failed is tried by the next run even if nothing else changes.
+                if (run.Operation == Operations.Cluster && ClusterPlan.ListsDownloaded(resource, RunContext.Parse(run.Context).Cluster!))
+                {
+                    var refresh = run.Steps.Single(s => s.Name == StepNames.RefreshBlockLists);
+                    refresh.Status = StepStatuses.Skipped;
+                    refresh.Detail = "The declared lists are downloaded.";
+                }
+
+                break;
+            case StepNames.InspectCluster or StepNames.ReconcileCluster:
+                await ClusterPlan.RecordPeersAsync(db, run, outputs, cancellationToken);
+                MergeCertificates(resource, outputs);
+                break;
+            case StepNames.DetachMembers:
+                await ClusterPlan.RecordDetachedAsync(db, run, outputs, now, cancellationToken);
+                break;
+            case StepNames.RefreshBlockLists:
+                resource.BlockListsRefreshed = RunContext.Parse(run.Context).Cluster!.BlockListsHash;
                 break;
             case StepNames.Apply when run.Operation == Operations.Cluster:
                 var cluster = RunContext.Parse(run.Context).Cluster!;
@@ -614,8 +641,14 @@ public sealed partial class RunEngine(
             case StepNames.Apply:
                 resource.Outputs = null;
                 break;
-            case StepNames.Verify or StepNames.VerifyCluster:
+            case StepNames.Verify:
                 resource.VerifiedAt = now;
+                break;
+            case StepNames.VerifyCluster:
+                resource.VerifiedAt = now;
+                // This is a newer check than the one that failed.
+                resource.ObserveError = null;
+                resource.ObserveErrorAt = null;
                 break;
             case StepNames.VerifyRoot:
                 if (RunContext.Parse(run.Context).ManagedWorker is null || resource.ManagedWorker?.ReadyAt is not null)

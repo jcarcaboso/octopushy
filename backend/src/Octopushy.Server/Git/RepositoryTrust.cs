@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Git;
 
@@ -43,18 +44,21 @@ public static class RepositoryTrust
             .ToList();
 
     public static Task<string?> BlockedReasonAsync(OctopushyDb db, Run run, CancellationToken ct) =>
-        BlockedReasonAsync(db, run.RevisionId, run.Commit, RunContext.Parse(run.Context), ct);
+        BlockedReasonAsync(db, run.RevisionId, run.Commit, RunContext.Parse(run.Context), run.ResourceId, ct);
 
     /// <summary>Why work built from this revision and context, such as an observation, may not be sent yet.</summary>
-    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, CancellationToken ct)
+    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, Guid? resourceId, CancellationToken ct)
     {
         if (revisionId is not { } id || commit is null
             || !await EligibleRevisions(db).AnyAsync(r => r.Id == id && r.Commit == commit, ct))
         {
             return "Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.";
         }
+        // Whatever bound them: this is what the store checks again when it releases them.
+        if (await ProtectedSecrets.WithheldAsync(db, context.Secrets.Values, resourceId, context.CodeDigest, context.Address, ct) is { } withheld)
+            return withheld;
         if (context.Cluster is { } cluster)
-            return await ClusterBlockedReasonAsync(db, context.Address, cluster, ct);
+            return await ClusterBlockedReasonAsync(db, context.Address, cluster, resourceId, ct);
         var address = InstallationAddress(context.Address);
         var endpoint = context.Proxmox.Endpoint;
         var trust = await db.InstallationTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
@@ -65,8 +69,11 @@ public static class RepositoryTrust
         return null;
     }
 
-    private static async Task<string?> ClusterBlockedReasonAsync(OctopushyDb db, string address, ClusterContext cluster, CancellationToken ct)
+    private static async Task<string?> ClusterBlockedReasonAsync(OctopushyDb db, string address, ClusterContext cluster, Guid? resourceId, CancellationToken ct)
     {
+        // It sends nothing and connects with no credential, and it is how the certificates to trust are found.
+        if (cluster.Probe)
+            return null;
         var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
         if (trust is null)
             return $"{WaitingForCluster}: {address} is a new application cluster. Trust it on its page before its admin password is sent to {string.Join(", ", cluster.Endpoints)}.";
@@ -74,7 +81,30 @@ public static class RepositoryTrust
         if (unknown.Count > 0)
             return $"{WaitingForCluster}: {string.Join(", ", unknown)} is a new member endpoint of {address}. Trust the cluster again on its page before its admin password is sent there.";
         if (trust.CodeDigest != cluster.CodeDigest)
-            return $"{WaitingForCluster}: the recipe code of {address} changed, and it runs with the admin password before anyone approves a plan. Review the change, then trust the cluster again on its page.";
-        return null;
+            return $"{WaitingForCluster}: the recipe code of {address} or of a member changed, and it runs with the admin password. Review the change, then trust the cluster again on its page.";
+        var trusted = ClusterCertificates.Parse(trust.Certificates);
+        var missing = cluster.Endpoints.Where(e => !trusted.ContainsKey(e)).ToList();
+        if (missing.Count > 0)
+            return $"{WaitingForCluster}: no certificate is trusted yet for {string.Join(", ", missing)}. Once the member is installed, check its certificate on the cluster's page and trust the cluster again.";
+        var observed = resourceId is { } id
+            ? await db.Resources.AsNoTracking().Where(r => r.Id == id).Select(r => r.MemberCertificates).FirstOrDefaultAsync(ct)
+            : null;
+        var changed = ClusterCertificates.Parse(observed).Where(c => trusted.TryGetValue(c.Key, out var known) && known.Sha256 != c.Value.Sha256)
+            .Select(c => c.Key).Order(StringComparer.Ordinal).ToList();
+        return changed.Count > 0
+            ? $"{WaitingForCluster}: {string.Join(", ", changed)} presents another certificate than the one trusted, so it may not be that member. If it was rebuilt, check the new certificate on the cluster's page and trust the cluster again."
+            : null;
     }
+}
+
+/// <summary>The certificates of a cluster's members, by endpoint; the JSON kept for what was seen and what was trusted.</summary>
+public sealed record MemberCertificate(string Sha256, string Pem);
+
+public static class ClusterCertificates
+{
+    public static Dictionary<string, MemberCertificate> Parse(string? json) =>
+        string.IsNullOrEmpty(json) ? [] : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, MemberCertificate>>(json, RunContext.Json) ?? [];
+
+    public static string Serialize(IReadOnlyDictionary<string, MemberCertificate> certificates) =>
+        System.Text.Json.JsonSerializer.Serialize(certificates, RunContext.Json);
 }

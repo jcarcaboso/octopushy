@@ -216,16 +216,35 @@ public static partial class Endpoints
                 if (!inputs.Endpoints.SequenceEqual(request.Endpoints.Distinct().Order(StringComparer.Ordinal), StringComparer.Ordinal)
                     || inputs.CodeDigest != request.CodeDigest)
                     throw new RunException("The cluster's members or recipe code changed since they were shown. Review them again.");
+                var seen = ClusterCertificates.Parse(resource.MemberCertificates);
+                var shown = request.Certificates ?? new Dictionary<string, string>();
+                if (shown.Keys.Except(inputs.Endpoints).Any()
+                    || shown.Any(c => seen.GetValueOrDefault(c.Key)?.Sha256 != c.Value))
+                    throw new RunException("The certificates changed since they were shown. Review them again.");
                 var trust = await db.ClusterTrusts.FirstOrDefaultAsync(t => t.Address == resource.Address, ct);
                 if (trust is null)
                 {
                     trust = new ClusterTrust { Address = resource.Address, CodeDigest = inputs.CodeDigest, TrustedBy = actor };
                     db.ClusterTrusts.Add(trust);
                 }
+                var previous = ClusterCertificates.Parse(trust.Certificates);
                 trust.Endpoints = inputs.Endpoints.ToList();
                 trust.CodeDigest = inputs.CodeDigest;
+                // A certificate is trusted only as shown; one nobody could read yet stays untrusted.
+                trust.Certificates = ClusterCertificates.Serialize(inputs.Endpoints
+                    .Where(e => shown.ContainsKey(e) || previous.ContainsKey(e))
+                    .ToDictionary(e => e, e => shown.ContainsKey(e) ? seen[e] : previous[e]));
                 trust.TrustedAt = clock.GetUtcNow();
                 trust.TrustedBy = actor;
+                // The grants that let the guests install before the cluster run can start.
+                var key = inputs.Cluster.Credentials.Key;
+                await ProtectedSecrets.GrantAsync(db, key, resource.Id, inputs.CodeDigest, actor, clock.GetUtcNow(), ct);
+                var guests = await db.Resources.Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null).ToListAsync(ct);
+                foreach (var member in inputs.Members)
+                {
+                    if (guests.FirstOrDefault(g => g.Address == member.Guest) is { } guest)
+                        await ProtectedSecrets.GrantAsync(db, key, guest.Id, member.CodeDigest, actor, clock.GetUtcNow(), ct);
+                }
                 foreach (var run in await db.Runs.Where(r => r.ResourceId == resource.Id && r.Status == RunStatuses.Blocked && r.Detail != null
                     && r.Detail.StartsWith(RepositoryTrust.WaitingForCluster)).ToListAsync(ct))
                 {
@@ -234,10 +253,45 @@ public static partial class Endpoints
                 }
                 await db.SaveChangesAsync(ct);
                 signal.Wake();
-                return Views.ClusterTrust(inputs, trust);
+                return Views.ClusterTrust(inputs, trust, resource, await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == key && e.Protected, ct));
             }, ct)))
             .WithTags("Inventory")
             .WithName("trustCluster");
+
+        api.MapPost("/clusters/{id:guid}/certificates", async (Guid id, Planner planner, CancellationToken ct) =>
+        {
+            await planner.ReadCertificatesAsync(id, ct);
+            return TypedResults.NoContent();
+        })
+            .WithTags("Inventory")
+            .WithName("readClusterCertificates");
+
+        api.MapPost("/clusters/{id:guid}/members/{guestId:guid}/detached", async (Guid id, Guid guestId, AcknowledgeDetachRequest request, HttpContext http,
+            RunEngine engine, OrchestratorSignal signal, RevisionCache revisions, TimeProvider clock, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                if (string.IsNullOrWhiteSpace(request.Note)) throw new RunException("Say how the guest left the cluster.");
+                var binding = await db.ClusterBindings.FirstOrDefaultAsync(b => b.ClusterId == id && b.GuestId == guestId && b.DetachedAt == null, ct)
+                    ?? throw new RunException("That guest is not joined to this cluster.");
+                var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+                var repository = head is null ? null : await revisions.GetAsync(head.Commit, ct);
+                var cluster = await db.Resources.AsNoTracking().FirstAsync(r => r.Id == id, ct);
+                if (repository?.Cluster(cluster.Address)?.Members.Any(m => m.Guest == binding.Guest) == true)
+                    throw new RunException("The cluster still lists this guest; take it out of members first.");
+                binding.DetachedAt = clock.GetUtcNow();
+                binding.DetachedBy = actor;
+                binding.DetachNote = request.Note;
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return true;
+            }, ct);
+            return TypedResults.NoContent();
+        })
+            .WithTags("Inventory")
+            .WithName("acknowledgeClusterDetach");
     }
 
     private static void MapRuns(RouteGroupBuilder api)
@@ -489,6 +543,19 @@ public static partial class Endpoints
         .WithName("deleteEnrollmentToken");
     }
 
+    private static async Task SetProtectionAsync(OctopushyDb db, string key, bool value, HttpContext http, TimeProvider clock, CancellationToken ct)
+    {
+        var actor = http.User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+        if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal))
+            throw new RunException("System entries are not released to definitions, so protection does not apply.");
+        var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, ct) ?? throw new RunException("There is no such entry.");
+        entry.Protected = value;
+        entry.ProtectedAt = clock.GetUtcNow();
+        entry.ProtectedBy = actor;
+        await db.SaveChangesAsync(ct);
+    }
+
     private static void MapVariables(RouteGroupBuilder group)
     {
         group.MapGet("", async (VariableStore store, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
@@ -508,7 +575,8 @@ public static partial class Endpoints
                     entry.Visibility == Visibilities.Plain ? await store.GetPlainAsync(entry.Key, ct) : null,
                     uses.GetValueOrDefault(entry.Key) ?? [],
                     entry.LatestVersion,
-                    revoked));
+                    revoked,
+                    entry.Protected));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -519,7 +587,7 @@ public static partial class Endpoints
         })
         .WithName("listVariables");
 
-        group.MapPut("", async (VariableUpdate update, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
+        group.MapPut("", async (VariableUpdate update, HttpContext http, RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
         {
             await engine.ExecuteAsync(async (db, services) =>
             {
@@ -533,6 +601,9 @@ public static partial class Endpoints
                 {
                     await store.DescribeAsync(update.Key, update.Description, ct);
                 }
+                // Only ever on: taking protection off is its own, visible action.
+                if (update.Protected)
+                    await SetProtectionAsync(db, update.Key, true, http, clock, ct);
                 return true;
             }, ct);
 
@@ -541,6 +612,37 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("setVariable");
+
+        group.MapPost("/protection", async (VariableProtectionRequest request, HttpContext http, RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                await SetProtectionAsync(db, request.Key, request.Protected, http, clock, ct);
+                return true;
+            }, ct);
+            signal.Wake();
+            return TypedResults.NoContent();
+        })
+        .WithName("setVariableProtection");
+
+        group.MapPost("/grants", async (VariableGrantRequest request, HttpContext http, RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                if (!await db.Resources.AnyAsync(r => r.Id == request.ResourceId, ct))
+                    throw new RunException("There is no such resource.");
+                if (!await db.StoreEntries.AnyAsync(e => e.Key == request.Key && e.Protected, ct))
+                    throw new RunException("That entry is not protected, so it needs no grant.");
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                await ProtectedSecrets.GrantAsync(db, request.Key, request.ResourceId, request.CodeDigest, actor, clock.GetUtcNow(), ct);
+                await db.SaveChangesAsync(ct);
+                return true;
+            }, ct);
+            signal.Wake();
+            return TypedResults.NoContent();
+        })
+        .WithName("grantVariable");
 
         group.MapDelete("", async (string key, RunEngine engine, RevisionCache revisions, CancellationToken ct) =>
         {

@@ -30,8 +30,8 @@ public class ClusterDefinitionTests
             lists: [https://lists.example.invalid/list.txt]
             blocked: [bad.example.com]
             allowed: [fine.example.com]
+            listProbes: [listed.example.com]
         credentials: { store: dns/admin }
-        tls: { verify: false }
         """;
 
     public static string Guest(string host, int vmid, string address, string extra = "") => $$"""
@@ -82,6 +82,8 @@ public class ClusterDefinitionTests
             root: ../../modules/opentofu/cluster
             """);
         test.Write("modules/opentofu/cluster/main.tf", "# a root\n");
+        test.Write("modules/opentofu/cluster/.terraform.lock.hcl", "# pinned\n");
+        test.Write("modules/opentofu/test-vm/.terraform.lock.hcl", "# pinned\n");
         test.Write(PrimaryFile, Guest("korriban", 320, "10.1.0.32"));
         test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.42"));
         test.Write(ClusterFile, cluster);
@@ -109,7 +111,6 @@ public class ClusterDefinitionTests
         Assert.Equal("home.clusters.technitium", cluster.Stack);
         Assert.Equal(Primary, cluster.Primary!.Guest);
         Assert.Equal([Primary, Secondary], cluster.Members.Select(m => m.Guest));
-        Assert.False(cluster.VerifyTls);
         Assert.Same(cluster, repository.ClusterOf(Secondary));
         Assert.Null(repository.ClusterOf("home/korriban/other"));
     }
@@ -133,6 +134,7 @@ public class ClusterDefinitionTests
     [InlineData("updateIntervalHours: 24", "updateIntervalHours: 0")]
     [InlineData("lists: [https://lists.example.invalid/list.txt]", "lists: [ftp://lists.example.invalid/list.txt]")]
     [InlineData("credentials: { store: dns/admin }", "credentials: { value: hunter2 }")]
+    [InlineData("credentials: { store: dns/admin }", "credentials: { store: dns/admin }\ntls: { verify: false }")]
     public void The_schema_refuses(string from, string to)
     {
         using var test = Repository(With(from, to));
@@ -238,15 +240,74 @@ public class ClusterDefinitionTests
 
     [Theory]
     [InlineData("main.tf", "module \"other\" {\n  source = \"../other\"\n}\n")]
+    [InlineData("main.tf", "/* comment */ module \"outside\" { source = \"../outside\" }\n")]
+    [InlineData("main.tf", "/* a\nb */\n\nmodule \"outside\" {\n  source = \"../outside\"\n}\n")]
+    [InlineData("main.tf", "locals { a = 1 } module \"outside\" { source = \"../outside\" }\n")]
+    [InlineData("main.tf", "module \"remote\" {\n  source = \"git::https://example.invalid/x.git\"\n}\n")]
+    [InlineData("main.tf", "module \"dynamic\" {\n  source = var.where\n}\n")]
+    [InlineData("main.tf", "/* never closed\nmodule \"outside\" {}\n")]
     [InlineData("extra.tf.json", "{}")]
+    [InlineData("extra.tofu", "module \"x\" {}\n")]
+    [InlineData("extra.tofu.json", "{}")]
     [InlineData(".terraform/providers/evil", "binary")]
     public void Trust_has_to_cover_all_the_code_in_a_cluster_root(string file, string content)
     {
         using var test = Repository();
         test.Write($"modules/opentofu/cluster/{file}", content);
         var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Contains(repository.Issues, i => i.Message.Contains("may hold only .tf files of its own"));
-        Assert.False(repository.IsValid(Cluster));
+        Assert.False(repository.IsValid(Cluster), string.Join("; ", repository.Issues.Select(i => i.Message)));
+    }
+
+    [Fact]
+    public void Comments_and_strings_do_not_look_like_module_calls()
+    {
+        using var test = Repository();
+        test.Write("modules/opentofu/cluster/main.tf", """
+            # module "not" { source = "../a" }
+            // module "not" { source = "../b" }
+            /* module "not" { source = "../c" } */
+            locals {
+              text = "module \"not\" { source = \"../d\" } ${upper("x}")}"
+              doc  = <<-EOT
+                module "not" { source = "../e" }
+              EOT
+            }
+            """);
+        Assert.True(LabRepositoryLoader.Load(test.Root).IsValid(Cluster));
+    }
+
+    [Fact]
+    public void A_root_needs_a_lock_file_so_that_something_pins_its_providers()
+    {
+        using var test = Repository();
+        test.Delete("modules/opentofu/cluster/.terraform.lock.hcl");
+        Assert.False(LabRepositoryLoader.Load(test.Root).IsValid(Cluster));
+    }
+
+    [Fact]
+    public void A_member_whose_recipe_cannot_be_reviewed_makes_the_cluster_invalid()
+    {
+        using var test = Repository();
+        test.Write("modules/opentofu/test-vm/main.tf", "/* x */ module \"outside\" { source = \"../outside\" }\n");
+        Assert.Contains(Errors(test, Cluster), e => e.Contains("cannot be reviewed"));
+    }
+
+    [Fact]
+    public void A_member_may_use_the_modules_its_recipe_lists()
+    {
+        var repository = LabRepositoryLoader.Load(TestRepository.ExampleLab);
+        Assert.True(repository.IsValid(Cluster), string.Join("\n", repository.IssuesFor(Cluster).Select(i => i.Message)));
+    }
+
+    [Theory]
+    [InlineData("    listProbes: [listed.example.com]\n", "", "A list needs a name in listProbes")]
+    [InlineData("    lists: [https://lists.example.invalid/list.txt]\n", "", "no list is declared")]
+    [InlineData("listProbes: [listed.example.com]", "listProbes: [bad.example.com]", "also in blocked")]
+    [InlineData("listProbes: [listed.example.com]", "listProbes: [fine.example.com]", "also in allowed")]
+    public void A_list_needs_a_probe_that_says_something_about_it(string from, string to, string expected)
+    {
+        using var test = Repository(With(from, to));
+        Assert.Contains(Errors(test, Cluster), e => e.Contains(expected));
     }
 
     [Fact]
@@ -260,7 +321,7 @@ public class ClusterDefinitionTests
             root: ../../modules/opentofu/cluster
             modules: [../../modules/opentofu/test-vm]
             """);
-        Assert.Contains(LabRepositoryLoader.Load(test.Root).Issues, i => i.Message.Contains("trust covers its folder"));
+        Assert.Contains(LabRepositoryLoader.Load(test.Root).Issues, i => i.Message.Contains("stands alone"));
     }
 
     [Fact]
@@ -376,6 +437,17 @@ public class ClusterDefinitionTests
         test.Write("modules/opentofu/cluster/main.tf", "# another root\n");
         Assert.NotEqual(hash, Hash(test));
         Assert.NotEqual(digest, Digest(test));
+    }
+
+    [Fact]
+    public void The_trusted_code_includes_each_members_recipe()
+    {
+        using var test = Repository();
+        var digest = Digest(test);
+        var hash = Hash(test);
+        test.Write("modules/opentofu/test-vm/main.tf", "# another root\n");
+        Assert.NotEqual(digest, Digest(test));
+        Assert.NotEqual(hash, Hash(test));
     }
 
     [Fact]

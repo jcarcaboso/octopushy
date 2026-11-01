@@ -32,6 +32,9 @@ public sealed class AssignmentBuilder(
 {
     public const string PlanArtifact = "plan.tar.gz";
 
+    /// <summary>The file in a cluster's root that holds the primary's trusted certificate.</summary>
+    private const string PinnedCertificate = "octopushy-primary.pem";
+
     public static StepAction ActionFor(string stepName) => stepName switch
     {
         StepNames.PrepareWorker => new StepAction("managed-worker", "prepare", true),
@@ -48,9 +51,11 @@ public sealed class AssignmentBuilder(
         StepNames.UpdateWorkerOs => new StepAction("managed-worker", "update-os", true),
         StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
         StepNames.InspectCluster => new StepAction("technitium", "inspect", false),
+        StepNames.DetachMembers => new StepAction("technitium", "detach", true),
         StepNames.ReconcileCluster => new StepAction("technitium", "reconcile", true),
         StepNames.RefreshBlockLists => new StepAction("technitium", "refresh-block-lists", true),
         StepNames.VerifyCluster or StepNames.ObserveCluster => new StepAction("technitium", "verify", false),
+        StepNames.ProbeCluster => new StepAction("technitium", "certificates", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -58,6 +63,8 @@ public sealed class AssignmentBuilder(
     public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
         var action = ActionFor(stepName);
+        if (stepName == StepNames.ProbeCluster)
+            return [];
         if (action.Executor == "technitium")
             return [SecretNames.ClusterPassword];
         var token = TokenFor(stepName, context);
@@ -77,11 +84,12 @@ public sealed class AssignmentBuilder(
         StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
         or StepNames.InstallDiskReporter
         or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
-        or StepNames.ReconcileCluster or StepNames.RefreshBlockLists
+        or StepNames.DetachMembers or StepNames.ReconcileCluster
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     /// <summary>The work of an observation of this context.</summary>
-    public static string ObserveStep(RunContext context) => context.Cluster is null ? StepNames.Observe : StepNames.ObserveCluster;
+    public static string ObserveStep(RunContext context) =>
+        context.Cluster is null ? StepNames.Observe : context.Cluster.Probe ? StepNames.ProbeCluster : StepNames.ObserveCluster;
 
     private static string TokenFor(string stepName, RunContext context) =>
         context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
@@ -90,7 +98,7 @@ public sealed class AssignmentBuilder(
     public async Task<Assignment> BuildAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
         var blocked = run is null
-            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, attempt.ResourceId, cancellationToken)
             : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);
         if (blocked is { } reason)
         {
@@ -154,6 +162,7 @@ public sealed class AssignmentBuilder(
             names.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
             attempt.Id,
             agentId,
+            new SecretRelease(run?.ResourceId ?? attempt.ResourceId, context.CodeDigest, context.Address),
             cancellationToken);
         if (missing.Count > 0)
         {
@@ -195,15 +204,27 @@ public sealed class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(SecretEnvFor(stepName, tofu).Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
-            if (context.Cluster is not null && stepName == StepNames.Plan)
+            if (context.Cluster is not null)
             {
-                input["replace"] = new JsonArray(ClusterPlan.Replacements(
-                    await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken)).Select(a => (JsonNode?)a).ToArray());
+                if (stepName == StepNames.Plan)
+                    input["replace"] = new JsonArray(ClusterPlan.Replacements(
+                        await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken)).Select(a => (JsonNode?)a).ToArray());
+                // The provider talks to the certificate an operator trusted, and nothing else.
+                var primary = context.Cluster.Members.Single(m => m.Role == Definitions.ClusterRoles.Primary);
+                var pinned = (await TrustedCertificatesAsync(context, cancellationToken))[Definitions.ClusterInputs.Endpoint(primary.Address)];
+                input["files"] = new JsonObject { [PinnedCertificate] = pinned.Pem };
+                input["env"]!["TECHNITIUM_CACERT"] = PinnedCertificate;
             }
             if (run.Operation == Operations.Provision
                 && (context.RootDiskBytes is not null || context.ManagedWorker is not null || context.DiskReporter is not null))
                 input["retainNoChangesPlan"] = true;
-            assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
+            // Code outside what was reviewed cannot run if it never arrives.
+            var reviewed = await ProtectedSecrets.AnyAsync(db, context.Secrets.Values, cancellationToken);
+            if (reviewed && context.ReviewedPaths is null)
+                throw new CredentialUnavailableException("This run holds a protected secret and has no reviewed code; plan it again.");
+            assignment.FilesTarGz = ByteString.CopyFrom(reviewed
+                ? await mirror.BundleAsync(run.Commit!, context.ReviewedPaths!, cancellationToken)
+                : await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (stepName == StepNames.Apply)
             {
                 assignment.Artifacts.Add(approvedPlan!);
@@ -216,12 +237,23 @@ public sealed class AssignmentBuilder(
         else if (action.Executor == "technitium")
         {
             input = context.Cluster!.Input.DeepClone().AsObject();
+            if (!context.Cluster.Probe)
+            {
+                // Pinned at dispatch: a run can wait for trust that comes after it was made.
+                var certificates = await TrustedCertificatesAsync(context, cancellationToken);
+                foreach (var member in input["members"]!.AsArray())
+                    member!["certificateSha256"] = certificates[member["endpoint"]!.GetValue<string>()].Sha256;
+            }
+            if (stepName == StepNames.DetachMembers)
+            {
+                ArgumentNullException.ThrowIfNull(run);
+                input["remove"] = await ClusterPlan.RemovalsAsync(db, run, await StepOutputsAsync(run, StepNames.Plan, cancellationToken), cancellationToken);
+            }
             if (stepName == StepNames.ReconcileCluster)
             {
                 ArgumentNullException.ThrowIfNull(run);
                 var plan = await StepOutputsAsync(run, StepNames.Plan, cancellationToken);
                 input["join"] = new JsonArray(ClusterPlan.Joins(plan).Select(g => (JsonNode?)g).ToArray());
-                input["remove"] = new JsonArray(ClusterPlan.Removals(plan).Select(g => (JsonNode?)g).ToArray());
                 input["pruneEntries"] = ClusterPlan.PrunesEntries(plan);
             }
         }
@@ -329,6 +361,15 @@ public sealed class AssignmentBuilder(
         }
 
         return assignment;
+    }
+
+    private async Task<Dictionary<string, MemberCertificate>> TrustedCertificatesAsync(RunContext context, CancellationToken cancellationToken)
+    {
+        var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == context.Address, cancellationToken)
+            ?? throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: {context.Address} is not trusted.");
+        var certificates = ClusterCertificates.Parse(trust.Certificates);
+        return context.Cluster!.Endpoints.All(certificates.ContainsKey) ? certificates
+            : throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: a member's certificate is not trusted yet.");
     }
 
     private async Task<JsonNode?> StepOutputsAsync(Run run, string stepName, CancellationToken cancellationToken)

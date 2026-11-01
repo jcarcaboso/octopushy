@@ -354,7 +354,7 @@ public sealed partial class LabRepositoryLoader
         }
         if (recipe.Operation == "cluster" && (recipe.Modules ?? []).Count > 0)
         {
-            Error(recipe.File, LineOf(recipe.File, "/modules"), "A cluster recipe's root stands alone: trust covers its folder and nothing else.", address);
+            Error(recipe.File, LineOf(recipe.File, "/modules"), "A cluster recipe's root stands alone, so that one folder is all there is to review.", address);
         }
         foreach (var module in recipe.Modules ?? [])
         {
@@ -389,17 +389,10 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
-        // Its plan runs with the admin password, so trust has to cover all the code that runs:
-        // nothing may come from outside the folder, or be left out of the folder's digest.
-        if (recipe.Operation == "cluster")
+        if (recipe.Operation == "cluster" && ReviewProblem(recipe) is { } problem)
         {
-            if (tofuFiles.Any(f => f.EndsWith(".tf.json", StringComparison.Ordinal)
-                    || ModuleBlock().IsMatch(File.ReadAllText(f)))
-                || Directory.Exists(Path.Combine(rootPath, ".terraform")))
-            {
-                Error(recipe.File, null, $"The root {recipe.Root} of a cluster recipe may hold only .tf files of its own: no module calls, .tf.json, or .terraform.", address);
-                _invalidRecipes.Add(recipe.Id);
-            }
+            Error(recipe.File, null, problem, address);
+            _invalidRecipes.Add(recipe.Id);
         }
 
         if (recipe.InputsSchema is { } inputs)
@@ -423,6 +416,45 @@ public sealed partial class LabRepositoryLoader
                 _invalidRecipes.Add(recipe.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// What keeps a recipe from being reviewed as a whole. Its plan or apply runs with a password,
+    /// so the code that runs has to be the code the digest covers: nothing that OpenTofu would
+    /// load from elsewhere, and no file this cannot read. It reads the files instead of matching
+    /// lines, and treats what it cannot read as a problem.
+    /// </summary>
+    private string? ReviewProblem(RecipeDefinition recipe)
+    {
+        var listed = (recipe.Modules ?? []).ToHashSet(StringComparer.Ordinal);
+        foreach (var folder in new[] { recipe.Root }.Concat(listed))
+        {
+            var path = Path.Combine(_root, folder);
+            if (!Directory.Exists(path))
+                continue;
+            if (Directory.Exists(Path.Combine(path, ".terraform")))
+                return $"{folder} holds .terraform, which a digest cannot cover.";
+            var files = Directory.EnumerateFiles(path).ToList();
+            foreach (var file in files.Where(f => f.EndsWith(".tofu", StringComparison.Ordinal) || f.EndsWith(".tofu.json", StringComparison.Ordinal)
+                         || f.EndsWith(".tf.json", StringComparison.Ordinal)))
+                return $"{Relative(file)} is a form of OpenTofu code that Octopushy does not read; use .tf.";
+            foreach (var file in files.Where(f => f.EndsWith(".tf", StringComparison.Ordinal)))
+            {
+                if (TofuSource.Blocks(File.ReadAllText(file)) is not { } blocks)
+                    return $"{Relative(file)} cannot be read with certainty, so it cannot be reviewed.";
+                foreach (var block in blocks.Where(b => b.Type == "module"))
+                {
+                    var source = block.Source is null || !(block.Source.StartsWith("./", StringComparison.Ordinal) || block.Source.StartsWith("../", StringComparison.Ordinal))
+                        ? null : ResolveInside(path, block.Source);
+                    if (source is null || !listed.Contains(source))
+                        return $"{Relative(file)} calls a module from {block.Source ?? "somewhere unknown"}, outside what the recipe lists in modules, so a digest would not cover it.";
+                }
+            }
+        }
+
+        return File.Exists(Path.Combine(_root, recipe.Root, ".terraform.lock.hcl"))
+            ? null
+            : $"{recipe.Root} has no .terraform.lock.hcl, so nothing pins the providers that run.";
     }
 
     private void LoadLab(
@@ -506,7 +538,6 @@ public sealed partial class LabRepositoryLoader
             ((JsonArray)json["members"]!).Select(m => new ClusterMember(
                 MemberAddress(lab, m!["guest"]!.GetValue<string>()), m["role"]!.GetValue<string>())).ToList(),
             ParseStoreReference(json["credentials"]!),
-            json["tls"]?["verify"]?.GetValue<bool>() ?? true,
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
     }
@@ -620,6 +651,11 @@ public sealed partial class LabRepositoryLoader
                 Error(cluster.File, line, $"The member {member.Guest} sets its admin password from {password.Key}, not {cluster.Credentials.Key}; members share one password.", cluster.Address);
             }
 
+            if (recipes.TryGetValue(guest.Recipe, out var memberRecipe) && ReviewProblem(memberRecipe) is { } codeProblem)
+            {
+                Error(cluster.File, line, $"The member {member.Guest} cannot be reviewed: {codeProblem}", cluster.Address);
+            }
+
             var installation = installations.FirstOrDefault(n => n.Address == guest.InstallationAddress);
             var failureDomain = installation?.Type == "standalone" ? guest.InstallationAddress : $"{guest.InstallationAddress}/{guest.Host}";
             if (!hosts.TryGetValue(failureDomain, out var sharing))
@@ -641,7 +677,29 @@ public sealed partial class LabRepositoryLoader
             Error(cluster.File, LineOf(cluster.File, "/settings/forwardZones"), $"The forward zone {repeated.Key} is listed more than once.", cluster.Address);
         }
 
-        if (settings["blocking"]?["control"]?.GetValue<string>() is { } control
+        var blocking = settings["blocking"];
+        var lists = (blocking?["lists"] as JsonArray)?.Count ?? 0;
+        var probes = (blocking?["listProbes"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToList() ?? [];
+        if (lists > 0 && probes.Count == 0 && blocking?["enabled"]?.GetValue<bool>() != false)
+        {
+            Error(cluster.File, LineOf(cluster.File, "/settings/blocking/lists"), "A list needs a name in listProbes: without one, nothing shows that a member enforces it.", cluster.Address);
+        }
+
+        if (lists == 0 && probes.Count > 0)
+        {
+            Error(cluster.File, LineOf(cluster.File, "/settings/blocking/listProbes"), "listProbes names what downloaded lists block, and no list is declared.", cluster.Address);
+        }
+
+        foreach (var field in new[] { "blocked", "allowed" })
+        {
+            var entries = (blocking?[field] as JsonArray)?.Select(p => p!.GetValue<string>()).ToList() ?? [];
+            foreach (var probe in probes.Where(entries.Contains))
+            {
+                Error(cluster.File, LineOf(cluster.File, "/settings/blocking/listProbes"), $"{probe} is also in {field}, so it says nothing about the lists.", cluster.Address);
+            }
+        }
+
+        if (blocking?["control"]?.GetValue<string>() is { } control
             && (control.EndsWith(".test", StringComparison.Ordinal) || control.EndsWith(".test.", StringComparison.Ordinal)))
         {
             Error(cluster.File, LineOf(cluster.File, "/settings/blocking/control"), "A .test name answers NXDOMAIN everywhere, so it cannot show that a server resolves.", cluster.Address);
@@ -1053,6 +1111,4 @@ public sealed partial class LabRepositoryLoader
     [GeneratedRegex(@"^\s*backend\s+""", RegexOptions.Multiline)]
     private static partial Regex BackendBlock();
 
-    [GeneratedRegex(@"^\s*module\s+""", RegexOptions.Multiline)]
-    private static partial Regex ModuleBlock();
 }
