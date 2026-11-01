@@ -983,7 +983,11 @@ async fn a_root_that_calls_a_module_of_its_own_still_gets_it_installed() {
     let mut request = reviewed(&[]);
     request["reviewed"]["noModules"] = json!(false);
     request["env"]["FAKE_MODULES"] = json!(manifest);
-    let r = preview(&fx, &request, protected_tar(&[])).await;
+    let inside: &[(&str, &[u8])] = &[(
+        "modules/opentofu/test-vm/sub/main.tf",
+        b"variable \"b\" {}\n",
+    )];
+    let r = preview(&fx, &request, protected_tar(inside)).await;
     r.result
         .as_ref()
         .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
