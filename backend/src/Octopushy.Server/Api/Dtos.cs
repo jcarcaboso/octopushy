@@ -126,6 +126,8 @@ public sealed record LogDto(IReadOnlyList<Agents.LogLineRecord> Lines, long Next
 public sealed record ObservedGuestDto(
     int Vmid,
     string? Name,
+    /// <summary><c>qemu</c> or <c>lxc</c>, as Proxmox calls them.</summary>
+    string? Kind,
     string? Host,
     string? Status,
     bool Template,
@@ -151,6 +153,8 @@ public sealed record GuestSummaryDto(
     Guid Id,
     string Address,
     string Name,
+    /// <summary><c>vm</c> or <c>container</c>, as the definition declares it.</summary>
+    string Type,
     string? Host,
     int? Vmid,
     string Lifecycle,

@@ -398,6 +398,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.Id,
             resource.Address,
             resource.Address.Split('/')[^1],
+            definition?["type"]?.GetValue<string>() ?? GuestTypes.Vm,
             definition?["host"]?.GetValue<string>(),
             vmid,
             definition?["lifecycle"]?.GetValue<string>() ?? "active",
@@ -419,6 +420,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         return new ObservedGuestDto(
             vmid,
             g["name"]?.GetValue<string>(),
+            g["kind"]?.GetValue<string>(),
             g["host"]?.GetValue<string>(),
             g["status"]?.GetValue<string>(),
             g["template"]?.GetValue<bool>() ?? false,

@@ -4633,6 +4633,7 @@
           "id",
           "address",
           "name",
+          "type",
           "host",
           "vmid",
           "lifecycle",
@@ -4653,6 +4654,9 @@
             "type": "string"
           },
           "name": {
+            "type": "string"
+          },
+          "type": {
             "type": "string"
           },
           "host": {
@@ -5133,6 +5137,7 @@
         "required": [
           "vmid",
           "name",
+          "kind",
           "host",
           "status",
           "template",
@@ -5150,6 +5155,12 @@
             "format": "int32"
           },
           "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "kind": {
             "type": [
               "null",
               "string"

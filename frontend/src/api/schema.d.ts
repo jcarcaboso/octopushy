@@ -1064,6 +1064,7 @@ export interface components {
             id: string;
             address: string;
             name: string;
+            type: string;
             host: null | string;
             /** Format: int32 */
             vmid: null | number;
@@ -1173,6 +1174,7 @@ export interface components {
             /** Format: int32 */
             vmid: number;
             name: null | string;
+            kind: null | string;
             host: null | string;
             status: null | string;
             template: boolean;

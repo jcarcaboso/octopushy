@@ -23,13 +23,14 @@ import { formatBytes } from "../lib/format";
 import { formatUptime } from "../lib/time";
 
 function ObservedVm({ vm }: { vm: ObservedGuest | null }) {
-  if (!vm) return <p className="muted">Not observed: the installation has not reported a VM with this VMID.</p>;
+  if (!vm) return <p className="muted">Not observed: the installation has not reported a guest with this VMID.</p>;
   const memory = vm.maxMemoryBytes;
   const cpu = vm.maxCpu;
   return (
     <KeyValue
       items={[
         { term: "VMID", value: <span className="num">{vm.vmid}</span> },
+        { term: "Type", value: vm.kind === "lxc" ? "Container" : vm.kind === "qemu" ? "VM" : "—" },
         { term: "Name", value: <span className="mono">{vm.name ?? "—"}</span> },
         { term: "Host", value: <span className="mono">{vm.host ?? "—"}</span> },
         { term: "Power", value: vm.status ?? "—" },
@@ -140,14 +141,14 @@ export function GuestPage() {
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
         {data.missingSince && !data.retiredAt ? (
           <Callout kind="warning" title={<>Folder deleted <RelativeTime value={data.missingSince} /></>}>
-            Octopushy proposes removing the VM, using the guest's last applied
+            Octopushy proposes removing the guest, using its last applied
             definition and its approval and destructive policy. If no removal run is shown, use Plan removal. Restore the
             folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>
         ) : null}
         {data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
-            The VM was removed and verified absent.
+            The guest was removed and verified absent.
           </Callout>
         ) : null}
         <div className="columns columns--main-side">
@@ -178,10 +179,10 @@ export function GuestPage() {
             <Card title="Revisions">
               <Revisions guest={data} />
             </Card>
-            <Card title="Observed VM">
+            <Card title="Observed guest">
               <ObservedVm vm={guest.observed} />
             </Card>
-            <GuestDiskUsage key={guest.id} id={guest.id} usage={data.diskUsage} inactive={Boolean(data.retiredAt || data.missingSince)} />
+            <GuestDiskUsage key={guest.id} id={guest.id} usage={data.diskUsage} inactive={Boolean(data.retiredAt || data.missingSince)} container={guest.type === "container"} />
             <Card title="Outputs">
               {data.outputs === null || data.outputs === undefined ? (
                 <p className="muted">No outputs recorded yet. They appear after a successful apply.</p>

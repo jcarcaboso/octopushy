@@ -23,7 +23,7 @@ import { humanize, plural } from "../lib/format";
 
 function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
   return (
-    <Table label="Observed VMs" className="table--observed">
+    <Table label="Observed guests" className="table--observed">
       <thead>
         <tr>
           <th scope="col">VMID</th>
@@ -36,13 +36,19 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
       </thead>
       <tbody>
         {vms.length === 0 ? (
-          <EmptyRow colSpan={6}>{observed ? "Proxmox reported no VMs." : "Not observed yet. Observe the installation to list its VMs."}</EmptyRow>
+          <EmptyRow colSpan={6}>{observed ? "Proxmox reported no guests." : "Not observed yet. Observe the installation to list its guests."}</EmptyRow>
         ) : null}
         {vms.map((vm) => (
           <tr key={String(vm.vmid)}>
             <td className="num">{vm.vmid}</td>
             <td className="mono">
               {vm.name ?? <span className="muted">—</span>}
+              {vm.kind === "lxc" ? (
+                <>
+                  {" "}
+                  <Badge tone="neutral">Container</Badge>
+                </>
+              ) : null}
               {vm.template ? (
                 <>
                   {" "}
@@ -179,7 +185,7 @@ export function InstallationPage() {
               <GuestTable guests={installation.guests} label="Declared guests" />
             </Card>
             <Card
-              title="Observed VMs"
+              title="Observed guests"
               meta={unmanaged > 0 ? `${data.observedGuests.length} · ${plural(unmanaged, "unmanaged")}` : data.observedGuests.length || undefined}
               id="observed"
               flush

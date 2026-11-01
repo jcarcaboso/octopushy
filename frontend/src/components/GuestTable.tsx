@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import type { GuestSummary } from "../api/types";
-import { StatusBadge } from "./Badge";
+import { Badge, StatusBadge } from "./Badge";
 import { EmptyRow, Table } from "./Table";
 
 function Power({ guest }: { guest: GuestSummary }) {
@@ -37,6 +37,12 @@ export function GuestTable({ guests, label, emptyText = "No guests declared." }:
                 <Link to={`/guests/${guest.id}`} className="strong-link mono">
                   {guest.name}
                 </Link>
+                {guest.type === "container" ? (
+                  <>
+                    {" "}
+                    <Badge tone="neutral">Container</Badge>
+                  </>
+                ) : null}
                 {guest.lifecycle === "retired" && guest.status !== "retired" ? (
                   <span className="muted small"> · retiring</span>
                 ) : null}

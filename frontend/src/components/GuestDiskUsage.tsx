@@ -14,7 +14,7 @@ import { RelativeTime } from "./RelativeTime";
 import { ErrorMessage } from "./States";
 import { useNow } from "./useNow";
 
-export function GuestDiskUsage({ id, usage, inactive }: { id: string; usage: DiskUsage; inactive: boolean }) {
+export function GuestDiskUsage({ id, usage, inactive, container = false }: { id: string; usage: DiskUsage; inactive: boolean; container?: boolean }) {
   const now = useNow();
   const [configuring, setConfiguring] = useState(false);
   const [revoking, setRevoking] = useState(false);
@@ -106,7 +106,9 @@ export function GuestDiskUsage({ id, usage, inactive }: { id: string; usage: Dis
             }}>
               <p>
                 A one-shot Linux reporter measures the root filesystem and pushes used bytes over HTTPS.
-                This is the manual installation option; automatic provisioning does not need this form.
+                {container
+                  ? "Octopushy cannot install it on a container, because Proxmox has no guest exec for LXC, so this manual installation is the only option."
+                  : "This is the manual installation option; automatic provisioning does not need this form."}
               </p>
               {usage.enabled ? <Callout kind="warning" title="This replaces the current token">Reinstall the configuration on the VM after generating a new token.</Callout> : null}
               <div className="field">

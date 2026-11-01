@@ -37,18 +37,18 @@ function describe(step: Step, operation: string): string | null {
   switch (step.name) {
     case "plan":
       return operation === "retire"
-        ? "OpenTofu plans destroying the VM; the saved plan is what gets applied."
+        ? "OpenTofu plans destroying the guest; the saved plan is what gets applied."
         : "OpenTofu plans the change; the saved plan is what gets applied.";
     case "approval":
       return "The saved plan is approved by policy or by you.";
     case "unprotect":
-      return "Removes the VM's protection so it can be deleted.";
+      return "Removes the guest's protection so it can be deleted.";
     case "apply":
       return "OpenTofu applies exactly the approved plan.";
     case "verify":
-      return "Checks the VM through the Proxmox API.";
+      return "Checks the guest through the Proxmox API.";
     case "verify-absent":
-      return "Checks through the Proxmox API that the VM is gone.";
+      return "Checks through the Proxmox API that the guest is gone.";
     case "grow-root":
       return "Checks the supported NixOS layout and expands its root partition and ext4 filesystem online if needed.";
     case "verify-root":

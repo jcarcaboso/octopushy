@@ -31,6 +31,13 @@ describe("guest disk usage", () => {
     expect(screen.getByText(/not filesystem-available space/)).toBeInTheDocument();
   });
 
+  it("says the manual installation is the only option on a container", async () => {
+    renderAt(<GuestDiskUsage id="ct-1" usage={usage()} inactive={false} container />, { path: "/", route: "/" });
+    fireEvent.click(screen.getByRole("button", { name: "Configure reporter" }));
+    expect(await screen.findByText(/no guest exec for LXC/)).toBeInTheDocument();
+    expect(screen.queryByText(/automatic provisioning does not need this form/)).not.toBeInTheDocument();
+  });
+
   it("distinguishes no report, unknown capacity, and a real zero reading", () => {
     const view = show(usage({ usedBytes: null, receivedAt: null, staleAfter: null }));
     expect(screen.getByText("Waiting for the first report.")).toBeInTheDocument();

@@ -76,7 +76,7 @@ function InstallationCard({ installation, filter }: { installation: Installation
       {unmanaged > 0 ? (
         <p className="installation__unmanaged">
           <Link to={`/installations/${installation.id}#observed`}>
-            {plural(unmanaged, "unmanaged VM")}
+            {plural(unmanaged, "unmanaged guest")}
           </Link>{" "}
           <span className="muted">on this installation (shown, never touched).</span>
         </p>
