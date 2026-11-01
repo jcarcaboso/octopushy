@@ -10,8 +10,10 @@ import sys
 import tempfile
 import textwrap
 import time
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 RUNNER = Path(__file__).resolve().parents[2] / "agent/ansible/octopushy-ansible"
 KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----"
@@ -23,6 +25,41 @@ def load():
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+class Recap(unittest.TestCase):
+    def callback(self, path):
+        """The callback, with just enough of Ansible for it to import."""
+        ansible = types.ModuleType("ansible")
+        plugins = types.ModuleType("ansible.plugins")
+        callback = types.ModuleType("ansible.plugins.callback")
+        callback.CallbackBase = type("CallbackBase", (), {"__init__": lambda self: None})
+        modules = {"ansible": ansible, "ansible.plugins": plugins, "ansible.plugins.callback": callback}
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, {"OCTOPUSHY_RESULT_FILE": str(path)}):
+            spec = importlib.util.spec_from_file_location("octopushy_recap", RUNNER.with_name("octopushy_recap.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.CallbackModule()
+
+    def test_the_end_of_an_ssh_failure_is_kept_however_long_its_banner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recap.json"
+            callback = self.callback(path)
+            message = "@" * 5000 + "\nHost key verification failed."
+            callback.v2_runner_on_unreachable(types.SimpleNamespace(_result={"msg": message}, task_name="Gathering Facts"))
+            recap = json.loads(path.read_text())
+            self.assertTrue(recap["unreachable"].endswith("Host key verification failed."))
+            self.assertLessEqual(len(recap["unreachable"]), 1024)
+            self.assertFalse(recap["reached"])
+
+    def test_a_task_result_is_never_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recap.json"
+            callback = self.callback(path)
+            callback.v2_runner_on_failed(types.SimpleNamespace(_result={"msg": "s3cret"}, task_name="Install"))
+            text = path.read_text()
+            self.assertIn("Install", text)
+            self.assertNotIn("s3cret", text)
 
 
 class Mounts(unittest.TestCase):

@@ -882,8 +882,14 @@ fn unreachable_failure(prep: &Prepared, recap: &Recap, outputs: &Value) -> Failu
             outputs.clone(),
         );
     }
+    let reason = message
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("no reason given");
     Failure::with_outputs(
-        format!("could not reach the guest over SSH, so nothing ran: {message}"),
+        format!("could not reach the guest over SSH, so nothing ran: {reason}"),
         outputs.clone(),
     )
 }

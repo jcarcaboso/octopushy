@@ -61,9 +61,10 @@ class CallbackModule(CallbackBase):
             self.write()
 
     def v2_runner_on_unreachable(self, result):
-        # This message says how the connection failed; it comes from ssh, not from a module.
+        # This says how the connection failed; it comes from ssh, not from a module. ssh ends
+        # with the reason, after a banner that can be long, so the end is what is kept.
         message = result._result.get("msg") if hasattr(result, "_result") else None
-        self.result["unreachable"] = str(message or "")[:MAX_DETAIL]
+        self.result["unreachable"] = str(message or "")[-MAX_DETAIL:]
         self.result["unreachableTask"] = str(result.task_name)
         self.write()
 

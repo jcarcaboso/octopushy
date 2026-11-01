@@ -488,6 +488,27 @@ async fn a_refused_host_key_is_a_failure_that_says_so() {
 }
 
 #[tokio::test]
+async fn a_failed_login_gives_ssh_s_reason() {
+    let fx = Fixture::new();
+    let mut refused = recap(false, true);
+    refused["unreachable"] =
+        json!("a banner\r\nmore banner\r\nops@g: Permission denied (publickey).\r\n");
+    fx.set("recap.json", &refused.to_string());
+    fx.set("exit", "4");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { message, .. }) => {
+            assert!(
+                message.ends_with("Permission denied (publickey)."),
+                "{message}"
+            );
+            assert!(!message.contains("banner"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_declared_outcome_is_not_a_failure() {
     let fx = Fixture::new();
     let mut deferred = recap(true, true);
