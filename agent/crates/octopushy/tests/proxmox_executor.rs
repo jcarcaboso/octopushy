@@ -25,6 +25,24 @@ async fn mock(fixture: Fixture) -> RunningMock {
     .unwrap()
 }
 
+/// [`Fixture::example`] plus a running container and a container template.
+fn fixture_with_containers() -> Fixture {
+    let mut fixture = Fixture::example();
+    for guest in [
+        json!({
+            "vmid": 212, "name": "krb-dns-01", "node": "korriban", "kind": "lxc",
+            "protection": true, "ipv4": ["10.1.0.32"], "maxCpu": 2
+        }),
+        json!({
+            "vmid": 9001, "name": "ct-template", "node": "korriban", "kind": "lxc",
+            "status": "stopped", "template": true, "protection": true
+        }),
+    ] {
+        fixture.vms.push(serde_json::from_value(guest).unwrap());
+    }
+    fixture
+}
+
 fn connection(m: &RunningMock) -> Value {
     json!({ "endpoint": m.endpoint(), "verifyTls": false, "caCertificatePem": m.ca_pem() })
 }
@@ -131,6 +149,188 @@ async fn wrong_token_and_unreachable_api_fail() {
     assert!(failed(r).0.contains("unknown proxmox action"));
 }
 
+fn failing(outputs: &Value) -> Vec<&str> {
+    outputs["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["ok"] == false)
+        .map(|c| c["name"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn verify_guest_checks_a_container_through_the_lxc_api() {
+    let m = mock(fixture_with_containers()).await;
+    let t = m.token();
+    let input = |vmid: u32, node: &str, name: &str, ip: Value| {
+        json!({
+            "connection": connection(&m), "node": node, "vmid": vmid, "name": name,
+            "expectRunning": true, "expectIpv4": ip, "waitSeconds": 0, "guestKind": "lxc"
+        })
+    };
+
+    let (r, _) = exec(
+        "verify-guest",
+        input(212, "korriban", "krb-dns-01", json!("10.1.0.32")),
+        &t,
+    )
+    .await;
+    let out = r.unwrap().outputs;
+    assert_eq!(out["status"], "running");
+    assert_eq!(out["ipv4Addresses"], json!(["10.1.0.32"]));
+    assert_eq!(
+        out["checks"][0],
+        json!({ "name": "present", "ok": true, "detail": "CT 212 exists" })
+    );
+    assert_eq!(out["checks"][5]["detail"], "container reports 10.1.0.32");
+
+    // Wrong address, wrong node, wrong name: as strict as for a VM.
+    let (r, _) = exec(
+        "verify-guest",
+        input(212, "moraband", "other", json!("10.1.0.99")),
+        &t,
+    )
+    .await;
+    let (message, outputs) = failed(r);
+    assert_eq!(
+        failing(&outputs.unwrap()),
+        ["placement", "name", "address"],
+        "{message}"
+    );
+
+    // A template is not the guest, even when its name matches.
+    let (r, _) = exec(
+        "verify-guest",
+        input(9001, "korriban", "ct-template", Value::Null),
+        &t,
+    )
+    .await;
+    let (_, outputs) = failed(r);
+    assert!(failing(&outputs.unwrap()).contains(&"template"));
+
+    // A VM under the VMID is not the container, and a container is not the VM.
+    let (r, _) = exec(
+        "verify-guest",
+        input(210, "korriban", "krb-crt-01", Value::Null),
+        &t,
+    )
+    .await;
+    let (message, _) = failed(r);
+    assert!(message.contains("not a container"), "{message}");
+
+    let without_kind = json!({
+        "connection": connection(&m), "node": "korriban", "vmid": 212, "name": "krb-dns-01",
+        "expectRunning": true, "expectIpv4": "10.1.0.32", "waitSeconds": 0
+    });
+    let (r, _) = exec("verify-guest", without_kind, &t).await;
+    let (message, _) = failed(r);
+    assert!(message.contains("QEMU guest agent"), "{message}");
+
+    // An explicit qemu is what no kind at all means; anything else is refused.
+    let explicit = json!({
+        "connection": connection(&m), "node": "korriban", "vmid": 210, "name": "krb-crt-01",
+        "expectIpv4": "10.1.0.21", "waitSeconds": 0, "guestKind": "qemu"
+    });
+    assert!(exec("verify-guest", explicit, &t).await.0.is_ok());
+    let unknown = json!({
+        "connection": connection(&m), "node": "korriban", "vmid": 210, "guestKind": "openvz"
+    });
+    assert!(exec("verify-guest", unknown, &t).await.0.is_err());
+
+    // No address yet: it fails without guessing, and nothing about a guest agent.
+    let mut unaddressed = m.vm(212).unwrap();
+    unaddressed.ipv4 = None;
+    m.upsert_vm(unaddressed);
+    let (r, _) = exec(
+        "verify-guest",
+        input(212, "korriban", "krb-dns-01", Value::Null),
+        &t,
+    )
+    .await;
+    let (message, _) = failed(r);
+    assert!(
+        message.contains("the container reports no IPv4 address"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn set_protection_on_a_container_uses_the_lxc_api_and_refuses_the_wrong_guest() {
+    let m = mock(fixture_with_containers()).await;
+    let t = m.token();
+    let input = |vmid: u32, node: &str, name: &str| {
+        json!({
+            "connection": connection(&m), "node": node, "vmid": vmid, "name": name,
+            "protection": false, "guestKind": "lxc"
+        })
+    };
+
+    let (r, _) = exec("set-protection", input(212, "korriban", "krb-dns-01"), &t).await;
+    assert_eq!(
+        r.unwrap().outputs,
+        json!({ "absent": false, "previous": true, "protection": false })
+    );
+    assert!(!m.vm(212).unwrap().protection);
+    let mut protected = m.vm(212).unwrap();
+    protected.protection = true;
+    m.upsert_vm(protected);
+
+    let (r, _) = exec("set-protection", input(212, "moraband", "krb-dns-01"), &t).await;
+    assert!(failed(r).0.contains("is on korriban, not moraband"));
+    let (r, _) = exec("set-protection", input(212, "korriban", "other"), &t).await;
+    assert!(failed(r).0.contains("is named"));
+    let (r, _) = exec("set-protection", input(9001, "korriban", "ct-template"), &t).await;
+    assert!(failed(r).0.contains("is a template"));
+    let (r, _) = exec("set-protection", input(210, "korriban", "krb-crt-01"), &t).await;
+    assert!(failed(r).0.contains("not a container"));
+    assert!(m.vm(212).unwrap().protection);
+    assert!(m.vm(210).unwrap().protection);
+
+    // A container is still refused by a payload that means QEMU.
+    let (r, _) = exec(
+        "set-protection",
+        json!({ "connection": connection(&m), "node": "korriban", "vmid": 212, "protection": false }),
+        &t,
+    )
+    .await;
+    assert!(failed(r).0.contains("only QEMU VMs are supported"));
+
+    let (r, _) = exec("set-protection", input(4242, "korriban", "gone"), &t).await;
+    assert_eq!(r.unwrap().outputs["absent"], true);
+}
+
+#[tokio::test]
+async fn verify_absent_sees_a_container_under_the_vmid() {
+    let m = mock(fixture_with_containers()).await;
+    let input = json!({ "connection": connection(&m), "vmid": 212, "waitSeconds": 0 });
+    let (r, _) = exec("verify-absent", input.clone(), &m.token()).await;
+    assert!(failed(r).0.contains("still exists"));
+    m.remove_vm(212);
+    let (r, _) = exec("verify-absent", input, &m.token()).await;
+    assert_eq!(r.unwrap().outputs["present"], false);
+}
+
+#[tokio::test]
+async fn observe_reports_a_container_as_lxc() {
+    let m = mock(fixture_with_containers()).await;
+    let (r, _) = exec(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+    )
+    .await;
+    let out = r.unwrap().outputs;
+    let container = out["guests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["vmid"] == 212)
+        .unwrap();
+    assert_eq!(container["kind"], "lxc");
+    assert_eq!(container["name"], "krb-dns-01");
+}
+
 #[tokio::test]
 async fn verify_guest_checks() {
     let m = mock(Fixture::example()).await;
@@ -177,15 +377,7 @@ async fn verify_guest_checks() {
     )
     .await;
     let (message, outputs) = failed(r);
-    let outputs = outputs.unwrap();
-    let failing: Vec<&str> = outputs["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| c["ok"] == false)
-        .map(|c| c["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(failing, ["placement", "name", "address"]);
+    assert_eq!(failing(&outputs.unwrap()), ["placement", "name", "address"]);
     assert!(message.contains("not 10.1.0.99"), "{message}");
 
     // Guest agent not running.

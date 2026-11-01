@@ -76,7 +76,8 @@ pub struct FixtureVm {
     pub tags: Vec<String>,
     #[serde(default)]
     pub protection: bool,
-    /// Addresses the guest agent reports, or null when the agent is not running.
+    /// Addresses the guest agent reports, or null when the agent is not running. For
+    /// a container, the addresses of its interface.
     #[serde(default)]
     pub ipv4: Option<Vec<String>>,
     /// `qemu` or `lxc`.

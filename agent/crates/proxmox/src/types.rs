@@ -160,7 +160,8 @@ pub struct VmResource {
     pub kind: GuestKind,
 }
 
-/// `GET /nodes/{node}/qemu/{vmid}/status/current`.
+/// `GET /nodes/{node}/qemu/{vmid}/status/current`, and the same path under `lxc`
+/// for a container.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VmStatus {
     #[serde(default, deserialize_with = "de::string_or_empty")]
@@ -180,11 +181,12 @@ pub struct VmStatus {
     pub lock: Option<String>,
 }
 
-/// `GET /nodes/{node}/qemu/{vmid}/config`. Only a few keys are typed; the rest
-/// stay available in `other`.
+/// `GET /nodes/{node}/qemu/{vmid}/config`, and the same path under `lxc` for a
+/// container, which calls its name `hostname`. Only a few keys are typed; the
+/// rest stay available in `other`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VmConfig {
-    #[serde(default, deserialize_with = "de::opt_string")]
+    #[serde(default, alias = "hostname", deserialize_with = "de::opt_string")]
     pub name: Option<String>,
     #[serde(default, deserialize_with = "de::bool_or_false")]
     pub protection: bool,
@@ -261,21 +263,54 @@ pub struct GuestIpAddress {
     pub prefix: Option<u64>,
 }
 
+/// One interface from `GET /nodes/{node}/lxc/{vmid}/interfaces`, which Proxmox reads
+/// from the container's network namespace: no agent runs inside it. `ip-addresses`
+/// names IPv4 `inet`. Releases before it have only `inet`, one `address/prefix`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ContainerInterface {
+    #[serde(default, deserialize_with = "de::string_or_empty")]
+    pub name: String,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub inet: Option<String>,
+    #[serde(rename = "ip-addresses", default)]
+    pub ip_addresses: Vec<GuestIpAddress>,
+}
+
+fn add_ipv4(out: &mut Vec<Ipv4Addr>, address: &str) {
+    if let Ok(ip) = address.trim().parse::<Ipv4Addr>()
+        && !ip.is_loopback()
+        && !ip.is_unspecified()
+        && !out.contains(&ip)
+    {
+        out.push(ip);
+    }
+}
+
 /// The non-loopback IPv4 addresses of `interfaces`, in order, without duplicates.
 pub fn ipv4_addresses(interfaces: &[GuestInterface]) -> Vec<Ipv4Addr> {
     let mut out = Vec::new();
     for iface in interfaces {
         for addr in &iface.ip_addresses {
-            if !addr.kind.eq_ignore_ascii_case("ipv4") {
-                continue;
+            if addr.kind.eq_ignore_ascii_case("ipv4") {
+                add_ipv4(&mut out, &addr.address);
             }
-            if let Ok(ip) = addr.address.trim().parse::<Ipv4Addr>()
-                && !ip.is_loopback()
-                && !ip.is_unspecified()
-                && !out.contains(&ip)
-            {
-                out.push(ip);
+        }
+    }
+    out
+}
+
+/// The non-loopback IPv4 addresses of a container's `interfaces`, in order, without
+/// duplicates.
+pub fn container_ipv4_addresses(interfaces: &[ContainerInterface]) -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for iface in interfaces {
+        for addr in &iface.ip_addresses {
+            if addr.kind.eq_ignore_ascii_case("inet") {
+                add_ipv4(&mut out, &addr.address);
             }
+        }
+        if let Some(inet) = &iface.inet {
+            add_ipv4(&mut out, inet.split('/').next().unwrap_or(inet));
         }
     }
     out

@@ -1,10 +1,13 @@
 //! The client against the `mock-proxmox` server, over HTTPS with its CA as the
 //! only trust root.
 
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use mock_proxmox::{Fixture, Options};
-use octopushy_proxmox::{ApiToken, Client, ClientConfig, Error, GuestKind, Tls, ipv4_addresses};
+use octopushy_proxmox::{
+    ApiToken, Client, ClientConfig, Error, GuestKind, Tls, container_ipv4_addresses, ipv4_addresses,
+};
 
 async fn start_mock() -> mock_proxmox::RunningMock {
     mock_proxmox::start(
@@ -119,6 +122,73 @@ async fn vm_status_config_protection_and_guest_agent() {
     let perms = c.permissions(Some("/vms/210")).await.unwrap();
     assert!(perms.has("/vms/210", "VM.Audit"));
     assert!(!perms.has("/vms/211", "VM.Audit"));
+}
+
+#[tokio::test]
+async fn container_status_config_protection_and_interfaces() {
+    let mut fixture = Fixture::example();
+    fixture.vms.push(
+        serde_json::from_value(serde_json::json!({
+            "vmid": 212, "name": "krb-dns-01", "node": "korriban", "kind": "lxc",
+            "protection": true, "ipv4": ["10.1.0.32"], "maxCpu": 2, "maxMemoryBytes": 2147483648u64
+        }))
+        .unwrap(),
+    );
+    let mock = mock_proxmox::start(
+        fixture,
+        Options {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            tls: true,
+        },
+    )
+    .await
+    .unwrap();
+    let c = client(
+        &mock,
+        &mock.token(),
+        Tls::CustomCa(mock.ca_pem().unwrap().to_owned()),
+    );
+
+    assert_eq!(c.find_vm(212).await.unwrap().unwrap().kind, GuestKind::Lxc);
+    assert_eq!(
+        c.container_status("korriban", 212).await.unwrap().status,
+        "running"
+    );
+    let config = c.container_config("korriban", 212).await.unwrap();
+    assert!(config.protection);
+    assert_eq!(config.name.as_deref(), Some("krb-dns-01"));
+
+    c.set_container_protection("korriban", 212, false)
+        .await
+        .unwrap();
+    assert!(!mock.vm(212).unwrap().protection);
+
+    let interfaces = c.container_interfaces("korriban", 212).await.unwrap();
+    assert_eq!(
+        container_ipv4_addresses(&interfaces),
+        vec!["10.1.0.32".parse::<Ipv4Addr>().unwrap()]
+    );
+
+    // QEMU and LXC paths do not answer for each other's guests.
+    assert!(matches!(
+        c.vm_config("korriban", 212).await,
+        Err(Error::NotFound(_))
+    ));
+    match c.container_config("korriban", 210).await {
+        Err(Error::NotFound(m)) => assert!(m.contains("nodes/korriban/lxc/210.conf"), "{m}"),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // A container that is not running has no interfaces: Proxmox answers with null data.
+    let mut stopped = mock.vm(212).unwrap();
+    stopped.status = "stopped".into();
+    mock.upsert_vm(stopped);
+    assert!(
+        c.container_interfaces("korriban", 212)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

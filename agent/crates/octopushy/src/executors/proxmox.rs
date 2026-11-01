@@ -6,7 +6,8 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use octopushy_proxmox::{
-    ApiToken, Client, ClientConfig, Error as PveError, GuestKind, Tls, VmResource, ipv4_addresses,
+    ApiToken, Client, ClientConfig, Error as PveError, GuestKind, Tls, VmResource,
+    container_ipv4_addresses, ipv4_addresses,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,6 +29,32 @@ pub struct Connection {
 
 fn yes() -> bool {
     true
+}
+
+/// `guestKind` in `verify-guest` and `set-protection`: the API a guest answers under.
+/// Payloads that have none mean QEMU.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExpectedKind {
+    #[default]
+    Qemu,
+    Lxc,
+}
+
+impl ExpectedKind {
+    fn matches(self, kind: &GuestKind) -> bool {
+        matches!(
+            (self, kind),
+            (Self::Qemu, GuestKind::Qemu) | (Self::Lxc, GuestKind::Lxc)
+        )
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Qemu => "VM",
+            Self::Lxc => "CT",
+        }
+    }
 }
 
 impl Connection {
@@ -196,6 +223,8 @@ struct VerifyGuestInput {
     expect_ipv4: Option<String>,
     #[serde(default = "default_guest_wait")]
     wait_seconds: u64,
+    #[serde(default)]
+    guest_kind: ExpectedKind,
 }
 
 fn default_guest_wait() -> u64 {
@@ -259,13 +288,16 @@ async fn evaluate_guest(
     expect_ip: Option<Ipv4Addr>,
 ) -> Result<GuestReport, PveError> {
     let vmid = input.vmid;
+    let noun = input.guest_kind.noun();
     let mut report = GuestReport::default();
     let check = |name, ok, detail: String| Check { name, ok, detail };
 
     let Some(vm) = c.find_vm(vmid).await? else {
-        report
-            .checks
-            .push(check("present", false, format!("VM {vmid} does not exist")));
+        report.checks.push(check(
+            "present",
+            false,
+            format!("{noun} {vmid} does not exist"),
+        ));
         return Ok(report);
     };
     report.present = true;
@@ -273,16 +305,16 @@ async fn evaluate_guest(
     report.name = vm.name.clone();
     report
         .checks
-        .push(check("present", true, format!("VM {vmid} exists")));
+        .push(check("present", true, format!("{noun} {vmid} exists")));
 
     let placed = vm.node == input.node;
     report.checks.push(check(
         "placement",
         placed,
         if placed {
-            format!("VM {vmid} is on {}", vm.node)
+            format!("{noun} {vmid} is on {}", vm.node)
         } else {
-            format!("VM {vmid} is on {}, not {}", vm.node, input.node)
+            format!("{noun} {vmid} is on {}, not {}", vm.node, input.node)
         },
     ));
 
@@ -299,16 +331,31 @@ async fn evaluate_guest(
         ));
     }
 
-    let is_qemu = vm.kind == GuestKind::Qemu;
-    let status = if is_qemu {
-        match c.vm_status(&vm.node, vmid).await {
-            Ok(s) => s.status,
-            // It vanished between the two requests; the next round sees that.
-            Err(PveError::NotFound(_)) => vm.status.clone(),
-            Err(e) => return Err(e),
-        }
+    if input.guest_kind == ExpectedKind::Lxc {
+        report.checks.push(check(
+            "template",
+            !vm.template,
+            if vm.template {
+                format!("{noun} {vmid} is a template")
+            } else {
+                format!("{noun} {vmid} is not a template")
+            },
+        ));
+    }
+
+    let kind_matches = input.guest_kind.matches(&vm.kind);
+    let current = if !kind_matches {
+        Ok(vm.status.clone())
+    } else if input.guest_kind == ExpectedKind::Lxc {
+        c.container_status(&vm.node, vmid).await.map(|s| s.status)
     } else {
-        vm.status.clone()
+        c.vm_status(&vm.node, vmid).await.map(|s| s.status)
+    };
+    let status = match current {
+        Ok(status) => status,
+        // It vanished between the two requests; the next round sees that.
+        Err(PveError::NotFound(_)) => vm.status.clone(),
+        Err(e) => return Err(e),
     };
     report.status = Some(status.clone());
     let running = status == "running";
@@ -317,7 +364,7 @@ async fn evaluate_guest(
             "running",
             running,
             format!(
-                "VM {vmid} is {}",
+                "{noun} {vmid} is {}",
                 if status.is_empty() {
                     "in an unknown state"
                 } else {
@@ -327,41 +374,51 @@ async fn evaluate_guest(
         ));
     }
 
-    if !is_qemu {
+    if !kind_matches {
         report.checks.push(check(
             "address",
             false,
-            format!(
-                "VM {vmid} is a {} guest; addresses come from the QEMU guest agent",
-                vm.kind.as_str()
-            ),
+            match input.guest_kind {
+                ExpectedKind::Qemu => format!(
+                    "VM {vmid} is a {} guest; addresses come from the QEMU guest agent",
+                    vm.kind.as_str()
+                ),
+                ExpectedKind::Lxc => format!(
+                    "{noun} {vmid} is a {} guest, not a container",
+                    vm.kind.as_str()
+                ),
+            },
         ));
     } else if !running && !input.expect_running {
         report.checks.push(check(
             "address",
             true,
-            "not checked: the VM is not running and expectRunning is false".to_owned(),
+            format!("not checked: the {noun} is not running and expectRunning is false"),
         ));
+    } else if input.guest_kind == ExpectedKind::Lxc {
+        match c.container_interfaces(&vm.node, vmid).await {
+            Ok(ifaces) => {
+                report.ipv4 = container_ipv4_addresses(&ifaces);
+                report
+                    .checks
+                    .push(address_check(&report.ipv4, expect_ip, "container"));
+            }
+            Err(PveError::NotFound(_)) => {
+                report.checks.push(check(
+                    "address",
+                    false,
+                    format!("{noun} {vmid} disappeared"),
+                ));
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         match c.guest_network_interfaces(&vm.node, vmid).await {
             Ok(ifaces) => {
                 report.ipv4 = ipv4_addresses(&ifaces);
-                let list = report
-                    .ipv4
-                    .iter()
-                    .map(|ip| ip.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let (ok, detail) = match expect_ip {
-                    _ if report.ipv4.is_empty() => {
-                        (false, "the guest agent reports no IPv4 address".to_owned())
-                    }
-                    Some(want) if !report.ipv4.contains(&want) => {
-                        (false, format!("guest agent reports {list}, not {want}"))
-                    }
-                    _ => (true, format!("guest agent reports {list}")),
-                };
-                report.checks.push(check("address", ok, detail));
+                report
+                    .checks
+                    .push(address_check(&report.ipv4, expect_ip, "guest agent"));
             }
             Err(PveError::GuestAgentUnavailable(m)) => {
                 report.checks.push(check(
@@ -381,13 +438,34 @@ async fn evaluate_guest(
     Ok(report)
 }
 
+fn address_check(addresses: &[Ipv4Addr], expected: Option<Ipv4Addr>, reporter: &str) -> Check {
+    let list = addresses
+        .iter()
+        .map(|ip| ip.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (ok, detail) = match expected {
+        _ if addresses.is_empty() => (false, format!("the {reporter} reports no IPv4 address")),
+        Some(want) if !addresses.contains(&want) => {
+            (false, format!("{reporter} reports {list}, not {want}"))
+        }
+        _ => (true, format!("{reporter} reports {list}")),
+    };
+    Check {
+        name: "address",
+        ok,
+        detail,
+    }
+}
+
 async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let input: VerifyGuestInput = ctx.input()?;
     let expect_ip = input.expect_ipv4.as_deref().map(parse_ipv4).transpose()?;
     let c = client(cfg, ctx, &input.connection)?;
     require_audit(&c, input.vmid).await?;
+    let noun = input.guest_kind.noun();
     ctx.log.agent(format!(
-        "verifying VM {} on {} (up to {}s)",
+        "verifying {noun} {} on {} (up to {}s)",
         input.vmid, input.node, input.wait_seconds
     ));
 
@@ -428,7 +506,7 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         let now = Instant::now();
         if now >= deadline {
             let message = format!(
-                "VM {} did not pass verification within {}s: {last_summary}",
+                "{noun} {} did not pass verification within {}s: {last_summary}",
                 input.vmid, input.wait_seconds
             );
             return Err(match last_report {
@@ -502,14 +580,19 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         node: String,
         vmid: u32,
         protection: bool,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        guest_kind: ExpectedKind,
     }
     let input: Input = ctx.input()?;
     let c = client(cfg, ctx, &input.connection)?;
     require_audit(&c, input.vmid).await?;
+    let noun = input.guest_kind.noun();
 
     let Some(vm) = c.find_vm(input.vmid).await? else {
         ctx.log.agent(format!(
-            "VM {} does not exist; nothing to change",
+            "{noun} {} does not exist; nothing to change",
             input.vmid
         ));
         return Ok(Success::outputs(
@@ -518,19 +601,47 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     };
     if vm.node != input.node {
         return Err(Failure::msg(format!(
-            "VM {} is on {}, not {}; refusing to change its protection",
+            "{noun} {} is on {}, not {}; refusing to change its protection",
             input.vmid, vm.node, input.node
         )));
     }
-    if vm.kind != GuestKind::Qemu {
-        return Err(Failure::msg(format!(
-            "VM {} is a {} guest; only QEMU VMs are supported",
-            input.vmid,
-            vm.kind.as_str()
-        )));
+    if !input.guest_kind.matches(&vm.kind) {
+        return Err(Failure::msg(match input.guest_kind {
+            ExpectedKind::Qemu => format!(
+                "VM {} is a {} guest; only QEMU VMs are supported",
+                input.vmid,
+                vm.kind.as_str()
+            ),
+            ExpectedKind::Lxc => format!(
+                "{noun} {} is a {} guest, not a container; refusing to change its protection",
+                input.vmid,
+                vm.kind.as_str()
+            ),
+        }));
+    }
+    if input.guest_kind == ExpectedKind::Lxc {
+        if vm.template {
+            return Err(Failure::msg(format!(
+                "{noun} {} is a template; refusing to change its protection",
+                input.vmid
+            )));
+        }
+        if let Some(expected) = &input.name
+            && vm.name.as_ref() != Some(expected)
+        {
+            return Err(Failure::msg(format!(
+                "{noun} {} is named {:?}, not {expected:?}; refusing to change its protection",
+                input.vmid,
+                vm.name.as_deref().unwrap_or("")
+            )));
+        }
     }
 
-    let previous = match c.vm_config(&vm.node, input.vmid).await {
+    let read = async || match input.guest_kind {
+        ExpectedKind::Qemu => c.vm_config(&vm.node, input.vmid).await,
+        ExpectedKind::Lxc => c.container_config(&vm.node, input.vmid).await,
+    };
+    let previous = match read().await {
         Ok(config) => config.protection,
         Err(PveError::NotFound(_)) => {
             return Ok(Success::outputs(
@@ -542,25 +653,33 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let word = |b: bool| if b { "on" } else { "off" };
     if previous == input.protection {
         ctx.log.agent(format!(
-            "protection of VM {} is already {}",
+            "protection of {noun} {} is already {}",
             input.vmid,
             word(previous)
         ));
     } else {
         ctx.log.agent(format!(
-            "turning protection of VM {} {}",
+            "turning protection of {noun} {} {}",
             input.vmid,
             word(input.protection)
         ));
-        c.set_vm_protection(&vm.node, input.vmid, input.protection)
-            .await
-            .map_err(|e| protection_failure(e, input.vmid))?;
+        match input.guest_kind {
+            ExpectedKind::Qemu => {
+                c.set_vm_protection(&vm.node, input.vmid, input.protection)
+                    .await
+            }
+            ExpectedKind::Lxc => {
+                c.set_container_protection(&vm.node, input.vmid, input.protection)
+                    .await
+            }
+        }
+        .map_err(|e| protection_failure(e, noun, input.vmid))?;
     }
-    let now = c.vm_config(&vm.node, input.vmid).await?.protection;
+    let now = read().await?.protection;
     if now != input.protection {
         return Err(Failure::with_outputs(
             format!(
-                "Proxmox still reports protection {} for VM {}",
+                "Proxmox still reports protection {} for {noun} {}",
                 word(now),
                 input.vmid
             ),
@@ -575,12 +694,12 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 /// A failed `set-protection` request. A rejection (bad token, missing privilege, a client error)
 /// changed nothing. When the request may have reached Proxmox but the answer was lost or was a
 /// server-side error, the agent cannot tell whether the change was made.
-fn protection_failure(error: PveError, vmid: u32) -> Failure {
+fn protection_failure(error: PveError, noun: &str, vmid: u32) -> Failure {
     let may_have_applied = matches!(error, PveError::Transport(_) | PveError::Decode { .. })
         || matches!(error, PveError::Status { status, .. } if status >= 500);
     if may_have_applied {
         Failure::Uncertain(format!(
-            "{error}; Proxmox may have changed the protection of VM {vmid}"
+            "{error}; Proxmox may have changed the protection of {noun} {vmid}"
         ))
     } else {
         error.into()
@@ -609,7 +728,7 @@ mod tests {
         ];
         for e in uncertain {
             assert!(
-                matches!(protection_failure(e, 210), Failure::Uncertain(m) if m.contains("VM 210")),
+                matches!(protection_failure(e, "VM", 210), Failure::Uncertain(m) if m.contains("VM 210")),
             );
         }
         let rejected = [
@@ -621,7 +740,10 @@ mod tests {
             status(499),
         ];
         for e in rejected {
-            assert!(matches!(protection_failure(e, 210), Failure::Failed { .. }));
+            assert!(matches!(
+                protection_failure(e, "VM", 210),
+                Failure::Failed { .. }
+            ));
         }
     }
 }

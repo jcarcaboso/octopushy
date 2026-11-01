@@ -3,7 +3,7 @@
 //! Responses imitate Proxmox closely where clients depend on it: the `{"data":
 //! ...}` envelope, booleans as `0`/`1`, `;`-separated tags, and errors with the
 //! message in the HTTP status line (for example `500 QEMU guest agent is not
-//! running`).
+//! running`). A guest of kind `lxc` answers under `/lxc/`, the rest under `/qemu/`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,12 @@ pub fn router(state: SharedFixture) -> Router {
             "/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces",
             get(network_interfaces),
         )
+        .route("/nodes/{node}/lxc/{vmid}/status/current", get(ct_status))
+        .route(
+            "/nodes/{node}/lxc/{vmid}/config",
+            get(ct_config).put(put_ct_config),
+        )
+        .route("/nodes/{node}/lxc/{vmid}/interfaces", get(ct_interfaces))
         .route("/access/permissions", get(permissions))
         .fallback(|| async { pve_error(StatusCode::NOT_IMPLEMENTED, "Method not implemented") })
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
@@ -189,6 +195,21 @@ impl IntoResponse for PveError {
 
 /// Finds a QEMU VM on `node`, answering like Proxmox when it is not there.
 fn find_vm<'a>(f: &'a Fixture, node: &str, vmid: &str) -> Result<&'a FixtureVm, PveError> {
+    find_guest(f, node, vmid, "qemu", "qemu-server")
+}
+
+/// Finds a container on `node`, answering like Proxmox when it is not there.
+fn find_ct<'a>(f: &'a Fixture, node: &str, vmid: &str) -> Result<&'a FixtureVm, PveError> {
+    find_guest(f, node, vmid, "lxc", "lxc")
+}
+
+fn find_guest<'a>(
+    f: &'a Fixture,
+    node: &str,
+    vmid: &str,
+    kind: &str,
+    config_folder: &str,
+) -> Result<&'a FixtureVm, PveError> {
     if !f.nodes.iter().any(|n| n.name == node) {
         return Err(PveError(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -211,11 +232,13 @@ fn find_vm<'a>(f: &'a Fixture, node: &str, vmid: &str) -> Result<&'a FixtureVm, 
     })?;
     f.vms
         .iter()
-        .find(|vm| vm.vmid == id && vm.node == node && vm.kind == "qemu")
+        .find(|vm| vm.vmid == id && vm.node == node && vm.kind == kind)
         .ok_or_else(|| {
             PveError(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Configuration file 'nodes/{node}/qemu-server/{vmid}.conf' does not exist"),
+                format!(
+                    "Configuration file 'nodes/{node}/{config_folder}/{vmid}.conf' does not exist"
+                ),
             )
         })
 }
@@ -274,10 +297,16 @@ async fn put_vm_config(
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
     let mut f = state.lock().unwrap();
-    let vmid_num = match find_vm(&f, &node, &vmid) {
-        Ok(vm) => vm.vmid,
-        Err(e) => return e.into_response(),
-    };
+    match find_vm(&f, &node, &vmid) {
+        Ok(vm) => {
+            let vmid = vm.vmid;
+            put_protection(&mut f, vmid, &form)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+fn put_protection(f: &mut Fixture, vmid: u32, form: &HashMap<String, String>) -> Response {
     let protection = match form.get("protection").map(String::as_str) {
         Some("1") | Some("true") => Some(true),
         Some("0") | Some("false") => Some(false),
@@ -287,7 +316,7 @@ async fn put_vm_config(
         None => None,
     };
     if let Some(p) = protection
-        && let Some(vm) = f.vms.iter_mut().find(|v| v.vmid == vmid_num)
+        && let Some(vm) = f.vms.iter_mut().find(|v| v.vmid == vmid)
     {
         vm.protection = p;
     }
@@ -339,6 +368,113 @@ async fn network_interfaces(
             }
         ]
     }))
+}
+
+async fn ct_status(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    match find_ct(&f, &node, &vmid) {
+        Ok(vm) => {
+            let running = vm.status == "running";
+            let mut v = json!({
+                "vmid": vm.vmid, "name": vm.name, "status": vm.status, "type": "lxc",
+                "uptime": if running { vm.uptime_seconds } else { 0 },
+                "cpus": vm.max_cpu, "maxmem": vm.max_memory_bytes,
+            });
+            if vm.template {
+                v["template"] = json!(1);
+            }
+            data(v)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn ct_config(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    match find_ct(&f, &node, &vmid) {
+        Ok(vm) => {
+            let mut v = json!({
+                "hostname": vm.name, "cores": vm.max_cpu, "memory": vm.max_memory_bytes / 1024 / 1024,
+                "arch": "amd64", "ostype": "debian", "unprivileged": 1,
+                "digest": format!("{:040x}", vm.vmid),
+            });
+            if vm.protection {
+                v["protection"] = json!(1);
+            }
+            if vm.template {
+                v["template"] = json!(1);
+            }
+            if !vm.tags.is_empty() {
+                v["tags"] = Value::String(vm.tags.join(";"));
+            }
+            data(v)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn put_ct_config(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let mut f = state.lock().unwrap();
+    match find_ct(&f, &node, &vmid) {
+        Ok(vm) => {
+            let vmid = vm.vmid;
+            put_protection(&mut f, vmid, &form)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Answers like `PVE::LXC::get_interfaces`: read from the container's network namespace,
+/// with null data when it is not running. `family` is `inet`, not QEMU's `ipv4`.
+async fn ct_interfaces(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    let vm = match find_ct(&f, &node, &vmid) {
+        Ok(vm) => vm,
+        Err(e) => return e.into_response(),
+    };
+    if vm.status != "running" {
+        return data(Value::Null);
+    }
+    let mut addresses: Vec<Value> = vm
+        .ipv4
+        .iter()
+        .flatten()
+        .map(|ip| json!({ "ip-address-type": "inet", "ip-address": ip, "prefix": 24 }))
+        .collect();
+    addresses.push(
+        json!({ "ip-address-type": "inet6", "ip-address": "fe80::be24:11ff:fe00:2", "prefix": 64 }),
+    );
+    let mut eth0 = json!({
+        "name": "eth0", "hwaddr": "bc:24:11:00:00:02", "hardware-address": "bc:24:11:00:00:02",
+        "inet6": "fe80::be24:11ff:fe00:2/64", "ip-addresses": addresses,
+    });
+    if let Some(ip) = vm.ipv4.iter().flatten().last() {
+        eth0["inet"] = json!(format!("{ip}/24"));
+    }
+    data(json!([
+        {
+            "name": "lo", "hwaddr": "00:00:00:00:00:00", "hardware-address": "00:00:00:00:00:00",
+            "inet": "127.0.0.1/8", "inet6": "::1/128",
+            "ip-addresses": [
+                { "ip-address-type": "inet", "ip-address": "127.0.0.1", "prefix": 8 },
+                { "ip-address-type": "inet6", "ip-address": "::1", "prefix": 128 }
+            ]
+        },
+        eth0
+    ]))
 }
 
 async fn permissions(

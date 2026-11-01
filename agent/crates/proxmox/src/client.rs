@@ -256,12 +256,63 @@ impl Client {
 
     /// Sets the VM's `protection` option (`PUT /nodes/{node}/qemu/{vmid}/config`).
     pub async fn set_vm_protection(&self, node: &str, vmid: u32, protection: bool) -> Result<()> {
+        self.set_protection("qemu", node, vmid, protection).await
+    }
+
+    /// `GET /nodes/{node}/lxc/{vmid}/status/current`.
+    pub async fn container_status(&self, node: &str, vmid: u32) -> Result<VmStatus> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "status", "current"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// `GET /nodes/{node}/lxc/{vmid}/config`.
+    pub async fn container_config(&self, node: &str, vmid: u32) -> Result<VmConfig> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "config"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// Sets the container's `protection` option (`PUT /nodes/{node}/lxc/{vmid}/config`).
+    pub async fn set_container_protection(
+        &self,
+        node: &str,
+        vmid: u32,
+        protection: bool,
+    ) -> Result<()> {
+        self.set_protection("lxc", node, vmid, protection).await
+    }
+
+    /// The container's network interfaces (`GET /nodes/{node}/lxc/{vmid}/interfaces`).
+    /// A container that is not running has none; Proxmox answers with null data.
+    pub async fn container_interfaces(
+        &self,
+        node: &str,
+        vmid: u32,
+    ) -> Result<Vec<ContainerInterface>> {
+        let id = vmid.to_string();
+        let interfaces: Option<Vec<ContainerInterface>> = self
+            .get(&["nodes", node, "lxc", &id, "interfaces"], &[])
+            .await
+            .map_err(missing_vm)?;
+        Ok(interfaces.unwrap_or_default())
+    }
+
+    async fn set_protection(
+        &self,
+        guests: &str,
+        node: &str,
+        vmid: u32,
+        protection: bool,
+    ) -> Result<()> {
         let id = vmid.to_string();
         let value = if protection { "1" } else { "0" };
         let _: serde_json::Value = self
             .request(
                 Method::PUT,
-                &["nodes", node, "qemu", &id, "config"],
+                &["nodes", node, guests, &id, "config"],
                 &[],
                 Some(&[("protection", value)]),
                 None,

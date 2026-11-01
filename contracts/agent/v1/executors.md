@@ -35,7 +35,8 @@ Advertised separately from `proxmox`, so older workers cannot receive guest setu
 
 ### `install-disk-reporter`
 
-Runs after VM verification on provision runs only, including no-change plans.
+Runs after VM verification on provision runs only, including no-change plans. The
+controller never schedules it for a container: Proxmox has no guest exec for LXC.
 Takes the same `connection` object as `proxmox` and secrets `proxmox.token` and
 `disk-reporter.token` (64 hexadecimal characters). No repository bundle or plan
 artifact is needed.
@@ -134,6 +135,13 @@ standalone hosts and clusters alike. Proxmox hides VMs a token cannot audit, so 
 concluding that a VM is absent the executor checks that the token has `VM.Audit` on
 `/vms/<vmid>`, and fails if it does not.
 
+`verify-guest` and `set-protection` take an optional `guestKind`, `qemu` or `lxc`. It
+selects the API the guest answers under, `/nodes/{node}/qemu/...` or
+`/nodes/{node}/lxc/...`. Left out it means `qemu`, so older payloads behave as before, and
+the controller sets it only for containers. Any other value fails the attempt. A guest of
+the other kind under the VMID fails both actions. `observe` and `verify-absent` take no
+`guestKind`: `/cluster/resources` lists both kinds, each with its `kind`.
+
 ### `observe`
 
 Input: `{ "connection": { … } }`
@@ -171,20 +179,23 @@ Input:
 ```json
 {
   "connection": { … }, "node": "korriban", "vmid": 210, "name": "krb-crt-01",
-  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180
+  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180, "guestKind": "qemu"
 }
 ```
 
 `expectIpv4` is null for plain DHCP without a declared reservation; then any non-loopback IPv4 address
-reported by the QEMU guest agent satisfies the address check. The executor polls
+reported by the QEMU guest agent satisfies the address check. A container has no guest
+agent: its addresses come from `GET /nodes/{node}/lxc/{vmid}/interfaces`, which reads its
+network namespace and needs only `VM.Audit`. The executor polls
 every 5 seconds until every check passes or `waitSeconds` runs out.
 For DHCP with a declared `network.reservedAddress`, that address is required,
 just as the address without its prefix is required for static configuration.
 The reservation itself remains externally managed.
 
 Checks, in order: `present` (the VMID exists), `placement` (it is on `node`),
-`name`, `running` (when `expectRunning`), and `address` (the guest agent reports
-an IPv4 address, and `expectIpv4` is among them when set).
+`name`, for a container `template` (it is not one), `running` (when `expectRunning`),
+and `address` (the guest agent or the container reports an IPv4 address, and
+`expectIpv4` is among them when set). Details name a container `CT 312`.
 
 Output:
 
@@ -211,12 +222,14 @@ Output: `{ "present": false }`. Fails if the VMID still exists when the wait end
 
 ### `set-protection`
 
-Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "protection": false }`
+Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "protection": false }`,
+plus `guestKind` and, for a container, `name`.
 
 Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the VM's
-`protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`. Succeeds with
-`{ "absent": true, "previous": null, "protection": null }` when the VM does not exist,
-and fails when it is on another node than `node`.
+`protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`, or the same path under
+`lxc`. Succeeds with `{ "absent": true, "previous": null, "protection": null }` when the VM
+does not exist, and fails when it is on another node than `node`. It also fails for a
+container that is a template or whose name is not `name`.
 
 ## `opentofu`
 
@@ -238,7 +251,10 @@ Input (the same for both actions):
   },
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
-  "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR" },
+  "secretEnv": {
+    "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR",
+    "TF_VAR_admin_password": "recipe.TF_VAR_admin_password"
+  },
   "destroy": false,
   "retainNoChangesPlan": false
 }
@@ -263,6 +279,10 @@ Input (the same for both actions):
 - `env` and `secretEnv` are set for every OpenTofu command, together with
   `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, and `TF_PLUGIN_CACHE_DIR`. Secret values are
   passed through the environment, never as command-line arguments.
+- `TF_VAR_<name>` in `secretEnv`, with the secret `recipe.TF_VAR_<name>`, carries a guest's
+  `provision.secrets`. The controller sends these to `apply` only, so what `preview` saves
+  cannot hold them. The root declares each as a variable with a null default, because it
+  is unset while planning, and `ephemeral = true`, so the state does not hold it either.
 
 ### Built-in state
 
@@ -327,6 +347,8 @@ Output:
 `read` actions. A replace has the actions `["delete", "create"]` or
 `["create", "delete"]` and counts as `replace`, not as `delete`. The JSON plan itself
 is not logged or returned, because it can hold configuration values.
+
+`variables.guest.inputs` holds the guest's `provision.inputs`, when it has any.
 
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding

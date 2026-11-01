@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use octopushy_proxmox::{ApiToken, Client, ClientConfig, Error, Tls};
+use octopushy_proxmox::{ApiToken, Client, ClientConfig, Error, Tls, container_ipv4_addresses};
 use serde_json::json;
 use wiremock::matchers::{body_json, body_string, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -194,6 +194,51 @@ async fn puts_protection_as_a_form() {
         .set_vm_protection("korriban", 210, false)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn puts_container_protection_under_lxc() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api2/json/nodes/pve/lxc/312/config"))
+        .and(body_string("protection=0"))
+        .respond_with(data(serde_json::Value::Null))
+        .expect(1)
+        .mount(&server)
+        .await;
+    client(&server)
+        .set_container_protection("pve", 312, false)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn decodes_both_shapes_of_container_interfaces() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/pve/lxc/312/interfaces"))
+        .respond_with(data(json!([
+            { "name": "lo", "inet": "127.0.0.1/8" },
+            // Current releases: every address, with the family `ip` reports.
+            { "name": "eth0", "inet": "10.1.0.33/24", "ip-addresses": [
+                { "ip-address-type": "inet", "ip-address": "10.1.0.32", "prefix": 24 },
+                { "ip-address-type": "inet", "ip-address": "10.1.0.33", "prefix": 24 },
+                { "ip-address-type": "inet6", "ip-address": "fe80::1", "prefix": 64 }
+            ] },
+            // Older releases: only the last address of the interface.
+            { "name": "eth1", "hwaddr": "bc:24:11:00:00:03", "inet": "10.2.0.32/24" }
+        ])))
+        .mount(&server)
+        .await;
+    let interfaces = client(&server)
+        .container_interfaces("pve", 312)
+        .await
+        .unwrap();
+    let addresses: Vec<String> = container_ipv4_addresses(&interfaces)
+        .iter()
+        .map(|ip| ip.to_string())
+        .collect();
+    assert_eq!(addresses, ["10.1.0.32", "10.1.0.33", "10.2.0.32"]);
 }
 
 #[tokio::test]

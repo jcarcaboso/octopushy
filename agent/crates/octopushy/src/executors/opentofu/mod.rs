@@ -645,6 +645,7 @@ mod tests {
     fn env_names() {
         assert!(check_env_name("PROXMOX_VE_API_TOKEN").is_ok());
         assert!(check_env_name("PG_CONN_STR").is_ok());
+        assert!(check_env_name("TF_VAR_admin_password").is_ok());
         for bad in [
             "",
             "1X",
