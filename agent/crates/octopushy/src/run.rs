@@ -80,8 +80,10 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         .map(|&name| name.to_owned())
         .collect();
     let capabilities = tools_available
-        .then(|| state::CAPABILITY.to_owned())
+        .then_some([state::CAPABILITY, state::REVIEWED_CAPABILITY])
         .into_iter()
+        .flatten()
+        .map(str::to_owned)
         .collect();
     let exec = Arc::new(ExecutorConfig {
         runtime,

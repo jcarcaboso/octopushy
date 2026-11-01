@@ -148,7 +148,7 @@ async fn hello_only_advertises_usable_tool_capabilities() {
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
         let capabilities: &[&str] = if available {
-            &["opentofu-builtin-state"]
+            &["opentofu-builtin-state", "opentofu-reviewed"]
         } else {
             &[]
         };

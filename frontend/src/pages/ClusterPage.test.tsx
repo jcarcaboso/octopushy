@@ -173,7 +173,7 @@ describe("ClusterPage", () => {
     mockApi({ [`GET /api/clusters/${id}`]: () => detail(changed) });
     render();
     expect((await screen.findAllByText("Can log in as root:")).length).toBe(2);
-    expect(screen.getAllByText(/ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… attacker@evil/)).toHaveLength(2);
+    expect(screen.getAllByText(/ssh-ed25519 …AIAttackerKeyAttackerKey attacker@evil/)).toHaveLength(2);
     expect(screen.getAllByText(/credentials read-only proxmox\/ro, privileged proxmox\/priv/)).toHaveLength(2);
     expect(screen.getAllByText(/volumes \/etc\/dns = local-lvm:vm-9320-disk-0/)).toHaveLength(2);
     expect(screen.getAllByText(/bridges vmbr0/)).toHaveLength(2);

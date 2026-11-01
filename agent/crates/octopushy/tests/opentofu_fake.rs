@@ -944,7 +944,7 @@ fn protected_tar(extra: &[(&str, &[u8])]) -> Vec<u8> {
 /// What a run holding a protected secret is told: the folders its digest covers.
 fn reviewed(modules: &[&str]) -> Value {
     let mut request = input(false, json!({}));
-    request["reviewed"] = json!({ "modules": modules });
+    request["reviewed"] = json!({ "modules": modules, "noModules": modules.is_empty() });
     request
 }
 
@@ -974,6 +974,22 @@ fn init_line(fx: &Fixture) -> String {
         .find(|l| l.starts_with("init"))
         .unwrap_or_default()
         .to_owned()
+}
+
+#[tokio::test]
+async fn a_root_that_calls_a_module_of_its_own_still_gets_it_installed() {
+    let fx = Fixture::new();
+    let manifest = r#"{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"sub","Source":"./sub","Dir":"sub"}]}"#;
+    let mut request = reviewed(&[]);
+    request["reviewed"]["noModules"] = json!(false);
+    request["env"]["FAKE_MODULES"] = json!(manifest);
+    let r = preview(&fx, &request, protected_tar(&[])).await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let init = init_line(&fx);
+    assert!(init.contains("-lockfile=readonly"), "{init}");
+    assert!(!init.contains("-get=false"), "{init}");
 }
 
 #[tokio::test]

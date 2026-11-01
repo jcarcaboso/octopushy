@@ -140,10 +140,13 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
   );
 }
 
-/** A login key as an operator reads it: its type, the start of the key itself, and who it says it belongs to. */
+/**
+ * A login key as an operator reads it: its type, the end of the key itself, and who it says it
+ * belongs to. The end, because every key of a type starts alike and the comment says what it likes.
+ */
 function describeKey(key: string) {
   const [type, body = "", ...comment] = key.trim().split(/\s+/);
-  return `${type} ${body.length > 24 ? `${body.slice(0, 24)}…` : body} ${comment.join(" ")}`.trim();
+  return `${type} ${body.length > 24 ? `…${body.slice(-24)}` : body} ${comment.join(" ")}`.trim();
 }
 
 /** How a member would use the password beyond its code. Each of these is covered by trust. */

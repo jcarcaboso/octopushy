@@ -174,6 +174,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Verify = inputs.Recipe.Verify,
             CodeDigest = ReleaseBinding.Of(repository, guest).Digest,
             ReviewedPaths = inputs.Code.Paths,
+            CallsNoModules = inputs.Code.CallsNoModules,
             RootDiskBytes = inputs.Recipe.GuestFilesystem is null ? null
                 : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),
             DiskReporter = installReporter ? new DiskReporterContext(
@@ -348,6 +349,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 Canonical.Hash(variables["blocking"]!["lists"])),
             CodeDigest = inputs.CodeDigest,
             ReviewedPaths = inputs.Code.Paths,
+            CallsNoModules = inputs.Code.CallsNoModules,
             Secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.ClusterPassword] = cluster.Credentials.Key },
             RequestedSecretVersions = requestedVersions,
         };

@@ -16,7 +16,8 @@ and `heartbeat_seconds` 0 means 10. `Hello.running_attempt_ids` includes attempt
 agent accepted and is still holding for capacity. The agent sends `AttemptStarted`
 again on each new connection while an attempt runs. `Hello.capabilities` lists features
 that are not executors; a controller sends built-in OpenTofu state work only to agents
-that advertise `opentofu-builtin-state`, and older agents send no capabilities.
+that advertise `opentofu-builtin-state`, a run holding a protected secret only to agents that
+advertise `opentofu-reviewed`, and older agents send no capabilities.
 
 ## Enrollment token and CA
 
@@ -266,10 +267,10 @@ Input (the same for both actions):
 
 - `reviewed`, when present, marks a run that holds a protected secret, which receives only the
   folders its reviewed code covers. `reviewed.modules` lists the repository folders of the modules the
-  recipe lists. Absent, nothing changes. Present, the executor fails before running `tofu` unless the
+  recipe lists, and `reviewed.noModules` says the root is known to call none. Absent, nothing changes. Present, the executor fails before running `tofu` unless the
   root has a `.terraform.lock.hcl` as a regular file, and fails if the root or a listed module holds
-  `.terraform`. Every `tofu init` then gets `-lockfile=readonly`, and `-get=false` when `modules` is
-  empty. After the init, `.terraform/modules/modules.json` is read and the step fails if any module
+  `.terraform`. Every `tofu init` then gets `-lockfile=readonly`, and `-get=false` when `noModules` is
+  true. After the init, `.terraform/modules/modules.json` is read and the step fails if any module
   has a source that does not start with `./` or `../`, or a directory that is not inside the root or a
   listed module after resolving it. Nothing is planned or applied then.
 - `files_tar_gz` holds the repository snapshot (without `.git`); `root` is a
@@ -536,8 +537,9 @@ and a primary at the declared primary's address. Otherwise the join is a known f
 and saying that whatever answered for the primary's address may not have been the primary. The leg
 itself is not pinned, so a relay cannot be told from the primary.
 
-A member whose outcome is unknown does not stop the others from being handled: the members joined before
-it, and the approved prunes, are done, and the attempt then ends `uncertain` with the same output
+A member whose outcome is unknown ends the joining: members after it are not attempted, because the
+cluster's state is not known. The members joined before it, and the approved prunes, are done, and the
+attempt then ends `uncertain` with the same output
 (`joined`, `members`) as any other end, so that the controller keeps what it learned.
 
 ### `refresh-block-lists`

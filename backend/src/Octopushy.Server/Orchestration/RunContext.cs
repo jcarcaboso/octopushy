@@ -44,6 +44,9 @@ public sealed record RunContext
     /// <summary>The folders that digest covers: all a run holding a protected secret receives.</summary>
     public IReadOnlyList<string>? ReviewedPaths { get; init; }
 
+    /// <summary>Whether that code is known to call no module, so that none need be installed.</summary>
+    public bool CallsNoModules { get; init; }
+
     public DiskReporterContext? DiskReporter { get; init; }
 
     /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>

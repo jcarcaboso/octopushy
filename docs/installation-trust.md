@@ -77,7 +77,7 @@ interpolates, because a reader that guessed wrong about one would take code for 
 A hand-written reader is not what the password depends on. A run that holds a protected secret gets
 the folders its digest covers, with the module folders its recipe lists, and the agent then keeps
 OpenTofu to them: it needs a `.terraform.lock.hcl` and no `.terraform`, runs `tofu init` with
-`-lockfile=readonly` so a provider cannot be unpinned, and with `-get=false` when no module is listed
+`-lockfile=readonly` so a provider cannot be unpinned, and with `-get=false` when the root calls no module
 so that nothing is fetched. With listed modules it reads `.terraform/modules/modules.json` after the
 init and before the plan, and fails if a module is not local or resolves outside the listed folders.
 A listed module is installed by `init`, which runs with the run's environment, the password included;

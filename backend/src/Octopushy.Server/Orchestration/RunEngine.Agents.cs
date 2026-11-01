@@ -81,10 +81,12 @@ public sealed partial class RunEngine
                 }
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
                 var needsBuiltInState = attempt.Executor == "opentofu" && context.OpenTofu?.Backend.IsBuiltIn == true;
+                var needsReviewed = attempt.Executor == "opentofu" && await ProtectedSecrets.AnyAsync(db, context.Secrets.Values, cancellationToken);
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
                                 && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability))
+                                && (!needsReviewed || s.Capabilities.Contains(ProtectedSecrets.AgentCapability))
                                 && !managed.Any(w => w.AgentId == a.Id && (w.ReadyAt is null || context.AgentLabels.Count == 0
                                     || w.ResourceId == resourceId
                                     || context.Proxmox.Vmid == w.Vmid && context.Proxmox.Node == w.Host)))
@@ -94,7 +96,9 @@ public sealed partial class RunEngine
                 {
                     var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
                     waiting = matchingLabels
-                        ? needsBuiltInState
+                        ? needsReviewed
+                            ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels that enforces reviewed code."
+                            : needsBuiltInState
                             ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
                             : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
                         : attempt.RequiredLabels.Length == 0

@@ -390,8 +390,7 @@ public sealed partial class LabRepositoryLoader
         }
 
         // What receives a password is reviewed as a whole: a cluster's code does, and so does a
-        // recipe that takes a secret. A guest that binds one to another recipe is held to it when
-        // its run is built, whatever its recipe declares.
+        // recipe that takes a secret. A guest that binds one to another recipe gets the same review.
         if ((recipe.Operation == "cluster" || recipe.Secrets is { Count: > 0 }) && ReviewProblem(recipe) is { } problem)
         {
             Error(recipe.File, null, problem, address);
@@ -919,6 +918,11 @@ public sealed partial class LabRepositoryLoader
         foreach (var name in (recipe?.Secrets ?? []).Where(n => !guest.ProvisionSecrets.ContainsKey(n)))
         {
             Error(guest.File, LineOf(guest.File, "/provision"), $"The recipe '{guest.Recipe}' needs provision.secrets.{name}.", guest.Address);
+        }
+
+        if (recipe is { Secrets: null or { Count: 0 } } && guest.ProvisionSecrets.Count > 0 && ReviewProblem(recipe) is { } unreviewed)
+        {
+            Error(guest.File, LineOf(guest.File, "/provision/secrets"), unreviewed, guest.Address);
         }
 
         if (guest.IsContainer && guest.Json["setup"]?["diskReporter"] is not null)

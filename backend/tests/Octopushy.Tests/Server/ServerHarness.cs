@@ -249,7 +249,10 @@ public sealed class ServerHarness : IAsyncDisposable
             return RunContext.Parse(attempt.Context!);
         });
 
-    public Task<FakeAgent> ConnectAgentAsync(params string[] labels) => ConnectAsync(labels, [TofuStateStore.AgentCapability]);
+    public Task<FakeAgent> ConnectAgentAsync(params string[] labels) => ConnectAsync(labels, [TofuStateStore.AgentCapability, ProtectedSecrets.AgentCapability]);
+
+    /// <summary>An agent from before reviewed code, which would ignore being asked to keep to it.</summary>
+    public Task<FakeAgent> ConnectAgentWithoutReviewAsync(params string[] labels) => ConnectAsync(labels, [TofuStateStore.AgentCapability]);
 
     /// <summary>An agent from before built-in state.</summary>
     public Task<FakeAgent> ConnectOlderAgentAsync(params string[] labels) => ConnectAsync(labels, []);

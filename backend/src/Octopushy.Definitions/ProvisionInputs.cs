@@ -173,7 +173,7 @@ public sealed record ProvisionInputs(
 /// The code an operator reviews for a recipe: what <see cref="Digest"/> covers, and the only
 /// folders a run holding a protected secret receives, so nothing outside it can execute.
 /// </summary>
-public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths)
+public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths, bool CallsNoModules)
 {
     public static ReviewedCode Of(LabRepository repository, RecipeDefinition recipe)
     {
@@ -186,7 +186,15 @@ public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths)
             ["rootFiles"] = ProvisionInputs.TreeHash(repository.Root, recipe.Root),
             ["moduleFiles"] = new JsonArray(modules.Select(m => (JsonNode?)ProvisionInputs.TreeHash(repository.Root, m)).ToArray()),
         };
-        return new ReviewedCode(Canonical.Hash(hashed), [folder, recipe.Root, .. modules]);
+        return new ReviewedCode(Canonical.Hash(hashed), [folder, recipe.Root, .. modules], modules.Count == 0 && CallsNoModule(repository, recipe.Root));
+    }
+
+    /// <summary>Whether the root is known to call no module. A file that cannot be read with certainty may.</summary>
+    private static bool CallsNoModule(LabRepository repository, string root)
+    {
+        var path = Path.Combine(repository.Root, root);
+        return Directory.Exists(path) && Directory.EnumerateFiles(path, "*.tf").All(file =>
+            TofuSource.Blocks(File.ReadAllText(file)) is { } blocks && blocks.All(b => b.Type != "module"));
     }
 }
 

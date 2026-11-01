@@ -227,6 +227,15 @@ public class ContainerGuestTests
     }
 
     [Fact]
+    public void A_secret_bound_to_a_recipe_that_declares_none_gets_the_same_review()
+    {
+        using var test = Example();
+        File.Delete(Path.Combine(test.Root, "modules/opentofu/proxmox-lxc/.terraform.lock.hcl"));
+        Replace(test, Dns, "  recipe: technitium-lxc\n", "  recipe: proxmox-lxc\n");
+        Assert.Contains(Errors(test), e => e.Contains("no .terraform.lock.hcl"));
+    }
+
+    [Fact]
     public void A_recipe_can_require_its_secrets()
     {
         using var test = Example();

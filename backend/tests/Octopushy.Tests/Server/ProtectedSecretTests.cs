@@ -387,6 +387,27 @@ public class ProtectedSecretTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_protected_run_waits_for_an_agent_that_keeps_to_the_reviewed_code()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var server = await ServerHarness.StartAsync(postgres, repository);
+        await using var _ = server;
+        await server.SetSecretAsync(Key, Password);
+        var older = await server.ConnectAgentWithoutReviewAsync("home");
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        (await client.PostAsJsonAsync("/api/variables/protection", new { key = Key, @protected = true })).EnsureSuccessStatusCode();
+        await server.SyncAndTrustAsync(client);
+        await TrustCodeAsync(client);
+        await server.TickAsync();
+        await server.TickAsync();
+        Assert.DoesNotContain(older.TakeAssignments(), a => a.Executor == "opentofu");
+
+        var current = await server.ConnectAgentAsync("home");
+        await server.TickAsync();
+        Assert.NotEmpty(FilesOf(await current.NextAsync("preview")));
+    }
+
+    [Fact]
     public async Task A_run_with_a_protected_secret_receives_only_the_reviewed_files()
     {
         using var repository = ClusterDefinitionTests.Repository();

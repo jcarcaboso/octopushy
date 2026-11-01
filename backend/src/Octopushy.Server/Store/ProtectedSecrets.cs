@@ -11,6 +11,9 @@ namespace Octopushy.Server.Store;
 /// </summary>
 public static class ProtectedSecrets
 {
+    /// <summary>An agent that keeps OpenTofu to the reviewed code. Others ignore the field that asks it to.</summary>
+    public const string AgentCapability = "opentofu-reviewed";
+
     /// <summary>
     /// Why these keys may not go to this resource running this code in this way, or null. The
     /// digest is <see cref="Definitions.ReleaseBinding"/>'s, so a grant does not follow a key to

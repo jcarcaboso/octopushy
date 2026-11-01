@@ -226,7 +226,11 @@ public sealed class AssignmentBuilder(
             // installs no module that is not listed here, and no provider the lock file does not pin.
             // ReviewedCode.Of lists the recipe's folder, then its root, then its modules.
             if (reviewed)
-                input["reviewed"] = new JsonObject { ["modules"] = new JsonArray(context.ReviewedPaths!.Skip(2).Select(p => (JsonNode?)p).ToArray()) };
+                input["reviewed"] = new JsonObject
+                {
+                    ["modules"] = new JsonArray(context.ReviewedPaths!.Skip(2).Select(p => (JsonNode?)p).ToArray()),
+                    ["noModules"] = context.CallsNoModules,
+                };
             assignment.FilesTarGz = ByteString.CopyFrom(reviewed
                 ? await mirror.BundleAsync(run.Commit!, context.ReviewedPaths!, cancellationToken)
                 : await mirror.BundleAsync(run.Commit!, cancellationToken));

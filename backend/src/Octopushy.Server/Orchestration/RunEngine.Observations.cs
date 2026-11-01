@@ -27,8 +27,8 @@ public sealed partial class RunEngine
         // A cluster run looks at its members itself, and holds them while it does: a check beside
         // it would race it, and what it finds could come after the run's and replace it.
         if (installation.Kind == ResourceKinds.Cluster && context.Cluster?.Probe != true
-            && await db.Runs.AnyAsync(r => r.ResourceId == installation.Id && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
-                                           && r.Status != RunStatuses.Cancelled, cancellationToken))
+            && await db.Runs.AnyAsync(r => r.ResourceId == installation.Id
+                                           && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running), cancellationToken))
         {
             return;
         }
@@ -154,7 +154,7 @@ public sealed partial class RunEngine
         // What a cluster run found since this check began is newer than what this one found.
         if (installation.Kind == ResourceKinds.Cluster && attempt.Action != "certificates"
             && await db.Runs.AnyAsync(r => r.ResourceId == installation.Id
-                                           && (r.FinishedAt > attempt.CreatedAt || r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled),
+                                           && (r.FinishedAt > attempt.CreatedAt || r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running),
                 cancellationToken))
         {
             return;

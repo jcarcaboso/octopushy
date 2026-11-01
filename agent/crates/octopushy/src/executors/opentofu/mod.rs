@@ -73,9 +73,13 @@ struct Input {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Reviewed {
-    /// Repository folders of the modules the recipe lists. With none, nothing is installed.
+    /// Repository folders of the modules the recipe lists.
     #[serde(default)]
     modules: Vec<String>,
+    /// The root is known to call no module, so none need be installed. A module in the root
+    /// itself still has to be, and `-get=false` refuses that too.
+    #[serde(default)]
+    no_modules: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -578,12 +582,12 @@ impl Tofu<'_> {
     async fn init(&self, readonly_lock: bool) -> Result<(), Failure> {
         let mut args = strings(&["init", "-input=false", "-no-color"]);
         // A protected run takes only what was reviewed: providers as the lock file pins them,
-        // and no module that no one listed, which is not fetched at all when none is listed.
+        // and no module that no one listed, which is not fetched at all when the root calls none.
         let reviewed = self.prep.input.reviewed.as_ref();
         if readonly_lock || reviewed.is_some() {
             args.push("-lockfile=readonly".into());
         }
-        if reviewed.is_some_and(|r| r.modules.is_empty()) {
+        if reviewed.is_some_and(|r| r.no_modules) {
             args.push("-get=false".into());
         }
         args.extend(self.prep.backend_args.iter().cloned());

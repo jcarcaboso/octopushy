@@ -23,6 +23,9 @@ use crate::tls::sha256_hex;
 pub const BACKEND_TYPE: &str = "octopushy";
 /// What `Hello.capabilities` advertises.
 pub const CAPABILITY: &str = "opentofu-builtin-state";
+
+/// Advertises that this agent enforces `reviewed`, so a protected run can be given to it.
+pub const REVIEWED_CAPABILITY: &str = "opentofu-reviewed";
 pub const ARTIFACT: &str = "terraform.tfstate";
 /// Where OpenTofu saves the state, in its working directory, when it cannot write
 /// the backend file. It is then the only copy of what the apply did.
