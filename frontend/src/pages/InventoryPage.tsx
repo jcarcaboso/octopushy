@@ -86,7 +86,7 @@ function InstallationCard({ installation, filter }: { installation: Installation
 }
 
 function ClusterCard({ cluster }: { cluster: ClusterSummary }) {
-  const needsTrust = cluster.valid && (cluster.trust.untrusted.length > 0 || cluster.trust.codeChanged);
+  const needsTrust = cluster.valid && (cluster.trust.untrusted.length > 0 || cluster.trust.codeChanged || cluster.trust.certificates.some((c) => !c.trusted));
   return (
     <Card
       title={

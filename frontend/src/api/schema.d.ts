@@ -276,6 +276,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/clusters/{id}/certificates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["readClusterCertificates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/clusters/{id}/members/{guestId}/detached": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acknowledgeClusterDetach"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/guests/{id}/state": {
         parameters: {
             query?: never;
@@ -804,6 +836,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/variables/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["setVariableProtection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/variables/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["grantVariable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables/candidates": {
         parameters: {
             query?: never;
@@ -872,6 +936,9 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcknowledgeDetachRequest: {
+            note: string;
+        };
         AgentDto: {
             /** Format: uuid */
             id: string;
@@ -954,6 +1021,12 @@ export interface components {
             path: string;
             change: string;
         };
+        ClusterCertificateDto: {
+            endpoint: string;
+            sha256: null | string;
+            trustedSha256: null | string;
+            trusted: boolean;
+        };
         ClusterDetailDto: {
             cluster: components["schemas"]["ClusterSummaryDto"];
             definitionFile: null | string;
@@ -973,6 +1046,14 @@ export interface components {
             /** Format: date-time */
             missingSince: null | string;
             runs: components["schemas"]["RunSummaryDto"][];
+            leaving: components["schemas"]["ClusterLeavingDto"][];
+        };
+        ClusterLeavingDto: {
+            /** Format: uuid */
+            guestId: string;
+            guest: string;
+            address: string;
+            peerName: null | string;
         };
         ClusterMemberDto: {
             guest: string;
@@ -981,6 +1062,7 @@ export interface components {
             /** Format: uuid */
             guestId: null | string;
             guestStatus: null | string;
+            codeDigest?: null | string;
         };
         ClusterSummaryDto: {
             /** Format: uuid */
@@ -1014,6 +1096,8 @@ export interface components {
             /** Format: date-time */
             trustedAt: null | string;
             trustedBy: null | string;
+            certificates: components["schemas"]["ClusterCertificateDto"][];
+            passwordProtected: boolean;
         };
         CreatedOperatorToken: {
             /** Format: uuid */
@@ -1585,6 +1669,9 @@ export interface components {
         TrustClusterRequest: {
             endpoints: string[];
             codeDigest: string;
+            certificates?: null | {
+                [key: string]: string;
+            };
         };
         TrustInstallationRequest: {
             endpoints: string[];
@@ -1611,6 +1698,14 @@ export interface components {
             /** Format: int32 */
             latestVersion: number;
             revoked: boolean;
+            /** @default false */
+            protected: boolean;
+        };
+        VariableGrantRequest: {
+            key: string;
+            /** Format: uuid */
+            resourceId: string;
+            codeDigest: null | string;
         };
         VariablePromotionRequest: {
             key: string;
@@ -1619,6 +1714,10 @@ export interface components {
             /** Format: int32 */
             expectedCurrentVersion: number;
             verificationNote: string;
+        };
+        VariableProtectionRequest: {
+            key: string;
+            protected: boolean;
         };
         VariableRevocationRequest: {
             key: string;
@@ -1631,6 +1730,8 @@ export interface components {
             value: null | string;
             visibility: null | string;
             description: null | string;
+            /** @default false */
+            protected: boolean;
         };
         VariableVersionDto: {
             /** Format: int32 */
@@ -2582,6 +2683,105 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ClusterTrustDto"];
                 };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    readClusterCertificates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    acknowledgeClusterDetach: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                guestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcknowledgeDetachRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Bad Request */
             400: {
@@ -4819,6 +5019,104 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    setVariableProtection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariableProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    grantVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariableGrantRequest"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

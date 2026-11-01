@@ -23,6 +23,7 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
   const [value, setValue] = useState(existing && !wasSecret ? (existing.value ?? "") : "");
   const [visibility, setVisibility] = useState<"secret" | "plain">(existing?.visibility === "plain" ? "plain" : "secret");
   const [description, setDescription] = useState(existing?.description ?? "");
+  const [isProtected, setProtected] = useState(false);
 
   const keyValid = keyPattern.test(key.trim()) && !key.trim().startsWith("system/");
   const valueChanged = existing ? (wasSecret ? value !== "" : value !== (existing.value ?? "")) : true;
@@ -55,6 +56,7 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
         value: sendsValue ? value : null,
         visibility: sendsValue ? visibility : null,
         description: description.trim() || null,
+        protected: isProtected,
       },
       { onSuccess: close },
     );
@@ -151,6 +153,12 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
           ) : null}
         </fieldset>
         <div className="field">
+          {existing ? null : (
+            <label className="radio">
+              <input type="checkbox" checked={isProtected} onChange={(e) => setProtected(e.target.checked)} />
+              <span>Protected: only code an operator trusted for it can receive it, whatever the repository says</span>
+            </label>
+          )}
           <label htmlFor="variable-description">
             Description <span className="muted">(optional)</span>
           </label>

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClusterDetail, ClusterSummary, Inventory } from "../api/types";
@@ -26,7 +26,16 @@ function summary(overrides: Partial<ClusterSummary> = {}): ClusterSummary {
     ],
     activeRun: null,
     lastRun: null,
-    trust: { endpoints, untrusted: [], codeDigest: "digest", codeChanged: false, trustedAt: "2026-11-01T08:00:00Z", trustedBy: "ops" },
+    trust: {
+      endpoints,
+      untrusted: [],
+      codeDigest: "digest",
+      codeChanged: false,
+      trustedAt: "2026-11-01T08:00:00Z",
+      trustedBy: "ops",
+      certificates: endpoints.map((endpoint) => ({ endpoint, sha256: `sha-${endpoint}`, trustedSha256: `sha-${endpoint}`, trusted: true })),
+      passwordProtected: true,
+    },
     verifiedAt: null,
     observedAt: null,
     observeError: null,
@@ -52,6 +61,7 @@ function detail(cluster: ClusterSummary, verification: unknown = null): ClusterD
     verification: verification as ClusterDetail["verification"],
     missingSince: null,
     runs: [],
+    leaving: [],
   };
 }
 
@@ -73,18 +83,22 @@ describe("ClusterPage", () => {
     });
     render();
     expect(await screen.findByText("New member endpoint")).toBeInTheDocument();
-    expect(screen.getByText(endpoints[1]!)).toBeInTheDocument();
+    expect(screen.getAllByText(endpoints[1]!).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("button", { name: "Trust cluster" }));
     const request = requests.find((r) => r.path.endsWith("/trust"));
-    expect(request?.body).toEqual({ endpoints, codeDigest: "digest" });
-    expect(await screen.findByText("Trusted")).toBeInTheDocument();
+    expect(request?.body).toEqual({
+      endpoints,
+      codeDigest: "digest",
+      certificates: Object.fromEntries(endpoints.map((e) => [e, `sha-${e}`])),
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Trust cluster" })).not.toBeInTheDocument());
   });
 
   it("explains why changed recipe code needs trust", async () => {
     mockApi({ [`GET /api/clusters/${id}`]: () => detail(summary({ trust: { ...summary().trust, codeChanged: true } })) });
     render();
     expect(await screen.findByText("Recipe code changed")).toBeInTheDocument();
-    expect(screen.getByText(/before anyone approves a plan/)).toBeInTheDocument();
+    expect(screen.getByText(/before any person approves it/)).toBeInTheDocument();
   });
 
   it("shows a refused trust", async () => {
@@ -118,6 +132,45 @@ describe("ClusterPage", () => {
     expect(screen.getByText("it reports clusterInitialized=false")).toBeInTheDocument();
     expect(screen.getByText("call deleteSecondary, then Plan now")).toBeInTheDocument();
     expect(screen.getByText("Passed")).toBeInTheDocument();
+  });
+
+  it("shows no member as passed when the latest check failed without saying why", async () => {
+    mockApi({
+      [`GET /api/clusters/${id}`]: () =>
+        detail(summary({ status: "verification-failed", observeError: "the agent lost its route" }), { ok: false, error: "the agent lost its route", members: [] }),
+    });
+    render();
+    expect((await screen.findAllByText("Unknown: the last check failed")).length).toBe(2);
+    expect(screen.queryByText("Passed")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Verification failed").length).toBeGreaterThan(0);
+  });
+
+  it("warns plainly when a member presents another certificate", async () => {
+    const certificates = summary().trust.certificates.map((c, i) => (i === 1 ? { ...c, sha256: "sha-new", trusted: false } : c));
+    mockApi({ [`GET /api/clusters/${id}`]: () => detail(summary({ trust: { ...summary().trust, certificates } })) });
+    render();
+    expect(await screen.findByText("A member presents another certificate")).toBeInTheDocument();
+    expect(screen.getByText("sha-new")).toBeInTheDocument();
+    expect(screen.getByText(/something else is answering at its address/)).toBeInTheDocument();
+  });
+
+  it("says when the password is not protected", async () => {
+    mockApi({ [`GET /api/clusters/${id}`]: () => detail(summary({ trust: { ...summary().trust, codeChanged: true, passwordProtected: false } })) });
+    render();
+    expect(await screen.findByText(/Mark it protected under Variables/)).toBeInTheDocument();
+  });
+
+  it("asks how a guest left before acknowledging it", async () => {
+    const { requests } = mockApi({
+      [`GET /api/clusters/${id}`]: () => ({ ...detail(summary()), leaving: [{ guestId: "g2", guest: "home/moraband/mrb-dns-01", address: "10.1.0.42", peerName: null }] }),
+      [`POST /api/clusters/${id}/members/g2/detached`]: () => undefined,
+    });
+    render();
+    const button = await screen.findByRole("button", { name: "It has left" });
+    expect(button).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("How it left"), "by hand");
+    await userEvent.click(button);
+    await waitFor(() => expect(requests.find((r) => r.path.endsWith("/detached"))?.body).toEqual({ note: "by hand" }));
   });
 
   it("cannot plan a cluster whose definition was deleted", async () => {

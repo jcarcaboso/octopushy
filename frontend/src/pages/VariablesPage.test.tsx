@@ -12,6 +12,7 @@ function entry(overrides: Partial<Variable> = {}): Variable {
   return {
     key,
     visibility: "secret",
+    protected: false,
     description: "API credential",
     version: 3,
     latestVersion: 4,
@@ -80,7 +81,7 @@ describe("VariablesPage credential lifecycle", () => {
     expect(requests.find((request) => request.path.endsWith("/candidates"))?.body).toEqual({
       key,
       value: "new-private-credential",
-      description: "API credential",
+      description: "API credential", protected: false,
     });
     expect(requests.some((request) => request.method === "PUT")).toBe(false);
     expect(document.body).not.toHaveTextContent("new-private-credential");
@@ -104,7 +105,7 @@ describe("VariablesPage credential lifecycle", () => {
       key,
       value: null,
       visibility: null,
-      description: "Updated description",
+      description: "Updated description", protected: false,
     });
     expect(requests.some((request) => request.path.endsWith("/candidates"))).toBe(false);
   });
@@ -126,7 +127,7 @@ describe("VariablesPage credential lifecycle", () => {
       key,
       value: "initial-private-credential",
       visibility: "secret",
-      description: null,
+      description: null, protected: false,
     });
     await waitFor(() => expect(screen.queryByDisplayValue("initial-private-credential")).not.toBeInTheDocument());
   });

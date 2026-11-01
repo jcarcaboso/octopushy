@@ -529,6 +529,37 @@ export function useTrustInstallation() {
   });
 }
 
+export function useReadClusterCertificates() {
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: (id: string) => unwrap(api.POST("/api/clusters/{id}/certificates", { params: { path: { id } } })),
+    onSuccess: () => refreshRuns(),
+  });
+}
+
+export function useAcknowledgeDetach() {
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, guestId, note }: { id: string; guestId: string; note: string }) =>
+      unwrap(api.POST("/api/clusters/{id}/members/{guestId}/detached", { params: { path: { id, guestId } }, body: { note } })),
+    onSuccess: () => refreshRuns(),
+  });
+}
+
+export function useSetVariableProtection() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (body: { key: string; protected: boolean }) => unwrap(api.POST("/api/variables/protection", { body })),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: keys.variables });
+      void client.invalidateQueries({ queryKey: ["run"] });
+    },
+  });
+}
+
 export function useTrustCluster() {
   const refreshRuns = useRefreshRuns();
   return useMutation({

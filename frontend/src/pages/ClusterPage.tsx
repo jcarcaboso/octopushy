@@ -1,7 +1,8 @@
-import { Play, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Play, RefreshCw, ShieldCheck } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { isNotFound } from "../api/client";
-import { useCluster, usePlanCluster, useTrustCluster } from "../api/queries";
+import { useAcknowledgeDetach, useCluster, usePlanCluster, useReadClusterCertificates, useTrustCluster } from "../api/queries";
 import type { ClusterDetail, ClusterSummary } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
@@ -19,28 +20,60 @@ import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { humanize } from "../lib/format";
 
-/** Asks for trust while the admin password would go somewhere new, or to code nobody has seen. */
+function shortened(digest: string | null | undefined) {
+  return digest ? `${digest.slice(0, 16)}…` : "—";
+}
+
+/** Asks for trust while the admin password would go somewhere new, to code nobody saw, or to an unknown certificate. */
 function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
   const trust = useTrustCluster();
-  const { endpoints, untrusted, codeChanged, codeDigest, trustedAt } = cluster.trust;
-  if (!cluster.valid || !codeDigest || (untrusted.length === 0 && !codeChanged)) return null;
+  const read = useReadClusterCertificates();
+  const { endpoints, untrusted, codeChanged, codeDigest, trustedAt, certificates, passwordProtected } = cluster.trust;
+  const unseen = certificates.filter((c) => !c.sha256);
+  const changed = certificates.filter((c) => c.sha256 && !c.trusted);
+  const needed = !trustedAt || untrusted.length > 0 || codeChanged || changed.length > 0;
+  if (!cluster.valid || !codeDigest || !(needed || unseen.length > 0)) return null;
+  const replaced = changed.filter((c) => c.trustedSha256);
+  const shown = Object.fromEntries(certificates.filter((c) => c.sha256).map((c) => [c.endpoint, c.sha256 as string]));
   return (
     <div id="trust">
       <Callout
-        kind="warning"
-        title={!trustedAt ? "New application cluster" : untrusted.length > 0 ? "New member endpoint" : "Recipe code changed"}
+        kind={replaced.length > 0 ? "danger" : "warning"}
+        title={
+          replaced.length > 0
+            ? "A member presents another certificate"
+            : !trustedAt
+              ? "New application cluster"
+              : untrusted.length > 0
+                ? "New member endpoint"
+                : codeChanged
+                  ? "Recipe code changed"
+                  : "Certificates to trust"
+        }
         actions={
-          <button
-            type="button"
-            className="button button--primary"
-            disabled={trust.isPending}
-            onClick={() => trust.mutate({ id: cluster.id, endpoints, codeDigest })}
-          >
-            <ShieldCheck size={15} aria-hidden="true" />
-            {trust.isPending ? "Trusting…" : "Trust cluster"}
-          </button>
+          <>
+            <button type="button" className="button" disabled={read.isPending} onClick={() => read.mutate(cluster.id)}>
+              <RefreshCw size={15} aria-hidden="true" />
+              {read.isPending ? "Reading…" : "Read certificates"}
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={trust.isPending}
+              onClick={() => trust.mutate({ id: cluster.id, endpoints, codeDigest, certificates: shown })}
+            >
+              <ShieldCheck size={15} aria-hidden="true" />
+              {trust.isPending ? "Trusting…" : "Trust cluster"}
+            </button>
+          </>
         }
       >
+        {replaced.length > 0 ? (
+          <p>
+            Either the member was rebuilt or something else is answering at its address. It receives nothing until you trust this. Compare
+            the fingerprint with the member's own, from the Proxmox host, as docs/technitium-lxc.md describes.
+          </p>
+        ) : null}
         {untrusted.length > 0 ? (
           <p>
             The cluster's admin password is sent only to trusted endpoints. Runs wait until you trust{" "}
@@ -54,19 +87,99 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
           </p>
         ) : null}
         {codeChanged || !trustedAt ? (
-          <p>
-            The recipe's OpenTofu code runs with the admin password before anyone approves a plan, so trust covers it too. Review it
-            first: <span className="mono break">{codeDigest}</span>
+          <>
+            <p>
+              The password reaches this code, in a plan or an apply, before any person approves it, so trust covers it. Review the recipes
+              and roots in the repository first; this is what you would be trusting.
+            </p>
+            <ul className="small">
+              <li>
+                All of it: <span className="mono break">{codeDigest}</span>
+              </li>
+              {cluster.members.map((member) => (
+                <li key={member.guest}>
+                  <span className="mono">{member.guest}</span>: <span className="mono">{shortened(member.codeDigest)}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+        <Table label="Member certificates">
+          <thead>
+            <tr>
+              <th scope="col">Endpoint</th>
+              <th scope="col">Presents (SHA-256)</th>
+              <th scope="col">Trusted</th>
+            </tr>
+          </thead>
+          <tbody>
+            {certificates.map((c) => (
+              <tr key={c.endpoint}>
+                <td className="mono">{c.endpoint}</td>
+                <td className="mono break">{c.sha256 ?? <span className="muted">Not read yet</span>}</td>
+                <td>{c.trusted ? <Badge tone="success">Trusted</Badge> : <Badge tone="warning">Not trusted</Badge>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+        {unseen.length > 0 ? (
+          <p className="small muted">
+            A member's certificate can be read once it is installed. Trust the code now so that the guests can install, and come back to trust
+            their certificates.
           </p>
         ) : null}
-        <ErrorMessage error={trust.error} />
+        {passwordProtected ? null : (
+          <p className="small">
+            The password's store entry is not protected, so a commit could reach it some other way. Mark it protected under Variables.
+          </p>
+        )}
+        <ErrorMessage error={trust.error ?? read.error} />
       </Callout>
     </div>
   );
 }
 
+function Leaving({ cluster, leaving }: { cluster: ClusterSummary; leaving: ClusterDetail["leaving"] }) {
+  const acknowledge = useAcknowledgeDetach();
+  const [note, setNote] = useState("");
+  if (leaving.length === 0) return null;
+  return (
+    <Callout kind="warning" title="Guests still joined that the cluster no longer lists">
+      <p>
+        Each can be retired once it has left. A cluster run takes out a member removed from <span className="mono">members</span>. If this one
+        left another way, or the cluster's definition is gone, say so here; that is your statement, and nothing checks it.
+      </p>
+      <label>
+        How it left{" "}
+        <input value={note} onChange={(e) => setNote(e.target.value)} aria-label="How it left" />
+      </label>
+      <ul>
+        {leaving.map((guest) => (
+          <li key={guest.guestId}>
+            <span className="mono">{guest.guest}</span> ({guest.address}){" "}
+            <button
+              type="button"
+              className="button button--small"
+              disabled={acknowledge.isPending || note.trim() === ""}
+              onClick={() => acknowledge.mutate({ id: cluster.id, guestId: guest.guestId, note })}
+            >
+              It has left
+            </button>
+          </li>
+        ))}
+      </ul>
+      <ErrorMessage error={acknowledge.error} />
+    </Callout>
+  );
+}
+
 function Members({ cluster, verification }: { cluster: ClusterSummary; verification: ClusterDetail["verification"] }) {
-  const reports = (verification as { members?: { guest: string; ok: boolean; version?: string; recovery?: string; checks?: { name: string; ok: boolean; detail: string }[] }[] } | null)?.members ?? [];
+  const latest = verification as {
+    ok?: boolean;
+    error?: string;
+    members?: { guest: string; ok: boolean; version?: string; recovery?: string; checks?: { name: string; ok: boolean; detail: string }[] }[];
+  } | null;
+  const reports = latest?.members ?? [];
   return (
     <Table label="Members">
       <thead>
@@ -93,7 +206,11 @@ function Members({ cluster, verification }: { cluster: ClusterSummary; verificat
               <td>{member.guestStatus ? <StatusBadge status={member.guestStatus} /> : <span className="muted">—</span>}</td>
               <td>
                 {!report ? (
-                  <span className="muted">Not checked yet</span>
+                  latest?.ok === false ? (
+                    <Badge tone="warning">Unknown: the last check failed</Badge>
+                  ) : (
+                    <span className="muted">Not checked yet</span>
+                  )
                 ) : report.ok ? (
                   <Badge tone="success">Passed</Badge>
                 ) : (
@@ -158,6 +275,7 @@ export function ClusterPage() {
       />
       <div className="stack stack--large">
         <TrustCallout cluster={cluster} />
+        <Leaving cluster={cluster} leaving={data.leaving} />
         <ErrorMessage error={plan.error} />
         {cluster.observeError ? (
           <Callout kind="danger" title="The last background check failed">
@@ -194,7 +312,7 @@ export function ClusterPage() {
                     term: "Trust",
                     value: cluster.trust.trustedAt ? (
                       <>
-                        {cluster.trust.untrusted.length > 0 || cluster.trust.codeChanged ? (
+                        {cluster.trust.untrusted.length > 0 || cluster.trust.codeChanged || cluster.trust.certificates.some((c) => !c.trusted) ? (
                           <Badge tone="warning">Changed</Badge>
                         ) : (
                           <Badge tone="success">Trusted</Badge>

@@ -1,6 +1,6 @@
 import { History, KeyRound, Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { useDeleteVariable, useVariables } from "../api/queries";
+import { useDeleteVariable, useSetVariableProtection, useVariables } from "../api/queries";
 import type { Variable } from "../api/types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -29,6 +29,7 @@ function UsedBy({ usedBy }: { usedBy: string[] }) {
 
 export function VariablesPage() {
   const { data, error, isPending } = useVariables();
+  const protection = useSetVariableProtection();
   const remove = useDeleteVariable();
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<Variable | null>(null);
@@ -123,7 +124,8 @@ export function VariablesPage() {
                           </Badge>
                         ) : (
                           <Badge tone="neutral">Plain</Badge>
-                        )}
+                        )}{" "}
+                        {v.protected ? <Badge tone="warning">Protected</Badge> : null}
                       </td>
                       <td>{v.description ?? <span className="muted">—</span>}</td>
                       <td className="cell-value">
@@ -151,6 +153,15 @@ export function VariablesPage() {
                           <button type="button" className="button button--small" onClick={() => setEditing({ existing: v })} aria-label={`Update ${v.key}`}>
                             <Pencil size={14} aria-hidden="true" />
                             Update
+                          </button>
+                          <button
+                            type="button"
+                            className="button button--small"
+                            disabled={protection.isPending}
+                            onClick={() => protection.mutate({ key: v.key, protected: !v.protected })}
+                            aria-label={`${v.protected ? "Stop protecting" : "Protect"} ${v.key}`}
+                          >
+                            {v.protected ? "Unprotect" : "Protect"}
                           </button>
                           {v.visibility === "secret" ? (
                             <button type="button" className="button button--small" onClick={() => setManaging(v.key)} aria-label={`Versions of ${v.key}`}>

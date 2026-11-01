@@ -32,7 +32,8 @@ const stepNames: Record<string, string> = {
   "drain-worker": "Drain the worker",
   "revoke-worker": "Remove the worker's enrollment",
   "inspect-cluster": "Inspect members",
-  "reconcile-cluster": "Join and remove members",
+  "detach-members": "Take out removed members",
+  "reconcile-cluster": "Join members",
   "refresh-block-lists": "Download block lists",
   "verify-cluster": "Verify every member",
 };
@@ -71,10 +72,12 @@ function describe(step: Step, operation: string): string | null {
       return "Once the VM is verified absent, removes the worker's enrollment; its identity stays in history.";
     case "inspect-cluster":
       return "Asks every member what it reports, so that the plan shows a member out of the cluster or an entry nobody declared.";
+    case "detach-members":
+      return "Takes out exactly the members the approved plan removes, before the apply forgets them, so that a failure here can be tried again.";
     case "reconcile-cluster":
-      return "Joins and removes exactly the members the approved plan changed. The admin password stays out of OpenTofu.";
+      return "Joins the members the approved plan added and removes entries nobody declared. The admin password stays out of OpenTofu.";
     case "refresh-block-lists":
-      return "A new list URL is not enforced until the lists are downloaded.";
+      return "A new list URL is not enforced until the lists are downloaded. A download that failed is tried again by the next run.";
     case "verify-cluster":
       return "Connects to every member directly and asks each one, including over DNS. This runs on every cluster run.";
     default:
