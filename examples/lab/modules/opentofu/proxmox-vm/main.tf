@@ -31,8 +31,9 @@ resource "proxmox_virtual_environment_vm" "guest" {
   on_boot       = true
   started       = true
 
-  # Proxmox refuses to delete a protected VM. Octopushy lifts the protection only in an
-  # approved retire run, right before it applies the destroy plan.
+  # Proxmox refuses to delete a protected VM. Octopushy lifts the protection only after
+  # approval, right before it applies a retire run's destroy plan or a provision plan that
+  # replaces this VM. A replaced VM comes back protected from this setting.
   protection      = true
   stop_on_destroy = true
 

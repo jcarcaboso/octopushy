@@ -38,7 +38,7 @@ public sealed class AssignmentBuilder(
         StepNames.InstallWorker => new StepAction("managed-worker", "install", true),
         StepNames.Plan => new StepAction("opentofu", "preview", false),
         StepNames.Apply => new StepAction("opentofu", "apply", true),
-        StepNames.Unprotect => new StepAction("proxmox", "set-protection", true),
+        StepNames.Unprotect or StepNames.Reprotect => new StepAction("proxmox", "set-protection", true),
         StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
         StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
         StepNames.Observe => new StepAction("proxmox", "observe", false),
@@ -63,7 +63,7 @@ public sealed class AssignmentBuilder(
 
     // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
     public static string TokenFor(string stepName) => stepName is
-        StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
+        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
         or StepNames.InstallDiskReporter
         or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
@@ -94,7 +94,7 @@ public sealed class AssignmentBuilder(
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
         var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
-            ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), cancellationToken) : null;
+            ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), stepName, cancellationToken) : null;
         if (stepName == StepNames.InstallDiskReporter)
         {
             if (run is null || step is null)
@@ -208,7 +208,7 @@ public sealed class AssignmentBuilder(
                 ["expectRunning"] = true,
                 ["expectIpv4"] = proxmox.ExpectIpv4,
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
-                ["protection"] = false,
+                ["protection"] = stepName == StepNames.Reprotect,
             };
             if (action.Executor == "nixos-rootfs")
             {
@@ -293,7 +293,7 @@ public sealed class AssignmentBuilder(
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>
-    private async Task<Artifact> ApprovedPlanAsync(Run run, CancellationToken cancellationToken)
+    private async Task<Artifact> ApprovedPlanAsync(Run run, string stepName, CancellationToken cancellationToken)
     {
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var plan = steps.SingleOrDefault(s => s.Name == StepNames.Plan);
@@ -317,6 +317,9 @@ public sealed class AssignmentBuilder(
         else if (runContext.ManagedWorker is not null
             && ManagedWorkerSafety.DestructivePlan(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)))
             throw new AssignmentException("Managed worker deletion/replacement is not supported, even with saved-plan approval.");
+        if (stepName == StepNames.Unprotect && run.Operation == Operations.Provision
+            && (runContext.ManagedWorker is not null || !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext)))
+            throw new AssignmentException("Protection is lifted only for an approved plan that replaces or deletes this guest's VM.");
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)

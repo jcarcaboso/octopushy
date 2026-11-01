@@ -188,6 +188,28 @@ lab-repo/
     change does from the preview, such as an OpenTofu plan's delete and replace
     actions, not from the edit. Retiring a guest retires its services first, each
     under its own setting.
+
+    **A VM is the exception, because recreating one wipes its disks.** A provision
+    plan that replaces or deletes a Proxmox VM waits for approval unless
+    `destructive: automatic` is written down somewhere: inheriting it from an
+    automatic approval is not enough. Two things happen without a person:
+    - With `destructive: automatic` set explicitly, the plan goes ahead, as a retire
+      would.
+    - A VM that never finished its first apply recovers on its own, even with
+      `destructive: manual`. OpenTofu must be replacing it because it is tainted,
+      that must be the only VM the plan removes, and Octopushy must never have
+      applied or verified this guest. Otherwise it waits like any other VM, and the
+      `approval` setting still applies.
+
+    Once approved, Octopushy lifts the protection of the guest's own VM right before
+    applying that plan, as a retire does, and the apply recreates the VM protected.
+    It does so only when the plan's state names the guest's VMID on its host. A plan
+    that keeps the VM never touches protection, and a preview never does. If the
+    apply does not finish, for instance a failure, a cancelled run, or a closed
+    uncertain outcome, the run puts protection back before it ends and says so, and
+    planning again retries.
+    *Decided November 1, 2026: before this, a replaced VM stopped at Proxmox's
+    protection flag, whatever was approved, and someone had to lift it by hand.*
 12. **Identity is stable.** A guest's address maps to its installation and VMID.
     Changing the VMID of an existing guest is refused as a possible new
     incarnation, and a new guest cannot claim a VMID that is already bound.

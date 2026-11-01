@@ -19,6 +19,7 @@ const stepNames: Record<string, string> = {
   approval: "Approval",
   unprotect: "Remove protection",
   apply: "Apply",
+  reprotect: "Restore protection",
   verify: "Verify",
   "verify-absent": "Verify absent",
   "grow-root": "Expand guest root filesystem",
@@ -45,6 +46,8 @@ function describe(step: Step, operation: string): string | null {
       return "Removes the VM's protection so it can be deleted.";
     case "apply":
       return "OpenTofu applies exactly the approved plan.";
+    case "reprotect":
+      return "Puts the VM's protection back, because the plan was not applied in full.";
     case "verify":
       return "Checks the VM through the Proxmox API.";
     case "verify-absent":
