@@ -304,7 +304,7 @@ public sealed class Step
 
     public int Ordinal { get; set; }
 
-    /// <summary><c>plan</c>, <c>approval</c>, <c>unprotect</c>, <c>apply</c>, <c>verify</c>, or <c>verify-absent</c>.</summary>
+    /// <summary><c>plan</c>, <c>approval</c>, <c>unprotect</c>, <c>apply</c>, <c>reprotect</c>, <c>verify</c>, or <c>verify-absent</c>.</summary>
     public required string Name { get; set; }
 
     public required string Kind { get; set; }

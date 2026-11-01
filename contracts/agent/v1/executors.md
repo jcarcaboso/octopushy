@@ -218,6 +218,9 @@ Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the V
 `{ "absent": true, "previous": null, "protection": null }` when the VM does not exist,
 and fails when it is on another node than `node`.
 
+The controller sends it for the `unprotect` step with `protection: false` and for the
+`reprotect` step with `protection: true`, always with the run's own `node` and `vmid`.
+
 ## `opentofu`
 
 Runs OpenTofu in a container image (`image`), rootless, with only the attempt's
@@ -327,6 +330,13 @@ Output:
 `read` actions. A replace has the actions `["delete", "create"]` or
 `["create", "delete"]` and counts as `replace`, not as `delete`. The JSON plan itself
 is not logged or returned, because it can hold configuration values.
+
+A change also carries `actionReason`, OpenTofu's `action_reason`, when the plan gives
+one, such as `replace_because_tainted`. A change to a
+`proxmox_virtual_environment_vm` that exists carries `vmId` and `node`, the `vm_id` and
+`node_name` its state holds. The controller lifts a provision run's protection only for
+a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
+them out never gets that VM's protection lifted, and the apply fails on it as before.
 
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding

@@ -19,7 +19,7 @@ public class GuestFilesystemTests
         Run Build(GuestDefinition g) => factory.Guest(repository, g,
             new Resource { Kind = ResourceKinds.Guest, Address = g.Address, Lab = g.Lab },
             new DefinitionRevision { Commit = "rev" }, "test");
-        Assert.Equal(new[] { "plan", "approval", "apply", "verify", "grow-root", "verify-root" },
+        Assert.Equal(new[] { "plan", "approval", "unprotect", "apply", "verify", "grow-root", "verify-root" },
             Build(guest).Steps.Select(s => s.Name));
         Assert.DoesNotContain(Build(guest with { Lifecycle = "retired" }).Steps,
             s => s.Name is "grow-root" or "verify-root");

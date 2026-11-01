@@ -125,6 +125,7 @@ public class SharedCredentialTests(PostgresFixture postgres)
     [Theory]
     [InlineData(StepNames.Apply, "pending")]
     [InlineData(StepNames.Unprotect, "pending")]
+    [InlineData(StepNames.Reprotect, "pending")]
     [InlineData(StepNames.GrowRoot, "pending")]
     [InlineData(StepNames.VerifyRoot, "pending")]
     [InlineData(StepNames.InstallDiskReporter, "pending")]
