@@ -175,6 +175,38 @@ public class ProtectedSecretTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_key_added_to_a_member_does_not_get_the_password_to_a_machine_it_can_log_in_to()
+    {
+        // The attack: no line of code changes. The key is the only difference, and lands at the
+        // next rebuild, on a machine that is handed the unsealed password.
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await StartAsync(postgres, repository);
+        await using var _ = server;
+        using var __ = client;
+        await TrustCodeAsync(client);
+        await FinishGuestsAsync(server, agent);
+        var released = await ReleasesAsync(server);
+
+        repository.Write(ClusterDefinitionTests.SecondaryFile, ClusterDefinitionTests.Guest("moraband", 420, "10.1.0.42",
+            "access: { sshAuthorizedKeys: [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKeyAttackerKeyAttackerKeyAttackerKey attacker\"] }\npolicy: { approval: automatic }"));
+        server.Commit("Let in a key");
+        await server.SyncAsync();
+
+        var withheld = await DriveAsync(server, agent);
+        Assert.DoesNotContain(withheld, a => a.Secrets.Values.Contains(Password));
+        Assert.DoesNotContain(withheld, a => a.Action == "apply");
+        var run = await server.LatestRunAsync(Secondary, Operations.Provision);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("Waiting for trust", run.Detail);
+        Assert.Equal(released, await ReleasesAsync(server));
+
+        // The operator sees the key before trusting it.
+        var member = (await ClusterAsync(client))["members"]!.AsArray().Single(m => m!["guest"]!.GetValue<string>() == Secondary)!;
+        Assert.Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKeyAttackerKeyAttackerKeyAttackerKey attacker",
+            member["execution"]!["guest"]!["access"]!["sshAuthorizedKeys"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task The_same_attack_works_on_nothing_while_the_cluster_waits_for_its_first_trust()
     {
         using var repository = ClusterDefinitionTests.Repository();

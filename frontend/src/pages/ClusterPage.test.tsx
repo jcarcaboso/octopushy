@@ -97,7 +97,7 @@ describe("ClusterPage", () => {
   it("explains why changed recipe code needs trust", async () => {
     mockApi({ [`GET /api/clusters/${id}`]: () => detail(summary({ trust: { ...summary().trust, codeChanged: true } })) });
     render();
-    expect(await screen.findByText("Recipe code changed")).toBeInTheDocument();
+    expect(await screen.findByText("Members or code changed")).toBeInTheDocument();
     expect(screen.getByText(/before any person approves it/)).toBeInTheDocument();
   });
 
@@ -149,9 +149,41 @@ describe("ClusterPage", () => {
     mockApi({ [`GET /api/clusters/${id}`]: () => detail(changed) });
     render();
     expect((await screen.findAllByText(/state\.example\.invalid/)).length).toBe(2);
+    expect(screen.getAllByText("Login keys: none")).toHaveLength(2);
     expect(screen.getAllByText("admin_password = dns/admin")).toHaveLength(2);
     expect(screen.getAllByText(/its certificate not verified/)).toHaveLength(2);
     expect(screen.getAllByText(/images\.example\.invalid/)).toHaveLength(2);
+  });
+
+  it("shows who could log in to a member, and where it is, before the password goes there", async () => {
+    const members = summary().members.map((member) => ({
+      ...member,
+      execution: {
+        proxmox: { endpoint: "https://10.1.0.10:8006/", readOnlyToken: { store: "proxmox/ro" }, privilegedToken: { store: "proxmox/priv" } },
+        guest: {
+          vmid: 320,
+          host: "korriban",
+          access: { sshAuthorizedKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKeyAttackerKey attacker@evil"] },
+          hardware: { mountPoints: [{ path: "/etc/dns", volume: "local-lvm:vm-9320-disk-0" }] },
+        },
+        host: { datastores: { images: "local" }, bridges: ["vmbr0"] },
+      },
+    }));
+    const changed = summary({ members, trust: { ...summary().trust, codeChanged: true, codeDigest: "digest2" } });
+    mockApi({ [`GET /api/clusters/${id}`]: () => detail(changed) });
+    render();
+    expect((await screen.findAllByText("Can log in as root:")).length).toBe(2);
+    expect(screen.getAllByText(/ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… attacker@evil/)).toHaveLength(2);
+    expect(screen.getAllByText(/credentials read-only proxmox\/ro, privileged proxmox\/priv/)).toHaveLength(2);
+    expect(screen.getAllByText(/volumes \/etc\/dns = local-lvm:vm-9320-disk-0/)).toHaveLength(2);
+    expect(screen.getAllByText(/bridges vmbr0/)).toHaveLength(2);
+  });
+
+  it("says a member list changed when only the members did", async () => {
+    mockApi({ [`GET /api/clusters/${id}`]: () => detail(summary({ trust: { ...summary().trust, codeChanged: true, codeDigest: "digest2" } })) });
+    render();
+    expect(await screen.findByText("Members or code changed")).toBeInTheDocument();
+    expect(screen.queryByText("Recipe code changed")).not.toBeInTheDocument();
   });
 
   it("shows no member as passed when the latest check failed without saying why", async () => {

@@ -47,7 +47,7 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
               : untrusted.length > 0
                 ? "New member endpoint"
                 : codeChanged
-                  ? "Recipe code changed"
+                  ? "Members or code changed"
                   : "Certificates to trust"
         }
         actions={
@@ -140,6 +140,12 @@ function TrustCallout({ cluster }: { cluster: ClusterSummary }) {
   );
 }
 
+/** A login key as an operator reads it: its type, the start of the key itself, and who it says it belongs to. */
+function describeKey(key: string) {
+  const [type, body = "", ...comment] = key.trim().split(/\s+/);
+  return `${type} ${body.length > 24 ? `${body.slice(0, 24)}…` : body} ${comment.join(" ")}`.trim();
+}
+
 /** How a member would use the password beyond its code. Each of these is covered by trust. */
 function Execution({ of }: { of: unknown }) {
   if (typeof of !== "object" || of === null) return null;
@@ -147,10 +153,30 @@ function Execution({ of }: { of: unknown }) {
     backend?: { type?: string; config?: unknown; env?: unknown };
     secrets?: Record<string, string>;
     agentLabels?: string[];
-    proxmox?: { endpoint?: string | null; verifyTls?: boolean | null };
+    proxmox?: {
+      endpoint?: string | null;
+      verifyTls?: boolean | null;
+      readOnlyToken?: { store?: string } | null;
+      privilegedToken?: { store?: string } | null;
+      caCertificate?: { store?: string } | null;
+    };
     template?: { source?: { url?: string } } | null;
+    guest?: {
+      vmid?: number;
+      host?: string;
+      access?: { sshAuthorizedKeys?: string[] };
+      hardware?: { mountPoints?: { path?: string; volume?: string }[] };
+    };
+    host?: { datastores?: Record<string, string>; bridges?: string[] } | null;
   };
   const backend = run.backend ?? {};
+  const keys = run.guest?.access?.sshAuthorizedKeys ?? [];
+  const volumes = (run.guest?.hardware?.mountPoints ?? []).filter((mount) => mount.volume);
+  const tokens = [
+    run.proxmox?.readOnlyToken?.store ? `read-only ${run.proxmox.readOnlyToken.store}` : null,
+    run.proxmox?.privilegedToken?.store ? `privileged ${run.proxmox.privilegedToken.store}` : null,
+    run.proxmox?.caCertificate?.store ? `CA ${run.proxmox.caCertificate.store}` : null,
+  ].filter(Boolean);
   return (
     <ul className="small">
       <li>
@@ -171,6 +197,31 @@ function Execution({ of }: { of: unknown }) {
       <li>
         Proxmox: <span className="mono">{run.proxmox?.endpoint ?? "?"}</span>
         {run.proxmox?.verifyTls === false ? ", its certificate not verified" : ""}
+        {tokens.length > 0 ? <span className="mono break">, credentials {tokens.join(", ")}</span> : null}
+      </li>
+      {run.guest?.vmid !== undefined ? (
+        <li>
+          Guest: <span className="mono">{run.guest.vmid}</span> on <span className="mono">{run.guest.host ?? "?"}</span>
+          {run.host?.datastores ? <span className="mono break">, datastores {Object.entries(run.host.datastores).map(([use, name]) => `${use} = ${name}`).join(", ")}</span> : null}
+          {run.host?.bridges ? <span className="mono">, bridges {run.host.bridges.join(", ")}</span> : null}
+          {volumes.length > 0 ? <span className="mono break">, volumes {volumes.map((mount) => `${mount.path} = ${mount.volume}`).join(", ")}</span> : null}
+        </li>
+      ) : null}
+      <li>
+        {keys.length > 0 ? (
+          <>
+            <strong>Can log in as root:</strong>
+            <ul>
+              {keys.map((key) => (
+                <li key={key} className="mono break">
+                  {describeKey(key)}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <>Login keys: none</>
+        )}
       </li>
       {run.template?.source?.url ? (
         <li>

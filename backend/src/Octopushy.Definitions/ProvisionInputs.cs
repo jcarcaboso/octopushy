@@ -22,7 +22,7 @@ public sealed record ProvisionInputs(
     ReviewedCode Code)
 {
     /// <summary>Guest fields excluded from the infrastructure hash; reporter setup is hashed separately.</summary>
-    private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
+    internal static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
     public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision)
@@ -194,8 +194,11 @@ public sealed record ReviewedCode(string Digest, IReadOnlyList<string> Paths)
 /// What a grant of a protected secret covers for a guest: its reviewed code, and everything that
 /// decides who ends up with the secret when that code does not change. A commit can leave every
 /// line of a root alone and still change where its state goes, which variable a secret becomes,
-/// which agent runs it, what container it is installed in, or what reaches the install's shell.
-/// <see cref="Execution"/> is that, as an operator is shown it before trusting.
+/// which agent runs it, what container it is installed in, who can log in to that container, or
+/// which credential reaches the Proxmox API that creates it. So this is the guest as it is
+/// provisioned, whole, except what cannot affect it; and the host and the installation's
+/// credentials it is created through. <see cref="Execution"/> is that, as an operator is shown it
+/// before trusting.
 /// </summary>
 public sealed record ReleaseBinding(string Digest, JsonObject Execution)
 {
@@ -203,23 +206,41 @@ public sealed record ReleaseBinding(string Digest, JsonObject Execution)
     {
         var code = repository.Recipes.TryGetValue(guest.Recipe, out var recipe) ? ReviewedCode.Of(repository, recipe).Digest : "";
         var installation = repository.Installation(guest.InstallationAddress);
-        var endpoint = installation is not null && installation.Hosts.TryGetValue(guest.Host, out var host)
-            ? ProvisionInputs.EndpointFor(installation, host) : null;
+        var host = installation is not null && installation.Hosts.TryGetValue(guest.Host, out var found) ? found : null;
+        var endpoint = installation is not null && host is not null ? ProvisionInputs.EndpointFor(installation, host) : null;
         var backend = guest.StateBackend is { } name && repository.Settings?.StateBackends.TryGetValue(name, out var declared) == true ? declared : null;
-        var template = guest.Template is { } id && repository.Templates.TryGetValue(id, out var found) ? found : null;
+        var template = guest.Template is { } id && repository.Templates.TryGetValue(id, out var image) ? image : null;
+        var provisioned = guest.Json.DeepClone().AsObject();
+        foreach (var field in ProvisionInputs.NotProvisioned)
+            provisioned.Remove(field);
         var execution = new JsonObject
         {
             ["backend"] = backend?.Json.DeepClone() ?? new JsonObject { ["type"] = "built-in" },
             ["secrets"] = new JsonObject(guest.ProvisionSecrets.OrderBy(s => s.Key, StringComparer.Ordinal)
                 .Select(s => KeyValuePair.Create(s.Key, (JsonNode?)s.Value.Key))),
             ["agentLabels"] = new JsonArray(PolicyResolver.AgentLabels(repository, guest).Value.Select(l => (JsonNode?)l).ToArray()),
-            ["proxmox"] = new JsonObject { ["endpoint"] = endpoint, ["verifyTls"] = installation?.Connection.VerifyTls },
+            ["proxmox"] = new JsonObject
+            {
+                ["endpoint"] = endpoint,
+                ["verifyTls"] = installation?.Connection.VerifyTls,
+                // Which store entries are sent to the API, as the token and as its CA.
+                ["readOnlyToken"] = Reference(installation?.Connection.ReadOnlyToken),
+                ["privilegedToken"] = Reference(installation?.Connection.PrivilegedToken),
+                ["sharedToken"] = installation?.Connection.SharedToken,
+                ["caCertificate"] = Reference(installation?.Connection.CaCertificate),
+            },
             ["template"] = template?.Json.DeepClone(),
             ["inputs"] = guest.Json["provision"]?["inputs"]?.DeepClone(),
             ["network"] = guest.Json["network"]?.DeepClone(),
+            // Who can log in (access.sshAuthorizedKeys), where it is, what it mounts, what it is.
+            ["guest"] = provisioned,
+            ["host"] = host?.Json.DeepClone(),
         };
         return new ReleaseBinding(Canonical.Hash(new JsonObject { ["code"] = code, ["execution"] = execution.DeepClone() }), execution);
     }
+
+    private static JsonNode? Reference(StoreReference? reference) =>
+        reference is null ? null : new JsonObject { ["store"] = reference.Key, ["version"] = reference.Version };
 }
 
 /// <summary>Canonical JSON (keys sorted, no whitespace) and its SHA-256, for change detection.</summary>
