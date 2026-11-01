@@ -226,6 +226,46 @@ public class ProvisioningTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_definition_restored_after_an_invalid_one_is_planned_again()
+    {
+        // Reproduced twice: a guest is changed, a revision that breaks it lands before anyone
+        // approves, and a revision puts the first change back. The guest has to be planned
+        // again, not left pending with no run behind it.
+        using var repository = TestRepository.Minimal();
+        repository.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }\n");
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        var file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var original = File.ReadAllText(Path.Combine(repository.Root, file));
+        var changed = original.Replace("memory: 2048", "memory: 4096");
+        repository.Write(file, changed);
+        server.Commit("More memory");
+        await server.SyncAndTrustAsync();
+
+        repository.Write(file, changed.Replace("type: vm", "type: kitten"));
+        server.Commit("Break it");
+        await server.SyncAndTrustAsync();
+        Assert.False((await server.ResourceAsync(Guest)).Valid);
+        var cancelled = await server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.Operation == Operations.Provision && r.Status == RunStatuses.Cancelled)
+            .OrderByDescending(r => r.CreatedAt).FirstAsync());
+        Assert.StartsWith("The definition is invalid in", cancelled.Detail);
+
+        repository.Write(file, changed);
+        server.Commit("Put the memory back");
+        await server.SyncAndTrustAsync();
+
+        var latest = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.False(RunStatuses.IsTerminal(latest.Status), $"{latest.Status}: {latest.Detail}");
+        var resource = await server.ResourceAsync(Guest);
+        Assert.Equal(resource.DesiredRevisionId, latest.RevisionId);
+        Assert.Equal("preview", (await agent.NextAsync("preview")).Action);
+    }
+
+    [Fact]
     public async Task A_lost_lease_during_apply_is_uncertain_until_the_result_arrives()
     {
         await using var server = await ServerHarness.StartAsync(postgres);

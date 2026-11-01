@@ -114,7 +114,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             foreach (var resource in byAddress.Values.Where(r => !seen.Contains(r.Id) && r.RetiredAt is null))
             {
                 resource.MissingSince ??= now;
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}.",
+                await WithdrawAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}.",
                     cancellationToken, keepRemoval: true);
                 // Deleting a folder asks for removal; the destructive policy decides whether it waits for approval.
                 if (resource.Kind != ResourceKinds.Guest) continue;
@@ -145,7 +145,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
 
             if (!resource.Valid || cluster is null)
             {
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
+                await WithdrawAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
                 continue;
             }
 
@@ -168,7 +168,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         {
             if (!resource.Valid)
             {
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
+                await WithdrawAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
                 continue;
             }
 
@@ -197,7 +197,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 var issues = repository.IssuesFor(resource.Address).ToList();
                 issues.Add(new DefinitionIssue(IssueSeverity.Error, guest.File, null, error.Message, resource.Address));
                 resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition cannot be planned in {Short(revision.Commit)}.", cancellationToken);
+                await WithdrawAsync(db, activeRuns, revision, resource, $"The definition cannot be planned in {Short(revision.Commit)}.", cancellationToken);
                 continue;
             }
 
@@ -263,9 +263,11 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
     }
 
-    private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
+    /// <summary>Cancels the resource's runs from other revisions that can be, and says whether any was.</summary>
+    private async Task<bool> SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
         CancellationToken cancellationToken, bool keepRemoval = false)
     {
+        var cancelled = false;
         foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id).ToList())
         {
             // A guest that stays deleted keeps its proposed removal.
@@ -275,7 +277,25 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             {
                 await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken);
                 activeRuns.Remove(run);
+                cancelled = true;
             }
+        }
+
+        return cancelled;
+    }
+
+    /// <summary>
+    /// Cancels the runs a revision that cannot be planned leaves behind, and forgets what they were
+    /// proposed for. The resource still remembers its last proposal as made, so the same definition
+    /// coming back would look as if a run already existed for it, and none would be made.
+    /// </summary>
+    private async Task WithdrawAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
+        CancellationToken cancellationToken, bool keepRemoval = false)
+    {
+        if (await SupersedeAsync(db, activeRuns, revision, resource, reason, cancellationToken, keepRemoval))
+        {
+            resource.DesiredInputsHash = null;
+            resource.DesiredRevisionId = null;
         }
     }
 
