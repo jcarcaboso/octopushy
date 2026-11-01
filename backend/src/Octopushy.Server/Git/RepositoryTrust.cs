@@ -7,12 +7,16 @@ namespace Octopushy.Server.Git;
 
 /// <summary>
 /// Which work may receive credentials. Any valid revision of the current repository source may
-/// run; credentials go only to Proxmox endpoints an operator trusted for their installation.
+/// run; credentials go only to Proxmox endpoints an operator trusted for their installation, and
+/// a cluster's admin password only to member addresses, and recipe code, trusted for that cluster.
 /// </summary>
 public static class RepositoryTrust
 {
     /// <summary>The start of every reason that an installation trust resolves.</summary>
     public const string WaitingForInstallation = "Waiting for trust";
+
+    /// <summary>The start of every reason that a cluster's trust resolves.</summary>
+    public const string WaitingForCluster = "Waiting for trust of the cluster";
 
     public static bool IsCurrentSource(DefinitionRevision revision, RepositorySettings? settings) =>
         settings?.Url is not null && revision.SourceId is { } source && source == settings.SourceId;
@@ -49,6 +53,8 @@ public static class RepositoryTrust
         {
             return "Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.";
         }
+        if (context.Cluster is { } cluster)
+            return await ClusterBlockedReasonAsync(db, context.Address, cluster, ct);
         var address = InstallationAddress(context.Address);
         var endpoint = context.Proxmox.Endpoint;
         var trust = await db.InstallationTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
@@ -56,6 +62,19 @@ public static class RepositoryTrust
             return $"{WaitingForInstallation}: {address} is a new Proxmox installation. Trust it on its page before its credentials are sent to {endpoint}.";
         if (!trust.Endpoints.Contains(endpoint))
             return $"{WaitingForInstallation}: {endpoint} is a new endpoint for {address}. Trust the installation again on its page before its credentials are sent there.";
+        return null;
+    }
+
+    private static async Task<string?> ClusterBlockedReasonAsync(OctopushyDb db, string address, ClusterContext cluster, CancellationToken ct)
+    {
+        var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
+        if (trust is null)
+            return $"{WaitingForCluster}: {address} is a new application cluster. Trust it on its page before its admin password is sent to {string.Join(", ", cluster.Endpoints)}.";
+        var unknown = cluster.Endpoints.Where(e => !trust.Endpoints.Contains(e)).ToList();
+        if (unknown.Count > 0)
+            return $"{WaitingForCluster}: {string.Join(", ", unknown)} is a new member endpoint of {address}. Trust the cluster again on its page before its admin password is sent there.";
+        if (trust.CodeDigest != cluster.CodeDigest)
+            return $"{WaitingForCluster}: the recipe code of {address} changed, and it runs with the admin password before anyone approves a plan. Review the change, then trust the cluster again on its page.";
         return null;
     }
 }

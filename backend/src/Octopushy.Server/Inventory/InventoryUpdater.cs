@@ -10,8 +10,9 @@ namespace Octopushy.Server.Inventory;
 /// <summary>
 /// Applies a new revision to the resources Octopushy knows, and proposes the runs it implies:
 /// a provision run for each guest whose inputs changed, a retire run for each guest newly
-/// retired, and a retire run for each guest whose folder was deleted. Each installation whose
-/// definition changed is observed again.
+/// retired, a retire run for each guest whose folder was deleted, and a cluster run for each
+/// application cluster whose inputs changed. Each installation whose definition changed is
+/// observed again. A deleted cluster.yaml only marks the cluster missing: nothing is destroyed.
 /// </summary>
 public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
 {
@@ -119,7 +120,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 if (resource.Kind != ResourceKinds.Guest) continue;
                 try
                 {
-                    if (await GuestRemoval.ProposeAsync(db, revisions, factory, resource, revision, force: false, cancellationToken) is { } removal)
+                    if (await GuestRemoval.ProposeAsync(db, revisions, factory, repository, resource, revision, force: false, cancellationToken) is { } removal)
                         runs.Add(removal);
                 }
                 catch (RunException error)
@@ -129,6 +130,37 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                         null, $"The folder was deleted, but its removal cannot be planned: {error.Message}", resource.Address) }, IssueJson);
                 }
             }
+        }
+
+        foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Cluster && seen.Contains(r.Id) && r.RetiredAt is null).ToList())
+        {
+            var cluster = repository.Cluster(resource.Address);
+            if (resource.Valid && cluster is not null && ClusterProblem(resource, cluster) is { } problem)
+            {
+                resource.Valid = false;
+                var issues = repository.IssuesFor(resource.Address).ToList();
+                issues.Add(new DefinitionIssue(IssueSeverity.Error, cluster.File, null, problem, resource.Address));
+                resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
+            }
+
+            if (!resource.Valid || cluster is null)
+            {
+                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition is invalid in {Short(revision.Commit)}.", cancellationToken);
+                continue;
+            }
+
+            var inputs = ClusterInputs.Build(repository, cluster, revision.Commit);
+            if (resource.DesiredInputsHash == inputs.Hash && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
+            {
+                if (activeRuns.Any(r => r.ResourceId == resource.Id && r.RevisionId == revision.Id))
+                    await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+                continue;
+            }
+
+            resource.DesiredInputsHash = inputs.Hash;
+            resource.DesiredRevisionId = revision.Id;
+            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            runs.Add(factory.Cluster(repository, cluster, resource, revision, "revision"));
         }
 
         var changedInstallations = new List<(Resource Resource, RunContext Context)>();
@@ -195,6 +227,16 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         }
     }
 
+    /// <summary>What a formed cluster cannot change: moving the primary is a promotion, and the domain is permanent.</summary>
+    private static string? ClusterProblem(Resource resource, ClusterDefinition cluster)
+    {
+        if (resource.BoundClusterDomain is { } domain && domain != cluster.ClusterDomain)
+            return $"This cluster was formed with the domain {domain}, which cannot change. Put it back; a new domain is a new cluster.";
+        if (resource.BoundPrimary is { } primary && primary != cluster.Primary?.Guest)
+            return $"The primary of this cluster is {primary}. Changing it is a promotion, which this version does not do: put it back, and see docs/technitium-lxc.md for promoting by hand.";
+        return null;
+    }
+
     /// <summary>
     /// A bound guest keeps its installation and VMID; changing them would silently point the
     /// guest at another VM. A VMID bound to one guest cannot be claimed by another.
@@ -241,6 +283,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
     {
         ResourceKind.Lab => ResourceKinds.Lab,
         ResourceKind.Installation => ResourceKinds.Installation,
+        ResourceKind.Cluster => ResourceKinds.Cluster,
         _ => ResourceKinds.Guest,
     };
 

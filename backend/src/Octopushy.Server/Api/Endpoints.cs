@@ -191,6 +191,53 @@ public static partial class Endpoints
             }, ct)))
             .WithTags("Inventory")
             .WithName("trustInstallation");
+
+        api.MapGet("/clusters/{id:guid}", async Task<Results<Ok<ClusterDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
+            await views.ClusterAsync(id, ct) is { } cluster ? TypedResults.Ok(cluster) : TypedResults.NotFound())
+            .WithTags("Inventory")
+            .WithName("getCluster");
+
+        api.MapPost("/clusters/{id:guid}/plan", async (Guid id, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.PlanClusterAsync(id, ct))))
+            .WithTags("Inventory")
+            .WithName("planCluster");
+
+        api.MapPost("/clusters/{id:guid}/trust", async (Guid id, TrustClusterRequest request, HttpContext http,
+            RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
+            {
+                var resource = await db.Resources.FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Cluster && r.RetiredAt == null, ct)
+                    ?? throw new RunException("There is no such cluster.");
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                var inputs = await services.GetRequiredService<Views>().ClusterInputsAsync(resource, ct)
+                    ?? throw new RunException("Fix the cluster's definition before trusting it.");
+                // Trust exactly what the operator saw: a newer commit may point elsewhere.
+                if (!inputs.Endpoints.SequenceEqual(request.Endpoints.Distinct().Order(StringComparer.Ordinal), StringComparer.Ordinal)
+                    || inputs.CodeDigest != request.CodeDigest)
+                    throw new RunException("The cluster's members or recipe code changed since they were shown. Review them again.");
+                var trust = await db.ClusterTrusts.FirstOrDefaultAsync(t => t.Address == resource.Address, ct);
+                if (trust is null)
+                {
+                    trust = new ClusterTrust { Address = resource.Address, CodeDigest = inputs.CodeDigest, TrustedBy = actor };
+                    db.ClusterTrusts.Add(trust);
+                }
+                trust.Endpoints = inputs.Endpoints.ToList();
+                trust.CodeDigest = inputs.CodeDigest;
+                trust.TrustedAt = clock.GetUtcNow();
+                trust.TrustedBy = actor;
+                foreach (var run in await db.Runs.Where(r => r.ResourceId == resource.Id && r.Status == RunStatuses.Blocked && r.Detail != null
+                    && r.Detail.StartsWith(RepositoryTrust.WaitingForCluster)).ToListAsync(ct))
+                {
+                    run.Status = run.StartedAt is null ? RunStatuses.Queued : RunStatuses.Running;
+                    run.Detail = null;
+                }
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return Views.ClusterTrust(inputs, trust);
+            }, ct)))
+            .WithTags("Inventory")
+            .WithName("trustCluster");
     }
 
     private static void MapRuns(RouteGroupBuilder api)

@@ -197,13 +197,68 @@ public sealed record InstallationSummaryDto(
     int UnmanagedCount,
     InstallationTrustDto Trust);
 
+/// <summary>
+/// Where a cluster's admin password goes and the code that holds it before approval, as declared
+/// now, and what of that is not trusted yet. A cluster with either waits for an operator.
+/// </summary>
+public sealed record ClusterTrustDto(
+    IReadOnlyList<string> Endpoints,
+    IReadOnlyList<string> Untrusted,
+    string? CodeDigest,
+    bool CodeChanged,
+    DateTimeOffset? TrustedAt,
+    string? TrustedBy);
+
+/// <summary>What the operator was shown; trust is refused when the cluster declares something else by now.</summary>
+public sealed record TrustClusterRequest(IReadOnlyList<string> Endpoints, string CodeDigest);
+
+public sealed record ClusterMemberDto(string Guest, string Role, string? Address, Guid? GuestId, string? GuestStatus);
+
+public sealed record ClusterSummaryDto(
+    Guid Id,
+    string Address,
+    string Name,
+    string? Type,
+    string? ClusterDomain,
+    string Status,
+    string? StatusDetail,
+    bool Valid,
+    int IssueCount,
+    IReadOnlyList<ClusterMemberDto> Members,
+    RunSummaryDto? ActiveRun,
+    RunSummaryDto? LastRun,
+    ClusterTrustDto Trust,
+    DateTimeOffset? VerifiedAt,
+    DateTimeOffset? ObservedAt,
+    string? ObserveError,
+    DateTimeOffset? ObserveErrorAt);
+
+public sealed record ClusterDetailDto(
+    ClusterSummaryDto Cluster,
+    string? DefinitionFile,
+    string? DefinitionText,
+    IReadOnlyList<IssueDto> Issues,
+    PolicyDto? Policy,
+    IReadOnlyList<string> AgentLabels,
+    string? AgentLabelsSetBy,
+    string? DesiredCommit,
+    string? CheckedCommit,
+    DateTimeOffset? CheckedAt,
+    string? AppliedCommit,
+    DateTimeOffset? AppliedAt,
+    /// <summary>What the latest check reported about each member.</summary>
+    JsonNode? Verification,
+    DateTimeOffset? MissingSince,
+    IReadOnlyList<RunSummaryDto> Runs);
+
 public sealed record LabDto(
     Guid Id,
     string Address,
     string Name,
     bool Valid,
     IReadOnlyList<IssueDto> Issues,
-    IReadOnlyList<InstallationSummaryDto> Installations);
+    IReadOnlyList<InstallationSummaryDto> Installations,
+    IReadOnlyList<ClusterSummaryDto> Clusters);
 
 public sealed record InventoryDto(RevisionDto? Revision, IReadOnlyList<LabDto> Labs);
 
@@ -243,8 +298,8 @@ public sealed record InstallationDetailDto(
     IReadOnlyList<ObservedGuestDto> ObservedGuests,
     string? ClusterName);
 
-/// <summary>An installation whose latest observation did not succeed.</summary>
-public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At);
+/// <summary>An installation or cluster whose latest observation did not succeed.</summary>
+public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At, string Kind = "installation");
 
 public sealed record OverviewCounts(
     int Guests,

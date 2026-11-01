@@ -263,6 +263,14 @@ public sealed partial class RunEngine(
             return;
         }
 
+        if (!inFlight && !reconcilingOutcome && await ClusterPlan.BlockedReasonAsync(db, run, cancellationToken) is { } memberReason)
+        {
+            run.Status = RunStatuses.Blocked;
+            run.Detail = memberReason;
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
         if (run.Status == RunStatuses.Queued || run.Status == RunStatuses.Blocked && run.StartedAt is null)
         {
             var eligible = RepositoryTrust.EligibleRevisions(db);
@@ -406,7 +414,8 @@ public sealed partial class RunEngine(
                     run.Detail = step.Detail;
                     break;
                 case StepStatuses.Failed:
-                    Finish(run, RunStatuses.Failed, $"The {step.Name} step failed: {step.Detail}");
+                    // What a member reports is not a failed deployment: the change went through.
+                    Finish(run, RunStatuses.Failed, step.Name == StepNames.VerifyCluster ? $"Verification failed: {step.Detail}" : $"The {step.Name} step failed: {step.Detail}");
                     break;
                 case StepStatuses.Uncertain:
                     run.Status = RunStatuses.Uncertain;
@@ -540,7 +549,8 @@ public sealed partial class RunEngine(
                 resource.CheckedAt = now;
                 if (outputs?["hasChanges"]?.GetValue<bool>() == false)
                 {
-                    if (run.Operation == Operations.Provision && RunContext.Parse(run.Context).RootDiskBytes is null)
+                    if (run.Operation == Operations.Cluster
+                        || run.Operation == Operations.Provision && RunContext.Parse(run.Context).RootDiskBytes is null)
                     {
                         resource.SyncedInputsHash = run.InputsHash;
                     }
@@ -549,13 +559,41 @@ public sealed partial class RunEngine(
                     var needsGuestApproval = run.Operation == Operations.Provision
                         && (planContext.RootDiskBytes is not null || planContext.ManagedWorker is not null || planContext.DiskReporter is not null);
                     foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
+                        or StepNames.ReconcileCluster or StepNames.RefreshBlockLists
                         || s.Name == StepNames.Approval && !needsGuestApproval))
                     {
                         later.Status = StepStatuses.Skipped;
                         later.Detail = "The plan has no changes.";
                     }
                 }
+                else if (run.Operation == Operations.Cluster)
+                {
+                    if (ClusterPlan.Joins(outputs).Count == 0 && ClusterPlan.Removals(outputs).Count == 0 && !ClusterPlan.PrunesEntries(outputs))
+                    {
+                        var reconcile = run.Steps.Single(s => s.Name == StepNames.ReconcileCluster);
+                        reconcile.Status = StepStatuses.Skipped;
+                        reconcile.Detail = "The plan changes no member.";
+                    }
 
+                    if (!ClusterPlan.ChangesBlockLists(outputs))
+                    {
+                        var refresh = run.Steps.Single(s => s.Name == StepNames.RefreshBlockLists);
+                        refresh.Status = StepStatuses.Skipped;
+                        refresh.Detail = "The plan changes no list URL.";
+                    }
+                }
+
+                break;
+            case StepNames.Apply when run.Operation == Operations.Cluster:
+                var cluster = RunContext.Parse(run.Context).Cluster!;
+                resource.AppliedInputsHash = run.InputsHash;
+                resource.AppliedRevisionId = run.RevisionId;
+                resource.AppliedAt = now;
+                resource.SyncedInputsHash = run.InputsHash;
+                resource.Outputs = outputs?["outputs"]?.ToJsonString();
+                resource.BoundPrimary ??= cluster.Primary;
+                resource.BoundClusterDomain ??= cluster.ClusterDomain;
+                resource.BoundAt ??= now;
                 break;
             case StepNames.Apply when run.Operation == Operations.Provision:
                 var context = RunContext.Parse(run.Context);
@@ -576,7 +614,7 @@ public sealed partial class RunEngine(
             case StepNames.Apply:
                 resource.Outputs = null;
                 break;
-            case StepNames.Verify:
+            case StepNames.Verify or StepNames.VerifyCluster:
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyRoot:

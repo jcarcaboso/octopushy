@@ -241,6 +241,99 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         return run;
     }
 
+    /// <summary>
+    /// A cluster run: inspect the members, plan, approval, apply, then what the plan decided about
+    /// members and block lists. Verification runs on every run, including one with no changes.
+    /// </summary>
+    public Run Cluster(LabRepository repository, ClusterDefinition cluster, Resource resource, DefinitionRevision revision, string reason)
+    {
+        var inputs = ClusterInputs.Build(repository, cluster, revision.Commit);
+        var policy = PolicyResolver.For(repository, cluster);
+        var context = ClusterBase(repository, inputs, revision) with
+        {
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
+            // The password reaches OpenTofu in the environment only, so it enters neither the saved
+            // plan nor the state. Trust keeps code that an operator has not seen from receiving it.
+            OpenTofu = new OpenTofuContext(
+                cluster.Stack,
+                inputs.Recipe.Root,
+                inputs.Recipe.Image ?? options.Value.Tools.OpenTofuImage,
+                BackendContext.BuiltIn,
+                inputs.Variables,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["TECHNITIUM_USERNAME"] = "admin" },
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["TECHNITIUM_PASSWORD"] = SecretNames.ClusterPassword }),
+        };
+        context.Cluster!.Input["formed"] = resource.BoundPrimary is not null;
+        var run = NewRun(resource, Operations.Cluster, revision, reason, context);
+        run.InputsHash = inputs.Hash;
+        AddSteps(run, [StepNames.InspectCluster, StepNames.Plan, StepNames.Approval, StepNames.Apply,
+            StepNames.ReconcileCluster, StepNames.RefreshBlockLists, StepNames.VerifyCluster]);
+        return run;
+    }
+
+    /// <summary>What a background check of a cluster's members is built from.</summary>
+    public static RunContext ClusterObservation(LabRepository repository, ClusterDefinition cluster, DefinitionRevision revision) =>
+        ClusterBase(repository, ClusterInputs.Build(repository, cluster, revision.Commit), revision);
+
+    private static RunContext ClusterBase(LabRepository repository, ClusterInputs inputs, DefinitionRevision revision)
+    {
+        var cluster = inputs.Cluster;
+        var labels = PolicyResolver.AgentLabels(repository, cluster);
+        var settings = cluster.Json["settings"]!;
+        var blocking = settings["blocking"];
+        var variables = inputs.Variables["cluster"]!["settings"]!;
+        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (cluster.Credentials.Version is { } version)
+        {
+            requestedVersions[SecretNames.ClusterPassword] = version;
+        }
+
+        var input = new JsonObject
+        {
+            ["cluster"] = cluster.Address,
+            ["verifyTls"] = cluster.VerifyTls,
+            ["clusterDomain"] = cluster.ClusterDomain,
+            ["minimumVersion"] = ClusterInputs.MinimumVersion,
+            ["members"] = new JsonArray(inputs.Members.Select(m => (JsonNode?)new JsonObject
+            {
+                ["guest"] = m.Guest,
+                ["role"] = m.Role,
+                ["address"] = m.Address,
+                ["endpoint"] = m.Endpoint,
+            }).ToArray()),
+            ["settings"] = new JsonObject
+            {
+                ["enableBlocking"] = variables["blocking"]!["enabled"]!.DeepClone(),
+                ["blockingType"] = variables["blocking"]!["type"]!.DeepClone(),
+                ["blockListUrls"] = variables["blocking"]!["lists"]!.DeepClone(),
+                ["blockListUpdateIntervalHours"] = variables["blocking"]!["updateIntervalHours"]!.DeepClone(),
+                ["recursion"] = variables["recursion"]!["policy"]!.DeepClone(),
+                ["recursionNetworkACL"] = variables["recursion"]!["networks"]!.DeepClone(),
+            },
+            ["blocked"] = variables["blocking"]!["blocked"]!.DeepClone(),
+            ["allowed"] = variables["blocking"]!["allowed"]!.DeepClone(),
+            ["forwardZones"] = new JsonArray(ClusterInputs.ForwardZones(settings).Select(z => (JsonNode?)z.Zone).ToArray()),
+            ["control"] = blocking?["control"]?.GetValue<string>(),
+        };
+        return new RunContext
+        {
+            Address = cluster.Address,
+            Commit = revision.Commit,
+            AgentLabels = labels.Value,
+            AgentLabelsSetBy = labels.SetBy,
+            Cluster = new ClusterContext(
+                cluster.Type,
+                inputs.Members.Single(m => m.Role == ClusterRoles.Primary).Guest,
+                cluster.ClusterDomain,
+                inputs.Members.Select(m => new ClusterMemberContext(m.Guest, m.Role, m.Address)).ToList(),
+                inputs.Endpoints,
+                inputs.CodeDigest,
+                input),
+            Secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.ClusterPassword] = cluster.Credentials.Key },
+            RequestedSecretVersions = requestedVersions,
+        };
+    }
+
     /// <summary>What an observation of the installation's hosts and VMs through its Proxmox API is built from.</summary>
     public static RunContext Observation(LabRepository repository, InstallationDefinition installation, DefinitionRevision revision)
     {

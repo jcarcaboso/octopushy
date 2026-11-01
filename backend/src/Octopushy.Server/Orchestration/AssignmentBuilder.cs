@@ -47,6 +47,10 @@ public sealed class AssignmentBuilder(
         StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         StepNames.UpdateWorkerOs => new StepAction("managed-worker", "update-os", true),
         StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
+        StepNames.InspectCluster => new StepAction("technitium", "inspect", false),
+        StepNames.ReconcileCluster => new StepAction("technitium", "reconcile", true),
+        StepNames.RefreshBlockLists => new StepAction("technitium", "refresh-block-lists", true),
+        StepNames.VerifyCluster or StepNames.ObserveCluster => new StepAction("technitium", "verify", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -54,6 +58,8 @@ public sealed class AssignmentBuilder(
     public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
         var action = ActionFor(stepName);
+        if (action.Executor == "technitium")
+            return [SecretNames.ClusterPassword];
         var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
             ? SecretEnvFor(stepName, context.OpenTofu!).Select(p => p.Value)
@@ -71,7 +77,11 @@ public sealed class AssignmentBuilder(
         StepNames.Apply or StepNames.Unprotect or StepNames.GrowRoot or StepNames.VerifyRoot or StepNames.PrepareWorker or StepNames.InstallWorker
         or StepNames.InstallDiskReporter
         or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
+        or StepNames.ReconcileCluster or StepNames.RefreshBlockLists
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
+
+    /// <summary>The work of an observation of this context.</summary>
+    public static string ObserveStep(RunContext context) => context.Cluster is null ? StepNames.Observe : StepNames.ObserveCluster;
 
     private static string TokenFor(string stepName, RunContext context) =>
         context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
@@ -94,7 +104,7 @@ public sealed class AssignmentBuilder(
         var invalid = CredentialBindings.Validate(context);
         if (invalid.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
-        var stepName = step?.Name ?? StepNames.Observe;
+        var stepName = step?.Name ?? ObserveStep(context);
         var action = ActionFor(stepName);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
@@ -149,9 +159,12 @@ public sealed class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
-        var token = TokenFor(stepName, context);
-        values[SecretNames.ProxmoxToken] = values[token];
-        values.Remove(token);
+        if (context.Cluster is null)
+        {
+            var token = TokenFor(stepName, context);
+            values[SecretNames.ProxmoxToken] = values[token];
+            values.Remove(token);
+        }
 
         var assignment = new Assignment
         {
@@ -182,6 +195,11 @@ public sealed class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(SecretEnvFor(stepName, tofu).Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
+            if (context.Cluster is not null && stepName == StepNames.Plan)
+            {
+                input["replace"] = new JsonArray(ClusterPlan.Replacements(
+                    await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken)).Select(a => (JsonNode?)a).ToArray());
+            }
             if (run.Operation == Operations.Provision
                 && (context.RootDiskBytes is not null || context.ManagedWorker is not null || context.DiskReporter is not null))
                 input["retainNoChangesPlan"] = true;
@@ -193,6 +211,18 @@ public sealed class AssignmentBuilder(
             if (state is not null)
             {
                 assignment.Artifacts.Add(state);
+            }
+        }
+        else if (action.Executor == "technitium")
+        {
+            input = context.Cluster!.Input.DeepClone().AsObject();
+            if (stepName == StepNames.ReconcileCluster)
+            {
+                ArgumentNullException.ThrowIfNull(run);
+                var plan = await StepOutputsAsync(run, StepNames.Plan, cancellationToken);
+                input["join"] = new JsonArray(ClusterPlan.Joins(plan).Select(g => (JsonNode?)g).ToArray());
+                input["remove"] = new JsonArray(ClusterPlan.Removals(plan).Select(g => (JsonNode?)g).ToArray());
+                input["pruneEntries"] = ClusterPlan.PrunesEntries(plan);
             }
         }
         else
@@ -299,6 +329,13 @@ public sealed class AssignmentBuilder(
         }
 
         return assignment;
+    }
+
+    private async Task<JsonNode?> StepOutputsAsync(Run run, string stepName, CancellationToken cancellationToken)
+    {
+        var outputs = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == stepName)
+            .Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
+        return outputs is null ? null : JsonNode.Parse(outputs);
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>

@@ -32,7 +32,11 @@ public sealed record RunContext
 
     public OpenTofuContext? OpenTofu { get; init; }
 
-    public required ProxmoxContext Proxmox { get; init; }
+    /// <summary>The installation the work acts on. A cluster's run has none, so this stays <see cref="ProxmoxContext.None"/>.</summary>
+    public ProxmoxContext Proxmox { get; init; } = ProxmoxContext.None;
+
+    /// <summary>The application cluster the work acts on, instead of a Proxmox installation.</summary>
+    public ClusterContext? Cluster { get; init; }
 
     public DiskReporterContext? DiskReporter { get; init; }
 
@@ -103,7 +107,27 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4,
     /// <summary><c>lxc</c> for a container. Null, for a VM, leaves the wire input as it always was.</summary>
-    string? GuestKind = null);
+    string? GuestKind = null)
+{
+    /// <summary>For work that does not go through Proxmox.</summary>
+    public static readonly ProxmoxContext None = new("", true, null, null, null, null, null);
+}
+
+/// <summary>
+/// An application cluster's run. <see cref="Endpoints"/> and <see cref="CodeDigest"/> are what
+/// trust is checked against; <see cref="Input"/> is the <c>technitium</c> executor's input,
+/// without what a step adds from the approved plan.
+/// </summary>
+public sealed record ClusterContext(
+    string Type,
+    string Primary,
+    string ClusterDomain,
+    IReadOnlyList<ClusterMemberContext> Members,
+    IReadOnlyList<string> Endpoints,
+    string CodeDigest,
+    JsonObject Input);
+
+public sealed record ClusterMemberContext(string Guest, string Role, string Address);
 
 public sealed record DiskReporterContext(
     string Endpoint,
@@ -137,6 +161,14 @@ public static class StepNames
     public const string DrainWorker = "drain-worker";
     /// <summary>Server-side: remove a removed managed worker's enrollment once its VM is gone.</summary>
     public const string RevokeWorker = "revoke-worker";
+    /// <summary>Reads what the members report, for the plan to show what a run must do about them.</summary>
+    public const string InspectCluster = "inspect-cluster";
+    /// <summary>Joins and removes the members the approved plan changed, and removes undeclared entries.</summary>
+    public const string ReconcileCluster = "reconcile-cluster";
+    public const string RefreshBlockLists = "refresh-block-lists";
+    public const string VerifyCluster = "verify-cluster";
+    /// <summary>Not a step: the work of a cluster's observation.</summary>
+    public const string ObserveCluster = "observe-cluster";
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -149,6 +181,8 @@ public static class SecretNames
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
     public const string DiskReporterToken = "disk-reporter.token";
+    /// <summary>A cluster's admin password. Unlike the Proxmox tokens, its role and wire name are the same.</summary>
+    public const string ClusterPassword = "technitium.password";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
 

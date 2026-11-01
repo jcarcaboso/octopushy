@@ -111,11 +111,33 @@ public sealed class InstallationTrust
     public required string TrustedBy { get; set; }
 }
 
+/// <summary>
+/// An operator's confirmation that a cluster's admin password may go to the addresses its members
+/// declare, and be given to its recipe's code before a change is approved. A new member address,
+/// or changed recipe code, waits for this again.
+/// </summary>
+public sealed class ClusterTrust
+{
+    /// <summary>The cluster's address, <c>lab/clusters/id</c>.</summary>
+    public required string Address { get; set; }
+
+    /// <summary>Every member endpoint the cluster declared when it was trusted, sorted.</summary>
+    public List<string> Endpoints { get; set; } = [];
+
+    /// <summary>The digest of the recipe and its root when it was trusted.</summary>
+    public required string CodeDigest { get; set; }
+
+    public DateTimeOffset TrustedAt { get; set; }
+
+    public required string TrustedBy { get; set; }
+}
+
 public static class ResourceKinds
 {
     public const string Lab = "lab";
     public const string Installation = "installation";
     public const string Guest = "guest";
+    public const string Cluster = "cluster";
 }
 
 /// <summary>
@@ -189,6 +211,12 @@ public sealed class Resource
 
     public DateTimeOffset? BoundAt { get; set; }
 
+    /// <summary>The primary a cluster was formed on; changing it would be a promotion.</summary>
+    public string? BoundPrimary { get; set; }
+
+    /// <summary>The domain a cluster was formed with, which cannot change.</summary>
+    public string? BoundClusterDomain { get; set; }
+
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
 
@@ -219,6 +247,8 @@ public static class Operations
 {
     public const string Provision = "provision";
     public const string Retire = "retire";
+    /// <summary>Reconciles an application cluster and verifies every member.</summary>
+    public const string Cluster = "cluster";
 }
 
 public static class RunStatuses

@@ -5,8 +5,9 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>
-/// Observations: an agent reads an installation's hosts and VMs through its Proxmox API, in the
-/// background. They change nothing, so they are not runs; only their failures are shown.
+/// Observations: an agent reads an installation's hosts and VMs through its Proxmox API, or checks
+/// a cluster's members, in the background. They change nothing, so they are not runs; only their
+/// failures are shown.
 /// </summary>
 public sealed partial class RunEngine
 {
@@ -40,7 +41,8 @@ public sealed partial class RunEngine
         }
 
         var now = clock.GetUtcNow();
-        var problems = await CredentialBindings.CheckAsync(db, null, context, cancellationToken, AssignmentBuilder.SecretsFor(StepNames.Observe, context));
+        var work = AssignmentBuilder.ObserveStep(context);
+        var problems = await CredentialBindings.CheckAsync(db, null, context, cancellationToken, AssignmentBuilder.SecretsFor(work, context));
         if (problems.Count > 0)
         {
             // Nothing was sent, so the installation stays due and is tried again at the next check.
@@ -55,7 +57,7 @@ public sealed partial class RunEngine
         else
         {
             installation.ObserveRequestedAt = now;
-            var action = AssignmentBuilder.ActionFor(StepNames.Observe);
+            var action = AssignmentBuilder.ActionFor(work);
             db.Attempts.Add(new Attempt
             {
                 Id = Guid.CreateVersion7(),

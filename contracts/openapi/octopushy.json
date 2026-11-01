@@ -760,6 +760,202 @@
         }
       }
     },
+    "/api/clusters/{id}": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getCluster",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/plan": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "planCluster",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/trust": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "trustCluster",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustClusterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterTrustDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/guests/{id}/state": {
       "get": {
         "tags": [
@@ -3976,6 +4172,328 @@
           }
         }
       },
+      "ClusterDetailDto": {
+        "required": [
+          "cluster",
+          "definitionFile",
+          "definitionText",
+          "issues",
+          "policy",
+          "agentLabels",
+          "agentLabelsSetBy",
+          "desiredCommit",
+          "checkedCommit",
+          "checkedAt",
+          "appliedCommit",
+          "appliedAt",
+          "verification",
+          "missingSince",
+          "runs"
+        ],
+        "type": "object",
+        "properties": {
+          "cluster": {
+            "$ref": "#/components/schemas/ClusterSummaryDto"
+          },
+          "definitionFile": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "definitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PolicyDto"
+              }
+            ]
+          },
+          "agentLabels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agentLabelsSetBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "desiredCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checkedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checkedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "appliedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "missingSince": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          }
+        }
+      },
+      "ClusterMemberDto": {
+        "required": [
+          "guest",
+          "role",
+          "address",
+          "guestId",
+          "guestStatus"
+        ],
+        "type": "object",
+        "properties": {
+          "guest": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "address": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "guestId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "guestStatus": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ClusterSummaryDto": {
+        "required": [
+          "id",
+          "address",
+          "name",
+          "type",
+          "clusterDomain",
+          "status",
+          "statusDetail",
+          "valid",
+          "issueCount",
+          "members",
+          "activeRun",
+          "lastRun",
+          "trust",
+          "verifiedAt",
+          "observedAt",
+          "observeError",
+          "observeErrorAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "clusterDomain": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "statusDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "issueCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterMemberDto"
+            }
+          },
+          "activeRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "trust": {
+            "$ref": "#/components/schemas/ClusterTrustDto"
+          },
+          "verifiedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "observedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "observeError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "observeErrorAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ClusterTrustDto": {
+        "required": [
+          "endpoints",
+          "untrusted",
+          "codeDigest",
+          "codeChanged",
+          "trustedAt",
+          "trustedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "untrusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codeDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "codeChanged": {
+            "type": "boolean"
+          },
+          "trustedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "trustedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "CreatedOperatorToken": {
         "required": [
           "id",
@@ -4989,7 +5507,8 @@
           "name",
           "valid",
           "issues",
-          "installations"
+          "installations",
+          "clusters"
         ],
         "type": "object",
         "properties": {
@@ -5016,6 +5535,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/InstallationSummaryDto"
+            }
+          },
+          "clusters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterSummaryDto"
             }
           }
         }
@@ -5130,6 +5655,10 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "kind": {
+            "type": "string",
+            "default": "installation"
           }
         }
       },
@@ -6317,6 +6846,24 @@
               "integer"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "TrustClusterRequest": {
+        "required": [
+          "endpoints",
+          "codeDigest"
+        ],
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codeDigest": {
+            "type": "string"
           }
         }
       },

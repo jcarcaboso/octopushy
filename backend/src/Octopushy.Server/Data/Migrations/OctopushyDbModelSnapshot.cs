@@ -273,6 +273,37 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("attempts", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ClusterTrust", b =>
+                {
+                    b.Property<string>("Address")
+                        .HasColumnType("text")
+                        .HasColumnName("address");
+
+                    b.Property<string>("CodeDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("code_digest");
+
+                    b.PrimitiveCollection<List<string>>("Endpoints")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("endpoints");
+
+                    b.Property<DateTimeOffset>("TrustedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("trusted_at");
+
+                    b.Property<string>("TrustedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("trusted_by");
+
+                    b.HasKey("Address")
+                        .HasName("pk_cluster_trusts");
+
+                    b.ToTable("cluster_trusts", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.DefinitionRevision", b =>
                 {
                     b.Property<Guid>("Id")
@@ -768,9 +799,17 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");
 
+                    b.Property<string>("BoundClusterDomain")
+                        .HasColumnType("text")
+                        .HasColumnName("bound_cluster_domain");
+
                     b.Property<string>("BoundInstallation")
                         .HasColumnType("text")
                         .HasColumnName("bound_installation");
+
+                    b.Property<string>("BoundPrimary")
+                        .HasColumnType("text")
+                        .HasColumnName("bound_primary");
 
                     b.Property<int?>("BoundVmid")
                         .HasColumnType("integer")

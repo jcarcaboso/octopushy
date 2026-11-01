@@ -12,6 +12,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
 
+    public DbSet<ClusterTrust> ClusterTrusts => Set<ClusterTrust>();
+
     public DbSet<Resource> Resources => Set<Resource>();
 
     public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
@@ -68,6 +70,11 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         });
 
         model.Entity<InstallationTrust>(e =>
+        {
+            e.HasKey(x => x.Address);
+        });
+
+        model.Entity<ClusterTrust>(e =>
         {
             e.HasKey(x => x.Address);
         });

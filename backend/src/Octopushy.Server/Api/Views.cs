@@ -24,6 +24,8 @@ public static class GuestStatuses
     public const string Invalid = "invalid";
     public const string Missing = "missing";
     public const string Retired = "retired";
+    /// <summary>A cluster whose members did not pass the checks of its latest run.</summary>
+    public const string VerificationFailed = "verification-failed";
 }
 
 /// <summary>Builds the read models the API returns.</summary>
@@ -170,6 +172,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var observations = await LatestObservationsAsync(cancellationToken);
         var observing = await ObservingAsync(cancellationToken);
         var trusts = await db.InstallationTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
+        var clusterTrusts = await db.ClusterTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
+        var head = await HeadRepositoryAsync(cancellationToken);
         var labs = resources.Where(r => r.Kind == ResourceKinds.Lab && r.RetiredAt == null).OrderBy(r => r.Address)
             .Select(lab => new LabDto(
                 lab.Id,
@@ -180,9 +184,162 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 resources.Where(r => r.Kind == ResourceKinds.Installation && r.ParentAddress == lab.Address && r.RetiredAt == null)
                     .OrderBy(r => r.Address)
                     .Select(i => InstallationSummary(i, resources, runs, observations, observing, trusts.GetValueOrDefault(i.Address)))
+                    .ToList(),
+                resources.Where(r => r.Kind == ResourceKinds.Cluster && r.ParentAddress == lab.Address && r.RetiredAt == null)
+                    .OrderBy(r => r.Address)
+                    .Select(c =>
+                    {
+                        var (active, last) = runs.GetValueOrDefault(c.Id);
+                        return ClusterSummary(c, resources, head, active, last, observations.GetValueOrDefault(c.Id), clusterTrusts.GetValueOrDefault(c.Address), runs);
+                    })
                     .ToList()))
             .ToList();
         return new InventoryDto(await LatestRevisionAsync(cancellationToken), labs);
+    }
+
+    public async Task<ClusterDetailDto?> ClusterAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Cluster, cancellationToken);
+        if (resource is null)
+        {
+            return null;
+        }
+
+        var runs = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+            .Where(r => r.ResourceId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(30)
+            .ToListAsync(cancellationToken);
+        var head = await HeadRepositoryAsync(cancellationToken);
+        var guests = await db.Resources.AsNoTracking().Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null).ToListAsync(cancellationToken);
+        var guestRuns = await LatestRunsAsync(guests.Select(g => g.Id).ToList(), cancellationToken);
+        var observation = (await LatestObservationsAsync(cancellationToken)).GetValueOrDefault(id);
+        var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == resource.Address, cancellationToken);
+        var active = runs.FirstOrDefault(r => !RunStatuses.IsTerminal(r.Status));
+        var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
+        var summary = ClusterSummary(resource, guests, head, active, last, observation, trust, guestRuns);
+
+        PolicyDto? policy = null;
+        ResolvedSetting<IReadOnlyList<string>>? labels = null;
+        if (head?.Repository.Cluster(resource.Address) is { } cluster && head.Repository.RepositoryValid && resource.MissingSince is null)
+        {
+            var effective = PolicyResolver.For(head.Repository, cluster);
+            policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
+            labels = PolicyResolver.AgentLabels(head.Repository, cluster);
+        }
+
+        var text = head is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(head.Commit, resource.DefinitionFile, cancellationToken);
+        var commits = await CommitsAsync([resource.DesiredRevisionId, resource.CheckedRevisionId, resource.AppliedRevisionId], cancellationToken);
+        var verify = runs.SelectMany(r => r.Steps).Where(s => s.Name == StepNames.VerifyCluster && s.Outputs is not null).MaxBy(s => s.FinishedAt);
+        var observed = observation?.ContainsKey("members") == true ? observation : null;
+        var verification = observed?["observedAt"]?.GetValue<DateTimeOffset>() is { } at && at >= (verify?.FinishedAt ?? DateTimeOffset.MinValue)
+            ? observed
+            : verify is null ? null : JsonNode.Parse(verify.Outputs!);
+        return new ClusterDetailDto(
+            summary,
+            resource.DefinitionFile,
+            text,
+            Issues(resource.Issues),
+            policy,
+            labels?.Value ?? [],
+            labels?.SetBy,
+            commits.GetValueOrDefault(resource.DesiredRevisionId ?? Guid.Empty),
+            commits.GetValueOrDefault(resource.CheckedRevisionId ?? Guid.Empty),
+            resource.CheckedAt,
+            commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty),
+            resource.AppliedAt,
+            verification?.DeepClone(),
+            resource.MissingSince,
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Cluster)).ToList());
+    }
+
+    /// <summary>What the latest revision declares for a cluster's trust, or null when it cannot be built.</summary>
+    public async Task<ClusterInputs?> ClusterInputsAsync(Resource resource, CancellationToken cancellationToken)
+    {
+        var head = await HeadRepositoryAsync(cancellationToken);
+        return head is null ? null : Inputs(resource, head);
+    }
+
+    private static ClusterInputs? Inputs(Resource resource, HeadRepository head) =>
+        resource.Valid && resource.MissingSince is null && head.Repository.IsValid(resource.Address) && head.Repository.Cluster(resource.Address) is { } cluster
+            ? ClusterInputs.Build(head.Repository, cluster, head.Commit)
+            : null;
+
+    private sealed record HeadRepository(string Commit, LabRepository Repository);
+
+    private async Task<HeadRepository?> HeadRepositoryAsync(CancellationToken cancellationToken)
+    {
+        var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        return latest is null ? null : new HeadRepository(latest.Commit, await revisions.GetAsync(latest.Commit, cancellationToken));
+    }
+
+    public static ClusterTrustDto ClusterTrust(ClusterInputs? inputs, ClusterTrust? trust)
+    {
+        var endpoints = inputs?.Endpoints ?? [];
+        return new ClusterTrustDto(
+            endpoints,
+            endpoints.Where(e => trust?.Endpoints.Contains(e) != true).ToList(),
+            inputs?.CodeDigest,
+            inputs is not null && trust is not null && trust.CodeDigest != inputs.CodeDigest,
+            trust?.TrustedAt,
+            trust?.TrustedBy);
+    }
+
+    private static ClusterSummaryDto ClusterSummary(
+        Resource resource,
+        IReadOnlyList<Resource> resources,
+        HeadRepository? head,
+        Run? active,
+        Run? last,
+        JsonObject? observation,
+        ClusterTrust? trust,
+        IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs)
+    {
+        var definition = resource.Definition is null ? null : JsonNode.Parse(resource.Definition);
+        var (status, detail) = GuestStatus(resource, active, last);
+        if (status == GuestStatuses.Missing)
+        {
+            detail = "cluster.yaml was deleted. The cluster keeps running and nothing was removed, but Octopushy no longer manages it. Restore the file to manage it again.";
+        }
+        else if (active is null && status == GuestStatuses.Failed && last?.Steps.Any(s => s.Name == StepNames.VerifyCluster && s.Status == StepStatuses.Failed) == true)
+        {
+            status = GuestStatuses.VerificationFailed;
+        }
+
+        var inputs = head is null ? null : Inputs(resource, head);
+        var addresses = inputs?.Members.ToDictionary(m => m.Guest, m => m.Address) ?? [];
+        var members = ((definition?["members"] as JsonArray)?.OfType<JsonObject>() ?? []).Select(m =>
+        {
+            var guest = m["guest"]!.GetValue<string>();
+            var full = guest.Count(c => c == '/') == 1 ? $"{resource.Lab}/{guest}" : guest;
+            var match = resources.FirstOrDefault(r => r.Kind == ResourceKinds.Guest && r.Address == full && r.RetiredAt is null);
+            string? memberStatus = null;
+            if (match is not null)
+            {
+                var (memberActive, memberLast) = runs.GetValueOrDefault(match.Id);
+                memberStatus = GuestStatus(match, memberActive, memberLast).Status;
+            }
+
+            return new ClusterMemberDto(full, m["role"]!.GetValue<string>(), addresses.GetValueOrDefault(full), match?.Id, memberStatus);
+        }).ToList();
+        return new ClusterSummaryDto(
+            resource.Id,
+            resource.Address,
+            resource.Address.Split('/')[^1],
+            definition?["type"]?.GetValue<string>(),
+            definition?["settings"]?["clusterDomain"]?.GetValue<string>(),
+            status,
+            detail,
+            resource.Valid,
+            Issues(resource.Issues).Count(i => i.Severity == "error"),
+            members,
+            active is null ? null : Summary(active, resource.Address, resource.Kind),
+            last is null ? null : Summary(last, resource.Address, resource.Kind),
+            ClusterTrust(inputs, trust),
+            resource.VerifiedAt,
+            observation?["observedAt"]?.GetValue<DateTimeOffset>(),
+            resource.ObserveError,
+            resource.ObserveErrorAt);
     }
 
     public async Task<GuestDetailDto?> GuestAsync(Guid id, CancellationToken cancellationToken)
@@ -313,7 +470,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             .Take(15)
             .ToListAsync(cancellationToken);
         var observeErrors = await db.Resources.AsNoTracking()
-            .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null && r.MissingSince == null && r.ObserveError != null)
+            .Where(r => (r.Kind == ResourceKinds.Installation || r.Kind == ResourceKinds.Cluster) && r.RetiredAt == null && r.MissingSince == null && r.ObserveError != null)
             .OrderBy(r => r.Address)
             .ToListAsync(cancellationToken);
         var agents = await db.Agents.AsNoTracking().CountAsync(a => !a.Disabled, cancellationToken);
@@ -323,7 +480,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             connections.All.Count,
             agents,
             attention.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
-            observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt)).ToList(),
+            observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt, r.Kind)).ToList(),
             recent.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList());
     }
 

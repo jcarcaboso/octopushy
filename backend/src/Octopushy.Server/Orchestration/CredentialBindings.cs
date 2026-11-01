@@ -12,6 +12,9 @@ internal static class CredentialBindings
 
     internal static List<string> Validate(RunContext context)
     {
+        if (context.Cluster is not null)
+            return ValidateCluster(context);
+
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
@@ -57,6 +60,24 @@ internal static class CredentialBindings
                     || !context.Secrets.ContainsKey(role))
                     problems.Add($"Backend environment '{name}' cannot override reserved Proxmox roles; inspect and replan");
             }
+        }
+        return problems;
+    }
+
+    /// <summary>A cluster's work carries its admin password and nothing else, and sets only the provider's own login.</summary>
+    private static List<string> ValidateCluster(RunContext context)
+    {
+        var problems = new List<string>();
+        if (context.Secrets.Keys.Any(k => k != SecretNames.ClusterPassword) || !context.Secrets.ContainsKey(SecretNames.ClusterPassword))
+            problems.Add("A cluster's run carries only its admin password; inspect and replan");
+        if (context.OpenTofu is { } tofu)
+        {
+            if (tofu.Env.Keys.Any(k => k != "TECHNITIUM_USERNAME"))
+                problems.Add("A cluster's OpenTofu environment is reserved; inspect and replan");
+            if (tofu.SecretEnv.Count != 1 || tofu.SecretEnv.GetValueOrDefault("TECHNITIUM_PASSWORD") != SecretNames.ClusterPassword)
+                problems.Add("A cluster's provider login mapping is reserved; inspect and replan");
+            if (!tofu.Backend.IsBuiltIn)
+                problems.Add("A cluster's state is built in; inspect and replan");
         }
         return problems;
     }

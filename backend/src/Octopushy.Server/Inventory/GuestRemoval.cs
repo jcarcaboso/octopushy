@@ -16,11 +16,13 @@ public static class GuestRemoval
     /// A retire run for <paramref name="resource"/>, deleted in <paramref name="removal"/>, or null when
     /// one is already under way, or, unless <paramref name="force"/>, was already proposed for it.
     /// </summary>
-    public static async Task<Run?> ProposeAsync(OctopushyDb db, RevisionCache revisions, RunFactory factory, Resource resource,
+    public static async Task<Run?> ProposeAsync(OctopushyDb db, RevisionCache revisions, RunFactory factory, Definitions.LabRepository current, Resource resource,
         DefinitionRevision removal, bool force, CancellationToken ct)
     {
         if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || resource.MissingSince is null)
             return null;
+        if (current.ClusterOf(resource.Address) is { } cluster)
+            throw new RunException($"It is still listed in {cluster.Address}; remove it from the cluster first, or restore its folder.");
         if (await db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Operation == Operations.Retire
             && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, ct))
             return null;
