@@ -51,12 +51,15 @@ class ClusterTests(unittest.TestCase):
             self.assertIn("> 0 ? 1 : 0", block)
 
     def test_the_addresses_the_controller_reads_exist(self):
-        for address in ('resource "terraform_data" "secondary"', 'resource "terraform_data" "block_lists"',
-                        'resource "terraform_data" "undeclared_entries"'):
+        for address in ('resource "terraform_data" "secondary"', 'resource "terraform_data" "undeclared_entries"'):
             self.assertIn(address, MAIN)
         plan = (ROOT / "backend/src/Octopushy.Server/Orchestration/ClusterPlan.cs").read_text()
-        for address in ("terraform_data.secondary[", "terraform_data.block_lists", "terraform_data.undeclared_entries"):
+        for address in ("terraform_data.secondary[", "terraform_data.undeclared_entries"):
             self.assertIn(address, plan)
+
+    def test_the_provider_cannot_turn_verification_off(self):
+        self.assertNotIn("skip_tls_verify", SOURCES)
+        self.assertNotIn("SKIP_TLS", SOURCES)
 
     def test_the_port_stays_the_https_one(self):
         self.assertIn(":53443", SOURCES)
@@ -67,7 +70,7 @@ class ExampleTests(unittest.TestCase):
     def test_the_example_cluster_names_its_members_password(self):
         cluster = (LAB / "labs/home/clusters/technitium/cluster.yaml").read_text()
         self.assertIn("credentials: { store: dns/technitium/admin-password }", cluster)
-        self.assertIn("tls: { verify: false }", cluster)
+        self.assertNotIn("verify", cluster)
         for guest in ("korriban/guests/krb-dns-01", "moraband/guests/mrb-dns-01"):
             text = (LAB / f"labs/home/proxmox/{guest}/guest.yaml").read_text()
             self.assertIn("admin_password: { store: dns/technitium/admin-password }", text)

@@ -5,9 +5,13 @@
 # proves nothing about Proxmox itself, its firewall, or an unprivileged LXC container.
 #
 # Plans and applies in separate steps, as the agent does, and checks that the password is not
-# in the saved plan, the state, the logs, or the container. Needs rootless podman and access
-# to the Proxmox, Debian, Microsoft, Technitium, and OpenTofu download sites. Every resource
-# is named octopushy-technitium-lxc-* and removed by that exact name.
+# in the saved plan, the state, the logs, or the container. Every resource is named
+# octopushy-technitium-lxc-* and removed by that exact name.
+#
+# This installs for real, so it is not an offline test: it needs rootless podman on a network
+# that reaches the sites `reachable` lists below, and it stops with a clear message if it
+# cannot, including on an --internal network. tests/technitium-cluster is the one that runs with
+# no way out.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -63,6 +67,30 @@ start_container() {
 
 identity() { in_ct 'cd /etc/dns && sha256sum self-signed-cert.pfx && ls -1'; }
 
+# What the container and OpenTofu download from, as docs/technitium-lxc.md lists them.
+reachable() {
+  local check='
+import socket, sys
+missing = []
+for host, port in (("registry.opentofu.org", 443), ("github.com", 443), ("deb.debian.org", 80),
+                   ("builds.dotnet.microsoft.com", 443), ("download.technitium.com", 443)):
+    try:
+        socket.create_connection((host, port), timeout=10).close()
+    except OSError as error:
+        missing.append(f"{host}:{port} ({error})")
+if missing:
+    print("\n".join(missing))
+    sys.exit(1)
+'
+  if ! out=$(podman run --rm --name "$name-preflight" --network "$name" docker.io/library/python:3-alpine python3 -I -c "$check" 2>&1); then
+    echo "This test installs for real and needs outbound access, which network $name does not have:" >&2
+    echo "$out" >&2
+    echo "It cannot pass on an --internal network. tests/technitium-cluster needs none." >&2
+    exit 2
+  fi
+  echo "the download sites answer"
+}
+
 log "Disposable resources"
 cleanup
 mkdir -p "$work/run/home" "$work/run/cache" "$work/run/out" "$work/etc-dns" "$work/share/ssh"
@@ -73,6 +101,7 @@ template=$work/$(basename "$template_url")
 sha512sum -c --quiet - <<<"$template_sha512  $template"
 podman import -q --change 'CMD ["/sbin/init"]' "$template" "$image" >/dev/null
 podman network create --subnet 10.199.0.0/24 "$name" >/dev/null
+reachable
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/share/tls.key" -out "$work/share/tls.crt" -days 1 \
   -subj /CN=fake-proxmox -addext subjectAltName=IP:10.199.0.10 2>/dev/null
 podman run -d --name "$name-proxmox" --network "$name" --ip 10.199.0.10 -v "$work/share:/share:Z" \
@@ -131,6 +160,40 @@ for port, expected in ((5380, False), (53443, True), (53, True), (22, True)):
     print(port, 'reachable' if reached else 'not reachable')
 "
 [[ $(in_ct 'cat /etc/resolv.conf' | grep -c '^nameserver 10.199.0.1$') == 1 ]] || fail "resolv.conf changed"
+
+log "What anyone answering on SSH would have received"
+# OpenTofu does not check the host key, so this is what an impostor gets. A stand-in for
+# install.sh keeps the upload, which is otherwise gone by the time a test could look.
+cp "$work/run/repo/$module/install.sh" "$work/install.sh.kept"
+printf '#!/bin/sh\ncp /run/octopushy-technitium/admin-password.sealed /root/captured\n' >"$work/run/repo/$module/install.sh"
+plan | tail -1
+apply >/dev/null
+in_ct 'cat /root/captured; rm /root/captured' >"$work/captured"
+cp "$work/install.sh.kept" "$work/run/repo/$module/install.sh"
+python3 -I - "$password" "$work/captured" <<'PY'
+import base64, sys
+secret, captured = sys.argv[1].encode(), open(sys.argv[2], "rb").read().strip()
+assert len(captured) > 20, captured
+encoded = base64.b64encode(secret).rstrip(b"=")
+assert secret not in captured and encoded not in captured and encoded[:8] not in captured, "the upload is readable"
+print("only ciphertext crossed SSH")
+PY
+in_ct 'grep -q "octopushy-bootstrap=" /root/.ssh/authorized_keys'
+plan | tail -1
+installs
+
+log "The certificate can be pinned"
+in_ct "openssl s_client -connect 127.0.0.1:53443 </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName" | grep -q "IP Address:$address" \
+  || fail "the certificate does not name the address"
+
+log "A failed guard keeps DNS down, rather than exposing the admin port"
+in_ct 'systemctl cat dns.service' | grep -q '^Requires=dns-http-guard.service' || fail "dns.service does not require the guard"
+in_ct 'systemctl stop dns.service; mv /etc/dns-http-guard.nft /etc/dns-http-guard.nft.kept; systemctl restart dns-http-guard.service || true; systemctl start dns.service || true'
+sleep 2
+[[ $(in_ct 'systemctl is-active dns.service || true') != active ]] || fail "DNS started without its guard"
+in_ct 'mv /etc/dns-http-guard.nft.kept /etc/dns-http-guard.nft; systemctl restart dns-http-guard.service; systemctl start dns.service'
+sleep 3
+echo "DNS waits for the guard"
 
 log "The password is nowhere"
 scan() {

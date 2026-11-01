@@ -13,8 +13,8 @@ settings:
     type: NxDomain
     updateIntervalHours: 24
     lists: [https://example.invalid/list.txt]
+    listProbes: [listed.example.com]  # on that list, so that verification can ask for it
     blocked: [bad.example.com]
     allowed: [false-positive.example.com]
 credentials: { store: dns/technitium/admin-password }
-tls: { verify: false }               # members serve a self-signed certificate
 policy: { approval: manual }

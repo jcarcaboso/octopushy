@@ -14,7 +14,6 @@ variable "cluster" {
   type = object({
     id     = string
     domain = string
-    tls    = object({ verify = bool })
     primary = object({
       guest   = string
       address = string

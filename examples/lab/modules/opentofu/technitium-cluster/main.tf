@@ -26,11 +26,6 @@ resource "terraform_data" "secondary" {
   input = each.value.address
 }
 
-# Changes only with the list URLs, so that a plan shows when they must be downloaded again.
-resource "terraform_data" "block_lists" {
-  input = local.blocking.lists
-}
-
 # Replaced when the agent finds blocked or allowed entries nobody declared, so that the plan
 # shows them going and they follow approval. The provider reads only the entries it knows.
 resource "terraform_data" "undeclared_entries" {

@@ -69,10 +69,12 @@ proxmox-e2e: dev-db
     tests/proxmox/run.sh
 
 # The technitium-lxc root and its install, in disposable local podman containers; no Proxmox.
+# It installs for real, so it needs outbound access: it stops with a clear message without it.
 technitium-lxc:
     tests/technitium-lxc/run.sh
 
 # A Technitium cluster on two real servers in disposable podman containers, with the real provider.
+# Its servers have no way out; only the first run downloads the images and the provider.
 technitium-cluster:
     tests/technitium-cluster/run.sh
 

@@ -23,15 +23,67 @@ class PasswordTests(unittest.TestCase):
         self.assertIn("ephemeral   = true", block)
         self.assertIn("default     = null", block)
 
-    def test_it_only_reaches_the_file_provisioner(self):
+    def test_it_only_reaches_the_guest_sealed(self):
+        # OpenTofu cannot check who answers on SSH, so what it uploads must be useless to anyone
+        # but the container Proxmox created.
         sources = (MODULE / "main.tf").read_text() + (MODULE / "outputs.tf").read_text()
         self.assertEqual(sources.count("var.admin_password"), 1)
-        self.assertIn("content     = var.admin_password", sources)
+        self.assertNotRegex(sources, r"content\s*=\s*var\.admin_password")
+        self.assertIn("admin-password.sealed", sources)
+        self.assertNotRegex(sources, r'destination\s*=\s*"\$\{local\.work\}/admin-password"')
+
+    def test_the_sealing_key_goes_only_through_the_proxmox_api(self):
+        main = (MODULE / "main.tf").read_text()
+        self.assertIn("octopushy-bootstrap=${local.bootstrap}", main)
+        block = re.search(r'module "container" \{.*?^\}', main, re.S | re.M).group()
+        self.assertIn("extra_ssh_keys", block)
+        self.assertIn("local.bootstrap_key", block)
+        install = re.search(r'resource "terraform_data" "install" \{.*?^\}', main, re.S | re.M).group()
+        self.assertNotRegex(install, r"(?m)^[^#]*BOOTSTRAP")
+        self.assertIn("SEAL_NONCE", install)
+
+    def test_the_guest_unseals_it_with_what_proxmox_gave_it(self):
+        self.assertIn("/root/.ssh/authorized_keys", INSTALL)
+        self.assertIn("octopushy-bootstrap=", INSTALL)
+        self.assertRegex(INSTALL, r"(?m)^unseal\(\)")
+        self.assertIn("fail \"the bootstrap key is missing", INSTALL)
+
+    def test_the_seal_opens(self):
+        """The bash half of the seal against the same construction as the HCL half."""
+        import base64, hashlib, subprocess, tempfile
+        key, nonce = "ab" * 32, "2026-11-01T00:00:00Z"
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        for secret in ("A test password, with & = + % in it", "x" * 12, "é-unicode-ü-secret", "y" * 200):
+            plain = base64.b64encode(secret.encode()).decode().rstrip("=")
+            sealed = ""
+            for i, c in enumerate(plain):
+                block = base64.b64encode(hashlib.sha256(f"{key}:{nonce}:{i // 40}".encode()).digest()).decode()
+                sealed += alphabet[(alphabet.index(c) + alphabet.index(block[i % 40])) % 64]
+            self.assertNotIn(plain[:12], sealed)
+            function = re.search(r"(?ms)^unseal\(\) \{.*?^\}", INSTALL).group()
+            with tempfile.TemporaryDirectory() as work:
+                Path(work, "sealed").write_text(sealed)
+                script = f"set -euo pipefail\n{function}\nunseal {work}/sealed {key} {nonce} {work}/plain\n"
+                subprocess.run(["bash", "-c", script], check=True)
+                self.assertEqual(Path(work, "plain").read_bytes(), secret.encode())
 
     def test_the_file_goes_to_curl_as_a_file(self):
         self.assertIn('--data-urlencode "pass@$password"', INSTALL)
         self.assertNotRegex(INSTALL, r"\$\(cat \"?\$password")
         self.assertNotIn("DNS_SERVER_ADMIN_PASSWORD=", INSTALL)
+
+    def test_a_failed_guard_keeps_dns_from_starting(self):
+        # Wants= would start DNS anyway, with plain HTTP open to the network.
+        unit = re.search(r"unit_text=.*?^UNIT", INSTALL, re.S | re.M).group()
+        self.assertRegex(unit, r"(?m)^Requires=dns-http-guard\.service$")
+        self.assertRegex(unit, r"(?m)^After=.*dns-http-guard\.service")
+        self.assertNotRegex(unit, r"(?m)^Wants=.*dns-http-guard")
+
+    def test_the_certificate_names_the_address_so_it_can_be_pinned(self):
+        # A certificate with only a common name cannot anchor the provider's connection.
+        self.assertIn("subjectAltName=IP:$address", INSTALL)
+        self.assertIn("DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH", INSTALL)
+        self.assertNotIn("DNS_SERVER_WEB_SERVICE_USE_SELF_SIGNED_CERT=true", INSTALL)
 
     def test_both_logins_are_checked_and_the_file_is_removed_on_exit(self):
         self.assertIn("trap cleanup EXIT", INSTALL)
@@ -63,7 +115,8 @@ class InstallTests(unittest.TestCase):
 
     def test_the_unit_depends_on_nothing_it_provides(self):
         unit = re.search(r"\[Unit\]\nDescription=Technitium DNS Server.*?\[Service\]", INSTALL, re.S).group()
-        self.assertNotIn("Requires=", unit)
+        # Only its own guard, which is the point of that guard.
+        self.assertEqual(re.findall(r"(?m)^Requires=.*", unit), ["Requires=dns-http-guard.service"])
         self.assertNotIn("BindsTo=", unit)
         self.assertNotIn("nss-lookup", unit)
 

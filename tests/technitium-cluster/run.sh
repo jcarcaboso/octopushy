@@ -53,10 +53,16 @@ eventually_dns() { # address name expected
 }
 
 start_node() { # name address
+  # The certificate the recipe's install makes: EC, ten years, naming the address.
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj "/CN=$2" \
+    -addext "subjectAltName=IP:$2" -keyout "$work/$1/tls.key" -out "$work/$1/tls.crt" 2>/dev/null
+  openssl pkcs12 -export -inkey "$work/$1/tls.key" -in "$work/$1/tls.crt" -out "$work/$1/https.pfx" \
+    -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout pass:test-only
+  rm -f "$work/$1/tls.key"
   podman run -d --name "$name-$1" --hostname "$1" --network "$network" --ip "$2" \
     -v "$work/$1:/etc/dns:Z" -e DNS_SERVER_DOMAIN="$1" -e DNS_SERVER_ADMIN_PASSWORD="$TECHNITIUM_PASSWORD" \
-    -e DNS_SERVER_WEB_SERVICE_ENABLE_HTTPS=true -e DNS_SERVER_WEB_SERVICE_USE_SELF_SIGNED_CERT=true \
-    -e DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443 "$image" >/dev/null
+    -e DNS_SERVER_WEB_SERVICE_ENABLE_HTTPS=true -e DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH=/etc/dns/https.pfx \
+    -e DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PASSWORD=test-only -e DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443 "$image" >/dev/null
   for _ in $(seq 1 60); do
     node call "$2" /api/admin/cluster/state >/dev/null 2>&1 && return
     sleep 1
@@ -69,7 +75,7 @@ tofu_in() { # network, then arguments
   podman run --rm --name "$name-tofu" --log-driver=none --cap-drop=all --security-opt=no-new-privileges \
     --read-only --tmpfs /tmp:rw,mode=1777 --userns=keep-id --network "$on" -v "$work/run:/w:Z" -w /w/root \
     -e HOME=/w/home -e TF_IN_AUTOMATION=1 -e TF_INPUT=0 -e TF_PLUGIN_CACHE_DIR=/w/cache \
-    -e TECHNITIUM_USERNAME=admin -e TECHNITIUM_PASSWORD "$tofu_image" "$@"
+    -e TECHNITIUM_USERNAME=admin -e TECHNITIUM_PASSWORD -e TECHNITIUM_CACERT=octopushy-primary.pem "$tofu_image" "$@"
 }
 tofu() { tofu_in "$network" "$@"; }
 
@@ -79,28 +85,35 @@ render() {
 import json, sys
 work = sys.argv[1]
 d = json.load(open(f"{work}/desired.json"))
-members = [
-    {"guest": "home/korriban/dns1", "role": "primary", "address": d["primary"], "endpoint": f"https://{d['primary']}:53443"},
-] + [
-    {"guest": guest, "role": "secondary", "address": address, "endpoint": f"https://{address}:53443"}
-    for guest, address in d["secondaries"].items()
+trusted = d.get("trusted", {})
+def member(guest, role, address):
+    endpoint = f"https://{address}:53443"
+    return {"guest": guest, "role": role, "address": address, "endpoint": endpoint,
+            "certificateSha256": trusted.get(endpoint, {}).get("sha256")}
+members = [member("home/korriban/dns1", "primary", d["primary"])] + [
+    member(guest, "secondary", address) for guest, address in d["secondaries"].items()
 ]
+primary_pem = trusted.get(f"https://{d['primary']}:53443", {}).get("pem")
+if primary_pem:
+    open(f"{work}/run/root/octopushy-primary.pem", "w").write(primary_pem)
 blocking = d["blocking"]
 json.dump({
     "octopushy": {"address": "home/clusters/technitium", "stack": "home.clusters.technitium", "lab": "home",
                   "cluster": "technitium", "revision": "test"},
-    "cluster": {"id": "technitium", "domain": d["domain"], "tls": {"verify": False},
+    "cluster": {"id": "technitium", "domain": d["domain"],
                 "primary": {"guest": "home/korriban/dns1", "address": d["primary"]},
                 "secondaries": {g: {"address": a} for g, a in d["secondaries"].items()},
-                "settings": {"recursion": d["recursion"], "forwardZones": d["forwardZones"], "blocking": blocking}},
+                "settings": {"recursion": d["recursion"], "forwardZones": d["forwardZones"],
+                             "blocking": {k: v for k, v in blocking.items() if k != "listProbes"}}},
 }, open(f"{work}/run/root/octopushy.auto.tfvars.json", "w"))
 base = {
-    "cluster": "home/clusters/technitium", "verifyTls": False, "clusterDomain": d["domain"], "minimumVersion": "15.6.2",
+    "cluster": "home/clusters/technitium", "clusterDomain": d["domain"], "minimumVersion": "15.6.2",
     "members": members, "formed": d["formed"], "syncWaitSeconds": 60, "control": d["control"],
     "settings": {"enableBlocking": blocking["enabled"], "blockingType": blocking["type"], "blockListUrls": blocking["lists"],
                  "blockListUpdateIntervalHours": blocking["updateIntervalHours"], "recursion": d["recursion"]["policy"],
                  "recursionNetworkACL": d["recursion"]["networks"]},
-    "blocked": blocking["blocked"], "allowed": blocking["allowed"], "forwardZones": [z["zone"] for z in d["forwardZones"]],
+    "blocked": blocking["blocked"], "allowed": blocking["allowed"], "listProbes": blocking["listProbes"],
+    "forwardZones": [z["zone"] for z in d["forwardZones"]],
 }
 json.dump(base, open(f"{work}/input.json", "w"))
 PY
@@ -126,6 +139,33 @@ import json, sys
 print(next(m['state'] for m in json.load(open('$work/inspect.json'))['members'] if m['guest'] == sys.argv[1]))" "$1"
 }
 
+# What Trust cluster records: what an agent read, as an operator saw it.
+trust_certificates() {
+  action certificates
+  python3 -I - "$work" <<'PY'
+import json, sys
+work = sys.argv[1]
+d = json.load(open(f"{work}/desired.json"))
+for c in json.load(open(f"{work}/certificates.json"))["certificates"]:
+    d.setdefault("trusted", {})[c["endpoint"]] = {"sha256": c["sha256"], "pem": c["pem"]}
+json.dump(d, open(f"{work}/desired.json", "w"))
+PY
+  render
+}
+
+# ClusterBinding, from what inspect reported: who is joined, by what identity.
+bind_peers() {
+  python3 -I - "$work" <<'PY'
+import json, sys
+work = sys.argv[1]
+d = json.load(open(f"{work}/desired.json"))
+for m in json.load(open(f"{work}/inspect.json"))["members"]:
+    if m.get("peerId") is not None:
+        d.setdefault("bindings", {})[m["guest"]] = {"guest": m["guest"], "address": m["address"], "peerId": m["peerId"], "peerName": m["peerName"]}
+json.dump(d, open(f"{work}/desired.json", "w"))
+PY
+}
+
 # ClusterPlan.Replacements
 replacements() {
   python3 -I - "$work/inspect.json" <<'PY'
@@ -141,6 +181,7 @@ PY
 
 plan() {
   action inspect
+  bind_peers
   mapfile -t replace < <(replacements)
   set +e
   tofu plan -input=false -no-color -detailed-exitcode -out=/w/out/plan.bin "${replace[@]}" >"$work/plan.log" 2>&1
@@ -160,12 +201,14 @@ for c in changes:
     m = secondary.match(c["address"])
     if m:
         (remove if c["change"]["actions"] == ["delete"] else join).append(m.group(1))
+d = json.load(open(f"{work}/desired.json"))
 out = {
     "addresses": [c["address"] for c in changes],
     "actions": {c["address"]: c["change"]["actions"] for c in changes},
-    "join": join, "remove": remove,
+    "join": join, "remove": [d.get("bindings", {}).get(g, {"guest": g}) for g in remove],
     "pruneEntries": any(c["address"] == "terraform_data.undeclared_entries" for c in changes),
-    "lists": any(c["address"] == "terraform_data.block_lists" for c in changes),
+    # ClusterPlan.ListsDownloaded: what was downloaded is kept apart from the plan.
+    "lists": d["blocking"]["lists"] != d.get("refreshed", []),
 }
 json.dump(out, open(f"{work}/changes.json", "w"))
 print("plan:", ", ".join(f"{c['address']} {'+'.join(c['change']['actions'])}" for c in changes) or "no changes")
@@ -198,7 +241,6 @@ PY
 }
 
 apply() { # what the steps after an approved plan do
-  tofu apply -input=false -no-color /w/out/plan.bin >>"$work/apply.log" 2>&1 || { tail -30 "$work/apply.log"; fail "the apply failed"; }
   python3 -I - "$work" <<'PY'
 import json, sys
 work = sys.argv[1]
@@ -207,11 +249,19 @@ changes = json.load(open(f"{work}/changes.json"))
 base.update(join=changes["join"], remove=changes["remove"], pruneEntries=changes["pruneEntries"])
 json.dump(base, open(f"{work}/input.json", "w"))
 PY
-  if [[ $(field join) != '[]' || $(field remove) != '[]' || $(field pruneEntries) == true ]]; then
+  # Removals first: once the apply has run, the plan no longer holds them.
+  if [[ $(field remove) != '[]' ]]; then action detach || fail "detach failed"; fi
+  tofu apply -input=false -no-color /w/out/plan.bin >>"$work/apply.log" 2>&1 || { tail -30 "$work/apply.log"; fail "the apply failed"; }
+  if [[ $(field join) != '[]' || $(field pruneEntries) == true ]]; then
     action reconcile || fail "reconcile failed"
   fi
   render
-  if [[ $(field lists) == true ]]; then action refresh-block-lists || fail "refresh failed"; fi
+  if [[ $(field lists) == true ]]; then refresh; fi
+}
+
+refresh() {
+  action refresh-block-lists || fail "refresh failed"
+  declare_ 'd["refreshed"] = d["blocking"]["lists"]'
 }
 
 verified() { action verify || fail "verification failed"; echo "verified every member"; }
@@ -243,9 +293,17 @@ cat >"$work/desired.json" <<JSON
   "recursion": { "policy": "UseSpecifiedNetworkACL", "networks": ["10.199.1.0/24"] },
   "forwardZones": [{ "zone": "lab.example.net", "forwarder": "$upstream", "protocol": "Udp" }],
   "blocking": { "enabled": true, "type": "NxDomain", "updateIntervalHours": 24, "lists": ["http://$upstream:8000/one.txt"],
-    "blocked": ["bad.lab.example.net"], "allowed": ["ok.lab.example.net"] } }
+    "blocked": ["bad.lab.example.net"], "allowed": ["ok.lab.example.net"], "listProbes": ["list1.lab.example.net"] } }
 JSON
 render
+
+log "Certificates, read with no credentials and then trusted"
+trust_certificates
+[[ -s $work/run/root/octopushy-primary.pem ]] || fail "no certificate was read for the primary"
+python3 -I -c "
+import json
+assert len(json.load(open('$work/desired.json'))['trusted']) == 2"
+scenario "certificates are read with no password"
 
 log "Form and join"
 plan
@@ -283,13 +341,21 @@ scenario "idempotent plan, and verification on a no-change plan"
 
 log "A new list URL is enforced only once it is downloaded"
 expect_dns "$secondary" list2.lab.example.net resolves
-declare_ 'd["blocking"]["lists"].append("http://'$upstream':8000/two.txt")'
+declare_ 'd["blocking"]["lists"].append("http://'$upstream':8000/two.txt"); d["blocking"]["listProbes"].append("list2.lab.example.net")'
 plan
 [[ $(field lists) == true ]] || fail "the plan does not show the new list"
 tofu apply -input=false -no-color /w/out/plan.bin >>"$work/apply.log" 2>&1
 sleep 8
 expect_dns "$primary" list2-before.lab.example.net resolves
-action refresh-block-lists || fail "refresh failed"
+# Verification asks for the probe, so it cannot pass before the list is enforced.
+python3 -I -c "
+import json
+d = json.load(open('$work/input.json')); d['syncWaitSeconds'] = 0
+json.dump(d, open('$work/input.json', 'w'))"
+if action verify 2>"$work/verify.err"; then fail "verification passed on a list that was not downloaded"; fi
+rg -q 'list2.lab.example.net is not blocked' "$work/verify.err" || { cat "$work/verify.err"; fail "unexpected failure"; }
+render
+refresh
 eventually_dns "$primary" list2.lab.example.net blocked
 eventually_dns "$secondary" list2.lab.example.net blocked
 verified
@@ -327,7 +393,7 @@ verified
 scenario "drift from a hand edit on the secondary, including an entry OpenTofu cannot see"
 
 log "Empty lists"
-declare_ 'd["blocking"].update(lists=[], blocked=[], allowed=[])'
+declare_ 'd["blocking"].update(lists=[], blocked=[], allowed=[], listProbes=[])'
 plan
 apply
 verified
@@ -336,7 +402,7 @@ no_changes "a plan with empty lists"
 verified
 expect_dns "$secondary" bad.lab.example.net resolves
 scenario "an empty list, and the plan stays clean"
-declare_ 'd["blocking"].update(lists=["http://'$upstream':8000/one.txt"], blocked=["bad.lab.example.net"], allowed=["ok.lab.example.net"])'
+declare_ 'd["blocking"].update(lists=["http://'$upstream':8000/one.txt"], blocked=["bad.lab.example.net"], allowed=["ok.lab.example.net"], listProbes=["list1.lab.example.net"])'
 plan
 apply
 verified
@@ -347,6 +413,24 @@ podman unshare rm -rf "$work/dns2"
 mkdir -p "$work/dns2"
 start_node dns2 "$secondary"
 sleep 35
+
+log "Its new certificate gets nothing until it is trusted"
+logins() { podman exec "$name-dns2" sh -c "cat /var/log/technitium/dns/*.log 2>/dev/null | grep -c 'logged in' || true"; }
+before=$(logins)
+if action inspect 2>"$work/inspect.err"; then
+  [[ $(state_of home/moraband/dns2) == unverified ]] || fail "the rebuilt member was not refused"
+fi
+if action verify 2>"$work/verify.err"; then fail "verification passed on a certificate nobody trusted"; fi
+rg -q 'another certificate than the one trusted' "$work/verify.err" || { cat "$work/verify.err"; fail "unexpected failure"; }
+python3 -I -c "
+import json
+r = json.load(open('$work/verify.json'))
+assert r['certificates'][0]['endpoint'].endswith('.12:53443'), r"
+[[ $(logins) == "$before" ]] || fail "the password reached an untrusted certificate"
+echo "the member was sent nothing, and its certificate is reported for review"
+scenario "a changed certificate withholds the password"
+trust_certificates
+
 plan
 no_changes "OpenTofu does not see a rebuilt secondary, which is why verification exists:"
 [[ $(state_of home/moraband/dns2) == stale ]] || fail "the secondary should be stale"
@@ -400,6 +484,18 @@ plan
 no_changes "a plan after the primary came back"
 verified
 scenario "primary down: the secondary serves, planning fails, and the plan is clean afterwards"
+
+log "A pin on the wrong certificate stops the provider too"
+python3 -I - "$work" <<'PY'
+import json, sys
+work = sys.argv[1]
+d = json.load(open(f"{work}/desired.json"))
+open(f"{work}/run/root/octopushy-primary.pem", "w").write(d["trusted"][f"https://{d['secondaries']['home/moraband/dns2']}:53443"]["pem"])
+PY
+if tofu plan -input=false -no-color >"$work/wrong-pin.log" 2>&1; then fail "the provider talked to a certificate it was not pinned to"; fi
+rg -q 'unknown authority' "$work/wrong-pin.log" || { tail -5 "$work/wrong-pin.log"; fail "unexpected failure"; }
+render
+scenario "the provider refuses any certificate but the pinned one"
 
 log "Removing a member"
 declare_ 'd["secondaries"] = {}'

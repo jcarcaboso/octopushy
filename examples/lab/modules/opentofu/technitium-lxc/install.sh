@@ -7,9 +7,11 @@
 # /etc/resolv.conf at 127.0.0.1. The container keeps resolving through the network.dns that
 # Proxmox wrote there, so nothing here depends on the server it installs.
 #
-# $work/admin-password holds the admin password. Technitium reads it only while /etc/dns has
-# no auth.config, and takes admin/admin if it cannot, so the login is checked afterwards. It
-# reaches curl as a file and never as an argument, and it is removed however this ends.
+# $work/admin-password.sealed holds the admin password, sealed to a key only this container has:
+# OpenTofu cannot tell who it is talking to on SSH, so nothing readable travels that way.
+# Technitium reads the password only while /etc/dns has no auth.config, and takes admin/admin if
+# it cannot, so the login is checked afterwards. It reaches curl as a file and never as an
+# argument, and it is removed however this ends.
 set -euo pipefail
 
 version=${TECHNITIUM_VERSION:?set TECHNITIUM_VERSION}
@@ -19,9 +21,27 @@ runtime_sha512=${ASPNETCORE_SHA512:?set ASPNETCORE_SHA512}
 address=${GUEST_ADDRESS:?set GUEST_ADDRESS}
 nameservers=${NAMESERVERS:?set NAMESERVERS}
 
+# Takes back out what main.tf added, into a file nobody else can read.
+unseal() {
+  local alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  local text block='' plain='' prefix i
+  text=$(<"$1")
+  for ((i = 0; i < ${#text}; i++)); do
+    ((i % 40)) || block=$(printf '%s' "$2:$3:$((i / 40))" | sha256sum | cut -d' ' -f1 | tr a-f A-F | basenc --base16 -d | base64 -w0)
+    prefix=${alphabet%%"${text:i:1}"*}
+    local sum=${#prefix}
+    prefix=${alphabet%%"${block:i%40:1}"*}
+    plain+=${alphabet:(sum - ${#prefix} + 64) % 64:1}
+  done
+  while ((${#plain} % 4)); do plain+='='; done
+  (umask 077 && printf '%s' "$plain" | base64 -d >"$4")
+}
+
 work=/run/octopushy-technitium
 password=$work/admin-password
+sealed=$work/admin-password.sealed
 config=/etc/dns
+certificate=$config/octopushy-https.pfx
 base=/opt/technitium
 service=dns.service
 first_run_drop_in=/run/systemd/system/$service.d
@@ -51,12 +71,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ -s $sealed ]]; then
+  bootstrap=$(sed -n 's/.* octopushy-bootstrap=\([0-9a-f]\{64\}\)$/\1/p' /root/.ssh/authorized_keys | head -n 1)
+  [[ -n $bootstrap ]] || fail "the bootstrap key is missing from authorized_keys; Proxmox writes it only when it creates the container"
+  unseal "$sealed" "$bootstrap" "${SEAL_NONCE:?set SEAL_NONCE}" "$password"
+  rm -f "$sealed"
+fi
 [[ -s $password ]] || fail "$password is missing or empty"
 # Identity written to the root disk would be lost with it.
 mountpoint -q "$config" || fail "$config is not a mount point; declare it under hardware.mountPoints"
 
 export DEBIAN_FRONTEND=noninteractive
-packages=(ca-certificates curl jq libicu76 libgssapi-krb5-2 nftables unattended-upgrades)
+packages=(ca-certificates curl jq libicu76 libgssapi-krb5-2 nftables openssl unattended-upgrades)
 if ! dpkg-query -W "${packages[@]}" >/dev/null 2>&1; then
   apt-get -o DPkg::Lock::Timeout=120 update -q
   # unattended-upgrades applies Debian security updates.
@@ -120,14 +146,16 @@ ExecStart=/usr/sbin/nft -f /etc/dns-http-guard.nft
 WantedBy=multi-user.target
 UNIT
 
-# Upstream's systemd.service, with the runtime's path. A failed guard does not hold DNS back,
-# and neither Octopushy nor name resolution has to be up for this to start.
+# Upstream's systemd.service, with the runtime's path. DNS does not start without the guard: a
+# member that is down is better than an admin API in plain HTTP on the network. Neither Octopushy
+# nor name resolution has to be up for this to start.
 unit=/etc/systemd/system/$service
 unit_text=$(cat <<UNIT
 [Unit]
 Description=Technitium DNS Server
+Requires=dns-http-guard.service
 After=network.target dns-http-guard.service
-Wants=network-online.target dns-http-guard.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -194,12 +222,23 @@ if [[ ! -e $config/auth.config ]]; then
   chmod 0750 "$work"
   chown dns-server "$password"
   chmod 0400 "$password"
+  # Technitium's own certificate has only a common name, which nothing can verify. This one
+  # names the address, so that an operator can pin it for the provider and the agent.
+  (umask 077 && openssl rand -hex 24 >"$work/tls.password")
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+    -subj "/CN=$address" -addext "subjectAltName=IP:$address" \
+    -keyout "$work/tls.key" -out "$work/tls.crt" 2>/dev/null
+  openssl pkcs12 -export -inkey "$work/tls.key" -in "$work/tls.crt" -out "$certificate" \
+    -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout "file:$work/tls.password"
+  chown dns-server:dns-server "$certificate"
+  chmod 0640 "$certificate"
   install -d -m 0755 "$first_run_drop_in"
   cat >"$first_run_drop_in/first-run.conf" <<CONF
 [Service]
 Environment="DNS_SERVER_ADMIN_PASSWORD_FILE=$password"
 Environment="DNS_SERVER_WEB_SERVICE_ENABLE_HTTPS=true"
-Environment="DNS_SERVER_WEB_SERVICE_USE_SELF_SIGNED_CERT=true"
+Environment="DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH=$certificate"
+Environment="DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PASSWORD=$(<"$work/tls.password")"
 Environment="DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443"
 CONF
   systemctl stop "$service" 2>/dev/null || true

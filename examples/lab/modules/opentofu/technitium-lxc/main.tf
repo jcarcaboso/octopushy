@@ -4,6 +4,15 @@ locals {
   firewall   = var.guest.inputs.firewall
   work       = "/run/octopushy-technitium"
 
+  # OpenTofu can check SSH's host key only against a public key, and nothing can give it this
+  # container's before it connects, so whoever answers on the network gets what is uploaded.
+  # The password is therefore sealed to this key, which reaches the container only as the
+  # comment of an SSH key in Proxmox's API, and never over SSH. It is derived from the private
+  # key in this stack's state, so it needs no provider of its own.
+  bootstrap     = sha256("octopushy-bootstrap:${tls_private_key.install.private_key_openssh}")
+  bootstrap_key = "${trimspace(tls_private_key.install.public_key_openssh)} octopushy-bootstrap=${local.bootstrap}"
+  seal_alphabet = split("", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+
   dns_sources   = length(local.firewall.dnsSources) == 0 ? null : join(",", local.firewall.dnsSources)
   admin_sources = length(local.firewall.adminSources) == 0 ? null : join(",", local.firewall.adminSources)
 }
@@ -20,7 +29,7 @@ module "container" {
   octopushy      = var.octopushy
   host           = var.host
   template       = var.template
-  extra_ssh_keys = [tls_private_key.install.public_key_openssh]
+  extra_ssh_keys = [local.bootstrap_key]
 
   guest = merge(var.guest, {
     inputs = {
@@ -70,10 +79,14 @@ resource "terraform_data" "install" {
     destination = "${local.work}/install.sh"
   }
 
-  # /run is a tmpfs, and install.sh removes the file however it ends.
+  # OpenTofu has no way to encrypt, so this adds, mod 64, the password's base64 to a keystream
+  # of SHA-256 blocks under the key above and a nonce that differs from plan to plan. install.sh
+  # takes it back out. Each block gives 40 of its 43 full characters.
   provisioner "file" {
-    content     = var.admin_password
-    destination = "${local.work}/admin-password"
+    content = join("", [for i, c in split("", replace(base64encode(var.admin_password), "=", "")) :
+      local.seal_alphabet[(index(local.seal_alphabet, c) + index(local.seal_alphabet,
+    substr(base64sha256("${local.bootstrap}:${plantimestamp()}:${floor(i / 40)}"), i % 40, 1))) % 64]])
+    destination = "${local.work}/admin-password.sealed"
   }
 
   provisioner "remote-exec" {
@@ -83,6 +96,7 @@ resource "terraform_data" "install" {
       "ASPNETCORE_VERSION=${local.technitium.aspnetcoreVersion}",
       "ASPNETCORE_SHA512=${local.technitium.aspnetcoreSha512}",
       "GUEST_ADDRESS=${local.address}",
+      "SEAL_NONCE=${plantimestamp()}",
       "NAMESERVERS='${join(" ", var.guest.network.dns)}'",
       "bash ${local.work}/install.sh",
     ])]
