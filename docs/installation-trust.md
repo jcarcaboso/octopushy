@@ -49,29 +49,58 @@ running mutations cannot be recalled.
 
 A [cluster](technitium-lxc.md#a-cluster)'s admin password is a credential too, and the lab repository
 decides where it would go: a member's address comes from its `guest.yaml`. So it gets the same
-guarantee. Trust is keyed by the cluster's address (`lab/clusters/id`) and holds the endpoint of
-every member, `https://<address>:53443`, when it was trusted.
+guarantee, and more, because code the repository controls holds it. Trust is keyed by the cluster's
+address (`lab/clusters/id`), and covers:
 
-A cluster also trusts its recipe's code. An installation does not need this, but a cluster's plan
-holds the admin password in its environment, because the provider logs in while planning, so a
-commit must not be able to run code of its own there. Trust records a digest of `recipe.yaml`, which
-names the image, and of the root's folder, which holds the lock file that pins the provider. A
-cluster's root may hold only its own `.tf` files.
+- **Endpoints:** every member's `https://<address>:53443`.
+- **Certificates:** each member's, by fingerprint. The agent and the provider talk to that exact
+  certificate and nothing else, and there is no setting that turns this off, because a commit could
+  use it. A member presenting another one is sent nothing.
+- **Code:** a digest of the cluster's recipe and root, and of each member's, with what they use. A
+  cluster's plan holds the password before anyone approves it, and a member's apply can run with
+  no person approving it, so a commit must not be able to run code of its own in either place.
+
+A cluster's root may hold only its own `.tf` files, and a root that receives the password has to pin
+its providers with a lock file and call only modules its recipe lists. They are read as HCL, not by
+matching lines, and a file that cannot be read with certainty is refused.
 
 1. A new cluster shows **Needs trust**. Its runs and checks wait, and receive no password.
-2. On the cluster's page, review the endpoints and the code, then choose **Trust cluster**.
-3. If a commit changes a member's address, adds a member, or changes the recipe, work waits again
-   until you trust what is declared now. Removing a member does not ask for this. Other clusters,
-   and every installation, are unaffected.
+2. On the cluster's page, review the code and choose **Trust cluster**. This also records the grants
+   below, so the guests can install before there are certificates to read.
+3. Trust again once certificates can be read; [the first deployment](technitium-lxc.md#the-order-of-a-first-deployment)
+   gives the order.
+4. If a commit changes a member's address, adds a member, or changes any of that code, or a member
+   presents another certificate, work waits until you trust what is declared now. Removing a
+   member does not ask for this. Other clusters, and every installation, are unaffected.
 
-The controller checks this before it releases the password or builds an assignment, as above. The
-password can also not reach an unreviewed plan another way: a backend environment value cannot use
-it, a Proxmox token cannot be it, and a guest's `provision.secrets` reach only an apply.
+Reading certificates needs no trust: that connection carries no credentials.
 
-- `GET /api/inventory` and `GET /api/clusters/{id}`: each cluster has `trust` with its declared
-  `endpoints`, the `untrusted` ones, `codeDigest`, `codeChanged`, `trustedAt` and `trustedBy`.
-- `POST /api/clusters/{id}/trust` with `{ "endpoints": [...], "codeDigest": "..." }`: trusts what is
-  declared when it matches the request. The actor comes from the session.
+- `GET /api/inventory` and `GET /api/clusters/{id}`: each cluster has `trust` with its `endpoints`,
+  the `untrusted` ones, `codeDigest`, `codeChanged`, `certificates`, `passwordProtected`, `trustedAt`
+  and `trustedBy`; each member has its `codeDigest`.
+- `POST /api/clusters/{id}/certificates`: reads what the members present now.
+- `POST /api/clusters/{id}/trust` with `{ "endpoints": [...], "codeDigest": "...", "certificates":
+  { "<endpoint>": "<sha256>" } }`: trusts what is declared when it matches the request, and leaves
+  any certificate it does not name as it was. The actor comes from the session.
+
+## Protected secrets
+
+Everything above checks what a commit declares, and a commit can change what it declares: it could
+delete the cluster and bind the password somewhere else. So protection is not in the repository.
+
+An operator can mark a store entry **Protected**, when creating it or later, under **Variables** or
+with `POST /api/variables/protection`. The flag is in the database. No definition can set it, and
+changing or deleting a definition does not remove it. A protected entry is released only for a
+**grant**: this resource, running code with this digest. The check is where the store releases keys,
+so it holds for every way a key can be bound, on every attempt, including retries. A run waiting
+for one shows *Waiting for trust*, whatever its `policy`.
+
+**Trust cluster** records grants for the cluster and for each member using its password. Other
+resources use `POST /api/variables/grants` with `{ "key": "...", "resourceId": "...", "codeDigest":
+"..." }`; a null digest is for work that runs no repository code, such as observing an installation.
+A run holding a protected entry receives only the folders its digest covers, not the repository.
+
+An entry that is not protected behaves as it always did.
 
 ## Upgrading from revision trust
 

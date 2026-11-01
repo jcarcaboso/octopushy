@@ -164,9 +164,26 @@ _Avoid_: Apply approval, a guarantee that code is safe, or trust of a single rev
 
 **Cluster trust**:
 An operator's decision to let an application cluster's admin password go to the
-addresses of its members, and be held by its recipe's code before a plan is approved.
-It is given again when a member's address or that code changes.
+addresses and certificates of its members, and be held by its recipes' code without
+a person approving it. It is given again when an address, a certificate, or that code
+changes.
 _Avoid_: Apply approval, or a review of what a change will do
+
+**Protected secret**:
+A store entry released only for a grant. The flag and the grants are in Octopushy's
+database, so no commit can set, change, or remove them.
+_Avoid_: Treating a definition as what guards a secret
+
+**Grant**:
+An operator's decision that one resource, running code with one digest, may receive
+a protected secret.
+_Avoid_: Trust when referring to one secret, or a sandbox: a digest says what the code is, not that it is safe
+
+**Member binding**:
+Octopushy's record of a guest that has joined an application cluster, with what
+identifies it there. It lasts until the guest is known to have left, whatever the
+definitions say.
+_Avoid_: Membership when referring to what cluster.yaml declares
 
 **Repository source**:
 The configured origin and branch from which definition revisions are discovered.

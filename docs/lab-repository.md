@@ -67,8 +67,9 @@ endpoints an operator [trusted](installation-trust.md) for it. A new installatio
 or a new endpoint for one, waits for that trust; other changes run as soon as they
 are synced. This is separate from the per-resource apply policy described below,
 and cannot be enabled or weakened by a setting in the lab repository. An application
-cluster's admin password has the same boundary, over its members' addresses and its
-recipe's code.
+cluster's admin password has the same boundary, over its members' addresses, certificates,
+and code. A [protected](installation-trust.md#protected-secrets) store entry goes only to what an
+operator granted it, and no definition can change that.
 
 The lab repository is the desired configuration Octopushy reads. It is separate from
 Octopushy's own source code and holds two kinds of files:
@@ -83,8 +84,8 @@ Everything else lives elsewhere:
 | Where | What |
 |---|---|
 | Lab repository | Definitions, tool-native files, policies, variable-store key references |
-| Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot, the entries each integration holds for Octopushy |
-| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state, which for a cluster records who has joined |
+| Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot, the entries each integration holds for Octopushy, who has really joined each cluster, what is trusted and granted |
+| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state, which for a cluster records who should be a member |
 
 ## Layout
 
@@ -559,7 +560,6 @@ settings:                         # shared by all members
   forwardZones:
     - { zone: home.arpa, forwarder: 10.1.0.1 }
 credentials: { store: dns/technitium/admin-password }
-tls: { verify: false }
 policy:
   approval: manual
 ```
@@ -581,19 +581,22 @@ operator's guide; the implementation differs from the original proposal as noted
   the `technitium` executor joins, removes, and verifies, because OpenTofu cannot join without
   putting the password in a saved plan, and cannot see a rebuilt member at all. Other kinds of
   cluster would bring a root and an executor of their own.
-- **OpenTofu state records who has joined.** There is no table: each secondary is a
-  `terraform_data` resource, so adding one is a create in the preview and removing one a delete.
-  The agent checks members before every plan, so a member that is out of the cluster is a
-  replacement there, and follows approval.
+- **OpenTofu state records who should be a member,** and Octopushy records who is. Each secondary is
+  a `terraform_data` resource, so adding one is a create in the preview and removing one a delete. The
+  agent checks members before every plan, so a member that is out of the cluster is a replacement
+  there, and follows approval. A binding in the database keeps what identifies each joined member, so
+  a removal touches that exact peer, and a guest cannot be retired until it has left.
 - **Role changes and removals are explicit.** Changing the primary of a formed cluster is a promotion,
   which this version refuses, and so is changing `clusterDomain`. Removing a member makes it leave
-  the cluster, which counts as a delete under the cluster's destructive setting; its guest is
-  retired separately. A guest still listed in a cluster cannot be retired, and deleting its folder
-  proposes nothing. Deleting `cluster.yaml` destroys nothing: the cluster is reported as missing.
+  the cluster before the apply, which counts as a delete under the cluster's destructive setting, as
+  does removing entries nobody declared. Its guest is retired separately. A guest still listed in a
+  cluster cannot be retired, and one that is out of the file waits until it has left. Deleting
+  `cluster.yaml` destroys nothing: the cluster is reported as missing, and its guests stay bound.
 - **The cluster has its own policy,** flowing down from the lab. Approving a cluster change never
   approves its members' changes. Its `execution.agentLabels` flow down the same way.
-- **Its runs do not lock the members.** Other work on those guests can go on meanwhile, and a guest
-  that applies a change gets the cluster checked afterwards.
+- **Its runs and its members' runs exclude each other.** A cluster run waits for its members, then
+  holds them until it ends, also when its outcome is uncertain. A guest that applies a change gets
+  the cluster checked afterwards.
 - **A cluster belongs to one lab,** and so do its members.
 
 ### Maintenance windows
@@ -649,9 +652,9 @@ New VM → configured guest → working service:
 3. Add `services/<name>/` under the guest. When the secrets resolve and are
    delivered, Octopushy proposes deploying that instance: it opens the instance's
    ports on the guest, deploys it, creates its DNS records, then verifies it.
-4. For a cluster, add `clusters/<id>/cluster.yaml` listing the member guests. Once
-   every member is verified and the cluster is trusted, one run forms it on the primary
-   and joins the others, then verifies each.
+4. For a cluster, add `clusters/<id>/cluster.yaml` listing the member guests, with its password
+   as a protected store entry. Trust the code, let the guests install, and trust their
+   certificates: one run then forms it on the primary, joins the others, and verifies each.
 
 Each step is a separate proposal. A failure in one guest or instance blocks only
 what depends on it.

@@ -41,10 +41,13 @@ provision:
   keeps resolving through them, never through itself, so it can boot and install with its
   own DNS server down.
 - **Set the password first:** add `dns/technitium/admin-password` as a secret under
-  **Variables**, at least 12 characters on one line. A run is blocked until it exists.
+  **Variables**, at least 12 characters on one line, and mark it **Protected** if the server
+  will join a [cluster](#a-cluster). A run is blocked until it exists.
 - **Agents need a route to the container's port 22.** OpenTofu installs over SSH.
+- **The install needs outbound access:** see [what it downloads](#what-it-downloads).
 
-Sign in at `https://<address>:53443` as `admin`. The certificate is self-signed.
+Sign in at `https://<address>:53443` as `admin`. The certificate is self-signed, made by the
+install for this address.
 
 ## What gets installed
 
@@ -57,13 +60,32 @@ creates the container with its public key. OpenTofu then connects as root and ru
 - writes `dns.service`, upstream's unit with the runtime's path, enabled at boot. It depends
   on neither Octopushy nor name resolution;
 - keeps Technitium's plain HTTP port 5380 on loopback with an nftables rule of its own, and
-  serves the API over HTTPS on 53443;
+  serves the API over HTTPS on 53443, with a certificate of its own that names the address, since
+  Technitium's has only a common name, which nothing can verify;
+- makes `dns.service` require that rule: **if the rule cannot be loaded, DNS does not start.** That
+  is deliberate. A member that is down is an outage you will see, and an admin API in plain HTTP on
+  the network is one you will not;
 - checks the running version, that the password works and `admin`/`admin` does not, that
   ports 53 and 53443 answer, and that `/etc/resolv.conf` still names `network.dns`. If any
   check fails, the apply fails.
 
 It does not use upstream's `install.sh`, which always fetches the latest release and points
 `/etc/resolv.conf` at the server itself. It runs as the `dns-server` user, as upstream does.
+
+### What it downloads
+
+| From | What | Needs reaching |
+| --- | --- | --- |
+| The Proxmox host | The container template | `download.proxmox.com`, port 80 |
+| The agent | OpenTofu's image, if the agent's runtime pulls it | `ghcr.io` |
+| The agent | Providers | `registry.opentofu.org`, and `github.com` with its release downloads, where the registry points |
+| The container | Packages | The mirrors in the template's sources, `deb.debian.org` by default, port 80 |
+| The container | ASP.NET Core | `builds.dotnet.microsoft.com` |
+| The container | Technitium | `download.technitium.com` |
+| Each member, in a cluster | Block lists | Whatever `settings.blocking.lists` names |
+
+The container keeps needing its mirrors, because it updates itself with `unattended-upgrades`.
+`just technitium-lxc` installs for real, so it needs this too, and says so if it cannot.
 
 ## Versions
 
@@ -93,20 +115,34 @@ Technitium takes the password on its first start only, when `/etc/dns/auth.confi
 exist. If it cannot read it, it silently uses `admin`/`admin`, which is why the install logs
 in to check.
 
-The value reaches the apply through `TF_VAR_admin_password`, and OpenTofu copies it to a file
-under `/run` in the container. The plan never receives it, and the variable is ephemeral, so
-it is in neither the saved plan nor the state. In the container it reaches curl as a file,
-not as an argument, and it is deleted however the install ends. `auth.config` holds only a
-hash of it.
+The value reaches the apply through `TF_VAR_admin_password`. The plan never receives it, and the
+variable is ephemeral, so it is in neither the saved plan nor the state.
+
+OpenTofu installs over SSH, and it **cannot authenticate who answers**: it checks a host key only
+against a public key, and nothing can give it this container's before it connects. So the password
+does not cross SSH in a form anyone else can read. The root derives a key from its state and sends
+it to the container through the Proxmox API, as the comment of an SSH key, which Proxmox writes
+into `authorized_keys`. The apply seals the password to that key, and `install.sh` opens it in the
+container. Someone impersonating the container on SSH receives ciphertext, the install script, and
+no key.
+
+OpenTofu has no encryption function, so the seal is built from what it has: a keystream of SHA-256
+blocks over that key, a nonce, and a counter, added to the base64 of the password. It is a small
+construction, not a library, and worth reading in [`main.tf`](../examples/lab/modules/opentofu/technitium-lxc/main.tf).
+
+An impersonator can still accept the session and report success, so **an apply that succeeds does
+not prove the real container was installed.** What proves that for a cluster is its certificate,
+below. In the container the password reaches curl as a file, not as an argument, and it is deleted
+however the install ends. `auth.config` holds only a hash of it.
 
 The store is not kept in sync afterwards. **Changing the value does not change the password.**
 Change it in Technitium first, then in the store: a later install checks the value in the store
 and fails if it does not work. In a cluster, [rotate it](#rotating-the-password) on the primary.
 
-The generated SSH private key is in the guest's OpenTofu state, and therefore in saved plans.
-Octopushy keeps both encrypted, but an external state backend keeps its own copy. OpenTofu does
-not check the container's SSH host key, because nothing reports it before the first
-connection: keep agents and the container on a network you trust.
+The generated SSH private key, and so the key the password is sealed to, is in the guest's
+OpenTofu state, and therefore in saved plans. Octopushy keeps both encrypted, but an external state
+backend keeps its own copy. That key also stays in the container's `authorized_keys`, for the next
+install.
 
 ## `/etc/dns`
 
@@ -136,7 +172,9 @@ Both default to everyone. `adminSources` must include the agents, or the next in
 connect. Turning this on for an existing server restarts its container.
 
 **These rules are inert unless the firewall is also enabled for the datacenter** (Datacenter,
-Firewall, Options), which Octopushy does not do. Port 5380 does not rely on them.
+Firewall, Options), which Octopushy does not do. Port 5380 does not rely on them: the container's
+own rule keeps it closed, and DNS does not start without that rule, so a guard that fails is an
+outage of that member, not an open port.
 
 In a cluster, members talk to each other on 53443 and 53 in both directions, and Technitium's
 cluster traffic does not work through a proxy. Limit the sources to your LAN if you like, but keep
@@ -167,11 +205,11 @@ settings:
     type: NxDomain
     updateIntervalHours: 24
     lists: [https://example.invalid/list.txt]
+    listProbes: [listed.example.com] # on that list, so that verification can ask for it
     blocked: [bad.example.com]
     allowed: [false-positive.example.com]
     # control: example.org           # a name every member must resolve
 credentials: { store: dns/technitium/admin-password }
-tls: { verify: false }               # members serve a self-signed certificate
 policy: { approval: manual }
 ```
 
@@ -184,6 +222,9 @@ the detail, and [the lab repository](lab-repository.md#application-clusters) the
 - **Each member is a guest of this recipe** on a static address, with `network.dns` naming other
   resolvers. Put members on different Proxmox hosts: members on one host are a warning, because
   that host is one failure domain for both.
+- **Create the password as a protected entry, before the first commit.** Under **Variables**, add
+  `dns/technitium/admin-password` and tick **Protected**. Only an operator can set that, and no commit
+  can undo it: the entry then goes only to what you trust, however a definition asks for it.
 - **Every member's `provision.secrets.admin_password` names the cluster's `credentials`.** Joining
   replaces a secondary's users with the primary's, and Octopushy signs in to every member with one
   password, so a guest that names another entry makes the cluster invalid.
@@ -192,18 +233,42 @@ the detail, and [the lab repository](lab-repository.md#application-clusters) the
 - **With the Proxmox firewall on,** see [Firewall](#firewall): members need each other on 53443
   and 53, and the agent's address has to be in both source lists.
 
-### The order of runs
+### The order of a first deployment
 
-1. Commit the guests and the cluster together. Each guest's run goes as usual.
-2. The cluster's run is **blocked** until every member is applied and verified, and its reason
-   names the ones it waits for. A member's failure shows there as that member's, and nothing else
-   stops.
-3. It then waits for [trust](installation-trust.md#application-clusters). Open the cluster's page,
-   check the addresses and the recipe, and choose **Trust cluster**.
-4. **Inspect** asks every member what it reports. **Plan** shows forming the cluster and a
-   `terraform_data.secondary` for each secondary. After approval, **apply** forms it and sets
-   everything; **Join and remove members** joins the secondaries; **Download block lists** forces
-   the lists; **Verify every member** checks each one directly.
+1. **Create the protected store entry,** as above.
+2. **Commit the guests and the cluster together.** Trust each new Proxmox installation on its page.
+3. **Trust the code.** The guests' runs are blocked with *Waiting for trust*, because they need the
+   password and nothing has been granted it. Open the cluster's page, review the recipes and roots in
+   the repository, and choose **Trust cluster**. The certificates cannot be read yet, and do not
+   need to be: this lets the guests install. It also grants the password to the cluster and to each
+   member, for exactly the code shown.
+4. **The guests install.** The cluster's run stays blocked until every member is applied and verified,
+   naming the ones it waits for. A member's failure shows there as that member's.
+5. **Trust the certificates.** Once a member answers, an agent reads its certificate, within a minute
+   or at once with **Read certificates**; this sends no password. Compare each fingerprint with the
+   member's own, from the Proxmox host, where nobody can stand in the middle:
+
+   ```sh
+   pct exec 320 -- sh -c 'openssl s_client -connect 127.0.0.1:53443 </dev/null 2>/dev/null \
+     | openssl x509 -outform der | sha256sum'
+   ```
+
+   Then choose **Trust cluster** again.
+6. **The cluster's run goes.** **Inspect** asks every member what it reports. **Plan** shows forming the
+   cluster and a `terraform_data.secondary` for each secondary. After approval, **apply** forms it
+   and sets everything; **Join members** joins the secondaries; **Download block lists** forces the
+   lists; **Verify every member** checks each one directly.
+
+From then on a commit that changes an address, a member's recipe, or the cluster's own waits for
+**Trust cluster** again, and a changed member root blocks that guest's run, with the password
+withheld, whatever its `policy` says.
+
+### Cluster runs and member guests
+
+A cluster run and its members' own runs do not overlap. A cluster run that has not started waits
+for its members. Once started it holds them until it ends, including while its outcome is uncertain,
+and a guest's run shows *Waiting for cluster run*. Approving a cluster's plan promptly therefore
+matters more than it looks: its members cannot change until it is done.
 
 Verification runs on every cluster run, even when the plan has no changes, and **Plan now** on the
 cluster's page starts one at any time. A failed check is reported as *Verification failed*, naming
@@ -217,9 +282,17 @@ observed. A failed background check shows on the overview. It proposes nothing a
 ### Changing a blocklist
 
 Edit `settings.blocking` and commit. Technitium does not enforce a new `lists` URL until it has
-downloaded it, so a plan that changes a URL includes **Download block lists**, on the primary,
-which covers every member. Entries in `blocked` and `allowed` reach secondaries through
-Technitium's own sync, usually within 20 seconds, and verification waits for up to 90.
+downloaded it, so a run downloads whatever it does not know to be downloaded, on the primary, which
+covers every member. Octopushy remembers what was downloaded apart from OpenTofu, so if a download
+fails, the next run tries again, even if its plan has no changes. Entries in `blocked` and `allowed`
+reach secondaries through Technitium's own sync, usually within 20 seconds, and verification waits
+for up to 90.
+
+**A list needs `listProbes`:** names that are on it and in neither `blocked` nor `allowed`, one for
+each list. A URL says nothing about what a server enforces, so verification asks every member for
+these over DNS, and a cluster with lists and no probes is invalid. If a list drops a probe,
+verification fails until you pick another. With nothing declared to block, verification asks
+nothing and reports `blockingVerified: false` rather than claim anything.
 
 Taking the last entry out of `blocked` or `allowed` deletes a resource in the plan, so it follows
 `policy.destructive`.
@@ -230,7 +303,8 @@ Octopushy owns the cluster's settings, lists and forward zones. **A hand edit in
 interface is reverted by the next run,** on either node, since a secondary hands its changes to
 the primary. A changed setting is a change in the next plan. An entry someone added to the blocked
 or allowed list is one OpenTofu cannot see, so inspect finds it, and the plan replaces
-`terraform_data.undeclared_entries`, which removes it after approval. To keep an entry, declare it.
+`terraform_data.undeclared_entries`, which removes it. The approval names what goes, and because it
+deletes something from a live server it follows `policy.destructive`. To keep an entry, declare it.
 
 Zones and records you add yourself are left alone, and so is everything the cluster does not
 declare. Per-node settings such as `logQueries` keep Technitium's defaults, because a change would
@@ -243,15 +317,29 @@ What stops is change: a cluster run fails at **Inspect** saying so, and the gues
 Nothing is lost when the primary returns, and the next plan is clean. If it is gone for good, see
 [promotion](#changing-the-primary).
 
+### A changed certificate
+
+The agent and the provider talk only to the exact certificate you trusted for a member. If a member
+presents another one it receives nothing, not even a login, and work stops with *Waiting for trust*.
+Verification fails naming it, and the cluster's page shows what it presents.
+
+Either something else is answering at that address, or the member was rebuilt and its `/etc/dns`
+went with its certificate. Tell them apart from the Proxmox host, with the command in
+[the first deployment](#the-order-of-a-first-deployment). If it is the member, choose **Trust cluster**.
+Changing a member's address needs a new certificate too, since the old one names the old address:
+that is a rebuild, not an edit.
+
 ### A rebuilt member
 
-Replacing a container discards a mount point with a `size`, so a member can come back empty. It
-then serves DNS **with no blocking**, and OpenTofu reports "No changes", because the primary still
-lists it. Verification is what catches this: the guest's run gets its cluster checked, and the
-check fails with the exact call to make.
+Replacing a container discards a mount point with a `size`, so a member can come back empty, with
+a new certificate. It then serves DNS **with no blocking**, and OpenTofu reports "No changes",
+because the primary still lists it. Verification is what catches this: the guest's run gets its
+cluster checked, and the check fails.
 
-Removing a member is a destructive decision, so Octopushy does not do this by itself. Sign in on
-the primary, then delete its stale record with the id from the failure:
+First [trust its new certificate](#a-changed-certificate), or nothing can sign in to it. The next
+verification then fails with the exact call to make. Removing a member is a destructive decision,
+so Octopushy does not do this by itself. Sign in on the primary, then delete its stale record with
+the id from the failure:
 
 ```sh
 token=$(curl -sk https://10.1.0.32:53443/api/user/login \
@@ -282,23 +370,31 @@ once formed, and OpenTofu's `prevent_destroy` stops it a second time.
 ### Removing things
 
 Take a member out of `members` to remove it. The plan shows a delete, so `policy.destructive`
-applies, and after approval it leaves the cluster, by `deleteSecondary` if it cannot answer. Retire
-its guest afterwards: a guest listed in a cluster cannot be retired, and its folder cannot be
-removed. A cluster has to keep one secondary.
+applies. After approval the member leaves the cluster **before** the apply, identified by what
+Octopushy recorded when it joined, and never by looking undeclared: a peer nobody approved removing
+stays, and verification reports it. If it fails, nothing was applied, so the next plan shows the
+same delete. A peer that cannot answer is deleted from the primary, and still believes it is a
+member until it is rebuilt. A cluster has to keep one secondary.
+
+A guest stays bound to its cluster until a run has seen it leave, whatever `cluster.yaml` says, so
+its retirement waits with *Waiting for the guest to leave*, including when one commit replaces a
+secondary and deletes the old guest's folder. If a guest left another way, or the cluster's
+definition is gone, say so on the cluster's page; that is your statement, and nothing checks it.
 
 Deleting `cluster.yaml` destroys nothing. The cluster is reported as missing and keeps running,
-and Octopushy stops managing it until the file is back. The root protects the cluster from
-destruction and never sets `force_delete`. Taking a cluster apart is done in Technitium.
+and Octopushy stops managing it until the file is back; its members stay bound. The root protects
+the cluster from destruction and never sets `force_delete`. Taking a cluster apart is done in
+Technitium.
 
 ### Rotating the password
 
 Change the password on the primary, which syncs it to every secondary, then add it to the store as
-a new version of the same entry. Until the store is updated, a cluster run fails at **Inspect** with
+a new version of the same entry; protection and grants stay with the entry. Until the store is updated, a cluster run fails at **Inspect** with
 the primary refusing the password, and changes nothing. Do not change it on a secondary alone, and
 keep it the same store entry on every member: a rebuilt member starts with the value in the store,
 so a stale store entry is a member the cluster cannot sign in to.
 
-### The password and the trade-off
+### The password and what remains
 
 The admin password reaches two kinds of code. The `technitium` executor is Octopushy's own, and
 receives it for every step. OpenTofu's provider needs a login too, and **it needs one while
@@ -317,10 +413,38 @@ View on every section, which needs Administration and Settings granted by hand, 
 the state. Such a user also reads the catalog's TSIG key from the settings, and would have to exist
 before the first plan.
 
-**So this is a trade-off, and you should know it:** repository code that runs at plan time could
-read the password. What stands between them is that trust covers the recipe's code: a commit that
-changes the root, its lock file, or the recipe's image waits for an operator, and a cluster's root
-may hold only its own files. This is stronger than a Proxmox token in
-[shared mode](proxmox-credentials.md), where any commit's code gets the token at plan time, but it
-is not a sandbox: approve changes to that code as you would give someone the password. An agent
-holds the password in memory and in that environment while it works.
+**What protects it** is that the entry is protected, and a protected entry is released only to a
+resource granted it, for the digest of the code that resource runs. The check is at the release, so it
+covers every way a definition can bind a key, and no commit can change it: not by editing a
+definition, and not by deleting one. A run holding such a secret receives only the files that digest
+covers, so code elsewhere in the repository is not there to run.
+
+**This is a review, not a sandbox.** The digest says the code is what you looked at. It does not say
+the code is safe, and code you trusted runs with the password.
+
+What someone with commit access can still do:
+
+- Anything that is data, not code: change settings, blocklists and forward zones, which then apply
+  under `policy`, and `policy` is in the repository too. A forward zone sends a domain's queries to a
+  server of their choosing. `policy.approval: manual` is as good as the repository is.
+- Destroy or replace unprotected guests, and retire any guest not bound to a cluster.
+- Run code at plan time with anything that is not protected: other store entries bound to their
+  recipes, backend environment, and Proxmox tokens. Shared-mode tokens reach every plan, as
+  [before](proxmox-credentials.md). The check that a backend cannot name a Proxmox token reads the
+  commit's own definitions, so it is defence in depth at most; mark such a token protected if it
+  matters, and the release check then applies to it as well.
+- Hold up work: a commit that changes trusted code stops those runs until someone trusts it.
+
+What remains exposed at plan time: the password is in the environment of the trusted root's OpenTofu
+and of the provider it pins, on the agent. Anyone who controls that agent, or who gets you to trust
+code that sends it away, has it.
+
+And on the network:
+
+- **The join is not pinned.** Technitium has no way to give a secondary the primary's certificate,
+  so `initJoin` has to ignore certificate errors, and the secondary sends the password to whoever
+  answers for the primary's address during those seconds. Join on a network you trust.
+- **Trusting a certificate is only as good as the comparison.** The first read is whatever answered.
+  Compare it from the Proxmox host, or you are trusting that nobody was there at that moment.
+- **A Proxmox connection with `tls: { verify: false }`** can be impersonated on the network, which
+  gives away its token and the key the password is sealed to.

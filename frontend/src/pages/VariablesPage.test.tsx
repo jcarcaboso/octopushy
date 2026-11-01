@@ -81,7 +81,7 @@ describe("VariablesPage credential lifecycle", () => {
     expect(requests.find((request) => request.path.endsWith("/candidates"))?.body).toEqual({
       key,
       value: "new-private-credential",
-      description: "API credential", protected: false,
+      description: "API credential",
     });
     expect(requests.some((request) => request.method === "PUT")).toBe(false);
     expect(document.body).not.toHaveTextContent("new-private-credential");

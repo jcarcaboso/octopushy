@@ -4,7 +4,8 @@ Each `Assignment` names an `executor` and an `action`. `input_json` and
 `outputs_json` are JSON objects with camelCase fields, as below. Secrets never
 appear in `input_json`; the input names them, and their values arrive in the
 assignment's `secrets` map. The agent replaces every secret value with `***` in log
-lines and error messages.
+lines, error messages, and every string of `outputs_json`, at any depth, for every
+executor.
 
 Unknown top-level input fields are ignored, so the server can add fields without breaking
 older agents. An executor that cannot parse its input fails the attempt. Outputs are
@@ -257,7 +258,8 @@ Input (the same for both actions):
   },
   "destroy": false,
   "retainNoChangesPlan": false,
-  "replace": []
+  "replace": [],
+  "files": {}
 }
 ```
 
@@ -351,6 +353,9 @@ is not logged or returned, because it can hold configuration values.
 
 `variables.guest.inputs` holds the guest's `provision.inputs`, when it has any.
 
+Optional `files` holds files to write into the root, by name, for what OpenTofu reads by path. A
+name may not start with a dot or end in `.tf`, `.tofu`, or `.json`, so this cannot add code.
+
 Optional `replace` lists resource addresses, each passed as `-replace=<address>`. It is for what
 only the controller knows must happen again, so that it is in the preview and follows approval. An
 address that is not in the state changes nothing.
@@ -396,77 +401,120 @@ bundle. The controller releases the password only for endpoints trusted for the 
 ```json
 {
   "cluster": "home/clusters/technitium",
-  "verifyTls": false,
   "clusterDomain": "cluster.home.arpa",
   "minimumVersion": "15.6.2",
   "formed": true,
   "members": [
     { "guest": "home/korriban/krb-dns-01", "role": "primary", "address": "10.1.0.32",
-      "endpoint": "https://10.1.0.32:53443" }
+      "endpoint": "https://10.1.0.32:53443", "certificateSha256": "ab12…" }
   ],
   "settings": {
     "enableBlocking": true, "blockingType": "NxDomain", "blockListUrls": [],
     "blockListUpdateIntervalHours": 24, "recursion": "UseSpecifiedNetworkACL",
     "recursionNetworkACL": ["10.1.0.0/24"]
   },
-  "blocked": ["bad.example.com"], "allowed": [], "forwardZones": ["home.arpa"],
+  "blocked": ["bad.example.com"], "allowed": [], "listProbes": [], "forwardZones": ["home.arpa"],
   "control": null,
-  "syncWaitSeconds": 90
+  "syncWaitSeconds": 90,
+  "joinSettleSeconds": 120
 }
 ```
 
-`verifyTls` false accepts the self-signed certificate and sets `ignoreCertificateErrors` on a join.
+The agent connects to a member only with its `certificateSha256`: the SHA-256 of the certificate,
+in hexadecimal. It accepts that exact leaf, whatever its name or issuer, and the handshake must be
+signed by it. A member with no `certificateSha256` fails the attempt before anything is sent, and
+one presenting another certificate gets a failed handshake, so no request reaches it. There is no way
+to accept any certificate, except in `certificates`, which sends no credentials.
+
 `settings` is compared key by key with `/api/settings/get`, and lists as sets; a list a member never
-held reads as `null` and equals an empty one. A member's optional `dnsPort` defaults to 53.
-`syncWaitSeconds` defaults to 90. Each session is closed with `/api/user/logout`.
+held reads as `null` and equals an empty one. A member's optional `dnsPort` defaults to 53. Each
+session is closed with `/api/user/logout`.
+
+A member is not trusted with the agent's memory: an answer is read as it streams and given up at 8 MiB,
+or 16 MiB and 200,000 entries for a list export, whatever its length claims.
+
+### `certificates`
+
+Read-only, with no secret, so it needs no trust. It connects to each member, accepting anything, and
+reports what it presents. Only the bare request of an unauthenticated `GET /` is sent.
+
+```json
+{
+  "certificates": [{ "guest": "home/korriban/krb-dns-01", "endpoint": "https://10.1.0.32:53443",
+                     "sha256": "ab12…", "pem": "-----BEGIN CERTIFICATE-----\n…" }],
+  "unreachable": [{ "guest": "home/moraband/mrb-dns-01", "error": "…" }]
+}
+```
 
 ### `inspect`
 
 Read-only; runs before the plan. Fails when the primary cannot be reached or refuses the password,
-saying that the secondaries keep answering, and when `formed` is true and the primary reports no
-cluster: forming again would split it.
+saying that the secondaries keep answering, when the primary presents another certificate, and when
+`formed` is true and the primary reports no cluster: forming again would split it.
 
 ```json
 {
   "formed": true,
-  "members": [{ "guest": "home/moraband/mrb-dns-01", "address": "10.1.0.42", "state": "joined" }],
-  "undeclared": { "blocked": ["hand.example.com"], "allowed": [] }
+  "members": [{ "guest": "home/moraband/mrb-dns-01", "address": "10.1.0.42", "state": "joined",
+                "peerId": 22, "peerName": "mrb-dns-01.cluster.home.arpa" }],
+  "undeclared": { "blocked": ["hand.example.com"], "allowed": [] },
+  "certificates": []
 }
 ```
 
 `members` holds the secondaries, each in one state: `joined`; `moved`, joined at another address than
 the primary has for it; `absent`, not in a cluster and not listed, so it can be joined; `stale`, not
 in a cluster but listed by the primary, which is a rebuilt member; `foreign`, in a cluster the primary
-does not list it in; `unreachable`; or `refused`, when it refuses the password. `undeclared` is what
-the primary's blocked and allowed lists hold beyond `blocked` and `allowed`. The provider reads only
-the entries it knows, so a plan cannot find these.
+does not list it in; `unreachable`; `refused`, when it refuses the password; or `unverified`, when it
+presents another certificate, which `certificates` then reports as in the action above.
 
-The controller turns `absent` into `replace: ["terraform_data.secondary[\"<guest>\"]"]` and anything
-in `undeclared` into `replace: ["terraform_data.undeclared_entries"]` on the `preview` that follows.
+The controller keeps `peerId` and `peerName` on the member's binding. `undeclared` is what the
+primary's blocked and allowed lists hold beyond `blocked` and `allowed`: the provider reads only the
+entries it knows, so a plan cannot find these. The controller turns `absent` into
+`replace: ["terraform_data.secondary[\"<guest>\"]"]` and anything in `undeclared` into
+`replace: ["terraform_data.undeclared_entries"]` on the `preview` that follows.
+
+### `detach`
+
+**Mutating and not cancellable.** Runs before the apply, so that a failure leaves the delete in the
+next plan. Takes `remove`, the members the approved plan deletes, as they were bound:
+
+```json
+{ "remove": [{ "guest": "home/umbrel/umb-dns-01", "address": "10.1.0.52", "peerId": 22,
+               "peerName": "umb-dns-01.cluster.home.arpa" }] }
+```
+
+A peer is matched by `peerId`, or by both `peerName` and `address`, or by `address` when nothing else
+was ever known, and only among secondaries. A peer it does not find has already left, and no other is
+touched: being undeclared says nothing about whose a peer is. A match that holds a declared member's
+address is refused. It goes with `removeSecondary`, or `deleteSecondary` when that fails, as it does
+for a peer that cannot answer, and what the primary lists afterwards decides. Output:
+`{ "detached": [...] }`, also on failure.
 
 ### `reconcile`
 
-**Mutating and not cancellable.** Takes `join` and `remove`, guest addresses from the approved plan's
-changes to `terraform_data.secondary`, and `pruneEntries`, true when the plan replaced
+**Mutating and not cancellable.** Runs after the apply. Takes `join`, guest addresses from the approved
+plan's changes to `terraform_data.secondary`, and `pruneEntries`, true when the plan replaced
 `terraform_data.undeclared_entries`.
 
 - `join`: an `absent` member joins with `initJoin` on the member itself, with the primary's name in
   `primaryNodeUrl` and its address in `primaryNodeIpAddress`. An IP-literal URL is refused upstream.
-  A `moved` member calls `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`, or unreachable
-  one fails with its recovery and does not stop the others.
-- `remove`: secondaries the primary lists and no member matches go, with `removeSecondary`, or
-  `deleteSecondary` when that fails, as it does for a peer that cannot answer. If there are more of
-  them than `remove` names, none goes. With an empty `remove`, none is looked at.
+  `ignoreCertificateErrors` is always true, because Technitium cannot pin there: this one leg is not
+  covered by trust. A `moved` member calls `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`,
+  or unreachable one fails with its recovery and does not stop the others.
 - `pruneEntries`: deletes undeclared blocked and allowed entries on the primary.
 
-Output: `{ "joined": [...], "removed": [...] }`. A known failure lists `failed` in its outputs. A join
-whose answer is lost is checked for up to 120 s, and is `uncertain` if the member still reports no
-cluster. The password is a form field of `initJoin`, never in a URL.
+Output: `{ "joined": [...], "members": [{ "guest": ..., "peerId": ..., "peerName": ... }] }`. Only an
+explicit refusal is a known failure of a join. An answer that was lost, cut off, or cannot be read says
+nothing about whether it happened, so both nodes are asked for up to `joinSettleSeconds`: it succeeded
+if the member reports a cluster and the primary lists it, and is otherwise `uncertain`. The password
+is a form field of `initJoin`, never in a URL.
 
 ### `refresh-block-lists`
 
-**Mutating.** Calls `forceUpdateBlockLists` on the primary, which covers every member. Runs after an
-approved plan changed `terraform_data.block_lists`. Output: `{ "refreshed": true }`.
+**Mutating.** Calls `forceUpdateBlockLists` on the primary, which covers every member. It takes no
+URL, and it needs no approved plan: the controller runs it when the declared lists are not known to
+be downloaded, so a download that failed is retried by a run with no changes. Output: `{ "refreshed": true }`.
 
 ### `verify`
 
@@ -476,6 +524,7 @@ observation. It connects to every member and checks, on each:
 | Check | Passes when |
 | --- | --- |
 | `reachable`, `login` | The API answers, and takes the password |
+| `certificate` | It presents the trusted certificate. If not, it is sent nothing |
 | `cluster` | `clusterInitialized` is true, in `clusterDomain` |
 | `version` | At least `minimumVersion` |
 | `membership` | Its `clusterNodes` are the declared members, in their roles |
@@ -483,12 +532,15 @@ observation. It connects to every member and checks, on each:
 | `settings` | `settings` matches |
 | `blocked`, `allowed` | Its lists are exactly the declared ones |
 | `zones` | It serves `forwardZones` |
-| `blocking` | Up to 5 `blocked` names answer with extended DNS error 15, when blocking is enabled |
+| `lists` | Lists are declared with `listProbes`, when blocking is enabled |
+| `blocking` | Up to 5 `blocked` names and 5 `listProbes` answer with extended DNS error 15, when blocking is enabled |
 | `control` | `control`, or the primary's name in the cluster zone, resolves |
 
 `blocking` and `control` are raw UDP DNS to that member. Extended DNS error 15, "Blocked", is what
 proves a block: Technitium sends it whatever the blocking type and whether or not the name exists,
-while NXDOMAIN alone also answers a name nobody registered.
+while NXDOMAIN alone also answers a name nobody registered. Each member reports `blockingVerified`,
+true only if such a question was asked and answered that way, so a cluster with nothing to ask does
+not claim anything.
 
 What can be sync lag is checked again every `poll_interval` for `syncWaitSeconds`. What cannot,
 such as a member that reports no cluster, fails at once.
@@ -496,11 +548,13 @@ such as a member that reports no cluster, fails at once.
 ```json
 {
   "ok": false,
+  "certificates": [],
   "members": [
     { "guest": "home/korriban/krb-dns-01", "address": "10.1.0.32", "role": "primary", "ok": true,
-      "version": "15.6.2", "checks": [{ "name": "cluster", "ok": true, "detail": "in cluster.home.arpa" }] },
+      "version": "15.6.2", "blockingVerified": true,
+      "checks": [{ "name": "cluster", "ok": true, "detail": "in cluster.home.arpa" }] },
     { "guest": "home/moraband/mrb-dns-01", "address": "10.1.0.42", "role": "secondary", "ok": false,
-      "version": "15.6.2",
+      "version": "15.6.2", "blockingVerified": false,
       "checks": [{ "name": "cluster", "ok": false, "detail": "it reports clusterInitialized=false, ..." }],
       "recovery": "the primary still lists it as Unreachable with id 22. Sign in to ..." }
   ]
