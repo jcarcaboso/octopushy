@@ -1,0 +1,38 @@
+- name: Configure the guest
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Require what was prepared
+      ansible.builtin.assert:
+        that:
+          - release_version == '1.2.3'
+          - greeting == 'hello'
+          - octopushy.action == 'configure'
+          - ansible_facts.system == 'Linux'
+    - name: Write what was prepared
+      ansible.builtin.copy:
+        content: "{{ release_version }} {{ greeting }}\n"
+        dest: /var/lib/configured
+        mode: "0644"
+    - name: Write a secret var
+      ansible.builtin.copy:
+        content: "{{ app_password }}"
+        dest: /var/lib/app-password
+        mode: "0600"
+      no_log: true
+    - name: Copy a secret file
+      ansible.builtin.copy:
+        src: "{{ deploy_key_src }}"
+        dest: /var/lib/deploy-key
+        mode: "0600"
+      no_log: true
+    - name: Read a file from the guest's folder in the repository
+      ansible.builtin.copy:
+        src: "{{ octopushy.guest_directory }}/motd"
+        dest: /var/lib/motd
+        mode: "0644"
+    # A careless task: this is what masking is for.
+    - name: Print a secret by mistake
+      ansible.builtin.debug:
+        msg: "the password is {{ app_password }} and the key is {{ lookup('ansible.builtin.file', deploy_key_src) }}"

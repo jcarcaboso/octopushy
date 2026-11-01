@@ -1,0 +1,1 @@
+{ "type": "object", "properties": { "greeting": { "type": "string" } }, "required": ["greeting"], "additionalProperties": false }

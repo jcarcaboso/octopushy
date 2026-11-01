@@ -9,11 +9,5 @@ RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates libnss-wrapper openssh-client python3 python3-venv \
  && rm -rf /var/lib/apt/lists/*
 COPY agent/ansible/ /tmp/ansible/
-RUN python3 -m venv /opt/octopushy/ansible \
- && /opt/octopushy/ansible/bin/pip install --no-cache-dir --require-hashes --no-deps -r /tmp/ansible/requirements.lock \
- && install -D -m 0755 /tmp/ansible/octopushy-ansible /opt/octopushy/ansible/lib/octopushy/octopushy-ansible \
- && install -D -m 0644 /tmp/ansible/octopushy_recap.py /opt/octopushy/ansible/lib/octopushy/octopushy_recap.py \
- && sed -i '1c #!/opt/octopushy/ansible/bin/python3' /opt/octopushy/ansible/lib/octopushy/octopushy-ansible \
- && ln -s /opt/octopushy/ansible/lib/octopushy/octopushy-ansible /usr/local/bin/octopushy-ansible \
- && rm -rf /tmp/ansible
+RUN cd /tmp/ansible && sh install.sh && rm -rf /tmp/ansible
 ENTRYPOINT ["/usr/local/bin/octopushy-ansible"]

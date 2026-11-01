@@ -1,0 +1,12 @@
+- name: Hold a guest lock through a long task
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Take the lock
+      ansible.builtin.command:
+        argv: [mkdir, /run/lock/test-workflow]
+      changed_when: false
+    - name: Work for a long time
+      ansible.builtin.command:
+        argv: [sleep, "600"]

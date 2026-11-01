@@ -83,10 +83,12 @@ guest_status() {
 }
 wait_for() {
   local want=$1 status=""
-  for _ in $(seq 1 120); do
+  for attempt in $(seq 1 120); do
     status=$(guest_status)
     [[ $status == "$want" ]] && { echo "guest is $status"; return 0; }
-    [[ $status == failed || $status == uncertain || $status == blocked ]] && break
+    [[ $status == failed || $status == uncertain ]] && break
+    # A run stays blocked until the engine's next pass after the installation is trusted.
+    [[ $status == blocked && $attempt -gt 15 ]] && break
     sleep 2
   done
   echo "Expected the guest to be $want, but it is $status."

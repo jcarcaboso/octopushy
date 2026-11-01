@@ -55,18 +55,22 @@ def die_with_parent():
     ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0)
 
 
-def tmp_is_memory():
-    """Whether /tmp is backed by memory: the last mount over it in mountinfo decides."""
+def is_memory(path, mountinfo):
+    """Whether a path is backed by memory: the last, longest mount over it decides."""
     kind = None
     best = -1
-    with open("/proc/self/mountinfo", encoding="utf-8", errors="replace") as stream:
-        for line in stream:
-            before, _, after = line.partition(" - ")
-            mount = before.split()[4]
-            if (mount == TMP or mount == "/" or TMP.startswith(mount + "/")) and len(mount) >= best:
-                best = len(mount)
-                kind = after.split()[0]
+    for line in mountinfo.splitlines():
+        before, _, after = line.partition(" - ")
+        mount = before.split()[4]
+        if (mount == path or mount == "/" or path.startswith(mount + "/")) and len(mount) >= best:
+            best = len(mount)
+            kind = after.split()[0]
     return kind in ("tmpfs", "ramfs")
+
+
+def tmp_is_memory():
+    with open("/proc/self/mountinfo", encoding="utf-8", errors="replace") as stream:
+        return is_memory(TMP, stream.read())
 
 
 def yaml_unsafe(value):
