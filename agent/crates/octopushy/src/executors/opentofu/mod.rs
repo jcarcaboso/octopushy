@@ -63,6 +63,19 @@ struct Input {
     /// Files written into the root, by name, for what OpenTofu reads by path.
     #[serde(default)]
     files: BTreeMap<String, String>,
+    /// Only for a run that holds a protected secret: the code it may run is what an operator
+    /// reviewed, so OpenTofu is kept from loading anything else. Absent, nothing changes.
+    #[serde(default)]
+    reviewed: Option<Reviewed>,
+}
+
+/// What a protected run may load besides its root.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Reviewed {
+    /// Repository folders of the modules the recipe lists. With none, nothing is installed.
+    #[serde(default)]
+    modules: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +194,8 @@ struct Prepared {
     _short_tmp: Option<ShortPath>,
     env: Vec<(String, String)>,
     backend_args: Vec<String>,
+    /// The folders a protected run may load code from, as they are on disk.
+    allowed: Option<Vec<PathBuf>>,
 }
 
 /// Validates the input, extracts the repository, and writes the generated files.
@@ -302,6 +317,10 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         )));
     }
     let root = canonical;
+    let allowed = match &input.reviewed {
+        Some(reviewed) => Some(check_reviewed(&repo, &root, reviewed)?),
+        None => None,
+    };
 
     // Generated files.
     let tfvars = serde_json::to_vec_pretty(&Value::Object(input.variables.clone()))
@@ -349,8 +368,79 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         settings,
         env,
         backend_args,
+        allowed,
         _short_tmp: short_tmp,
     })
+}
+
+/// What a run holding a protected secret needs of the files it received, before OpenTofu runs
+/// anything: a lock file that pins the providers, and no `.terraform` that could stand in for an
+/// install. Returns the folders the run may load code from.
+fn check_reviewed(repo: &Path, root: &Path, reviewed: &Reviewed) -> Result<Vec<PathBuf>, Failure> {
+    let lock = root.join(LOCK_FILE);
+    if !fs::symlink_metadata(&lock).is_ok_and(|m| m.is_file()) {
+        return Err(Failure::msg(format!(
+            "this run holds a protected secret, so its root needs a {LOCK_FILE} that pins its providers, and has none"
+        )));
+    }
+    let repo = repo.canonicalize().map_err(anyhow::Error::from)?;
+    let mut allowed = vec![root.to_path_buf()];
+    for module in &reviewed.modules {
+        let folder = repo
+            .join(check_root(module)?)
+            .canonicalize()
+            .ok()
+            .filter(|f| f.starts_with(&repo) && f.is_dir())
+            .ok_or_else(|| {
+                Failure::msg(format!(
+                    "the reviewed module folder {module:?} is not in the repository files"
+                ))
+            })?;
+        allowed.push(folder);
+    }
+    for folder in &allowed {
+        if fs::symlink_metadata(folder.join(".terraform")).is_ok() {
+            return Err(Failure::msg(format!(
+                "{} holds .terraform, which the reviewed code does not cover, so it cannot run with a protected secret",
+                folder.strip_prefix(&repo).unwrap_or(folder).display()
+            )));
+        }
+    }
+    Ok(allowed)
+}
+
+/// What `tofu init` installed, read from the manifest it leaves: every module has to be a folder
+/// the reviewed code covers. A module from anywhere else was fetched or would be loaded, and
+/// either way the digest says nothing about it.
+fn check_modules(root: &Path, allowed: &[PathBuf]) -> Result<(), Failure> {
+    let manifest = root.join(".terraform/modules/modules.json");
+    let text = match fs::read_to_string(&manifest) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(Failure::msg(format!(
+                "the installed modules cannot be read: {e}"
+            )));
+        }
+    };
+    let unreadable = || Failure::msg("the list of installed modules cannot be understood");
+    let manifest: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
+    for module in manifest["Modules"].as_array().ok_or_else(unreadable)? {
+        let key = module["Key"].as_str().ok_or_else(unreadable)?;
+        let source = module["Source"].as_str().ok_or_else(unreadable)?;
+        let dir = module["Dir"].as_str().ok_or_else(unreadable)?;
+        let local = key.is_empty() || source.starts_with("./") || source.starts_with("../");
+        let inside = root
+            .join(dir)
+            .canonicalize()
+            .is_ok_and(|dir| allowed.iter().any(|a| dir.starts_with(a)));
+        if !local || !inside {
+            return Err(Failure::msg(format!(
+                "the module {key:?} comes from {source:?}, which is not among the folders the reviewed code lists, so a protected secret cannot go to it"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// What a Unix socket's path can hold on Linux, without the NUL that ends it.
@@ -487,11 +577,20 @@ impl Tofu<'_> {
 
     async fn init(&self, readonly_lock: bool) -> Result<(), Failure> {
         let mut args = strings(&["init", "-input=false", "-no-color"]);
-        if readonly_lock {
+        // A protected run takes only what was reviewed: providers as the lock file pins them,
+        // and no module that no one listed, which is not fetched at all when none is listed.
+        let reviewed = self.prep.input.reviewed.as_ref();
+        if readonly_lock || reviewed.is_some() {
             args.push("-lockfile=readonly".into());
+        }
+        if reviewed.is_some_and(|r| r.modules.is_empty()) {
+            args.push("-get=false".into());
         }
         args.extend(self.prep.backend_args.iter().cloned());
         self.run_ok("init", args, false).await?;
+        if let Some(allowed) = &self.prep.allowed {
+            check_modules(&self.prep.root, allowed)?;
+        }
         if let Some(ws) = &self.prep.input.backend.workspace {
             let args = vec![
                 "workspace".into(),
@@ -717,7 +816,7 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             (Map::new(), Vec::new())
         }
         Err(Failure::Cancelled) => (Map::new(), Vec::new()),
-        Err(error @ Failure::Uncertain(_)) => return Err(error),
+        Err(error @ (Failure::Uncertain(_) | Failure::UncertainWith { .. })) => return Err(error),
     };
     if !sensitive.is_empty() {
         ctx.log.agent(format!(

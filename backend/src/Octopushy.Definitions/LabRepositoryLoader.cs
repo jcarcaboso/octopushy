@@ -389,7 +389,10 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
-        if (recipe.Operation == "cluster" && ReviewProblem(recipe) is { } problem)
+        // What receives a password is reviewed as a whole: a cluster's code does, and so does a
+        // recipe that takes a secret. A guest that binds one to another recipe is held to it when
+        // its run is built, whatever its recipe declares.
+        if ((recipe.Operation == "cluster" || recipe.Secrets is { Count: > 0 }) && ReviewProblem(recipe) is { } problem)
         {
             Error(recipe.File, null, problem, address);
             _invalidRecipes.Add(recipe.Id);

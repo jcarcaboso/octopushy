@@ -8,6 +8,11 @@ public sealed record TofuBlock(string Type, string? Source);
 /// are tokens, not text, so <c>/* x */ module "y" {</c> is a module call. It knows just enough
 /// HCL for that. Anything it cannot follow makes the whole file unreadable, and callers refuse
 /// an unreadable file, because what they ask decides which code runs with a password.
+/// That includes the escapes <c>$${</c> and <c>%%{</c>, which HCL reads as literal text and a
+/// reader that guessed wrong would take for code, comments inside an interpolation, and a
+/// heredoc that interpolates: none of them is needed to say where a module comes from.
+/// A hand-written reader is also not the only defence: a run holding a protected secret
+/// installs no module that was not listed, see the agent's <c>opentofu</c> executor.
 /// </summary>
 public static class TofuSource
 {
@@ -172,6 +177,10 @@ public static class TofuSource
                 {
                     return text[start.._at++];
                 }
+                else if ((c is '$' or '%') && _at + 2 < text.Length && text[_at + 1] == c && text[_at + 2] == '{')
+                {
+                    throw new FormatException(); // HCL's escape for a literal ${ or %{
+                }
                 else if ((c is '$' or '%') && _at + 1 < text.Length && text[_at + 1] == '{')
                 {
                     _at += 2;
@@ -196,6 +205,10 @@ public static class TofuSource
                 {
                     Quoted();
                 }
+                else if (c == '#' || At("//") || At("/*") || At("<<"))
+                {
+                    throw new FormatException(); // HCL allows these here; nothing that matters does
+                }
                 else
                 {
                     depth += c == '{' ? 1 : c == '}' ? -1 : 0;
@@ -215,6 +228,8 @@ public static class TofuSource
             {
                 var next = text.IndexOf('\n', line + 1);
                 var content = (next < 0 ? text[(line + 1)..] : text[(line + 1)..next]).Trim();
+                if (content.Contains("${", StringComparison.Ordinal) || content.Contains("%{", StringComparison.Ordinal))
+                    throw new FormatException(); // an interpolation can span lines, and so can end where this reads
                 if (content == marker)
                 {
                     _at = next < 0 ? text.Length : next;

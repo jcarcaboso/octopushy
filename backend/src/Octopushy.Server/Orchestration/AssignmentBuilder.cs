@@ -222,6 +222,11 @@ public sealed class AssignmentBuilder(
             var reviewed = await ProtectedSecrets.AnyAsync(db, context.Secrets.Values, cancellationToken);
             if (reviewed && context.ReviewedPaths is null)
                 throw new CredentialUnavailableException("This run holds a protected secret and has no reviewed code; plan it again.");
+            // Besides being the only files it receives, the agent keeps OpenTofu to them: it
+            // installs no module that is not listed here, and no provider the lock file does not pin.
+            // ReviewedCode.Of lists the recipe's folder, then its root, then its modules.
+            if (reviewed)
+                input["reviewed"] = new JsonObject { ["modules"] = new JsonArray(context.ReviewedPaths!.Skip(2).Select(p => (JsonNode?)p).ToArray()) };
             assignment.FilesTarGz = ByteString.CopyFrom(reviewed
                 ? await mirror.BundleAsync(run.Commit!, context.ReviewedPaths!, cancellationToken)
                 : await mirror.BundleAsync(run.Commit!, cancellationToken));

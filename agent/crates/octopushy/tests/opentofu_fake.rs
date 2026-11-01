@@ -41,6 +41,7 @@ case "$1" in
     if [ -f .terraform.lock.hcl ]; then cp .terraform.lock.hcl "$REC/lock-at-init.hcl"; fi
     [ -f .terraform.lock.hcl ] || echo '# lock written by init' > .terraform.lock.hcl
     mkdir -p .terraform
+    if [ -n "${FAKE_MODULES:-}" ]; then mkdir -p .terraform/modules; printf '%s' "$FAKE_MODULES" > .terraform/modules/modules.json; fi
     echo "Initializing the backend..."
     echo "OpenTofu has been successfully initialized!" ;;
   workspace)
@@ -920,4 +921,174 @@ async fn cancel_stops_a_running_plan() {
         started.elapsed()
     );
     assert!(r.lines.iter().any(|(_, t)| t == "stopping the tool"));
+}
+
+const LOCK: &str = "# pinned\n";
+
+fn protected_tar(extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut files: Vec<(&str, &[u8])> = vec![
+        (
+            "modules/opentofu/test-vm/main.tf",
+            b"resource \"terraform_data\" \"a\" {}\n",
+        ),
+        (
+            "modules/opentofu/test-vm/.terraform.lock.hcl",
+            LOCK.as_bytes(),
+        ),
+        ("modules/opentofu/lib/main.tf", b"variable \"a\" {}\n"),
+    ];
+    files.extend_from_slice(extra);
+    archive::pack(&files).unwrap()
+}
+
+/// What a run holding a protected secret is told: the folders its digest covers.
+fn reviewed(modules: &[&str]) -> Value {
+    let mut request = input(false, json!({}));
+    request["reviewed"] = json!({ "modules": modules });
+    request
+}
+
+async fn preview(fx: &Fixture, request: &Value, files: Vec<u8>) -> Run {
+    run(
+        fx,
+        "prev",
+        "preview",
+        request,
+        files,
+        vec![],
+        CancellationToken::new(),
+    )
+    .await
+}
+
+fn failure_of(r: &Run) -> String {
+    match &r.result {
+        Err(Failure::Failed { message, .. }) => message.clone(),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
+
+fn init_line(fx: &Fixture) -> String {
+    fx.read("args.log")
+        .lines()
+        .find(|l| l.starts_with("init"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_run_with_a_protected_secret_fetches_no_module_and_cannot_unpin_a_provider() {
+    let fx = Fixture::new();
+    let r = preview(&fx, &reviewed(&[]), protected_tar(&[])).await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let init = init_line(&fx);
+    assert!(init.contains("-get=false"), "{init}");
+    assert!(init.contains("-lockfile=readonly"), "{init}");
+    assert_eq!(fx.read("lock-at-init.hcl"), LOCK);
+}
+
+#[tokio::test]
+async fn a_run_without_a_protected_secret_inits_as_before() {
+    let fx = Fixture::new();
+    let r = preview(&fx, &input(false, json!({})), repo_tar(None)).await;
+    r.result.as_ref().unwrap();
+    let init = init_line(&fx);
+    assert!(
+        !init.contains("-get=false") && !init.contains("-lockfile"),
+        "{init}"
+    );
+}
+
+#[tokio::test]
+async fn a_protected_run_needs_a_lock_file_before_anything_runs() {
+    let fx = Fixture::new();
+    let r = preview(&fx, &reviewed(&[]), repo_tar(None)).await;
+    let message = failure_of(&r);
+    assert!(message.contains(".terraform.lock.hcl"), "{message}");
+    assert!(!fx.read("args.log").contains("init"), "tofu init ran");
+}
+
+#[tokio::test]
+async fn a_protected_run_refuses_what_a_repository_brought_into_dot_terraform() {
+    let fx = Fixture::new();
+    let tar = protected_tar(&[(
+        "modules/opentofu/test-vm/.terraform/modules/modules.json",
+        b"{}",
+    )]);
+    let r = preview(&fx, &reviewed(&[]), tar).await;
+    let message = failure_of(&r);
+    assert!(message.contains(".terraform"), "{message}");
+    assert!(!fx.read("args.log").contains("init"), "tofu init ran");
+}
+
+#[tokio::test]
+async fn a_declared_module_is_installed_and_checked_before_the_plan() {
+    let fx = Fixture::new();
+    // Dir is relative to the root, where OpenTofu runs.
+    let manifest = r#"{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"container","Source":"../lib","Dir":"../lib"}]}"#;
+    let mut request = reviewed(&["modules/opentofu/lib"]);
+    request["env"]["FAKE_MODULES"] = json!(manifest);
+    let r = preview(&fx, &request, protected_tar(&[])).await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let init = init_line(&fx);
+    assert!(init.contains("-lockfile=readonly"), "{init}");
+    assert!(!init.contains("-get=false"), "{init}");
+}
+
+#[tokio::test]
+async fn a_module_from_anywhere_else_stops_the_run_before_the_plan() {
+    for (source, dir) in [
+        ("https://evil.example/m.zip", ".terraform/modules/evil"),
+        ("../lib", "../lib/../../other"),
+        ("../other", "../other"),
+        ("../lib", "../lib-evil"),
+        ("registry.opentofu.org/x/y/z", "../lib"),
+    ] {
+        let fx = Fixture::new();
+        let manifest = json!({ "Modules": [
+            { "Key": "", "Source": "", "Dir": "." },
+            { "Key": "evil", "Source": source, "Dir": dir },
+        ] });
+        let mut request = reviewed(&["modules/opentofu/lib"]);
+        request["env"]["FAKE_MODULES"] = json!(manifest.to_string());
+        let r = preview(
+            &fx,
+            &request,
+            protected_tar(&[("modules/opentofu/other/main.tf", b"")]),
+        )
+        .await;
+        let message = failure_of(&r);
+        assert!(message.contains("evil"), "{source}: {message}");
+        assert!(!fx.read("args.log").contains("plan"), "{source}: planned");
+    }
+}
+
+#[tokio::test]
+async fn a_protected_apply_pins_the_same_way() {
+    let fx = Fixture::new();
+    let r = preview(&fx, &reviewed(&[]), protected_tar(&[])).await;
+    let artifact = r.result.as_ref().unwrap().artifacts[0].clone();
+    fx.reset();
+    let r = run(
+        &fx,
+        "apply-1",
+        "apply",
+        &reviewed(&[]),
+        protected_tar(&[]),
+        vec![artifact],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let init = init_line(&fx);
+    assert!(
+        init.contains("-get=false") && init.contains("-lockfile=readonly"),
+        "{init}"
+    );
 }

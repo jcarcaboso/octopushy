@@ -384,6 +384,41 @@ public class ProtectedSecretTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_run_with_a_protected_secret_is_told_to_load_nothing_that_was_not_reviewed()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        repository.Write("modules/opentofu/outside/main.tf", "# a module the recipe lists\n");
+        repository.Write("recipes/test-ct/recipe.yaml", """
+            schemaVersion: 1
+            operation: provision
+            executor: opentofu
+            root: ../../modules/opentofu/test-vm
+            modules: [../../modules/opentofu/outside]
+            verify: proxmox
+            guestType: container
+            """);
+        var (server, agent, client) = await StartAsync(postgres, repository);
+        await using var _ = server;
+        using var __ = client;
+        await TrustCodeAsync(client);
+        await server.TickAsync();
+
+        var input = JsonNode.Parse((await agent.NextAsync("preview")).InputJson)!;
+        Assert.Equal(["modules/opentofu/outside"], input["reviewed"]!["modules"]!.AsArray().Select(m => m!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_run_without_a_protected_secret_is_not_held_to_the_reviewed_folders()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await StartAsync(postgres, repository, protect: false);
+        await using var _ = server;
+        using var __ = client;
+        await server.TickAsync();
+        Assert.Null(JsonNode.Parse((await agent.NextAsync("preview")).InputJson)!["reviewed"]);
+    }
+
+    [Fact]
     public async Task A_module_hidden_behind_a_comment_gets_no_run_and_no_password()
     {
         // The attack: trust a harmless root, then have it call code the digest does not cover.
