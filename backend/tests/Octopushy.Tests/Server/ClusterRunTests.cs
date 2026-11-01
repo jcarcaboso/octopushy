@@ -1095,6 +1095,52 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_background_check_does_not_start_while_a_cluster_run_is_under_way()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository);
+        await using var _ = server;
+        await FormAsync(server, agent);
+        var id = (await ClusterSummaryAsync(client))["id"]!.GetValue<Guid>();
+        (await client.PostAsync($"/api/clusters/{id}/plan", null)).EnsureSuccessStatusCode();
+        Assert.False(RunStatuses.IsTerminal((await server.LatestRunAsync(Cluster, Operations.Cluster)).Status));
+        var before = await server.QueryAsync(db => db.Attempts.CountAsync(a => a.StepId == null && a.ResourceId == id));
+
+        await CheckDueAsync(server);
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        await server.TickAsync();
+
+        Assert.Equal(before, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.StepId == null && a.ResourceId == id)));
+    }
+
+    [Fact]
+    public async Task A_check_that_finishes_after_a_newer_run_does_not_replace_what_the_run_found()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository);
+        await using var _ = server;
+        await FormAsync(server, agent);
+        await CheckDueAsync(server);
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        await server.TickAsync();
+        var slow = await VerifyAsync(server, agent);
+
+        // A run starts and ends clean while that check is still out.
+        var id = (await ClusterSummaryAsync(client))["id"]!.GetValue<Guid>();
+        (await client.PostAsync($"/api/clusters/{id}/plan", null)).EnsureSuccessStatusCode();
+        await PlanAsync(agent, PlanOf());
+        await agent.ReportAsync(await VerifyAsync(server, agent), Outcome.Succeeded, new JsonObject { ["ok"] = true });
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Cluster, Operations.Cluster)).Status);
+
+        await agent.ReportAsync(slow, Outcome.Failed, new JsonObject { ["ok"] = false }, "home/moraband/mrb-dns-01 (10.1.0.42): it reported what it did before the run.");
+        await server.TickAsync();
+
+        var overview = (await client.GetFromJsonAsync<JsonObject>("/api/overview"))!;
+        Assert.DoesNotContain(overview["observeErrors"]!.AsArray(), e => e!["kind"]!.GetValue<string>() == "cluster");
+    }
+
+    [Fact]
     public async Task Planning_by_hand_verifies_again_and_the_detail_shows_members()
     {
         using var repository = ClusterDefinitionTests.Repository();

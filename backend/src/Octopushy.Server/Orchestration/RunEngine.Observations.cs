@@ -24,6 +24,15 @@ public sealed partial class RunEngine
     /// </summary>
     public async Task ObserveAsync(OctopushyDb db, Resource installation, DefinitionRevision revision, RunContext context, CancellationToken cancellationToken)
     {
+        // A cluster run looks at its members itself, and holds them while it does: a check beside
+        // it would race it, and what it finds could come after the run's and replace it.
+        if (installation.Kind == ResourceKinds.Cluster && context.Cluster?.Probe != true
+            && await db.Runs.AnyAsync(r => r.ResourceId == installation.Id && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
+                                           && r.Status != RunStatuses.Cancelled, cancellationToken))
+        {
+            return;
+        }
+
         var underWay = await db.Attempts.FirstOrDefaultAsync(
             a => a.ResourceId == installation.Id
                  && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running),
@@ -138,6 +147,15 @@ public sealed partial class RunEngine
         // A late result of an observation that a newer one replaced says nothing current.
         if (installation is null
             || await db.Attempts.AnyAsync(a => a.ResourceId == installation.Id && a.CreatedAt > attempt.CreatedAt, cancellationToken))
+        {
+            return;
+        }
+
+        // What a cluster run found since this check began is newer than what this one found.
+        if (installation.Kind == ResourceKinds.Cluster && attempt.Action != "certificates"
+            && await db.Runs.AnyAsync(r => r.ResourceId == installation.Id
+                                           && (r.FinishedAt > attempt.CreatedAt || r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled),
+                cancellationToken))
         {
             return;
         }
