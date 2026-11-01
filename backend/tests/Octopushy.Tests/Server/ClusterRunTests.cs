@@ -622,6 +622,48 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_member_that_left_stays_recorded_when_another_removal_in_the_step_failed()
+    {
+        // Two removals, and one of them failed: what the other did has still happened.
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository);
+        await using var _ = server;
+        await ReplaceSecondaryAsync(server, repository, agent, client);
+        await agent.ReportAsync(await agent.NextAsync("inspect"), Outcome.Succeeded, Inspection("absent"));
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            PlanOf((Secondary(), ["delete"]), (Secondary("home/moraband/mrb-dns-02"), ["create"])), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("detach"), Outcome.Failed, new JsonObject
+        {
+            ["detached"] = new JsonArray(ClusterDefinitionTests.Secondary),
+            ["unconfirmed"] = new JsonArray(),
+        }, "another peer stayed");
+        await server.TickAsync();
+
+        var binding = await server.QueryAsync(db => db.ClusterBindings.SingleAsync(b => b.Guest == ClusterDefinitionTests.Secondary));
+        Assert.NotNull(binding.DetachedAt);
+        Assert.StartsWith("run #", binding.DetachedBy);
+    }
+
+    [Fact]
+    public async Task A_member_that_joined_keeps_its_identity_when_another_join_in_the_step_failed()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var __ = server;
+        await PlanAsync(agent, PlanOf(Forming, (Secondary(), ["create"])));
+        await ApplyAsync(agent, await agent.NextAsync("apply"));
+        await agent.ReportAsync(await agent.NextAsync("reconcile"), Outcome.Failed, new JsonObject
+        {
+            ["joined"] = new JsonArray(ClusterDefinitionTests.Secondary),
+            ["members"] = new JsonArray(new JsonObject { ["guest"] = ClusterDefinitionTests.Secondary, ["peerId"] = 22, ["peerName"] = "mrb-dns-01.cluster.home.arpa" }),
+        }, "another member could not join");
+        await server.TickAsync();
+
+        var binding = await server.QueryAsync(db => db.ClusterBindings.SingleAsync(b => b.Guest == ClusterDefinitionTests.Secondary));
+        Assert.Equal(22, binding.PeerId);
+    }
+
+    [Fact]
     public async Task A_member_the_primary_only_forgot_stays_protected_until_an_operator_says_it_left()
     {
         // removeSecondary failed, so all that happened is that the primary's record was deleted.

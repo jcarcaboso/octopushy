@@ -427,6 +427,11 @@ public sealed partial class RunEngine
                         // A certificate that changed is what the next trust has to show.
                         if (attempt.Executor == "technitium")
                             MergeCertificates(await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken), outputs);
+                        // One member's trouble does not undo what happened to the others.
+                        if (step.Name == StepNames.DetachMembers)
+                            await ClusterPlan.RecordDetachedAsync(db, run, outputs, clock.GetUtcNow(), cancellationToken);
+                        if (step.Name == StepNames.ReconcileCluster)
+                            await ClusterPlan.RecordPeersAsync(db, run, outputs, cancellationToken);
                         break;
                 }
 
