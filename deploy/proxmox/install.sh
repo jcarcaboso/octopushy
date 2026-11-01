@@ -79,7 +79,7 @@ fi
 ask OCTOPUSHY_AGENT_HOST "Name or address agents use to reach Octopushy (goes into its certificate)" "$default_agent_host"
 
 ask CT_CORES "CPU cores" 2
-ask CT_MEMORY "Memory in MiB" 4096
+ask CT_MEMORY "Memory in MiB" 2048
 ask CT_DISK "Disk size in GiB" 32
 ask CT_SSH_KEY "SSH public key file for root (empty for none)" none
 

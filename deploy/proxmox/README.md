@@ -49,7 +49,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 | `CT_BRIDGE` / `CT_VLAN` | `vmbr0` / `none` | |
 | `CT_IP` / `CT_GATEWAY` | `dhcp` / host's gateway | `10.1.0.50/24` for a static address |
 | `OCTOPUSHY_AGENT_HOST` | the static address, else the host name | |
-| `CT_CORES` / `CT_MEMORY` / `CT_DISK` | `2` / `4096` MiB / `32` GiB | |
+| `CT_CORES` / `CT_MEMORY` / `CT_DISK` | `2` / `2048` MiB / `32` GiB | Raise it later with `pct set <CTID> --memory <MiB>` |
 | `CT_SSH_KEY` | `none` | A public key file, to SSH in as root |
 | `OCTOPUSHY_YES` | | `1` takes the defaults without asking |
 
