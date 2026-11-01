@@ -120,6 +120,14 @@ public static partial class ClusterPlan
                 db.ClusterBindings.Add(binding);
             }
 
+            // A guest that left and is declared again is a new member: the peer it was says nothing
+            // about the one it will be, and removal must not match the old one.
+            if (binding.DetachedAt is not null)
+            {
+                binding.PeerId = null;
+                binding.PeerName = null;
+            }
+
             binding.Guest = member.Guest;
             binding.Role = member.Role;
             binding.Address = member.Address;
@@ -213,7 +221,14 @@ public static partial class ClusterPlan
     public static IReadOnlyList<string> Removals(JsonNode? plan) =>
         Secondaries(plan).Where(s => s.Removed).Select(s => s.Guest).ToList();
 
-    public static bool PrunesEntries(JsonNode? plan) => Addresses(plan).Any(c => c.Address == UndeclaredEntries);
+    /// <summary>
+    /// Whether the plan removes entries from a live server. The resource that does it is also
+    /// created on a first run, when there is nothing to remove, so its being in the plan is not
+    /// enough: inspection has to have named entries, or the plan has to delete or replace it.
+    /// </summary>
+    public static bool PrunesEntries(JsonNode? plan, JsonNode? inspection) =>
+        Addresses(plan).Any(c => c.Address == UndeclaredEntries
+            && (c.Actions.Contains("delete") || UndeclaredEntriesIn(inspection).Count > 0));
 
     /// <summary>What inspection found in one list that nobody declared, as it was approved.</summary>
     public static JsonArray Undeclared(JsonNode? inspection, string list) =>

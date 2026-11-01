@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
@@ -103,6 +104,31 @@ public static class ClusterCertificates
 
     public static string Serialize(IReadOnlyDictionary<string, MemberCertificate> certificates) =>
         System.Text.Json.JsonSerializer.Serialize(certificates, RunContext.Json);
+
+    /// <summary>
+    /// The SHA-256 of a certificate's DER, in lower-case hex, and the PEM written from that DER:
+    /// null when the text is not exactly one certificate. What an agent reports as a member's
+    /// fingerprint is only trusted as far as the certificate it came with says so.
+    /// </summary>
+    public static (string Sha256, string Pem)? Read(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        var span = text.AsSpan();
+        if (!PemEncoding.TryFind(span, out var fields) || !span[fields.Label].SequenceEqual("CERTIFICATE")
+            || !span[..fields.Location.Start].IsWhiteSpace() || !span[fields.Location.End..].IsWhiteSpace())
+            return null;
+        try
+        {
+            var der = Convert.FromBase64String(span[fields.Base64Data].ToString());
+            _ = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificate(der);
+            return (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(der)), new string(PemEncoding.Write("CERTIFICATE", der)));
+        }
+        catch (Exception e) when (e is FormatException or System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>What to tell an operator about members presenting something other than what was trusted, or null.</summary>
     public static string? ChangedReason(string? trustedJson, string? observed)

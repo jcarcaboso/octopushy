@@ -260,7 +260,8 @@ public sealed class AssignmentBuilder(
                 var plan = await StepOutputsAsync(run, StepNames.Plan, cancellationToken);
                 input["join"] = new JsonArray(ClusterPlan.Joins(plan).Select(g => (JsonNode?)g).ToArray());
                 // What the approval named, as inspection found it, and nothing that appeared since.
-                var inspection = ClusterPlan.PrunesEntries(plan) ? await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken) : null;
+                var found = await StepOutputsAsync(run, StepNames.InspectCluster, cancellationToken);
+                var inspection = ClusterPlan.PrunesEntries(plan, found) ? found : null;
                 input["pruneBlocked"] = ClusterPlan.Undeclared(inspection, "blocked");
                 input["pruneAllowed"] = ClusterPlan.Undeclared(inspection, "allowed");
             }
@@ -376,8 +377,18 @@ public sealed class AssignmentBuilder(
         var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == context.Address, cancellationToken)
             ?? throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: {context.Address} is not trusted.");
         var certificates = ClusterCertificates.Parse(trust.Certificates);
-        return context.Cluster!.Endpoints.All(certificates.ContainsKey) ? certificates
-            : throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: a member's certificate is not trusted yet.");
+        if (!context.Cluster!.Endpoints.All(certificates.ContainsKey))
+            throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: a member's certificate is not trusted yet.");
+        // What the agent is told to pin to and what the provider is given are the same certificate.
+        var checkedCertificates = new Dictionary<string, MemberCertificate>(certificates);
+        foreach (var endpoint in context.Cluster.Endpoints)
+        {
+            if (ClusterCertificates.Read(certificates[endpoint].Pem) is not { } read || read.Sha256 != certificates[endpoint].Sha256.ToLowerInvariant())
+                throw new ExecutionUntrustedException($"{RepositoryTrust.WaitingForCluster}: the certificate recorded for {endpoint} does not match its fingerprint. Read the certificates again and trust the cluster again on its page.");
+            checkedCertificates[endpoint] = new MemberCertificate(read.Sha256, read.Pem);
+        }
+
+        return checkedCertificates;
     }
 
     private async Task<JsonNode?> StepOutputsAsync(Run run, string stepName, CancellationToken cancellationToken)

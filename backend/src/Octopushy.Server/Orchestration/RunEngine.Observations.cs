@@ -98,18 +98,38 @@ public sealed partial class RunEngine
         await db.Observations.Where(o => oldObservations.Contains(o.Id)).ExecuteDeleteAsync(cancellationToken);
     }
 
-    /// <summary>Remembers the certificates an agent saw, which is what an operator is shown to trust.</summary>
-    internal static void MergeCertificates(Resource cluster, JsonNode? outputs)
+    /// <summary>
+    /// Remembers the certificates an agent saw, which is what an operator is shown to trust. Only a
+    /// member's own endpoint counts, and a fingerprint only with the certificate it belongs to:
+    /// what is trusted later is the pair, and the pair has to be one thing.
+    /// </summary>
+    internal static void MergeCertificates(Resource cluster, JsonNode? outputs, IReadOnlyCollection<string> endpoints)
     {
         var seen = Git.ClusterCertificates.Parse(cluster.MemberCertificates);
         foreach (var member in (outputs?["certificates"] as JsonArray)?.OfType<JsonObject>() ?? [])
         {
-            if (member["endpoint"]?.GetValue<string>() is { } endpoint && member["sha256"]?.GetValue<string>() is { } sha256)
-                seen[endpoint] = new Git.MemberCertificate(sha256, member["pem"]?.GetValue<string>() ?? "");
+            if (member["endpoint"]?.GetValue<string>() is not { } endpoint || !endpoints.Contains(endpoint)
+                || member["sha256"]?.GetValue<string>() is not { } sha256)
+                continue;
+            // A certificate too large to carry is reported by its fingerprint alone, which an
+            // operator can compare but nothing can be pinned to.
+            var pem = member["pem"]?.GetValue<string>() ?? "";
+            if (pem.Length == 0)
+            {
+                if (sha256.Length == 64 && sha256.All(char.IsAsciiHexDigit))
+                    seen[endpoint] = new Git.MemberCertificate(sha256.ToLowerInvariant(), "");
+            }
+            else if (Git.ClusterCertificates.Read(pem) is { } read && string.Equals(read.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                seen[endpoint] = new Git.MemberCertificate(read.Sha256, read.Pem);
+            }
         }
 
         cluster.MemberCertificates = Git.ClusterCertificates.Serialize(seen);
     }
+
+    private static IReadOnlyCollection<string> EndpointsOf(string? context) =>
+        RunContext.Parse(context ?? "").Cluster?.Endpoints ?? [];
 
     /// <summary>Records a finished observation attempt on its installation; the caller saves.</summary>
     private async Task FinishObservationAsync(OctopushyDb db, Attempt attempt, JsonNode? outputs, CancellationToken cancellationToken)
@@ -128,7 +148,7 @@ public sealed partial class RunEngine
             case AttemptStatuses.Succeeded when attempt.Action == "certificates":
                 // What members present is not a check of them, so it clears and adds nothing,
                 // but a member that presents something else is news, and is all it takes to fail.
-                MergeCertificates(installation, outputs);
+                MergeCertificates(installation, outputs, EndpointsOf(attempt.Context));
                 installation.CertificatesReadAt = now;
                 var trust = await db.ClusterTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == installation.Address, cancellationToken);
                 if (Git.ClusterCertificates.ChangedReason(trust?.Certificates, installation.MemberCertificates) is { } changed)
@@ -153,7 +173,7 @@ public sealed partial class RunEngine
                 if (attempt.Executor == "technitium" && attempt.Action == "verify" && outputs is JsonObject failed)
                 {
                     failed["error"] = installation.ObserveError;
-                    MergeCertificates(installation, outputs);
+                    MergeCertificates(installation, outputs, EndpointsOf(attempt.Context));
                     await KeepObservationAsync(db, installation, attempt, failed.ToJsonString(), now, cancellationToken);
                 }
 

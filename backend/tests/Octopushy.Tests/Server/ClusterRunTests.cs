@@ -137,11 +137,31 @@ public class ClusterRunTests(PostgresFixture postgres)
     private const string PrimaryEndpoint = "https://10.1.0.32:53443";
     private const string SecondaryEndpoint = "https://10.1.0.42:53443";
 
-    private static JsonObject Certificate(string endpoint) => new()
+    private static readonly Dictionary<(string, int), (string Sha256, string Pem)> Issued = [];
+
+    /// <summary>A real self-signed certificate for a member; another generation is another certificate.</summary>
+    private static (string Sha256, string Pem) Issue(string endpoint, int generation = 0)
+    {
+        lock (Issued)
+        {
+            if (Issued.TryGetValue((endpoint, generation), out var known))
+                return known;
+            using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+            var request = new System.Security.Cryptography.X509Certificates.CertificateRequest($"CN={new Uri(endpoint).Host}-{generation}", key, System.Security.Cryptography.HashAlgorithmName.SHA256);
+            using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(1));
+            return Issued[(endpoint, generation)] = (
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(certificate.RawData)),
+                new string(System.Security.Cryptography.PemEncoding.Write("CERTIFICATE", certificate.RawData)));
+        }
+    }
+
+    private static string Sha(string endpoint, int generation = 0) => Issue(endpoint, generation).Sha256;
+
+    private static JsonObject Certificate(string endpoint, int generation = 0) => new()
     {
         ["endpoint"] = endpoint,
-        ["sha256"] = endpoint.EndsWith("32:53443", StringComparison.Ordinal) ? new string('a', 64) : new string('b', 64),
-        ["pem"] = $"-----BEGIN CERTIFICATE-----\n{endpoint}\n-----END CERTIFICATE-----\n",
+        ["sha256"] = Issue(endpoint, generation).Sha256,
+        ["pem"] = Issue(endpoint, generation).Pem,
     };
 
     private static async Task<HttpResponseMessage> PostTrustAsync(HttpClient client, JsonObject cluster)
@@ -249,13 +269,13 @@ public class ClusterRunTests(PostgresFixture postgres)
 
         var inspect = await agent.NextAsync("inspect");
         var members = JsonNode.Parse(inspect.InputJson)!["members"]!.AsArray();
-        Assert.Equal(new string('a', 64), members[0]!["certificateSha256"]!.GetValue<string>());
-        Assert.Equal(new string('b', 64), members[1]!["certificateSha256"]!.GetValue<string>());
+        Assert.Equal(Sha(PrimaryEndpoint), members[0]!["certificateSha256"]!.GetValue<string>());
+        Assert.Equal(Sha(SecondaryEndpoint), members[1]!["certificateSha256"]!.GetValue<string>());
         await agent.ReportAsync(inspect, Outcome.Succeeded, Inspection("absent"));
 
         var preview = JsonNode.Parse((await agent.NextAsync("preview")).InputJson)!;
         Assert.Equal("octopushy-primary.pem", preview["env"]!["TECHNITIUM_CACERT"]!.GetValue<string>());
-        Assert.Contains("10.1.0.32", preview["files"]!["octopushy-primary.pem"]!.GetValue<string>());
+        Assert.Equal(Issue(PrimaryEndpoint).Pem, preview["files"]!["octopushy-primary.pem"]!.GetValue<string>());
         Assert.DoesNotContain("SKIP_TLS", preview["env"]!.ToJsonString());
     }
 
@@ -270,8 +290,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         var cluster = await ClusterSummaryAsync(client);
         var id = cluster["id"]!.GetValue<Guid>();
         (await client.PostAsync($"/api/clusters/{id}/plan", null)).EnsureSuccessStatusCode();
-        var changed = Certificate(SecondaryEndpoint);
-        changed["sha256"] = new string('c', 64);
+        var changed = Certificate(SecondaryEndpoint, generation: 1);
         var inspection = Inspection("unverified");
         inspection["certificates"] = new JsonArray(changed);
         await agent.ReportAsync(await agent.NextAsync("inspect"), Outcome.Succeeded, inspection);
@@ -284,7 +303,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         var trust = (await ClusterSummaryAsync(client))["trust"]!;
         var shown = trust["certificates"]!.AsArray().Single(c => c!["endpoint"]!.GetValue<string>() == SecondaryEndpoint)!;
         Assert.False(shown["trusted"]!.GetValue<bool>());
-        Assert.Equal(new string('c', 64), shown["sha256"]!.GetValue<string>());
+        Assert.Equal(Sha(SecondaryEndpoint, 1), shown["sha256"]!.GetValue<string>());
 
         // What was read is what can be trusted, and nothing else.
         var stale = await client.PostAsJsonAsync($"/api/clusters/{id}/trust", new
@@ -298,7 +317,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         (await PostTrustAsync(client, await ClusterSummaryAsync(client))).EnsureSuccessStatusCode();
         await server.TickAsync();
         var next = await agent.NextAsync("preview");
-        Assert.Contains(PrimaryEndpoint.Split(':')[1][2..], JsonNode.Parse(next.InputJson)!["files"]!["octopushy-primary.pem"]!.GetValue<string>());
+        Assert.Equal(Issue(PrimaryEndpoint).Pem, JsonNode.Parse(next.InputJson)!["files"]!["octopushy-primary.pem"]!.GetValue<string>());
     }
 
     [Fact]
@@ -311,8 +330,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         var id = (await ClusterSummaryAsync(client))["id"]!.GetValue<Guid>();
         (await client.PostAsync($"/api/clusters/{id}/plan", null)).EnsureSuccessStatusCode();
         await PlanAsync(agent, PlanOf());
-        var changed = Certificate(SecondaryEndpoint);
-        changed["sha256"] = new string('c', 64);
+        var changed = Certificate(SecondaryEndpoint, generation: 1);
         await agent.ReportAsync(await VerifyAsync(server, agent), Outcome.Failed,
             new JsonObject { ["ok"] = false, ["members"] = new JsonArray(), ["certificates"] = new JsonArray(changed) },
             "home/moraband/mrb-dns-01 (10.1.0.42): it presents another certificate than the one trusted.");
@@ -321,7 +339,49 @@ public class ClusterRunTests(PostgresFixture postgres)
         var cluster = await ClusterSummaryAsync(client);
         Assert.Equal("verification-failed", cluster["status"]!.GetValue<string>());
         Assert.Contains(cluster["trust"]!["certificates"]!.AsArray(),
-            c => c!["sha256"]!.GetValue<string>() == new string('c', 64) && !c["trusted"]!.GetValue<bool>());
+            c => c!["sha256"]!.GetValue<string>() == Sha(SecondaryEndpoint, 1) && !c["trusted"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_fingerprint_that_is_not_the_one_of_its_certificate_is_not_kept()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, client) = await ReadyAsync(repository, trust: false);
+        await using var _ = server;
+        var lying = Certificate(PrimaryEndpoint);
+        lying["sha256"] = Sha(SecondaryEndpoint);
+        var foreign = Certificate("https://10.1.0.99:53443");
+        await ReadCertificatesAsync(server, agent, client, lying, foreign, Certificate(SecondaryEndpoint));
+
+        var seen = (await ClusterSummaryAsync(client))["trust"]!["certificates"]!.AsArray();
+        Assert.DoesNotContain(seen, c => c!["endpoint"]!.GetValue<string>() == PrimaryEndpoint && c["sha256"] is not null);
+        Assert.DoesNotContain(seen, c => c!["endpoint"]!.GetValue<string>() == "https://10.1.0.99:53443");
+        Assert.Contains(seen, c => c!["endpoint"]!.GetValue<string>() == SecondaryEndpoint && c["sha256"]?.GetValue<string>() == Sha(SecondaryEndpoint));
+    }
+
+    [Fact]
+    public async Task A_pem_that_is_not_the_certificate_trusted_is_not_pinned_to_the_provider()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var __ = server;
+        // A record from before the check, or written by other means: the fingerprint of one
+        // certificate, the PEM of another, and the PEM is what the provider would trust.
+        await server.WithDbAsync(async db =>
+        {
+            var trust = await db.ClusterTrusts.SingleAsync();
+            var certificates = ClusterCertificates.Parse(trust.Certificates);
+            certificates[PrimaryEndpoint] = new MemberCertificate(Sha(PrimaryEndpoint), Issue(PrimaryEndpoint, 1).Pem);
+            trust.Certificates = ClusterCertificates.Serialize(certificates);
+            await db.SaveChangesAsync();
+        });
+        await agent.ReportAsync(await agent.NextAsync("inspect"), Outcome.Succeeded, Inspection("absent"));
+        await server.TickAsync();
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Cluster, Operations.Cluster);
+        Assert.Contains("does not match its fingerprint", run.Detail);
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Secrets.ContainsKey(SecretNames.ClusterPassword));
     }
 
     [Fact]
@@ -430,7 +490,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         Assert.DoesNotContain(Password, preview.InputJson);
         Assert.Equal(Secondary(), input["replace"]![0]!.GetValue<string>());
         await agent.ReportAsync(preview, Outcome.Succeeded,
-            PlanOf(Forming, (Secondary(), ["create"]), ("terraform_data.block_lists", ["create"])), artifacts: FakeAgent.PlanArtifact());
+            PlanOf(Forming, (Secondary(), ["create"]), ("terraform_data.undeclared_entries", ["create"])), artifacts: FakeAgent.PlanArtifact());
 
         var apply = await agent.NextAsync("apply");
         Assert.Contains(apply.Artifacts, a => a.Name == "plan.tar.gz");
@@ -684,6 +744,37 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_guest_added_again_after_it_left_is_not_taken_for_the_peer_it_was()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var __ = server;
+        await FormAsync(server, agent);
+        await server.WithDbAsync(async db =>
+        {
+            var old = await db.ClusterBindings.SingleAsync(b => b.Guest == ClusterDefinitionTests.Secondary);
+            old.PeerId = 22;
+            old.PeerName = "mrb-dns-01.cluster.home.arpa";
+            old.DetachedAt = DateTimeOffset.UtcNow;
+            old.DetachedBy = "run #1";
+            await db.SaveChangesAsync();
+        });
+
+        // The same address is declared again, and bound again by the next apply.
+        await server.WithDbAsync(async db =>
+        {
+            var run = await db.Runs.OrderByDescending(r => r.CreatedAt).FirstAsync(r => r.Operation == Operations.Cluster);
+            await ClusterPlan.BindMembersAsync(db, run, RunContext.Parse(run.Context).Cluster!, DateTimeOffset.UtcNow, default);
+            await db.SaveChangesAsync();
+        });
+
+        var binding = await server.QueryAsync(db => db.ClusterBindings.SingleAsync(b => b.Guest == ClusterDefinitionTests.Secondary));
+        Assert.Null(binding.DetachedAt);
+        Assert.Null(binding.PeerId);
+        Assert.Null(binding.PeerName);
+    }
+
+    [Fact]
     public async Task A_member_the_primary_only_forgot_stays_protected_until_an_operator_says_it_left()
     {
         // removeSecondary failed, so all that happened is that the primary's record was deleted.
@@ -739,8 +830,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         await planner.ScheduleObservesAsync(CancellationToken.None);
         var read = await agent.NextKeepingOthersAsync("certificates");
         Assert.Empty(read.Secrets);
-        var changed = Certificate(SecondaryEndpoint);
-        changed["sha256"] = new string('c', 64);
+        var changed = Certificate(SecondaryEndpoint, generation: 1);
         await agent.ReportAsync(read, Outcome.Succeeded, new JsonObject { ["certificates"] = new JsonArray(Certificate(PrimaryEndpoint), changed) });
         await server.TickAsync();
 
@@ -1103,6 +1193,39 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_first_run_has_nothing_to_prune_and_is_not_held_for_destructive_approval()
+    {
+        using var repository = ClusterDefinitionTests.Repository(ClusterDefinitionTests.Definition + "\npolicy: { approval: automatic, destructive: manual }\n");
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var _ = server;
+        await PlanAsync(agent, PlanOf(Forming, (Secondary(), ["create"]), ("terraform_data.undeclared_entries", ["create"])), Inspection("absent"));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Cluster, Operations.Cluster);
+        Assert.NotEqual(RunStatuses.AwaitingApproval, run.Status);
+        Assert.DoesNotContain("nobody declared", run.Detail ?? "");
+        await ApplyAsync(agent, await agent.NextAsync("apply"));
+        var reconcile = JsonNode.Parse((await agent.NextAsync("reconcile")).InputJson)!;
+        Assert.Empty(reconcile["pruneBlocked"]!.AsArray());
+    }
+
+    [Theory]
+    [InlineData("create", false, false)]
+    [InlineData("create", true, true)]
+    [InlineData("delete,create", false, true)]
+    [InlineData("delete", false, true)]
+    [InlineData("update", false, false)]
+    public void Pruning_is_what_the_plan_does_to_the_entries_and_what_inspection_named(string actions, bool named, bool expected)
+    {
+        var plan = PlanOf(("terraform_data.undeclared_entries", actions.Split(',')));
+        var inspection = Inspection();
+        if (named)
+            inspection["undeclared"]!["allowed"] = new JsonArray("hand.example.com");
+        Assert.Equal(expected, ClusterPlan.PrunesEntries(plan, inspection));
+        Assert.False(ClusterPlan.PrunesEntries(PlanOf((Secondary(), ["delete"])), inspection));
+    }
+
+    [Fact]
     public async Task A_guest_taken_out_of_the_cluster_cannot_be_destroyed_until_it_has_left()
     {
         using var repository = ClusterDefinitionTests.Repository();
@@ -1151,7 +1274,7 @@ public class ClusterRunTests(PostgresFixture postgres)
         using var repository = ClusterDefinitionTests.Repository();
         var (server, agent, client) = await ReadyAsync(repository);
         await using var _ = server;
-        await PlanAsync(agent, PlanOf(Forming, ("terraform_data.block_lists", ["create"])));
+        await PlanAsync(agent, PlanOf(Forming, ("terraform_data.undeclared_entries", ["create"])));
         await ApplyAsync(agent, await agent.NextAsync("apply"));
         await agent.ReportAsync(await agent.NextAsync("refresh-block-lists"), Outcome.Failed, error: "the list server is down");
         await server.TickAsync();

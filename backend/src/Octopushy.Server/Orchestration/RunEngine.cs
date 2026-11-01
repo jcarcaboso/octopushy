@@ -478,7 +478,7 @@ public sealed partial class RunEngine(
         var manual = (context.ManagedWorker is not null || policy.Approval == "manual") && (resourceChanges > 0
             || outputs?["hasChanges"]?.GetValue<bool>() == true || privilegedRemains);
         // A replacement in the plan, but it deletes what someone added to a live server.
-        var prunes = run.Operation == Operations.Cluster && ClusterPlan.PrunesEntries(outputs);
+        var prunes = run.Operation == Operations.Cluster && ClusterPlan.PrunesEntries(outputs, InspectionOf(run));
         var destructiveManual = (deletes > 0 || prunes) && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
         if (!step.ApprovalRequired)
@@ -503,8 +503,8 @@ public sealed partial class RunEngine(
                 ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
                 : $"The plan removes entries from the server and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
-        if (prunes && run.Steps.Single(s => s.Name == StepNames.InspectCluster).Outputs is { } inspected)
-            step.Detail += $" It removes what nobody declared: {string.Join(", ", ClusterPlan.UndeclaredEntriesIn(JsonNode.Parse(inspected)))}.";
+        if (prunes)
+            step.Detail += $" It removes what nobody declared: {string.Join(", ", ClusterPlan.UndeclaredEntriesIn(InspectionOf(run)))}.";
         if (context.DiskReporter is not null)
         {
             step.Detail += " This run also installs the disk reporter inside the VM after verification.";
@@ -513,6 +513,10 @@ public sealed partial class RunEngine(
             step.Detail += $" This also switches the existing worker OS to {workerUpdate.SystemPath}; explicitly approve closure SHA-256 {workerUpdate.ArchiveSha256}.";
         return false;
     }
+
+    /// <summary>What the cluster run's inspection found, if it has run.</summary>
+    private static JsonNode? InspectionOf(Run run) =>
+        run.Steps.SingleOrDefault(s => s.Name == StepNames.InspectCluster)?.Outputs is { } text ? JsonNode.Parse(text) : null;
 
     private void CreateAttempt(OctopushyDb db, Run run, Step step, RunContext context, Guid? preferredAgent = null)
     {
@@ -583,7 +587,7 @@ public sealed partial class RunEngine(
                         detach.Detail = "The plan removes no member.";
                     }
 
-                    if (ClusterPlan.Joins(outputs).Count == 0 && !ClusterPlan.PrunesEntries(outputs))
+                    if (ClusterPlan.Joins(outputs).Count == 0 && !ClusterPlan.PrunesEntries(outputs, InspectionOf(run)))
                     {
                         var reconcile = run.Steps.Single(s => s.Name == StepNames.ReconcileCluster);
                         reconcile.Status = StepStatuses.Skipped;
@@ -603,7 +607,7 @@ public sealed partial class RunEngine(
                 break;
             case StepNames.InspectCluster or StepNames.ReconcileCluster:
                 await ClusterPlan.RecordPeersAsync(db, run, outputs, cancellationToken);
-                MergeCertificates(resource, outputs);
+                MergeCertificates(resource, outputs, RunContext.Parse(run.Context).Cluster?.Endpoints ?? []);
                 break;
             case StepNames.DetachMembers:
                 await ClusterPlan.RecordDetachedAsync(db, run, outputs, now, cancellationToken);
