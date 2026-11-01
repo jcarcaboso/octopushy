@@ -431,11 +431,15 @@ public class ClusterDefinitionTests
     }
 
     [Fact]
-    public void A_provision_recipe_without_secrets_is_not_held_to_it()
+    public void A_recipe_without_secrets_is_held_to_it_only_by_a_guest_that_binds_one()
     {
-        using var test = Repository();
-        test.Delete("modules/opentofu/test-vm/.terraform.lock.hcl");
-        Assert.True(LabRepositoryLoader.Load(test.Root).IsValid(Primary));
+        using var bound = Repository();
+        bound.Delete("modules/opentofu/test-vm/.terraform.lock.hcl");
+        Assert.False(LabRepositoryLoader.Load(bound.Root).IsValid(Primary));
+
+        using var plain = ContainerGuestTests.Repository();
+        plain.Delete("modules/opentofu/test-vm/.terraform.lock.hcl");
+        Assert.True(LabRepositoryLoader.Load(plain.Root).IsValid(ContainerGuestTests.Guest));
     }
 
     [Fact]

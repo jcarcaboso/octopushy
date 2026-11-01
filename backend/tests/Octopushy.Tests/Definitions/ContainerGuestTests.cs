@@ -30,6 +30,7 @@ public class ContainerGuestTests
     {
         var test = TestRepository.Minimal();
         test.Write(GuestPath, guest);
+        test.Write("modules/opentofu/test-vm/.terraform.lock.hcl", "# lock\n");
         test.Write("recipes/test-ct/recipe.yaml", $$"""
             schemaVersion: 1
             operation: provision
