@@ -11,12 +11,14 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$root/.dev/ansible
 runtime=${E2E_TOOL_RUNTIME:-podman}
-api_port=18180
-agent_port=18543
-proxmox_port=18106
-pg_port=55442
+# Free ports, so that this can run beside anything else on the machine.
+free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+api_port=$(free_port)
+agent_port=$(free_port)
+proxmox_port=$(free_port)
+pg_port=$(free_port)
+port=$(free_port)
 api=http://127.0.0.1:$api_port
-port=12222
 target=octopushy-ansible-target
 database=octopushy-ansible-pg
 image=localhost/octopushy-ansible:e2e
