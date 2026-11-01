@@ -536,7 +536,19 @@
 }
 
 .table--variables td:nth-child(3) {
-  min-width: 12rem;
+  min-width: 10rem;
+}
+
+/* Four buttons in a row do not fit beside seven other columns, and the table scrolls sideways
+   with them out of sight: let them wrap into the space the cell has. */
+.table--variables .cell-actions {
+  width: 1%;
+}
+
+.table--variables .cell-actions .button-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 11rem;
 }
 
 .change__address {
