@@ -65,12 +65,21 @@ impl Masker {
             Value::Array(items) => {
                 Value::Array(items.into_iter().map(|v| self.mask_json(v)).collect())
             }
-            Value::Object(fields) => Value::Object(
-                fields
-                    .into_iter()
-                    .map(|(k, v)| (self.mask(&k).into_owned(), self.mask_json(v)))
-                    .collect(),
-            ),
+            Value::Object(fields) => {
+                let mut masked = serde_json::Map::new();
+                for (key, value) in fields {
+                    let base = self.mask(&key).into_owned();
+                    // Two secrets as keys become one text; each keeps its value.
+                    let mut unique = base.clone();
+                    let mut count = 1;
+                    while masked.contains_key(&unique) {
+                        count += 1;
+                        unique = format!("{base}#{count}");
+                    }
+                    masked.insert(unique, self.mask_json(value));
+                }
+                Value::Object(masked)
+            }
             other => other,
         }
     }
@@ -112,6 +121,18 @@ mod tests {
         assert_eq!(masked["members"][0]["checks"][0]["n"], 3);
         assert_eq!(masked["***"], true);
         assert!(!masked.to_string().contains("word"));
+    }
+
+    #[test]
+    fn two_keys_masked_to_the_same_text_keep_both_their_values() {
+        let m = Masker::new(["first-secret", "second-secret"]);
+        let masked = m.mask_json(serde_json::json!({ "first-secret": 1, "second-secret": 2 }));
+        let fields = masked.as_object().unwrap();
+        assert_eq!(fields.len(), 2, "{masked}");
+        let mut values: Vec<i64> = fields.values().map(|v| v.as_i64().unwrap()).collect();
+        values.sort_unstable();
+        assert_eq!(values, [1, 2]);
+        assert!(!masked.to_string().contains("secret"));
     }
 
     #[test]

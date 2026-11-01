@@ -55,7 +55,7 @@ eventually_dns() { # address name expected
 start_node() { # name address
   # The certificate the recipe's install makes: EC, ten years, naming the address.
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj "/CN=$2" \
-    -addext "subjectAltName=IP:$2" -keyout "$work/$1/tls.key" -out "$work/$1/tls.crt" 2>/dev/null
+    -addext "subjectAltName=IP:$2" -addext "basicConstraints=critical,CA:FALSE" -keyout "$work/$1/tls.key" -out "$work/$1/tls.crt" 2>/dev/null
   openssl pkcs12 -export -inkey "$work/$1/tls.key" -in "$work/$1/tls.crt" -out "$work/$1/https.pfx" \
     -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout pass:test-only
   rm -f "$work/$1/tls.key"
@@ -202,11 +202,14 @@ for c in changes:
     if m:
         (remove if c["change"]["actions"] == ["delete"] else join).append(m.group(1))
 d = json.load(open(f"{work}/desired.json"))
+pruning = any(c["address"] == "terraform_data.undeclared_entries" for c in changes)
+undeclared = json.load(open(f"{work}/inspect.json"))["undeclared"]
 out = {
     "addresses": [c["address"] for c in changes],
     "actions": {c["address"]: c["change"]["actions"] for c in changes},
     "join": join, "remove": [d.get("bindings", {}).get(g, {"guest": g}) for g in remove],
-    "pruneEntries": any(c["address"] == "terraform_data.undeclared_entries" for c in changes),
+    # AssignmentBuilder: what inspection named, as the approval showed it, and nothing else.
+    **{f"prune{field.capitalize()}": undeclared[field] if pruning else [] for field in ("blocked", "allowed")},
     # ClusterPlan.ListsDownloaded: what was downloaded is kept apart from the plan.
     "lists": d["blocking"]["lists"] != d.get("refreshed", []),
 }
@@ -246,13 +249,13 @@ import json, sys
 work = sys.argv[1]
 base = json.load(open(f"{work}/input.json"))
 changes = json.load(open(f"{work}/changes.json"))
-base.update(join=changes["join"], remove=changes["remove"], pruneEntries=changes["pruneEntries"])
+base.update(join=changes["join"], remove=changes["remove"], pruneBlocked=changes["pruneBlocked"], pruneAllowed=changes["pruneAllowed"])
 json.dump(base, open(f"{work}/input.json", "w"))
 PY
   # Removals first: once the apply has run, the plan no longer holds them.
   if [[ $(field remove) != '[]' ]]; then action detach || fail "detach failed"; fi
   tofu apply -input=false -no-color /w/out/plan.bin >>"$work/apply.log" 2>&1 || { tail -30 "$work/apply.log"; fail "the apply failed"; }
-  if [[ $(field join) != '[]' || $(field pruneEntries) == true ]]; then
+  if [[ $(field join) != '[]' || $(field pruneBlocked) != '[]' || $(field pruneAllowed) != '[]' ]]; then
     action reconcile || fail "reconcile failed"
   fi
   render
@@ -332,6 +335,26 @@ verified
 expect_dns "$secondary" later.lab.example.net blocked
 scenario "a later entry reaches the secondary within the bounded retry"
 
+log "What joined is gone, and the cluster never needed it"
+for address in "$primary" "$secondary"; do
+  if node call "$address" /api/admin/users/list | rg -q octopushy-cluster-join; then fail "the temporary user is still on $address"; fi
+done
+back_up() { for _ in $(seq 1 60); do node call "$1" /api/admin/cluster/state >/dev/null 2>&1 && return; sleep 1; done; fail "$1 did not come back"; }
+podman restart -t 5 "$name-dns2" >/dev/null
+back_up "$secondary"
+podman restart -t 5 "$name-dns1" >/dev/null
+back_up "$primary"
+declare_ 'd["blocking"]["blocked"].append("after-restarts.lab.example.net")'
+plan
+apply
+verified
+expect_dns "$secondary" after-restarts.lab.example.net blocked
+declare_ 'd["blocking"]["blocked"].remove("after-restarts.lab.example.net")'
+plan
+apply
+verified
+scenario "the join's user is gone from both, and sync survives restarts and a later change"
+
 log "Idempotent"
 plan
 no_changes "a second plan"
@@ -386,7 +409,14 @@ import json
 c = json.load(open('$work/changes.json'))
 assert 'terraform_data.undeclared_entries' in c['addresses'], c
 assert 'technitium_server_settings.this' in c['addresses'], c
-assert c['pruneEntries'], c"
+assert c['pruneBlocked'] == ['hand.lab.example.net'], c"
+# Approved a moment ago, and here is an entry nobody has seen.
+node call "$primary" /api/blocked/add domain=added-after-approval.lab.example.net >/dev/null
+apply
+node export "$primary" /api/blocked/export | rg -q '^added-after-approval.lab.example.net$' || fail "an entry nobody approved was removed"
+if node export "$primary" /api/blocked/export | rg -q '^hand.lab.example.net$'; then fail "the approved entry stayed"; fi
+render
+plan
 apply
 verified
 [[ $(node export "$primary" /api/blocked/export | sort | tr '\n' ' ') == 'bad.lab.example.net later.lab.example.net ' ]] || fail "the hand-added entry stayed"

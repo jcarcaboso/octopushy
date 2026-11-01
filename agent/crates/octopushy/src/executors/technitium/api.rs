@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::attempts::logs::AttemptLogger;
 use crate::executors::Failure;
 
 /// Well beyond a real answer: settings and zone lists are small. A member is not trusted to
@@ -20,9 +21,16 @@ const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
 /// A blocked or allowed list is a person's own entries, not a downloaded list.
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EXPORT_ENTRIES: usize = 200_000;
+/// More than any cluster has, and each is a line in a report.
+const MAX_PEERS: usize = 256;
+const MAX_DNS_NAME: usize = 253;
+/// What is kept of a node's own words in the attempt's log.
+const MAX_NODE_TEXT: usize = 300;
 
 /// Why a call did not work. Reaching a member is one thing and being refused by it another, and
 /// a change whose answer never arrived is neither: only asking again can tell whether it happened.
+/// The text is the agent's own: a node's words go to the attempt's log and nowhere else, since
+/// outputs and failures are shown to whoever can see the run, and masking only knows exact text.
 #[derive(Debug)]
 pub enum ApiError {
     Unreachable(String),
@@ -128,6 +136,24 @@ pub fn http_client(pin: Option<&str>, timeout: Duration) -> Result<(Client, Offe
     Ok((client, offered))
 }
 
+/// A name a report may print: nothing a node chose can arrive here but letters, digits, and dots.
+pub fn is_dns_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= MAX_DNS_NAME
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-*".contains(&b))
+}
+
+/// Technitium's versions are numbers: 15.6.2, and 15.0 for a first release.
+fn is_version(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('.').collect();
+    (2..=4).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 6 && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// A member's `/api/admin/cluster/state`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,15 +184,49 @@ pub struct Peer {
     pub state: String,
 }
 
+impl ClusterState {
+    /// Keeps only what has the shape it should, so that nothing else can reach a report. What
+    /// does not read as empty, which every check already treats as not matching.
+    fn validated(mut self) -> Self {
+        if !is_version(&self.version) {
+            self.version.clear();
+        }
+        if !is_dns_name(&self.dns_server_domain) {
+            self.dns_server_domain.clear();
+        }
+        self.cluster_domain = self.cluster_domain.filter(|d| is_dns_name(d));
+        for peer in &mut self.cluster_nodes {
+            if !is_dns_name(&peer.name) {
+                peer.name.clear();
+            }
+            peer.ip_addresses
+                .retain(|a| a.parse::<std::net::IpAddr>().is_ok());
+            if !matches!(peer.kind.as_str(), "Primary" | "Secondary") {
+                peer.kind = "Unknown".into();
+            }
+            if !matches!(peer.state.as_str(), "Connected" | "Self" | "Unreachable") {
+                peer.state = "Unknown".into();
+            }
+        }
+        self
+    }
+}
+
 /// A signed-in session on one member.
 pub struct Api {
     http: Client,
     endpoint: String,
     token: String,
+    log: AttemptLogger,
 }
 
 impl Api {
-    pub async fn login(http: &Client, endpoint: &str, password: &str) -> Result<Self, ApiError> {
+    pub async fn login(
+        http: &Client,
+        endpoint: &str,
+        password: &str,
+        log: &AttemptLogger,
+    ) -> Result<Self, ApiError> {
         let endpoint = endpoint.trim_end_matches('/').to_owned();
         let response = http
             .post(format!("{endpoint}/api/user/login"))
@@ -176,7 +236,8 @@ impl Api {
             .map_err(|e| ApiError::Unreachable(transport(&e)))?;
         let body = decode(response).await?;
         if body["status"] != "ok" {
-            return Err(ApiError::Refused(message(&body)));
+            heard(log, &endpoint, &body["errorMessage"]);
+            return Err(ApiError::Refused("the login was refused".into()));
         }
         let token = body["token"]
             .as_str()
@@ -186,6 +247,7 @@ impl Api {
             http: http.clone(),
             endpoint,
             token,
+            log: log.clone(),
         })
     }
 
@@ -221,7 +283,8 @@ impl Api {
         if body["status"] == "ok" {
             Ok(body["response"].clone())
         } else {
-            Err(ApiError::Api(message(&body)))
+            self.note(&body["errorMessage"]);
+            Err(ApiError::Api(format!("{path} was refused")))
         }
     }
 
@@ -259,8 +322,22 @@ impl Api {
 
     pub async fn cluster_state(&self) -> Result<ClusterState, ApiError> {
         let value = self.get("/api/admin/cluster/state").await?;
-        serde_json::from_value(value)
-            .map_err(|e| ApiError::Api(format!("unexpected cluster state: {e}")))
+        let state: ClusterState = serde_json::from_value(value).map_err(|e| {
+            // Serde quotes what it could not read.
+            self.note(&Value::String(e.to_string()));
+            ApiError::Api("the cluster state cannot be read".into())
+        })?;
+        if state.cluster_nodes.len() > MAX_PEERS {
+            return Err(ApiError::Api(format!(
+                "the cluster state lists more than {MAX_PEERS} nodes"
+            )));
+        }
+        Ok(state.validated())
+    }
+
+    /// Keeps something a node said, for whoever reads this attempt's log.
+    pub fn note(&self, said: &Value) {
+        heard(&self.log, &self.endpoint, said);
     }
 
     /// Best effort: a session left behind expires by itself.
@@ -300,11 +377,15 @@ async fn decode(response: Response) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::Lost(format!("the server answered {status} without JSON: {e}")))
 }
 
-fn message(body: &Value) -> String {
-    body["errorMessage"]
+fn heard(log: &AttemptLogger, endpoint: &str, said: &Value) {
+    if said.is_null() {
+        return;
+    }
+    let text = said
         .as_str()
-        .unwrap_or("the server refused the request")
-        .to_owned()
+        .map_or_else(|| said.to_string(), str::to_owned);
+    let text: String = text.chars().take(MAX_NODE_TEXT).collect();
+    log.agent(format!("{endpoint} said: {text}"));
 }
 
 fn transport(e: &reqwest::Error) -> String {

@@ -45,6 +45,9 @@ struct Node {
     flood: HashMap<String, usize>,
     /// Where a successful join shows up: the primary's node, and its new peer.
     joins: Option<(Shared, Value)>,
+    users: Vec<String>,
+    /// Deleting a user answers with an error, once a user exists.
+    undeletable: bool,
 }
 
 type Shared = Arc<Mutex<Node>>;
@@ -122,6 +125,28 @@ async fn api(node: Shared, request: Request<Body>) -> Response<Body> {
             let domain = form["domain"].clone();
             n.blocked.retain(|e| e != &domain);
             ok(json!({}))
+        }
+        "/api/allowed/delete" => {
+            let domain = form["domain"].clone();
+            n.allowed.retain(|e| e != &domain);
+            ok(json!({}))
+        }
+        "/api/admin/users/create" => {
+            let user = form["user"].clone();
+            n.users.push(user);
+            ok(json!({}))
+        }
+        "/api/admin/users/delete" if n.undeletable && !n.users.is_empty() => {
+            json_body(json!({ "status": "error", "errorMessage": "no" }))
+        }
+        "/api/admin/users/delete" => {
+            let user = form["user"].clone();
+            n.users.retain(|u| u != &user);
+            ok(json!({}))
+        }
+        "/api/admin/users/list" => {
+            let users: Vec<Value> = n.users.iter().map(|u| json!({ "username": u })).collect();
+            ok(json!({ "users": users }))
         }
         "/api/admin/cluster/primary/removeSecondary"
         | "/api/admin/cluster/primary/deleteSecondary" => {
@@ -580,7 +605,7 @@ async fn a_primary_that_is_down_fails_inspection_and_says_what_still_works() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn reconcile_joins_an_absent_member_with_the_password_in_the_form_only() {
+async fn reconcile_joins_an_absent_member_with_a_credential_that_dies_with_the_join() {
     let mut alone = healthy(PRIMARY_NAME);
     alone.peers = vec![
         json!({ "id": 1, "name": PRIMARY_NAME, "ipAddresses": [PRIMARY_ADDRESS], "type": "Primary", "state": "Self" }),
@@ -600,14 +625,113 @@ async fn reconcile_joins_an_absent_member_with_the_password_in_the_form_only() {
         .position(|c| c == "/api/admin/cluster/initJoin")
         .unwrap();
     let form = &n.forms[at];
-    assert_eq!(form["primaryNodePassword"], PASSWORD);
+    assert_ne!(
+        form["primaryNodePassword"], PASSWORD,
+        "the admin password does not go out on the leg nothing can pin"
+    );
+    assert_eq!(form["primaryNodeUsername"], "octopushy-cluster-join");
+    assert!(form["primaryNodePassword"].len() >= 40);
     assert_eq!(form["primaryNodeIpAddress"], PRIMARY_ADDRESS);
     assert_eq!(form["ignoreCertificateErrors"], "true");
-    assert!(
-        form["primaryNodeUrl"].contains(PRIMARY_NAME),
-        "the primary's URL must carry its name"
+    assert_eq!(
+        form["primaryNodeUrl"],
+        format!(
+            "https://krb-dns-01.cluster.home.arpa:{}/",
+            port_of(&primary)
+        ),
+        "the URL is what is declared"
     );
-    assert!(!logs.join("\n").contains(PASSWORD));
+    assert!(!logs.join("\n").contains(&form["primaryNodePassword"]));
+    let p = primary.node.lock().unwrap();
+    let created = position(&p, "/api/admin/users/create");
+    let deleted = last_position(&p, "/api/admin/users/delete");
+    assert!(created < deleted, "the credential outlives the join");
+    assert_eq!(p.forms[created]["pass"], form["primaryNodePassword"]);
+    assert!(p.users.is_empty(), "the user is gone: {:?}", p.users);
+}
+
+fn port_of(fake: &Fake) -> u16 {
+    url::Url::parse(&fake.endpoint).unwrap().port().unwrap()
+}
+
+fn position(node: &Node, path: &str) -> usize {
+    node.calls
+        .iter()
+        .position(|c| c == path)
+        .unwrap_or_else(|| panic!("{path} was not called: {:?}", node.calls))
+}
+
+fn last_position(node: &Node, path: &str) -> usize {
+    node.calls
+        .iter()
+        .rposition(|c| c == path)
+        .unwrap_or_else(|| panic!("{path} was not called: {:?}", node.calls))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_primary_cannot_choose_where_a_secondary_joins() {
+    let mut alone = healthy("evil.example.net");
+    alone.peers = vec![
+        json!({ "id": 1, "name": "evil.example.net", "ipAddresses": [PRIMARY_ADDRESS], "type": "Primary", "state": "Self" }),
+    ];
+    let (primary, secondary) = pair(alone, rebuilt("mrb-dns-01")).await;
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    exec("reconcile", request).await.0.unwrap();
+    let n = secondary.node.lock().unwrap();
+    let form = &n.forms[position(&n, "/api/admin/cluster/initJoin")];
+    assert!(
+        !form["primaryNodeUrl"].contains("evil"),
+        "{}",
+        form["primaryNodeUrl"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_that_fails_leaves_no_credential_behind() {
+    let mut alone = healthy(PRIMARY_NAME);
+    alone.peers = vec![
+        json!({ "id": 1, "name": PRIMARY_NAME, "ipAddresses": [PRIMARY_ADDRESS], "type": "Primary", "state": "Self" }),
+    ];
+    let (primary, secondary) = pair(alone, rebuilt("mrb-dns-01")).await;
+    secondary.node.lock().unwrap().refuse.insert(
+        "/api/admin/cluster/initJoin".into(),
+        "the primary cannot be reached".into(),
+    );
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    failure(exec("reconcile", request).await.0);
+    assert!(primary.node.lock().unwrap().users.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_credential_a_dead_agent_left_behind_is_replaced_and_verification_says_so() {
+    let (primary, secondary) = healthy_pair().await;
+    primary
+        .node
+        .lock()
+        .unwrap()
+        .users
+        .push("octopushy-cluster-join".into());
+    let mut request = input(&primary, &secondary);
+    request["syncWaitSeconds"] = json!(0);
+    let (message, _) = failure(exec("verify", request).await.0);
+    assert!(message.contains("octopushy-cluster-join"), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_credential_that_cannot_be_removed_fails_the_step_and_says_so() {
+    let mut alone = healthy(PRIMARY_NAME);
+    alone.peers = vec![
+        json!({ "id": 1, "name": PRIMARY_NAME, "ipAddresses": [PRIMARY_ADDRESS], "type": "Primary", "state": "Self" }),
+    ];
+    let (primary, secondary) = pair(alone, rebuilt("mrb-dns-01")).await;
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    // It may exist from earlier: the first delete has to fail too, so only the last one counts.
+    primary.node.lock().unwrap().undeletable = true;
+    let (message, _) = failure(exec("reconcile", request).await.0);
+    assert!(message.contains("octopushy-cluster-join"), "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -654,9 +778,54 @@ async fn reconcile_prunes_undeclared_entries_on_the_primary_only_when_approved()
     let mut request = input(&primary, &secondary);
     exec("reconcile", request.clone()).await.0.unwrap();
     assert_eq!(primary.node.lock().unwrap().blocked.len(), 2);
-    request["pruneEntries"] = json!(true);
+    request["pruneBlocked"] = json!(["hand.example.com"]);
     exec("reconcile", request).await.0.unwrap();
     assert_eq!(primary.node.lock().unwrap().blocked, ["bad.example.com"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pruning_removes_what_was_approved_and_not_what_appeared_since() {
+    let (primary, secondary) = healthy_pair().await;
+    {
+        let mut n = primary.node.lock().unwrap();
+        n.blocked.push("approved.example.com".into());
+        n.blocked.push("added-after-approval.example.com".into());
+        n.allowed.push("approved-allow.example.com".into());
+        n.allowed.push("allow-after-approval.example.com".into());
+    }
+    let mut request = input(&primary, &secondary);
+    request["pruneBlocked"] = json!(["approved.example.com"]);
+    request["pruneAllowed"] = json!(["approved-allow.example.com"]);
+    exec("reconcile", request).await.0.unwrap();
+    let n = primary.node.lock().unwrap();
+    assert_eq!(
+        n.blocked,
+        ["bad.example.com", "added-after-approval.example.com"]
+    );
+    assert_eq!(
+        n.allowed,
+        ["fine.example.com", "allow-after-approval.example.com"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_declared_in_another_case_is_not_undeclared() {
+    let (primary, secondary) = healthy_pair().await;
+    let mut request = input(&primary, &secondary);
+    request["blocked"] = json!(["BAD.Example.com."]);
+    request["allowed"] = json!(["FINE.EXAMPLE.COM."]);
+    request["forwardZones"] = json!(["Home.Arpa."]);
+    let outputs = exec("inspect", request.clone()).await.0.unwrap().outputs;
+    assert_eq!(
+        outputs["undeclared"],
+        json!({ "blocked": [], "allowed": [] })
+    );
+    let (result, _) = exec("verify", request).await;
+    let outputs = match result {
+        Ok(success) => success.outputs,
+        Err(failed) => panic!("{failed:?}"),
+    };
+    assert_eq!(outputs["ok"], true, "{outputs}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -778,7 +947,9 @@ async fn a_peer_that_already_left_does_not_take_another_with_it() {
         "127.0.70.9"
     )]);
     let outputs = exec("detach", request).await.0.unwrap().outputs;
-    assert_eq!(outputs["detached"], json!(["home/umbrel/gone-already"]));
+    // Not listed is all the primary can say: a record deleted by hand looks the same.
+    assert_eq!(outputs["detached"], json!([]));
+    assert_eq!(outputs["unconfirmed"], json!(["home/umbrel/gone-already"]));
     assert_eq!(primary.node.lock().unwrap().peers.len(), 3);
     assert!(
         !primary
@@ -807,10 +978,38 @@ async fn a_peer_that_cannot_answer_is_deleted_because_this_removal_is_approved()
         "leaving.cluster.home.arpa",
         "127.0.70.9"
     )]);
-    exec("detach", request).await.0.unwrap();
+    let outputs = exec("detach", request).await.0.unwrap().outputs;
+    assert_eq!(outputs["detached"], json!([]), "nothing saw it leave");
+    assert_eq!(outputs["unconfirmed"], json!(["home/umbrel/umb-dns-01"]));
     let n = primary.node.lock().unwrap();
     assert!(n.calls.iter().any(|c| c.ends_with("/deleteSecondary")));
     assert_eq!(n.peers.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_binding_with_only_an_address_removes_nothing_whatever_answers_there() {
+    let (primary, secondary) = healthy_pair().await;
+    let unrelated = json!({ "id": 44, "name": "unrelated.cluster.home.arpa", "ipAddresses": ["127.0.70.9"], "type": "Secondary", "state": "Connected" });
+    primary.node.lock().unwrap().peers.push(unrelated);
+    let mut request = input(&primary, &secondary);
+    request["remove"] = json!([{ "guest": "home/umbrel/umb-dns-01", "address": "127.0.70.9" }]);
+    let (message, outputs) = failure(exec("detach", request).await.0);
+    assert!(message.contains("home/umbrel/umb-dns-01"), "{message}");
+    assert!(message.contains("acknowledge"), "{message}");
+    assert_eq!(outputs["detached"], json!([]));
+    assert_eq!(outputs["unconfirmed"], json!([]));
+    let n = primary.node.lock().unwrap();
+    assert_eq!(n.peers.len(), 3, "the unrelated peer stays");
+    assert!(!n.calls.iter().any(|c| c.contains("Secondary")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_binding_with_only_an_address_is_not_taken_for_gone_either() {
+    let (primary, secondary) = healthy_pair().await;
+    let mut request = input(&primary, &secondary);
+    request["remove"] = json!([{ "guest": "home/umbrel/umb-dns-01", "address": "127.0.70.9" }]);
+    let (_, outputs) = failure(exec("detach", request).await.0);
+    assert_eq!(outputs["detached"], json!([]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -948,8 +1147,10 @@ async fn a_refused_join_is_a_known_failure() {
     );
     let mut request = input(&primary, &secondary);
     request["join"] = json!(["home/moraband/mrb-dns-01"]);
-    let (message, _) = failure(exec("reconcile", request).await.0);
-    assert!(message.contains("the primary said no"), "{message}");
+    let (result, logs) = exec("reconcile", request).await;
+    let (message, _) = failure(result);
+    assert!(message.contains("Joining"), "{message}");
+    assert!(logs.join("\n").contains("the primary said no"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1149,4 +1350,130 @@ async fn reading_certificates_needs_no_password_and_sends_none() {
         "home/moraband/mrb-dns-01"
     );
     assert!(!String::from_utf8_lossy(&member.bodies.lock().unwrap()).contains("pass="));
+}
+
+const LEAK: &str = "cGFzc3dvcmQ6YSBzaGFyZWQgJiBhZG1pbg";
+
+fn text_of(result: &Result<Success, Failure>) -> String {
+    match result {
+        Ok(success) => success.outputs.to_string(),
+        Err(Failure::Failed { message, outputs }) => {
+            format!("{message} {}", outputs.clone().unwrap_or(Value::Null))
+        }
+        Err(other) => format!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_version_that_is_not_a_version_is_not_published() {
+    let (primary, secondary) = healthy_pair().await;
+    secondary.node.lock().unwrap().version = format!("15.6.2-{LEAK}");
+    let mut request = input(&primary, &secondary);
+    request["syncWaitSeconds"] = json!(0);
+    let (result, _) = exec("verify", request).await;
+    let text = text_of(&result);
+    assert!(!text.contains(LEAK), "{text}");
+    let (_, outputs) = failure(result);
+    let report = member(&outputs, "home/moraband/mrb-dns-01");
+    assert!(report["version"].is_null());
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "version" && c["ok"] == false)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_node_says_stays_out_of_outputs_and_failures_but_reaches_the_log() {
+    let mut alone = healthy(PRIMARY_NAME);
+    alone.peers = vec![
+        json!({ "id": 1, "name": PRIMARY_NAME, "ipAddresses": [PRIMARY_ADDRESS], "type": "Primary", "state": "Self" }),
+    ];
+    let (primary, secondary) = pair(alone, rebuilt("mrb-dns-01")).await;
+    secondary
+        .node
+        .lock()
+        .unwrap()
+        .refuse
+        .insert("/api/admin/cluster/initJoin".into(), LEAK.into());
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    let (result, logs) = exec("reconcile", request).await;
+    let text = text_of(&result);
+    assert!(!text.contains(LEAK), "{text}");
+    assert!(text.contains("home/moraband/mrb-dns-01"), "{text}");
+    assert!(logs.join("\n").contains(LEAK), "kept in the masked log");
+
+    let (primary, secondary) = healthy_pair().await;
+    primary
+        .node
+        .lock()
+        .unwrap()
+        .refuse
+        .insert("/api/settings/get".into(), LEAK.into());
+    let mut request = input(&primary, &secondary);
+    request["syncWaitSeconds"] = json!(0);
+    let text = text_of(&exec("verify", request).await.0);
+    assert!(!text.contains(LEAK), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn node_strings_are_validated_before_anything_is_published() {
+    let (primary, secondary) = healthy_pair().await;
+    {
+        let mut n = primary.node.lock().unwrap();
+        n.settings["blockingType"] = json!(LEAK);
+        n.blocked.push(format!("not a name {LEAK}"));
+        n.peers.push(json!({
+            "id": 77, "name": format!("no spaces {LEAK}"), "ipAddresses": [format!("x{LEAK}")],
+            "type": LEAK, "state": LEAK,
+        }));
+    }
+    let mut request = input(&primary, &secondary);
+    request["syncWaitSeconds"] = json!(0);
+    let inspected = exec("inspect", request.clone()).await.0;
+    let text = text_of(&inspected);
+    assert!(!text.contains(LEAK), "{text}");
+    let text = text_of(&exec("verify", request).await.0);
+    assert!(!text.contains(LEAK), "{text}");
+    assert!(text.contains("blockingType"), "{text}");
+    assert!(text.contains("not a domain name"), "{text}");
+}
+
+/// Every action that holds the password, against a member with a certificate nobody trusted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_with_a_changed_certificate_receives_nothing_on_any_path() {
+    for (action, role) in [
+        ("inspect", 0),
+        ("inspect", 1),
+        ("verify", 0),
+        ("verify", 1),
+        ("detach", 0),
+        ("reconcile", 0),
+        ("reconcile", 1),
+        ("refresh-block-lists", 0),
+    ] {
+        let rebuilt = tls_member("127.0.70.22").await;
+        let (primary, secondary) = healthy_pair().await;
+        let mut request = input(&primary, &secondary);
+        request["members"][role]["endpoint"] = json!(rebuilt.endpoint);
+        request["members"][role]["certificateSha256"] = json!("cd".repeat(32));
+        request["syncWaitSeconds"] = json!(0);
+        if action == "reconcile" {
+            request["join"] = json!(["home/moraband/mrb-dns-01"]);
+        }
+        let _ = exec(action, request).await;
+        assert_eq!(
+            rebuilt.requests.load(Ordering::SeqCst),
+            0,
+            "{action} reached the node with the changed certificate as member {role}"
+        );
+        let bodies = rebuilt.bodies.lock().unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bodies).contains("pass"),
+            "{action} sent it a password"
+        );
+    }
 }
