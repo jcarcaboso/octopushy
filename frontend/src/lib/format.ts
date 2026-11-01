@@ -34,6 +34,7 @@ export function humanize(value: string): string {
 const operations: Record<string, string> = {
   provision: "Provision",
   retire: "Retire",
+  configure: "Configure",
 };
 
 export function operationLabel(operation: string): string {

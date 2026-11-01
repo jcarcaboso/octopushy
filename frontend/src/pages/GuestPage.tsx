@@ -9,6 +9,7 @@ import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionView } from "../components/DefinitionView";
 import { IssueList } from "../components/IssueList";
+import { GuestConfigurationCard } from "../components/GuestConfiguration";
 import { GuestDiskUsage } from "../components/GuestDiskUsage";
 import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
@@ -172,6 +173,7 @@ export function GuestPage() {
                 {data.agentLabelsSetBy ? <span className="muted small">set by {data.agentLabelsSetBy}</span> : null}
               </div>
             </Card>
+            {data.configuration ? <GuestConfigurationCard id={guest.id} configuration={data.configuration} /> : null}
             <Card title="Identity">
               <Identity guest={data} />
             </Card>
