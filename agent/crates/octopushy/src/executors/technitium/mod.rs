@@ -439,23 +439,25 @@ impl Removal {
     }
 }
 
-/// The peer this removal stands for, and no other: its id on the primary, or both its name and
-/// its address. Being undeclared says nothing about whose it is, and neither does an address.
+/// The peer this removal stands for, and no other: its id on the primary together with its name
+/// or its address, or both its name and its address. Being undeclared says nothing about whose a
+/// peer is, and neither does an address alone, or an id that some other peer may hold by now.
 fn exact_peer<'a>(state: &'a ClusterState, removal: &Removal) -> Option<&'a Peer> {
     let secondaries = || state.cluster_nodes.iter().filter(|p| p.kind == "Secondary");
-    if let Some(id) = removal.peer_id
-        && let Some(peer) = secondaries().find(|p| p.id == id)
-    {
-        return Some(peer);
-    }
     let has_address = |p: &Peer| {
         removal
             .address
             .as_ref()
             .is_some_and(|a| p.ip_addresses.contains(a))
     };
-    let name = removal.peer_name.as_ref().filter(|n| !n.is_empty())?;
-    secondaries().find(|p| &p.name == name && has_address(p))
+    let name = removal.peer_name.as_ref().filter(|n| !n.is_empty());
+    let has_name = |p: &Peer| name.is_some_and(|n| &p.name == n);
+    if let Some(id) = removal.peer_id
+        && let Some(peer) = secondaries().find(|p| p.id == id && (has_name(p) || has_address(p)))
+    {
+        return Some(peer);
+    }
+    secondaries().find(|p| has_name(p) && has_address(p))
 }
 
 async fn detach(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> ExecResult {
@@ -486,7 +488,7 @@ async fn detach(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> ExecRe
             .any(|m| peer.ip_addresses.contains(&m.address))
         {
             failed.push(format!(
-                "{} holds the address of a declared member, so {} was not removed.",
+                "{} holds the address of a declared member, so {} was not removed: that may be the member's own peer, and removing it would remove the member. Compare the primary's peers by hand, delete the stale one there if it is not the declared member's, then acknowledge that on the cluster's page. The next plan goes on.",
                 peer.name, removal.guest
             ));
             continue;
@@ -547,6 +549,9 @@ async fn reconcile(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> Exe
     }
     let mut failed = Vec::new();
     let mut joined = Vec::new();
+    // A member whose join may or may not have happened. What was done before it, and the
+    // approved prunes, are still worth keeping and doing.
+    let mut uncertain = None;
     for guest in &input.join {
         let Some(member) = input
             .members
@@ -556,9 +561,15 @@ async fn reconcile(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> Exe
             failed.push(format!("{guest} is not a secondary of this cluster."));
             continue;
         };
-        match join(ctx, input, member, access, &primary_api, &state).await? {
-            Ok(()) => joined.push(guest.clone()),
-            Err(problem) => failed.push(problem),
+        match join(ctx, input, member, access, &primary_api, &state).await {
+            Ok(Ok(())) => joined.push(guest.clone()),
+            Ok(Err(problem)) => failed.push(problem),
+            Err(Failure::Uncertain(message)) => {
+                uncertain = Some(message);
+                break;
+            }
+            Err(Failure::Failed { message, .. }) => failed.push(message),
+            Err(other) => return Err(other),
         }
     }
 
@@ -589,7 +600,13 @@ async fn reconcile(ctx: &ExecContext, input: &Input, access: &Access<'_>) -> Exe
         })
         .collect();
     let outputs = json!({ "joined": joined, "members": members });
-    if failed.is_empty() {
+    if let Some(message) = uncertain {
+        failed.insert(0, message);
+        Err(Failure::UncertainWith {
+            message: failed.join(" "),
+            outputs,
+        })
+    } else if failed.is_empty() {
         Ok(Success::outputs(outputs))
     } else {
         Err(Failure::with_outputs(failed.join(" "), outputs))
@@ -626,7 +643,15 @@ async fn join(
         (Seen::Up(api, _), Standing::Absent) => {
             ctx.log.agent(format!("{}: joining", member.label()));
             match open_join(primary_api).await {
-                Err(e) => Err(format!("Preparing {} to join failed: {e}.", member.label())),
+                Err(e) => {
+                    // The user may exist already: failing to make it an administrator, for one.
+                    let left = close_join(primary_api).await.err();
+                    Err(format!(
+                        "Preparing {} to join failed: {e}.{}",
+                        member.label(),
+                        left.map(|l| format!(" {l}")).unwrap_or_default()
+                    ))
+                }
                 Ok(credential) => {
                     let outcome = match send_join(input, member, api, &credential).await {
                         Ok(()) => Ok(Ok(())),
@@ -1148,7 +1173,9 @@ async fn member_checks(
             Ok(false) => Check::pass("credential", "no temporary administrator is left"),
             Ok(true) => Check::fail(
                 "credential",
-                format!("the temporary administrator {JOIN_USER} is still on the primary"),
+                format!(
+                    "the temporary administrator {JOIN_USER} is still on the primary. Sign in there and delete it under Administration, Users; see 'Joining' in {RECOVERY_DOC}. A later join replaces it, but nothing else does"
+                ),
             ),
             Err(e) => Check::lagging("credential", format!("reading its users failed: {e}")),
         });

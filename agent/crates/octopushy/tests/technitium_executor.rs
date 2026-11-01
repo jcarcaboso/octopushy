@@ -1135,7 +1135,10 @@ async fn a_lost_join_answer_that_cannot_be_settled_is_uncertain() {
     request["join"] = json!(["home/moraband/mrb-dns-01"]);
     request["joinSettleSeconds"] = json!(0);
     let (result, _) = exec("reconcile", request).await;
-    assert!(matches!(result, Err(Failure::Uncertain(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(Failure::UncertainWith { .. })),
+        "{result:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1476,4 +1479,154 @@ async fn a_node_with_a_changed_certificate_receives_nothing_on_any_path() {
             "{action} sent it a password"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_that_fails_after_its_user_was_made_removes_the_user() {
+    let (primary, secondary) = pair(joining(), rebuilt("mrb-dns-01")).await;
+    // The user exists by the time making it an administrator fails.
+    primary
+        .node
+        .lock()
+        .unwrap()
+        .refuse
+        .insert("/api/admin/users/set".into(), "no".into());
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    let (message, _) = failure(exec("reconcile", request).await.0);
+    assert!(message.contains("Preparing"), "{message}");
+    let p = primary.node.lock().unwrap();
+    assert!(p.calls.iter().any(|c| c == "/api/admin/users/create"));
+    assert!(p.users.is_empty(), "the user stays: {:?}", p.users);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_leftover_credential_tells_the_operator_what_to_do() {
+    let (primary, secondary) = healthy_pair().await;
+    primary
+        .node
+        .lock()
+        .unwrap()
+        .users
+        .push("octopushy-cluster-join".into());
+    let mut request = input(&primary, &secondary);
+    request["syncWaitSeconds"] = json!(0);
+    let (message, _) = failure(exec("verify", request).await.0);
+    assert!(message.contains("Administration, Users"), "{message}");
+    assert!(message.contains("delete"), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_that_is_lost_keeps_the_identity_of_the_members_it_already_joined() {
+    let third = start("127.0.70.3", rebuilt("umb-dns-01")).await;
+    let (primary, secondary) = pair(joining(), rebuilt("mrb-dns-01")).await;
+    // The third joins and shows on the primary; the second's answer is lost and never settles.
+    let peer = json!({ "id": 33, "name": "umb-dns-01.cluster.home.arpa", "ipAddresses": [third.address], "type": "Secondary", "state": "Connected" });
+    {
+        let mut node = third.node.lock().unwrap();
+        node.joins = Some((primary.node.clone(), peer));
+        node.truncate.insert("/api/admin/cluster/initJoin".into());
+    }
+    secondary
+        .node
+        .lock()
+        .unwrap()
+        .truncate
+        .insert("/api/admin/cluster/initJoin".into());
+    primary
+        .node
+        .lock()
+        .unwrap()
+        .blocked
+        .push("stale.example.com".into());
+    let mut request = input(&primary, &secondary);
+    request["members"].as_array_mut().unwrap().push(json!({
+        "guest": "home/umbrel/umb-dns-01", "role": "secondary", "address": third.address, "endpoint": third.endpoint, "dnsPort": third.dns_port, "certificateSha256": PIN }));
+    request["join"] = json!(["home/umbrel/umb-dns-01", "home/moraband/mrb-dns-01"]);
+    request["pruneBlocked"] = json!(["stale.example.com"]);
+    request["joinSettleSeconds"] = json!(0);
+    let (result, _) = exec("reconcile", request).await;
+    let Err(Failure::UncertainWith { outputs, .. }) = result else {
+        panic!("expected an uncertain outcome that carries what was done, got {result:?}");
+    };
+    assert_eq!(outputs["joined"], json!(["home/umbrel/umb-dns-01"]));
+    assert_eq!(outputs["members"][0]["guest"], "home/umbrel/umb-dns-01");
+    assert_eq!(outputs["members"][0]["peerId"], 33);
+    assert!(
+        !primary
+            .node
+            .lock()
+            .unwrap()
+            .blocked
+            .contains(&"stale.example.com".to_owned()),
+        "an approved prune does not wait on another member's join"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_id_alone_does_not_say_whose_peer_it_is() {
+    let (primary, secondary) = healthy_pair().await;
+    // The primary lists id 33 as somebody else, at another address.
+    let stranger = json!({ "id": 33, "name": "stranger.cluster.home.arpa", "ipAddresses": ["127.0.70.50"], "type": "Secondary", "state": "Connected" });
+    primary.node.lock().unwrap().peers.push(stranger);
+    let mut request = input(&primary, &secondary);
+    request["remove"] = json!([removal(
+        "home/umbrel/umb-dns-01",
+        33,
+        "leaving.cluster.home.arpa",
+        "127.0.70.9"
+    )]);
+    let outputs = exec("detach", request).await.0.unwrap().outputs;
+    assert_eq!(outputs["detached"], json!([]));
+    assert_eq!(outputs["unconfirmed"], json!(["home/umbrel/umb-dns-01"]));
+    let n = primary.node.lock().unwrap();
+    assert!(n.peers.iter().any(|p| p["id"] == 33), "the stranger stays");
+    assert!(!n.calls.iter().any(|c| c.contains("Secondary")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_id_with_the_same_address_is_the_peer() {
+    let (primary, secondary) = healthy_pair().await;
+    // The name changed, the id and the address did not.
+    let renamed = json!({ "id": 33, "name": "renamed.cluster.home.arpa", "ipAddresses": ["127.0.70.9"], "type": "Secondary", "state": "Connected" });
+    primary.node.lock().unwrap().peers.push(renamed);
+    let mut request = input(&primary, &secondary);
+    request["remove"] = json!([removal(
+        "home/umbrel/umb-dns-01",
+        33,
+        "leaving.cluster.home.arpa",
+        "127.0.70.9"
+    )]);
+    let outputs = exec("detach", request).await.0.unwrap().outputs;
+    assert_eq!(outputs["detached"], json!(["home/umbrel/umb-dns-01"]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replacement_at_the_same_address_says_how_to_go_on() {
+    let (primary, secondary) = healthy_pair().await;
+    // The old guest's peer is the one at the address a declared member has now.
+    let mut request = input(&primary, &secondary);
+    request["remove"] = json!([removal(
+        "home/umbrel/old-dns-01",
+        22,
+        SECONDARY_NAME,
+        SECONDARY_ADDRESS
+    )]);
+    let (message, _) = failure(exec("detach", request).await.0);
+    assert!(
+        message.contains("holds the address of a declared member"),
+        "{message}"
+    );
+    assert!(message.contains("by hand"), "{message}");
+    assert!(message.contains("acknowledge"), "{message}");
+    assert!(
+        primary
+            .node
+            .lock()
+            .unwrap()
+            .peers
+            .iter()
+            .any(|p| p["id"] == 22),
+        "the declared member stays"
+    );
 }

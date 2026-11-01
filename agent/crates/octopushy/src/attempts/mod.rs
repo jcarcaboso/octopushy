@@ -330,6 +330,13 @@ impl AttemptManager {
                 artifacts: success.artifacts,
             },
             Ok(Err(Failure::Uncertain(message))) => result(&id, Outcome::Uncertain, &message),
+            Ok(Err(Failure::UncertainWith { message, outputs })) => AttemptResult {
+                attempt_id: id.clone(),
+                outcome: Outcome::Uncertain as i32,
+                outputs_json: log.masker().mask_json(outputs).to_string(),
+                error: message,
+                artifacts: Vec::new(),
+            },
             Ok(Err(Failure::Cancelled)) => {
                 result(&id, Outcome::Cancelled, "cancelled by the server")
             }

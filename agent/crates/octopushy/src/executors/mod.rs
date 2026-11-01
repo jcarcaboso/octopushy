@@ -145,6 +145,12 @@ impl Success {
 pub enum Failure {
     /// A remote mutation may still be running; it must not be automatically retried.
     Uncertain(String),
+    /// Uncertain, and some of what happened is known and worth keeping, such as the members
+    /// a step joined before it lost track of another.
+    UncertainWith {
+        message: String,
+        outputs: Value,
+    },
     Failed {
         message: String,
         /// Outputs to report even though the attempt failed.
@@ -164,7 +170,9 @@ impl Failure {
     /// What went wrong, for people to read.
     pub fn message(&self) -> &str {
         match self {
-            Failure::Uncertain(message) | Failure::Failed { message, .. } => message,
+            Failure::Uncertain(message)
+            | Failure::UncertainWith { message, .. }
+            | Failure::Failed { message, .. } => message,
             Failure::Cancelled => "cancelled",
         }
     }

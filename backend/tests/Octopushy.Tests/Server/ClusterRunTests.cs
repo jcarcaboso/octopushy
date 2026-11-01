@@ -664,6 +664,26 @@ public class ClusterRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_member_that_joined_keeps_its_identity_when_the_outcome_of_another_join_is_unknown()
+    {
+        using var repository = ClusterDefinitionTests.Repository();
+        var (server, agent, _) = await ReadyAsync(repository);
+        await using var __ = server;
+        await PlanAsync(agent, PlanOf(Forming, (Secondary(), ["create"])));
+        await ApplyAsync(agent, await agent.NextAsync("apply"));
+        await agent.ReportAsync(await agent.NextAsync("reconcile"), Outcome.Uncertain, new JsonObject
+        {
+            ["joined"] = new JsonArray(ClusterDefinitionTests.Secondary),
+            ["members"] = new JsonArray(new JsonObject { ["guest"] = ClusterDefinitionTests.Secondary, ["peerId"] = 22, ["peerName"] = "mrb-dns-01.cluster.home.arpa" }),
+        }, "the answer to joining another member was lost");
+        await server.TickAsync();
+
+        var binding = await server.QueryAsync(db => db.ClusterBindings.SingleAsync(b => b.Guest == ClusterDefinitionTests.Secondary));
+        Assert.Equal(22, binding.PeerId);
+        Assert.Equal("mrb-dns-01.cluster.home.arpa", binding.PeerName);
+    }
+
+    [Fact]
     public async Task A_member_the_primary_only_forgot_stays_protected_until_an_operator_says_it_left()
     {
         // removeSecondary failed, so all that happened is that the primary's record was deleted.

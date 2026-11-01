@@ -419,6 +419,9 @@ public sealed partial class RunEngine
                     case AttemptStatuses.Uncertain:
                         step.Status = StepStatuses.Uncertain;
                         step.Detail = attempt.Error ?? "The agent cannot tell whether the change was made. Plan again to see the current state.";
+                        // Not knowing about one member says nothing against the ones already joined.
+                        if (step.Name == StepNames.ReconcileCluster)
+                            await ClusterPlan.RecordPeersAsync(db, run, outputs, cancellationToken);
                         break;
                     default:
                         step.Status = StepStatuses.Failed;
