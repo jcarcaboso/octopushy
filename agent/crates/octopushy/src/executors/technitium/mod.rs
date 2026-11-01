@@ -654,7 +654,7 @@ async fn join(
                 }
                 Ok(credential) => {
                     let outcome = match send_join(input, member, api, &credential).await {
-                        Ok(()) => Ok(Ok(())),
+                        Ok(()) => confirm_join(ctx, input, member, access, primary_api).await,
                         // Only a refusal says the join did not happen.
                         Err(ApiError::Api(e) | ApiError::Refused(e)) => {
                             Ok(Err(format!("Joining {} failed: {e}.", member.label())))
@@ -823,6 +823,65 @@ async fn settle_lost_join(
         }
         ctx.sleep(Duration::from_millis(500).min(Duration::from_secs(5)))
             .await?;
+    }
+}
+
+/// After a join that answered: whether the real primary and the member agree on it, over the
+/// pinned connections. The join itself cannot be pinned, so whatever answered for the primary's
+/// address could have taken it. That is found out here only if it did not relay the join: a
+/// primary that never saw it does not list the member, and a member that joined another one
+/// lists that one. A relay cannot be told apart, and what it passed on is not checked.
+async fn confirm_join(
+    ctx: &ExecContext,
+    input: &Input,
+    member: &Member,
+    access: &Access<'_>,
+    primary_api: &Api,
+) -> Result<Result<(), String>, Failure> {
+    let primary = input.primary()?;
+    // A join restarts the member's web service, and the primary may take a moment to list it.
+    let deadline = Instant::now() + Duration::from_secs(input.join_settle_seconds.min(20));
+    loop {
+        let unmet = match primary_api.cluster_state().await {
+            Ok(state) if peer_of(&state, member, None).is_none() => Some(format!(
+                "{} says it joined, but the primary {} does not list it. Whatever answered for the primary's address during the join may not have been the primary, and the member may have taken its configuration from that. Join on a trusted network segment; see 'Joining' in {RECOVERY_DOC}.",
+                member.label(),
+                primary.label()
+            )),
+            Ok(_) => match connect(member, access).await? {
+                Seen::Up(api, state) => {
+                    api.logout().await;
+                    let names_primary = state
+                        .cluster_nodes
+                        .iter()
+                        .any(|p| p.kind == "Primary" && p.ip_addresses.contains(&primary.address));
+                    (!(state.cluster_initialized
+                        && same_name(state.cluster_domain.as_deref(), &input.cluster_domain)
+                        && names_primary))
+                        .then(|| format!(
+                            "{} joined, but it names another primary than {}, or none. Whatever answered for the primary's address during the join may not have been the primary. Join on a trusted network segment; see 'Joining' in {RECOVERY_DOC}.",
+                            member.label(),
+                            primary.label()
+                        ))
+                }
+                Seen::Impostor(_) => Some(impostor_recovery(member)),
+                Seen::Down(e) | Seen::Broken(e) | Seen::Refused(e) => Some(format!(
+                    "{} joined, but it could not be asked about it afterwards: {e}.",
+                    member.label()
+                )),
+            },
+            Err(e) => Some(format!(
+                "{} joined, but the primary could not be asked about it afterwards: {e}.",
+                member.label()
+            )),
+        };
+        let Some(unmet) = unmet else {
+            return Ok(Ok(()));
+        };
+        if Instant::now() >= deadline {
+            return Ok(Err(unmet));
+        }
+        ctx.sleep(Duration::from_millis(500)).await?;
     }
 }
 

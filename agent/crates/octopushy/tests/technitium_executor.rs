@@ -45,6 +45,11 @@ struct Node {
     flood: HashMap<String, usize>,
     /// Where a successful join shows up: the primary's node, and its new peer.
     joins: Option<(Shared, Value)>,
+    /// The same for a join whose answer arrives. `pair` sets it, as a real primary would list a
+    /// member that joined it; a test clears it for a primary that never saw the join.
+    registers: Option<(Shared, Value)>,
+    /// What the member lists as its peers after a join, when it is not the primary's list.
+    view_after_join: Option<Vec<Value>>,
     users: Vec<String>,
     /// Deleting a user answers with an error, once a user exists.
     undeletable: bool,
@@ -83,8 +88,8 @@ async fn api(node: Shared, request: Request<Body>) -> Response<Body> {
             n.initialized = true;
             n.domain = Some("cluster.home.arpa".into());
             n.name = SECONDARY_NAME.into();
-            if let Some((primary, peer)) = n.joins.take() {
-                primary.lock().unwrap().peers.push(peer);
+            if let Some(registration) = n.joins.take() {
+                register(&mut n, registration);
             }
         }
         return Response::builder()
@@ -157,10 +162,23 @@ async fn api(node: Shared, request: Request<Body>) -> Response<Body> {
         "/api/admin/cluster/initJoin" => {
             n.initialized = true;
             n.domain = Some("cluster.home.arpa".into());
+            if let Some(registration) = n.registers.take() {
+                register(&mut n, registration);
+            }
             ok(json!({}))
         }
         _ => ok(json!({})),
     }
+}
+
+/// A member that joined: the primary lists it, and it lists what the primary does.
+fn register(member: &mut Node, (primary, peer): (Shared, Value)) {
+    let mut primary = primary.lock().unwrap();
+    primary.peers.push(peer);
+    member.peers = member
+        .view_after_join
+        .take()
+        .unwrap_or_else(|| primary.peers.clone());
 }
 
 /// Answers A questions: NXDOMAIN with EDE 15 for a blocked name, an address for a known one.
@@ -278,12 +296,12 @@ const PIN: &str = "0000000000000000000000000000000000000000000000000000000000000
 const PRIMARY_ADDRESS: &str = "127.0.70.1";
 const SECONDARY_ADDRESS: &str = "127.0.70.2";
 
-async fn pair(primary: Node, secondary: Node) -> (Fake, Fake) {
+async fn pair(primary: Node, mut secondary: Node) -> (Fake, Fake) {
     // Each test owns its loopback pair, through ports; the addresses identify the members.
-    (
-        start(PRIMARY_ADDRESS, primary).await,
-        start(SECONDARY_ADDRESS, secondary).await,
-    )
+    let primary = start(PRIMARY_ADDRESS, primary).await;
+    let peer = peer_list(PRIMARY_ADDRESS, SECONDARY_ADDRESS, "Connected", "Self").remove(1);
+    secondary.registers = Some((primary.node.clone(), peer));
+    (primary, start(SECONDARY_ADDRESS, secondary).await)
 }
 
 async fn healthy_pair() -> (Fake, Fake) {
@@ -836,6 +854,8 @@ async fn one_member_that_cannot_join_does_not_stop_the_rest() {
     ];
     let third = start("127.0.70.3", rebuilt("umb-dns-01")).await;
     let (primary, secondary) = pair(alone, rebuilt("mrb-dns-01")).await;
+    let peer = json!({ "id": 33, "name": "umb-dns-01.cluster.home.arpa", "ipAddresses": [third.address], "type": "Secondary", "state": "Connected" });
+    third.node.lock().unwrap().registers = Some((primary.node.clone(), peer));
     secondary.node.lock().unwrap().refuse.insert(
         "/api/admin/cluster/initJoin".into(),
         "the primary cannot be reached".into(),
@@ -1629,4 +1649,36 @@ async fn a_replacement_at_the_same_address_says_how_to_go_on() {
             .any(|p| p["id"] == 22),
         "the declared member stays"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_the_primary_never_saw_is_not_taken_for_one() {
+    // Whatever answered for the primary's address took the join; the real primary was not there.
+    let (primary, secondary) = pair(joining(), rebuilt("mrb-dns-01")).await;
+    secondary.node.lock().unwrap().registers = None;
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    request["joinSettleSeconds"] = json!(0);
+    let (message, outputs) = failure(exec("reconcile", request).await.0);
+    assert!(message.contains("does not list"), "{message}");
+    assert!(message.contains("trusted network"), "{message}");
+    assert_eq!(outputs["joined"], json!([]));
+    assert!(
+        primary.node.lock().unwrap().users.is_empty(),
+        "and the credential is gone either way"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_that_names_another_primary_after_joining_is_not_taken_for_joined() {
+    let (primary, secondary) = pair(joining(), rebuilt("mrb-dns-01")).await;
+    secondary.node.lock().unwrap().view_after_join = Some(vec![
+        json!({ "id": 1, "name": "evil.cluster.home.arpa", "ipAddresses": ["127.0.70.66"], "type": "Primary", "state": "Connected" }),
+    ]);
+    let mut request = input(&primary, &secondary);
+    request["join"] = json!(["home/moraband/mrb-dns-01"]);
+    request["joinSettleSeconds"] = json!(0);
+    let (message, outputs) = failure(exec("reconcile", request).await.0);
+    assert!(message.contains("another primary"), "{message}");
+    assert_eq!(outputs["joined"], json!([]));
 }

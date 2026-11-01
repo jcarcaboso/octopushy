@@ -284,8 +284,15 @@ From then on a commit that changes the cluster's recipe, a member's recipe, or h
 waits for **Trust cluster** again, and that guest's run is blocked, with the password withheld,
 whatever its `policy` says. **How a member runs** is what the page lists under each member, and what
 trust covers beyond code: its state backend, which variable gets the password, the agents it runs
-on, its Proxmox connection, its template, its inputs, and its network. The cluster's own agents
-count too. Each of these decides who ends up with the password, without a line of code changing.
+on, its template, its inputs and its network, and the guest as it is created: its VMID and host, its
+hardware including the volumes its mount points name, and **the SSH keys that can log in to it as
+root** (`access.sshAuthorizedKeys`), which the page lists first. Also covered are the host's
+datastores and bridges, and the Proxmox connection with the store entries it uses as the API token
+and as the CA. The cluster's own agents count too. Each of these decides who ends up with the
+password, without a line of code changing: a key added to a member lands at the next rebuild, on a
+machine that is handed the password, and a token entry swapped for the protected one would send the
+password to Proxmox. Only what cannot change the guest is left out: its `description`, `policy`,
+`execution`, `setup` and `renamedFrom`.
 
 ### Cluster runs and member guests
 
@@ -301,7 +308,9 @@ stay as they were.
 
 Between runs, a member guest that applied a change gets its cluster checked by a new run within a
 minute, and every formed cluster is checked in the background as often as installations are
-observed. A failed background check shows on the overview. It proposes nothing and changes nothing.
+observed, but not while a run of it is under way, and a check that finishes after a run of the
+cluster has started or ended is dropped, so that it cannot replace what the run found. A failed
+background check shows on the overview. It proposes nothing and changes nothing.
 
 ### Changing a blocklist
 
@@ -328,7 +337,9 @@ interface is reverted by the next run,** on either node, since a secondary hands
 the primary. A changed setting is a change in the next plan. An entry someone added to the blocked
 or allowed list is one OpenTofu cannot see, so inspect finds it, and the plan replaces
 `terraform_data.undeclared_entries`, which removes it. The approval names what goes, and because it
-deletes something from a live server it follows `policy.destructive`. Only those names go: an entry
+deletes something from a live server it follows `policy.destructive`. A first run creates that
+resource with nothing to remove, and is not held for it: only a plan that deletes or replaces it, or an
+inspection that named entries, counts. Only those names go: an entry
 that appears after that inspection stays, verification reports it, and the next plan names it. To
 keep an entry, declare it.
 
@@ -457,7 +468,9 @@ before the first plan.
 resource granted it, for the digest of the code that resource runs and how it runs it. The check is
 at the release, so it covers every way a definition can bind a key, and no commit can change it: not
 by editing a definition, and not by deleting one. A run holding such a secret receives only the files
-that digest covers, so code elsewhere in the repository is not there to run. A state backend never
+that digest covers, so code elsewhere in the repository is not there to run, and the agent keeps
+OpenTofu to them: no module is fetched that no one listed, and no provider the lock file does not pin
+([how](installation-trust.md#application-clusters)). A state backend never
 gets a protected entry, whatever was granted: its environment reaches OpenTofu during init, before
 there is a plan to review, and the backend alone decides where that value goes.
 
@@ -485,17 +498,19 @@ code that sends it away, has it.
 And on the network:
 
 - **The join is not pinned.** See [Joining](#joining). During a join, whoever answers for the
-  primary's address gets a one-time administrator's password. Used at once, against the real primary,
-  that is an administrator until the join ends, long enough to make another. Join on a network you
-  trust.
+  primary's address gets the join credential, an administrator's password for the primary, and a
+  fake primary can feed the secondary configuration and apps of its choosing. **Join members on a
+  network segment you trust.**
 - **Trusting a certificate is only as good as the comparison.** The first read is whatever answered.
   Compare it from the Proxmox host, or you are trusting that nobody was there at that moment.
 - **The provider trusts a certificate as a CA, not as one exact leaf.** The agent compares the exact
   certificate, in inspection, which is first in every run, and a run stops there if it differs. The
   provider, which receives the password too, is given the trusted certificate as its only root,
   because that is all v1.3.0 can do, and that is a weaker check in two ways. Something that
-  certificate signed would pass: the install makes certificates with `CA:FALSE`, which cannot sign,
-  but trust does not refuse a member that presents a CA. And an apply can come long after
+  certificate signed would pass: the install makes the certificate with `CA:FALSE`, but Go's
+  verifier does not enforce that on a certificate it was given as a trust anchor, so `CA:FALSE`
+  is no promise that it cannot sign (we have not tested this ourselves; it is a statement about
+  Go, not about this install), and trust does not refuse a member that presents a CA. And an apply can come long after
   inspection, while it waits for approval, with no exact check since. Either way it takes the
   private key of the certificate you trusted, which passes the exact check anyway.
 - **Proxmox's connection,** next.
@@ -515,17 +530,45 @@ runtime, in the OpenTofu image.
 ## Joining
 
 Technitium gives a secondary no way to pin the primary, so `initJoin` has to ignore certificate
-errors. Whatever goes over that leg goes to whoever answers for the primary's address, so it is not
-the admin password. Over the pinned connection, the agent creates `octopushy-cluster-join` on the
-primary with a random password, gives that to the secondary, and deletes the user as soon as the
-join is over, however it ended. Where the secondary joins is what is declared, and nothing a node
-reports: `https://<primary guest id>.<clusterDomain>:53443/` for the name Technitium insists on, and
-the primary's address to connect to.
+errors. **That leg goes to whoever answers for the primary's address, and it is not only a
+password.** Over the pinned connection, the agent creates `octopushy-cluster-join` on the primary
+with a random password, gives that to the secondary, and deletes the user as soon as the join is
+over. Where the secondary joins is what is declared, and nothing a node reports:
+`https://<primary guest id>.<clusterDomain>:53443/` for the name Technitium insists on, and the
+primary's address to connect to.
+
+What a host answering for the primary during the join gets and can do:
+
+- **The join credential,** an administrator on the real primary until the join ends. Used at once
+  against it, that is long enough to make another administrator.
+- **If it relays the join to the real primary, the `ClusterApiToken`,** which is
+  administrator-equivalent and does not expire, **and the users' password hashes.** Deleting
+  `octopushy-cluster-join` afterwards does not take that token back.
+- **If it does not relay, the secondary's configuration.** Upstream's joiner restores `authConfig`,
+  the DNS settings, the zones, the block lists and the apps from whoever answers, so a fake primary
+  can feed a secondary any of them, including an app that runs code.
+
+So **join members on a network segment you trust**, with nothing between the agent, the secondary
+and the primary that you do not. Nothing here changes that.
+
+What Octopushy checks afterwards, over the pinned connections, is whether the real primary lists the
+member and whether the member names the declared primary's address as its own primary. A fake primary
+that does not relay the join leaves the real one without the member, and that fails the step with the
+member's name, so a join that the primary never saw is not recorded. It cannot tell a relay apart, and
+it cannot compare the certificate the secondary saw with the pinned one, because Technitium does not
+say. What it passed on is not checked.
+
+After the join, nodes talk to each other, and validate each other's certificates, through DANE
+(upstream's `ClusterNode.cs` and `HttpApiClient.cs`). How that behaves when a node has no TLSA
+record was not verified here, so nothing in this page relies on it.
 
 It has to be an administrator, since Technitium refuses anyone else. A cluster does not depend on
 it: tried on real 15.6.2 servers, sync survives deleting, disabling, and rotating that user, through
 a restart of each node and a later change, and `tests/technitium-cluster` keeps checking deletion.
 
-An agent that dies during a join leaves the user behind, with a password nobody has. Verification
-fails until it is gone, and the next join replaces it. To remove it by hand, sign in to the primary
-and delete it under **Administration, Users**.
+The user is deleted when the join succeeds, when it is refused, when its outcome is lost, and when
+making the user fails part way. If the delete itself fails, the step says so and names the user.
+An agent that dies during a join leaves the user behind, with a password nobody has, and so does a
+delete that could not be done: verification fails, naming it, until it is gone. The next join of any
+member replaces it. To remove it by hand, sign in to the primary and delete it under
+**Administration, Users**.

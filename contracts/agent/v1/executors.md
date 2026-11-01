@@ -259,10 +259,19 @@ Input (the same for both actions):
   "destroy": false,
   "retainNoChangesPlan": false,
   "replace": [],
-  "files": {}
+  "files": {},
+  "reviewed": null
 }
 ```
 
+- `reviewed`, when present, marks a run that holds a protected secret, which receives only the
+  folders its reviewed code covers. `reviewed.modules` lists the repository folders of the modules the
+  recipe lists. Absent, nothing changes. Present, the executor fails before running `tofu` unless the
+  root has a `.terraform.lock.hcl` as a regular file, and fails if the root or a listed module holds
+  `.terraform`. Every `tofu init` then gets `-lockfile=readonly`, and `-get=false` when `modules` is
+  empty. After the init, `.terraform/modules/modules.json` is read and the step fails if any module
+  has a source that does not start with `./` or `../`, or a directory that is not inside the root or a
+  listed module after resolving it. Nothing is planned or applied then.
 - `files_tar_gz` holds the repository snapshot (without `.git`); `root` is a
   directory inside it. The executor extracts it into the attempt's workspace and
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
@@ -484,10 +493,13 @@ next plan. Takes `remove`, the members the approved plan deletes, as they were b
                "peerName": "umb-dns-01.cluster.home.arpa" }] }
 ```
 
-A peer is matched by `peerId`, or by both `peerName` and `address`, and only among secondaries. A
-removal with neither is refused and removes nothing: an address does not say who is there now. Being
+A peer is matched by `peerId` together with its `peerName` or its `address`, or by both `peerName`
+and `address`, and only among secondaries. An id alone is not enough, since another peer may hold it
+by now. A removal that identifies no peer is refused and removes nothing: an address does not say who
+is there now. Being
 undeclared says nothing about whose a peer is, and no other peer is touched. A match that holds a
-declared member's address is refused. It goes with `removeSecondary`, or `deleteSecondary` when that
+declared member's address is refused, with the same way on as for an address alone: compare the
+primary's peers by hand, delete the stale one there, and acknowledge it on the cluster's page. It goes with `removeSecondary`, or `deleteSecondary` when that
 fails, as it does for a peer that cannot answer, and what the primary lists afterwards decides. Output,
 also on failure: `{ "detached": [...], "unconfirmed": [...] }`. `detached` was told to leave and is
 gone. `unconfirmed` is not listed by the primary, and nothing saw it leave: its record was deleted, or
@@ -504,7 +516,9 @@ named as undeclared when the plan replaced `terraform_data.undeclared_entries`, 
   `primaryNodeIpAddress`. An IP-literal URL is refused upstream, and no value a node reports is used.
   `ignoreCertificateErrors` is always true, because Technitium cannot pin there, so this leg carries
   no admin password: the agent creates the administrator `octopushy-cluster-join` on the primary with
-  a random password for that join, and deletes it afterwards whatever happened. A `moved` member calls
+  a random password for that join, and deletes it afterwards, also when the join was refused, its
+  outcome was lost, or preparing it failed part way. An agent that dies leaves it, and so does a delete
+  that failed, which the step reports: the next join replaces it, and `verify` names it until then. A `moved` member calls
   `updateIpAddress`. `joined` is a no-op. A `stale`, `foreign`, or unreachable one fails with its
   recovery and does not stop the others.
 - `pruneBlocked`, `pruneAllowed`: deletes exactly these on the primary. Entries that appeared since
@@ -515,6 +529,16 @@ explicit refusal is a known failure of a join. An answer that was lost, cut off,
 nothing about whether it happened, so both nodes are asked for up to `joinSettleSeconds`: it succeeded
 if the member reports a cluster and the primary lists it, and is otherwise `uncertain`. The password
 is a form field of `initJoin`, never in a URL.
+
+An answered join is checked too, up to `joinSettleSeconds` and at most 20 seconds: the primary, over
+the pinned connection, has to list the member, and the member has to report the declared cluster domain
+and a primary at the declared primary's address. Otherwise the join is a known failure, naming the member
+and saying that whatever answered for the primary's address may not have been the primary. The leg
+itself is not pinned, so a relay cannot be told from the primary.
+
+A member whose outcome is unknown does not stop the others from being handled: the members joined before
+it, and the approved prunes, are done, and the attempt then ends `uncertain` with the same output
+(`joined`, `members`) as any other end, so that the controller keeps what it learned.
 
 ### `refresh-block-lists`
 

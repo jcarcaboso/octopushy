@@ -176,8 +176,9 @@ _Avoid_: Treating a definition as what guards a secret
 
 **Grant**:
 An operator's decision that one resource, running code with one digest, may receive
-a protected secret. For a guest the digest also covers how that code runs: its state
-backend, variables, agents, Proxmox connection, template, inputs and network.
+a protected secret. For a guest the digest also covers how that code runs and what it creates: its state
+backend, variables, agents, Proxmox connection and the store entries it uses, template, inputs, network,
+VMID, host, hardware and mounted volumes, and the SSH keys that can log in to it.
 _Avoid_: Trust when referring to one secret, or a sandbox: a digest says what the code is, not that it is safe
 
 **Member binding**:

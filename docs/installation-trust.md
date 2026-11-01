@@ -53,19 +53,35 @@ guarantee, and more, because code the repository controls holds it. Trust is key
 address (`lab/clusters/id`), and covers:
 
 - **Endpoints:** every member's `https://<address>:53443`.
-- **Certificates:** each member's, by fingerprint. The agent talks to that exact certificate and
+- **Certificates:** each member's, by fingerprint, as the SHA-256 of the DER of the PEM stored with it,
+  which is checked when it is read and again when it is sent to the provider and the agent. The agent talks to that exact certificate and
   nothing else, and the provider takes it as its only root, and there is no setting that turns this
   off, because a commit could use it. A member presenting another one is sent nothing.
 - **Code and how it runs:** a digest of the cluster's recipe and root, of each member's, with what
   they use, and of how each member runs: its state backend, which variable gets the password, its
-  agents, its Proxmox connection, its template, inputs and network. A cluster's plan holds the
+  agents, its template, inputs and network, the guest as it is created (VMID, host, hardware and the
+  volumes it mounts, and the SSH keys that can log in to it), the host's datastores and bridges, and
+  the Proxmox connection with the store entries it uses as token and as CA. Only a guest's
+  `description`, `policy`, `execution`, `setup` and `renamedFrom` are left out. A cluster's plan holds the
   password before anyone approves it, and a member's apply can run with no person approving it, so
   a commit must not be able to run code of its own in either place, or send unchanged code somewhere
   new. The cluster's page shows this for each member before you trust it.
 
 A cluster's root may hold only its own `.tf` files, and a root that receives the password has to pin
-its providers with a lock file and call only modules its recipe lists. They are read as HCL, not by
-matching lines, and a file that cannot be read with certainty is refused.
+its providers with a lock file and call only modules its recipe lists. This holds for a cluster's
+recipe and for every recipe that declares `secrets`, such as `technitium-lxc`. The files are read as
+HCL, not by matching lines, and a file that cannot be read with certainty is refused: that includes
+HCL's escapes `$${` and `%%{`, comments or heredocs inside an interpolation, and a heredoc that
+interpolates, because a reader that guessed wrong about one would take code for text.
+
+A hand-written reader is not what the password depends on. A run that holds a protected secret gets
+the folders its digest covers, with the module folders its recipe lists, and the agent then keeps
+OpenTofu to them: it needs a `.terraform.lock.hcl` and no `.terraform`, runs `tofu init` with
+`-lockfile=readonly` so a provider cannot be unpinned, and with `-get=false` when no module is listed
+so that nothing is fetched. With listed modules it reads `.terraform/modules/modules.json` after the
+init and before the plan, and fails if a module is not local or resolves outside the listed folders.
+A listed module is installed by `init`; a remote one in a file the reader missed is therefore fetched
+before the check fails, and never planned. Runs that hold no protected secret are not changed.
 
 1. A new cluster shows **Needs trust**. Its runs and checks wait, and receive no password.
 2. On the cluster's page, review the code and choose **Trust cluster**. This also records the grants
