@@ -160,8 +160,8 @@ promotes nothing.
 | Exit 0 | `succeeded` | `succeeded`, snapshot promoted |
 | A task failed (exit 2, recap present) | `failed` | `failed`. The change is partial and known; run again |
 | The tool never started a task: pull failure, syntax error, host key or login refused on the first connection | `failed` | `failed`. Nothing happened on the guest |
-| Unreachable after a task started, even if an outcome was reported first | `uncertain` | `uncertain` |
-| Killed, timed out, or ended without a recap | `uncertain` | `uncertain` |
+| Unreachable after a task started, even if an outcome was reported first or the play ignored it | `uncertain` | `uncertain` |
+| Killed, timed out, or ended without a recap, unless the tool provably never started | `uncertain` | `uncertain` |
 | Agent lost or restarted while it ran | `uncertain` | `uncertain` |
 | A declared outcome | `succeeded` | Waits on `outcome-approval`, or ends as declared |
 
@@ -290,9 +290,10 @@ so they do not reach the guest's journal. `ANSIBLE_LOG_PATH`, keeping remote fil
 verbosity are fixed too. A recap callback records counts, the failed task's name and the
 declared outcome, and **never a task's result**. A task's name is templated, so it can hold a
 secret even with `no_log`. The recap therefore stays in the private directory, and
-`octopushy-ansible` hands it to the agent as the last line of stderr, where the logger
-masks it like any other line. It never reaches the workspace, which can outlive a run
-for as long as an agent is disconnected.
+`octopushy-ansible` hands it to the agent as a control line on stderr. It never reaches the
+workspace, which can outlive a run for as long as an agent is disconnected. A recap decides
+an attempt's outcome, so it is not a log line: it is never logged, it is parsed as written so
+masking cannot rename a field, and its text is masked and only then cut to size.
 
 **Masking.** Every line of tool output and every error is masked with the attempt's secrets.
 The check of multi-line values for this design found three gaps, all fixed here:
@@ -329,14 +330,17 @@ has the reasoning; the result:
   and it stops a setting in a play or an `ansible.cfg` from turning the check off: the
   connection is pinned with extra vars, including the `ssh` binary. It does not stop hostile
   repository code. A local task runs on the agent with the SSH agent's socket and the
-  run's secrets within reach, so it can call `ssh` however it likes. That is what
-  accepting tool-native code means, and reviewing commits is the defence against it.
+  run's secrets within reach, so it can call `ssh` however it likes, and it can write a
+  false recap to the same stderr. That is what accepting tool-native code means, and
+  reviewing commits is the defence against it.
 - **A narrower blast radius than the store.** Definitions cannot name a `system/` key or an
   installation's Proxmox token as an `access` key or a setup secret; both fail validation.
-  That check reads today's definitions, so the controller also refuses, at every release,
-  a key that has ever gone to Proxmox or OpenTofu work. A removed installation's token
-  stays stored, and this is what keeps it out of a playbook. It also means a key cannot be
-  shared between an OpenTofu backend and a playbook: give each its own.
+  That check reads today's definitions, and a removed installation's token stays stored,
+  so the controller also refuses, at every release, a key any installation last declared,
+  including one that is gone, and a key that has ever gone to Proxmox or OpenTofu work. A key
+  therefore cannot be shared between an OpenTofu backend and a playbook: give each its own.
+  One case stays open: a token an installation stopped naming, in a later commit, before it
+  was ever used. Revoke credentials you retire.
 - **Code runs before approval.** `preview` and `prepare` run repository code with no
   secrets, like `tofu plan`. In a container that code sees only its workspace. With the
   `local` runtime it runs as the agent's user, in the agent's container, where the agent's

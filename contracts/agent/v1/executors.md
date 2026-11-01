@@ -444,18 +444,19 @@ the environment or the workspace. A secret file's extra var holds its path.
 ```
 
 The result comes from the exit status and the recap of the `octopushy_recap` callback. A task's
-name can hold a secret, so the recap stays in memory: `octopushy-ansible` prints it as the
-last line of stderr, `octopushy-recap: {…}`, and the agent reads it after masking.
+name can hold a secret, so the recap stays in memory: `octopushy-ansible` prints it to stderr as
+`octopushy-recap: {…}` and says nothing if it has none. The agent holds that line back from
+the log, parses it as written, then masks its text and cuts it to 1024 characters.
 
 | What happened | Outcome |
 |---|---|
 | Exit 0 | `succeeded` |
-| `set_stats` set a declared `octopushy_outcome`, and the guest stayed reachable | `succeeded`, with `outcome` and `detail` |
+| `set_stats` set a declared `octopushy_outcome`, and no task was unreachable | `succeeded`, with `outcome` and `detail` |
 | `octopushy_outcome` is not declared | `failed` |
 | A task failed, and the recap was written | `failed`, naming the task |
 | No task started, or exit 78, 125, 126 or 127 with no recap: the tool never ran | `failed` |
 | ssh never connected on the first task: refused host key, refused login, no route | `failed` |
-| The guest was lost after that, or during a task, even after an outcome was reported | `uncertain` |
+| The guest was lost after that, even after an outcome, or in a task the play ignored with an outcome set | `uncertain` |
 | Killed, or ended without a recap | `uncertain` |
 | Past `timeoutMinutes`, which is stopped with SIGTERM | `uncertain` |
 

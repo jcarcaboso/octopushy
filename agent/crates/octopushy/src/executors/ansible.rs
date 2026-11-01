@@ -14,7 +14,8 @@
 //!
 //! Secrets never enter the workspace. They reach `octopushy-ansible` on stdin, which keeps
 //! them in memory; see `agent/ansible/octopushy-ansible`. The recap, which can hold a templated
-//! task name, comes back as its last line on stderr, after the logger masked it.
+//! task name, comes back as a control line on stderr. It decides the attempt's outcome, so it is
+//! parsed as it was written and is never logged; only then is what it says masked and cut.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -45,6 +46,8 @@ const RECAP_PREFIX: &str = "octopushy-recap: ";
 /// Exit statuses that mean the tool never started: `octopushy-ansible` refused to run, or
 /// the container runtime could not start it.
 const NEVER_STARTED: &[i32] = &[78, 125, 126, 127];
+/// The longest name or detail kept, after it is masked: cutting first would keep part of a secret.
+const MAX_REPORTED: usize = 1024;
 
 /// What ssh says when it never got as far as running anything on the guest.
 const NEVER_CONNECTED: &[&str] = &[
@@ -455,6 +458,7 @@ impl Ansible<'_> {
                     stdin,
                     capture_stdout: capture,
                     stderr_mark: None,
+                    control_prefix: Some(RECAP_PREFIX),
                 },
                 &self.ctx.log,
                 stop,
@@ -776,17 +780,26 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         remove_secret_dir(&ctx.attempt_id);
     }
     let out = out?;
-    let recap = read_recap(&out);
-    settle(&prep, ctx, &out, recap, minutes)
+    let recap = read_recap(&out, ctx);
+    settle(&prep, &out, recap, minutes)
 }
 
-/// The recap line, already masked like every other line of output.
-fn read_recap(out: &ToolOutput) -> Option<Recap> {
-    out.stderr_tail
-        .iter()
-        .rev()
-        .find_map(|line| line.trim_end().strip_prefix(RECAP_PREFIX))
-        .and_then(|text| serde_json::from_str(text).ok())
+/// The recap, with what is free text masked and then cut to size. Masking comes after parsing
+/// so it cannot rename a field, and a value is matched as it is, not as JSON escaped it.
+fn read_recap(out: &ToolOutput, ctx: &ExecContext) -> Option<Recap> {
+    let mut recap: Recap = serde_json::from_str(out.control.as_deref()?).ok()?;
+    for value in [
+        &mut recap.failed_task,
+        &mut recap.unreachable,
+        &mut recap.unreachable_task,
+        &mut recap.detail,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *value = ctx.log.mask(value).chars().take(MAX_REPORTED).collect();
+    }
+    Some(recap)
 }
 
 /// Whether ssh failed before anything ran on the guest.
@@ -800,13 +813,7 @@ fn never_connected(recap: &Recap) -> bool {
 
 /// What a run's exit status and recap mean. Whatever cannot be shown to have stayed off the
 /// guest, or to have ended there, is uncertain.
-fn settle(
-    prep: &Prepared,
-    ctx: &ExecContext,
-    out: &ToolOutput,
-    recap: Option<Recap>,
-    minutes: u64,
-) -> ExecResult {
+fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64) -> ExecResult {
     if out.cancelled {
         return Err(Failure::Uncertain(format!(
             "the playbook passed its limit of {minutes} minutes and was stopped; whether it finished what it was doing is unknown. Inspect the guest, and any lock it holds, before running it again"
@@ -826,12 +833,12 @@ fn settle(
             "exitCode": out.code,
             "tasks": recap.tasks,
             "recap": recap.stats,
-            "failedTask": recap.failed_task.as_deref().map(|t| ctx.log.mask(t)),
-            "unreachableTask": recap.unreachable_task.as_deref().map(|t| ctx.log.mask(t)),
+            "failedTask": recap.failed_task,
+            "unreachableTask": recap.unreachable_task,
         })
     };
     if !recap.finished {
-        if recap.tasks == 0 {
+        if recap.tasks == 0 && out.code != Some(0) {
             return Err(Failure::msg(failed_before_tasks(out)));
         }
         if never_connected(&recap) {
@@ -841,8 +848,9 @@ fn settle(
             "ansible-playbook ended (exit status {code}) without finishing; whether a change was made is unknown. Inspect the guest, and any lock it holds, before running it again"
         )));
     }
-    // Before any outcome: one reported earlier says nothing of a task the guest then lost.
-    if recap.unreachable.is_some() && out.code != Some(0) {
+    // Before any outcome: one reported earlier says nothing of a task the guest then lost,
+    // and a play that ignores unreachable hosts has not found out how that task ended.
+    if recap.unreachable.is_some() && (out.code != Some(0) || recap.outcome.is_some()) {
         if never_connected(&recap) {
             return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
         }
@@ -862,7 +870,7 @@ fn settle(
         }
         let mut result = outputs(&recap);
         result["outcome"] = json!(outcome);
-        result["detail"] = json!(recap.detail.as_deref().map(|d| ctx.log.mask(d)));
+        result["detail"] = json!(recap.detail);
         return Ok(Success::outputs(result));
     }
     if out.code == Some(0) {

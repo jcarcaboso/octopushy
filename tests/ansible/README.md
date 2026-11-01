@@ -20,7 +20,7 @@ It proves, against real tools:
   a run's evidence, the agent's state, the guest, or a command line, and no secret directory stays.
 - A repository's `ansible.cfg` and a play's vars cannot turn off host key checking, replace the
   `ssh` binary, or set a log file.
-- A task whose templated name holds a secret leaves it in neither evidence nor the agent's disk.
+- A task whose templated name holds a secret leaves it in neither logs, evidence nor the agent's disk.
 - A declared outcome waits for approval, and approving runs the action once more.
 - An action can reuse what the last successful run prepared.
 - A wrong pin fails, says so, and runs nothing.

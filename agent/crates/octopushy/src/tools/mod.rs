@@ -108,6 +108,9 @@ pub struct Invocation<'a> {
     pub capture_stdout: bool,
     /// A whole stderr line to report in [`ToolOutput::stderr_marked`].
     pub stderr_mark: Option<&'a str>,
+    /// Stderr lines starting with this are the tool talking to the agent, not output: they
+    /// are held back from the log, unmasked, and the last is [`ToolOutput::control`].
+    pub control_prefix: Option<&'a str>,
 }
 
 /// What a tool run produced.
@@ -121,6 +124,9 @@ pub struct ToolOutput {
     pub stderr_tail: Vec<String>,
     /// Whether stderr had the line [`Invocation::stderr_mark`] names, anywhere.
     pub stderr_marked: bool,
+    /// What followed [`Invocation::control_prefix`] on the last such line. It is not masked,
+    /// so whoever reads it masks what it keeps.
+    pub control: Option<String>,
     /// Whether the run was cancelled.
     pub cancelled: bool,
 }
@@ -407,11 +413,17 @@ impl ToolRuntime {
         let err_task = {
             let log = log.clone();
             let mark = inv.stderr_mark.map(str::to_owned);
+            let prefix = inv.control_prefix.map(str::to_owned);
             tokio::spawn(async move {
                 let mut tail: std::collections::VecDeque<String> = Default::default();
                 let mut marked = false;
+                let mut control = None;
                 let _ = lines::for_each_line(stderr, |l| {
                     marked |= mark.as_deref() == Some(l.trim_end());
+                    if let Some(rest) = prefix.as_deref().and_then(|p| l.strip_prefix(p)) {
+                        control = Some(rest.to_owned());
+                        return;
+                    }
                     let masked = log.stderr(&l);
                     if tail.len() == STDERR_TAIL {
                         tail.pop_front();
@@ -419,7 +431,7 @@ impl ToolRuntime {
                     tail.push_back(masked);
                 })
                 .await;
-                (tail.into_iter().collect::<Vec<_>>(), marked)
+                (tail.into_iter().collect::<Vec<_>>(), marked, control)
             })
         };
 
@@ -434,12 +446,13 @@ impl ToolRuntime {
             }
         };
         let stdout = out_task.await.context("stdout reader")??;
-        let (stderr_tail, stderr_marked) = err_task.await.context("stderr reader")?;
+        let (stderr_tail, stderr_marked, control) = err_task.await.context("stderr reader")?;
         Ok(ToolOutput {
             code: status.code(),
             stdout,
             stderr_tail,
             stderr_marked,
+            control,
             cancelled,
         })
     }
@@ -520,6 +533,7 @@ mod tests {
             stdin: None,
             capture_stdout: false,
             stderr_mark: None,
+            control_prefix: None,
         };
         let cmd = rt.command(&inv).await.unwrap();
         let std = cmd.as_std();

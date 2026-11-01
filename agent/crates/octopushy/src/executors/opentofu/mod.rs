@@ -357,6 +357,7 @@ impl Tofu<'_> {
                     capture_stdout: capture,
                     stderr_mark: (self.prep.built_in && step == "apply")
                         .then_some(state::NOT_SAVED),
+                    control_prefix: None,
                 },
                 &self.ctx.log,
                 &self.ctx.cancel,

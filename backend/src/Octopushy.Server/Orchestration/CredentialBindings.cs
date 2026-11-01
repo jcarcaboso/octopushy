@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
@@ -63,6 +64,25 @@ internal static class CredentialBindings
         return problems;
     }
 
+    /// <summary>
+    /// The keys a playbook may not hold, whatever today's definitions say: a removed installation's
+    /// token stays stored, and its key stops looking like one. So this asks what any installation
+    /// last declared, including those that are gone, and what a key has ever been released to.
+    /// </summary>
+    private static async Task<HashSet<string>> ProxmoxKeysAsync(OctopushyDb db, string[] keys, CancellationToken ct)
+    {
+        var released = await db.SecretResolutions.AsNoTracking()
+            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == "ansible"))
+            .Select(r => r.Key).Distinct().ToListAsync(ct);
+        var definitions = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.Definition != null)
+            .Select(r => r.Definition!).ToListAsync(ct);
+        var declared = definitions.Select(d => JsonNode.Parse(d)?["connection"])
+            .SelectMany(c => new[] { c?["token"], c?["readOnlyToken"], c?["privilegedToken"] })
+            .Select(reference => reference?["store"]?.GetValue<string>()).OfType<string>();
+        return [.. released, .. declared];
+    }
+
     /// <summary>A configure run holds its SSH key, its pin and its own secrets: nothing that reaches Proxmox.</summary>
     private static List<string> ValidateAnsible(RunContext context)
     {
@@ -93,11 +113,7 @@ internal static class CredentialBindings
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);
         var versions = await db.StoreVersions.AsNoTracking().Where(v => keys.Contains(v.Key)).ToListAsync(ct);
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
-        // What definitions say today is not enough: a removed installation's token stays stored,
-        // and its key stops looking like one. What it was released for does not change.
-        var usedElsewhere = context.Ansible is null ? [] : await db.SecretResolutions.AsNoTracking()
-            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == "ansible"))
-            .Select(r => r.Key).Distinct().ToListAsync(ct);
+        var refused = context.Ansible is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
 
         // Recover old runs from release evidence, never from today's current pointer.
         var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
@@ -115,9 +131,9 @@ internal static class CredentialBindings
                 continue;
             }
 
-            if (name != SecretNames.AnsibleHostKey && usedElsewhere.Contains(key))
+            if (name != SecretNames.AnsibleHostKey && refused.Contains(key))
             {
-                problems.Add($"{key}: this credential has gone to Proxmox or OpenTofu work, so a playbook cannot use it");
+                problems.Add($"{key}: this is a credential of Proxmox or OpenTofu work, so a playbook cannot use it");
                 continue;
             }
 

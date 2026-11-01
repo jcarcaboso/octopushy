@@ -72,6 +72,7 @@ async fn podman_tofu_version() {
                 env: vec![("SOME_SECRET".into(), "not-a-real-secret-value".into())],
                 stdin: None,
                 capture_stdout: true,
+                control_prefix: None,
                 stderr_mark: None,
             },
             &log,

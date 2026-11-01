@@ -8,8 +8,8 @@ JSON document with what must not be in argv, the environment or a file on disk:
 
 The SSH key goes into a private ssh-agent. Secret vars and files go into a private directory
 under /tmp, which has to be a tmpfs, and are removed when Ansible ends. So is the recap, which
-can hold a task's templated name: the last line on stderr hands it to the agent, which masks
-every line. Nothing a run produces reaches the agent's workspace.
+can hold a task's templated name. It reaches the agent as a control line on stderr, which is
+not logged; the agent masks what it keeps. Nothing a run produces reaches the workspace.
 """
 import ctypes
 import json
@@ -149,13 +149,13 @@ def ensure_user(private, environment):
 
 
 def report_recap(path):
-    """The agent reads this line. Without a recap no task started, which is a result too."""
+    """Hands the recap over. If there is none, this says nothing: that is not evidence nothing ran."""
     try:
         with open(path, encoding="utf-8") as stream:
             recap = json.load(stream)
     except (OSError, ValueError):
-        recap = {"reached": False, "finished": False, "tasks": 0}
-    print(RECAP_PREFIX + json.dumps(recap), file=sys.stderr, flush=True)
+        return
+    print(RECAP_PREFIX + json.dumps(recap, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
 def run(arguments, environment):

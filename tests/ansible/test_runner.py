@@ -52,6 +52,30 @@ class Recap(unittest.TestCase):
             self.assertLessEqual(len(recap["unreachable"]), 1024)
             self.assertFalse(recap["reached"])
 
+    def test_a_recap_that_cannot_be_kept_up_is_withdrawn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recap.json"
+            callback = self.callback(path)
+            callback.write()
+            self.assertTrue(path.exists())
+            real = json.dump
+            with mock.patch("json.dump", side_effect=OSError("no space")):
+                callback.v2_playbook_on_task_start(None, False)
+            self.assertIs(json.dump, real)
+            self.assertFalse(path.exists(), "a stale recap says less happened than did")
+            callback.v2_playbook_on_task_start(None, False)
+            self.assertFalse(path.exists(), "nothing comes back")
+
+    def test_a_long_name_is_kept_whole_or_not_at_all(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recap.json"
+            callback = self.callback(path)
+            whole = "x" * 4000
+            callback.v2_runner_on_failed(types.SimpleNamespace(task_name=whole))
+            self.assertEqual(json.loads(path.read_text())["failedTask"], whole)
+            callback.v2_runner_on_failed(types.SimpleNamespace(task_name="x" * 9000))
+            self.assertNotIn("x", json.loads(path.read_text())["failedTask"].replace("(too long to report)", ""))
+
     def test_a_task_result_is_never_recorded(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "recap.json"
@@ -179,11 +203,10 @@ class Runs(unittest.TestCase):
         last = done.stderr.decode().strip().splitlines()[-1]
         self.assertEqual(json.loads(last.removeprefix("octopushy-recap: "))["tasks"], 2)
 
-    def test_a_run_that_recorded_nothing_says_no_task_started(self):
+    def test_a_run_that_recorded_nothing_claims_nothing(self):
         done = self.run_it("site.yml", secrets={"sshKey": KEY}, env={"FAKE_EXIT": "4"})
         self.assertEqual(done.returncode, 4)
-        last = done.stderr.decode().strip().splitlines()[-1]
-        self.assertEqual(json.loads(last.removeprefix("octopushy-recap: "))["tasks"], 0)
+        self.assertNotIn(b"octopushy-recap", done.stderr)
 
     def test_a_preview_reports_no_recap(self):
         done = self.run_it("--list-tasks", "site.yml")

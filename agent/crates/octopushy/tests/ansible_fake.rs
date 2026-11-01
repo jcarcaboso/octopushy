@@ -19,6 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 const SSH_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n";
 const PASSWORD: &str = "tail\"scale\\secret";
+/// Values that test how a recap is read: one with the name of a field in it, and one that
+/// JSON escapes differently from how it was given.
+const FIELD_NAMES: [&str; 2] = ["unreachable", "tasks"];
+const UNICODE: &str = "pässwörd";
 const HOST_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
 
@@ -82,6 +86,8 @@ impl Fixture {
         std::fs::read_to_string(self.rec.join(name)).unwrap_or_default()
     }
 }
+
+static LONG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| "L0ng".repeat(180));
 
 fn repo() -> Vec<u8> {
     archive::pack(&[
@@ -151,7 +157,11 @@ async fn exec(
     let buffer = Arc::new(LogBuffer::default());
     let log = AttemptLogger::new(
         buffer.clone(),
-        Arc::new(Masker::new([SSH_KEY, PASSWORD])),
+        Arc::new(Masker::new(
+            [SSH_KEY, PASSWORD, UNICODE, LONG.as_str()]
+                .into_iter()
+                .chain(FIELD_NAMES),
+        )),
         Arc::new(Notify::new()),
     );
     let ctx = ExecContext {
@@ -474,6 +484,100 @@ async fn a_run_that_left_no_recap_is_uncertain() {
     fx.set("exit", "1");
     let done = run(&fx).await;
     assert!(matches!(done.result, Err(Failure::Uncertain(_))));
+}
+
+#[tokio::test]
+async fn a_run_that_exits_zero_with_no_recap_is_uncertain() {
+    let fx = Fixture::new();
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn an_unfinished_recap_that_exits_zero_is_uncertain() {
+    let fx = Fixture::new();
+    fx.set(
+        "recap.json",
+        r#"{"reached":false,"finished":false,"tasks":0}"#,
+    );
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn a_secret_named_like_a_field_cannot_change_what_a_recap_says() {
+    let fx = Fixture::new();
+    let mut lost = recap(true, true);
+    lost["outcome"] = json!("deferred");
+    lost["unreachable"] = json!("Shared connection closed");
+    fx.set("recap.json", &lost.to_string());
+    fx.set("exit", "4");
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+    assert!(!done.log.contains("octopushy-recap"), "{}", done.log);
+}
+
+#[tokio::test]
+async fn a_long_secret_in_a_task_name_is_masked_whole_before_it_is_cut() {
+    let fx = Fixture::new();
+    let mut failed = recap(true, true);
+    failed["failedTask"] = json!(format!("Connect with {}", *LONG));
+    fx.set("recap.json", &failed.to_string());
+    fx.set("exit", "2");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { message, outputs }) => {
+            assert!(!message.contains("L0ng"), "{message}");
+            assert_eq!(outputs.unwrap()["failedTask"], "Connect with ***");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!done.log.contains("L0ng"), "{}", done.log);
+}
+
+#[tokio::test]
+async fn a_secret_json_escaped_in_a_recap_is_masked_as_itself() {
+    let fx = Fixture::new();
+    fx.set(
+        "recap.json",
+        r#"{"reached":true,"finished":true,"tasks":1,"failedTask":"Install p\u00e4ssw\u00f6rd"}"#,
+    );
+    fx.set("exit", "2");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { outputs, .. }) => {
+            assert_eq!(outputs.unwrap()["failedTask"], "Install ***");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!done.log.contains("00e4"), "{}", done.log);
+}
+
+#[tokio::test]
+async fn a_guest_lost_in_a_task_the_play_ignored_leaves_an_outcome_uncertain() {
+    let fx = Fixture::new();
+    let mut lost = recap(true, true);
+    lost["outcome"] = json!("deferred");
+    lost["unreachable"] = json!("Shared connection closed");
+    fx.set("recap.json", &lost.to_string());
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
 }
 
 #[tokio::test]

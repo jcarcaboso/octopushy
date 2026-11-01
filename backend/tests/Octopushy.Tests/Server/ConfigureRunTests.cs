@@ -591,6 +591,53 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_removed_installations_token_cannot_reach_a_playbook_even_if_it_was_never_used()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+
+        await server.SetSecretAsync("proxmox/other/read-only", "octopushy@pve!other=read");
+        await server.SetSecretAsync("proxmox/other/privileged", "octopushy@pve!other=write");
+        const string other = "labs/home/proxmox/other/installation.yaml";
+        server.Repository.Write(other, """
+            schemaVersion: 1
+            type: standalone
+            connection:
+              endpoint: https://10.1.0.11:8006/
+              tls: { verify: false }
+              readOnlyToken: { store: proxmox/other/read-only }
+              privilegedToken: { store: proxmox/other/privileged }
+            hosts:
+              other:
+                datastores: { images: local, disks: local-lvm }
+                bridges: [vmbr0]
+            """);
+        server.Commit("Add an installation");
+        await server.SyncAsync();
+        await server.TickAsync();
+        Assert.False(await server.QueryAsync(db => db.SecretResolutions.AnyAsync(r => r.Key == "proxmox/other/privileged")));
+
+        server.Repository.Delete(other);
+        const string guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(guest, File.ReadAllText(Path.Combine(server.Repository.Root, guest))
+            .Replace("store: app/tailscale", "store: proxmox/other/privileged"));
+        server.Commit("Reuse a token that no definition names");
+        await server.SyncAsync();
+        await ScheduleAsync(server);
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("a playbook cannot use it", run.Detail);
+        Assert.Empty(agent.TakeAssignments());
+    }
+
+    [Fact]
     public async Task The_controller_masks_each_line_of_a_key_as_well()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
