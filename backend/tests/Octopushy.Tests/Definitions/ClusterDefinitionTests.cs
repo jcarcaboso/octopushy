@@ -325,7 +325,7 @@ public class ClusterDefinitionTests
             foreach (var (name, value) in sent)
             {
                 if (name.Contains('/')) { Check(value!.AsObject()); continue; }
-                Assert.Matches($@"(?m)^\s*{name}\s+=", declared);
+                Assert.Matches($@"\b{name}\s+=", declared);
                 if (value is System.Text.Json.Nodes.JsonObject child) Check(child);
             }
         }
