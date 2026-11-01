@@ -9,7 +9,20 @@
     "operation": { "enum": ["provision"] },
     "executor": { "enum": ["opentofu"] },
     "root": { "description": "The OpenTofu root module, relative to this file.", "type": "string", "minLength": 1 },
-    "inputs": { "description": "JSON Schema validating the guest's hardware and network, relative to this file.", "type": "string" },
+    "modules": {
+      "description": "Other OpenTofu modules the root uses, relative to this file. A change to them plans the recipe's guests again, as a change to the root does.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "inputs": { "description": "JSON Schema validating the guest's hardware, network, and provision.inputs, relative to this file.", "type": "string" },
+    "guestType": { "description": "The guest type this recipe provisions; vm when left out.", "enum": ["vm", "container"] },
+    "secrets": {
+      "description": "The provision.secrets a guest must set for this recipe.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?![\\s\\S])" },
+      "uniqueItems": true
+    },
     "verify": { "enum": ["proxmox", "none"] },
     "guestFilesystem": { "description": "Explicitly authorizes native online root growth and capacity verification through the Proxmox guest agent, including reconciliation after an infrastructure no-op. Only the supported NixOS ext4 layout is accepted.", "enum": ["nixos-ext4-root"] },
     "image": { "description": "Overrides the server's default OpenTofu image.", "type": "string" }

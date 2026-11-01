@@ -52,7 +52,8 @@ internal static class CredentialBindings
             {
                 if (name == "PROXMOX_VE_API_TOKEN" && role == SecretNames.ProxmoxToken)
                     continue;
-                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) || role != SecretNames.Backend(name)
+                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal)
+                    || role != SecretNames.Backend(name) && !(role == SecretNames.Recipe(name) && name.StartsWith("TF_VAR_", StringComparison.Ordinal))
                     || !context.Secrets.ContainsKey(role))
                     problems.Add($"Backend environment '{name}' cannot override reserved Proxmox roles; inspect and replan");
             }

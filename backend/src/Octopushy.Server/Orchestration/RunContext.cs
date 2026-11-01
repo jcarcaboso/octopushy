@@ -101,7 +101,9 @@ public sealed record ProxmoxContext(
     string? Node,
     int? Vmid,
     string? Name,
-    string? ExpectIpv4);
+    string? ExpectIpv4,
+    /// <summary><c>lxc</c> for a container. Null, for a VM, leaves the wire input as it always was.</summary>
+    string? GuestKind = null);
 
 public sealed record DiskReporterContext(
     string Endpoint,
@@ -149,4 +151,12 @@ public static class SecretNames
     public const string DiskReporterToken = "disk-reporter.token";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
+
+    private const string RecipePrefix = "recipe.";
+
+    /// <summary>A guest's <c>provision.secrets</c> entry, delivered as this environment variable.</summary>
+    public static string Recipe(string environmentVariable) => RecipePrefix + environmentVariable;
+
+    /// <summary>Whether the apply is the only step that receives this secret.</summary>
+    public static bool ApplyOnly(string name) => name.StartsWith(RecipePrefix, StringComparison.Ordinal);
 }

@@ -60,6 +60,12 @@ public sealed partial class LabRepositoryLoader
         // Backend env is available at preview time: it must not be another route to
         // a configured writer, including a writer from a different installation.
         var privilegedKeys = installations.Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var guest in guests)
+        {
+            foreach (var (name, reference) in guest.ProvisionSecrets.Where(s => privilegedKeys.Contains(s.Value.Key)))
+                Error(guest.File, LineOf(guest.File, $"/provision/secrets/{name}"),
+                    $"A privileged Proxmox token cannot be used as the secret '{name}'.", guest.Address);
+        }
         var splitPrivilegedKeys = installations.Where(i => !i.Connection.SharedToken)
             .Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
         foreach (var installation in installations)
@@ -297,6 +303,18 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
+        var modules = new List<string>();
+        foreach (var module in (json["modules"] as JsonArray)?.Select(n => n!.GetValue<string>()) ?? [])
+        {
+            if (ResolveInside(recipeDirectory, module) is not { } resolved)
+            {
+                Error(file, document.LineOf("/modules"), "A module must stay inside the repository.", $"recipes/{id}");
+                return null;
+            }
+
+            modules.Add(resolved);
+        }
+
         return new RecipeDefinition(
             id,
             file,
@@ -307,7 +325,10 @@ public sealed partial class LabRepositoryLoader
             inputs,
             json["verify"]?.GetValue<string>() ?? "proxmox",
             json["image"]?.GetValue<string>(),
-            json["guestFilesystem"]?.GetValue<string>());
+            json["guestFilesystem"]?.GetValue<string>(),
+            json["guestType"]?.GetValue<string>() ?? GuestTypes.Vm,
+            modules,
+            (json["secrets"] as JsonArray)?.Select(n => n!.GetValue<string>()).ToList());
     }
 
     private void CheckRecipe(RecipeDefinition recipe)
@@ -316,6 +337,17 @@ public sealed partial class LabRepositoryLoader
         if (recipe.GuestFilesystem is not null && recipe.Verify != "proxmox")
         {
             Error(recipe.File, null, "guestFilesystem requires verify: proxmox.", address);
+        }
+        if (recipe.GuestFilesystem is not null && recipe.GuestType == GuestTypes.Container)
+        {
+            Error(recipe.File, null, "guestFilesystem works through the QEMU guest agent, so it does not apply to containers.", address);
+        }
+        foreach (var module in recipe.Modules ?? [])
+        {
+            if (!Directory.Exists(Path.Combine(_root, module)))
+            {
+                Error(recipe.File, null, $"The module {module} does not exist.", address);
+            }
         }
         var rootPath = Path.Combine(_root, recipe.Root);
         if (!Directory.Exists(rootPath))
@@ -599,10 +631,31 @@ public sealed partial class LabRepositoryLoader
                 ["hardware"] = guest.Json["hardware"]?.DeepClone(),
                 ["network"] = guest.Json["network"]?.DeepClone(),
             };
+            if (guest.Json["provision"]?["inputs"] is { } recipeInputs)
+            {
+                instance["inputs"] = recipeInputs.DeepClone();
+            }
+
             foreach (var error in SchemaCatalog.Evaluate(inputs, instance))
             {
-                Error(guest.File, LineOf(guest.File, error.Pointer), $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})", guest.Address);
+                var pointer = error.Pointer.StartsWith("/inputs", StringComparison.Ordinal) ? "/provision" + error.Pointer : error.Pointer;
+                Error(guest.File, LineOf(guest.File, pointer), $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})", guest.Address);
             }
+        }
+
+        if (recipe is not null && recipe.GuestType != guest.Type)
+        {
+            Error(guest.File, LineOf(guest.File, "/type"), $"The recipe '{guest.Recipe}' provisions a {recipe.GuestType}, not a {guest.Type}.", guest.Address);
+        }
+
+        foreach (var name in (recipe?.Secrets ?? []).Where(n => !guest.ProvisionSecrets.ContainsKey(n)))
+        {
+            Error(guest.File, LineOf(guest.File, "/provision"), $"The recipe '{guest.Recipe}' needs provision.secrets.{name}.", guest.Address);
+        }
+
+        if (guest.IsContainer && guest.Json["setup"]?["diskReporter"] is not null)
+        {
+            Warning(guest.File, LineOf(guest.File, "/setup/diskReporter"), "Disk reporting installs through the QEMU guest agent, so it is ignored on a container.", guest.Address);
         }
 
         if (recipe?.GuestFilesystem is not null

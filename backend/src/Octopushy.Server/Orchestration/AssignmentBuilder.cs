@@ -56,10 +56,15 @@ public sealed class AssignmentBuilder(
         var action = ActionFor(stepName);
         var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
-            ? context.OpenTofu!.SecretEnv.Values
+            ? SecretEnvFor(stepName, context.OpenTofu!).Select(p => p.Value)
                 .Select(n => n == SecretNames.ProxmoxToken ? token : n).Distinct(StringComparer.Ordinal).ToList()
             : new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList();
     }
+
+    // What a plan does not receive cannot enter the saved plan, and a plan runs before anyone
+    // has approved the commit it comes from.
+    private static IEnumerable<KeyValuePair<string, string>> SecretEnvFor(string stepName, OpenTofuContext tofu) =>
+        stepName == StepNames.Apply ? tofu.SecretEnv : tofu.SecretEnv.Where(p => !SecretNames.ApplyOnly(p.Value));
 
     // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
     public static string TokenFor(string stepName) => stepName is
@@ -174,7 +179,7 @@ public sealed class AssignmentBuilder(
                 },
                 ["variables"] = tofu.Variables.DeepClone(),
                 ["env"] = new JsonObject(tofu.Env.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
-                ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
+                ["secretEnv"] = new JsonObject(SecretEnvFor(stepName, tofu).Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
             if (run.Operation == Operations.Provision
@@ -210,6 +215,10 @@ public sealed class AssignmentBuilder(
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = false,
             };
+            if (proxmox.GuestKind is { } guestKind)
+            {
+                input["guestKind"] = guestKind;
+            }
             if (action.Executor == "nixos-rootfs")
             {
                 input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");

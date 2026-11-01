@@ -93,6 +93,22 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             }
         }
 
+        // A retirement destroys what the guest has, which needs none of these. It must still
+        // work once the key is gone, and the root's variable has to accept null for the plan.
+        if (!guest.Retired && removedIn is null)
+        {
+            foreach (var (variable, store) in guest.ProvisionSecrets)
+            {
+                var name = $"TF_VAR_{variable}";
+                secrets[SecretNames.Recipe(name)] = store.Key;
+                if (store.Version is { } version)
+                {
+                    requestedVersions[SecretNames.Recipe(name)] = version;
+                }
+                secretEnv[name] = SecretNames.Recipe(name);
+            }
+        }
+
         var backend = inputs.Backend is { } external
             ? new BackendContext(
                 external.Type,
@@ -107,7 +123,10 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var reporter = options.Value.DiskReporter;
         reporter.Validate();
         var guestReporter = guest.Json["setup"]?["diskReporter"];
-        var installReporter = !retire && reporter.Enabled && guestReporter?["enabled"]?.GetValue<bool>() != false;
+        // A container has no QEMU guest agent, and Proxmox has no exec for LXC, so nothing could
+        // install the reporter. This is not an error: the guest simply reports no disk usage.
+        var installReporter = !retire && !guest.IsContainer && reporter.Enabled
+            && guestReporter?["enabled"]?.GetValue<bool>() != false;
         var nativeReporter = guest.ManagedWorker is not null;
         var image = inputs.Template?.Image;
         var verifiedImageHash = resource.ManagedWorker?.VerifiedOsUpdateRunId is not null
@@ -148,7 +167,8 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 inputs.Variables,
                 env,
                 secretEnv),
-            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest)),
+            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest),
+                guest.IsContainer ? "lxc" : null),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,

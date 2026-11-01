@@ -84,6 +84,8 @@ public sealed record ProvisionInputs(
         };
         if (guest.ManagedWorker is { } worker)
             variables["guest"]!["workerGeneration"] = worker.Generation.ToString();
+        if (guest.Json["provision"]?["inputs"] is { } recipeInputs)
+            variables["guest"]!["inputs"] = recipeInputs.DeepClone();
 
         var guestJson = guest.Json.DeepClone().AsObject();
         foreach (var field in NotProvisioned)
@@ -108,6 +110,11 @@ public sealed record ProvisionInputs(
         if (backend is not null)
         {
             hashed["backend"] = backend.Json.DeepClone();
+        }
+        // Omitted without modules, like diskReporter below, to preserve existing hashes.
+        if (recipe.Modules is { Count: > 0 } modules)
+        {
+            hashed["moduleFiles"] = new JsonArray(modules.Select(m => (JsonNode?)TreeHash(repository.Root, m)).ToArray());
         }
         // Reporter setup changes need a new run, but never become OpenTofu inputs.
         // Omit the key entirely for existing definitions to preserve their hashes.

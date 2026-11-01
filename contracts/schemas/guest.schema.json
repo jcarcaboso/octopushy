@@ -6,7 +6,7 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
-    "type": { "const": "vm", "description": "Proxmox containers come later." },
+    "type": { "enum": ["vm", "container"], "description": "A QEMU VM or a Proxmox LXC container. Its recipe must provision the same type." },
     "lifecycle": { "enum": ["active", "retired"] },
     "renamedFrom": { "$ref": "common.schema.json#/$defs/id" },
     "host": { "$ref": "common.schema.json#/$defs/id" },
@@ -31,6 +31,16 @@
       "type": "object",
       "properties": {
         "recipe": { "$ref": "common.schema.json#/$defs/id" },
+        "inputs": {
+          "description": "Settings for the recipe, validated by its inputs schema and passed to OpenTofu as guest.inputs.",
+          "type": "object"
+        },
+        "secrets": {
+          "description": "OpenTofu variables of the recipe's root filled from the variable store. Only the apply receives them, so a saved plan cannot hold them; declare them ephemeral so the state does not either.",
+          "type": "object",
+          "propertyNames": { "pattern": "^(?!(?:octopushy|guest|host|installation|template)(?![\\s\\S]))[a-z][a-z0-9_]*(?![\\s\\S])" },
+          "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+        },
         "state": {
           "description": "An external OpenTofu backend from octopushy.yaml. Leave it out to keep the state in Octopushy.",
           "type": "object",
@@ -70,5 +80,8 @@
     "policy": { "$ref": "common.schema.json#/$defs/policy" }
   },
   "required": ["schemaVersion", "type", "host", "vmid", "provision"],
+  "dependentSchemas": {
+    "worker": { "description": "A managed worker is a NixOS VM.", "properties": { "type": { "const": "vm" } } }
+  },
   "additionalProperties": false
 }

@@ -118,11 +118,28 @@ public sealed record GuestDefinition(
 
     public bool Retired => Lifecycle == "retired";
 
+    public string Type => Json["type"]!.GetValue<string>();
+
+    public bool IsContainer => Type == GuestTypes.Container;
+
+    /// <summary>The OpenTofu variables of the recipe's root that come from the store, by variable name.</summary>
+    public IReadOnlyDictionary<string, StoreReference> ProvisionSecrets =>
+        (Json["provision"]?["secrets"] as JsonObject)?.ToDictionary(
+            p => p.Key,
+            p => new StoreReference(p.Value!["store"]!.GetValue<string>(), p.Value["version"]?.GetValue<int>()),
+            StringComparer.Ordinal) ?? [];
+
     public ManagedWorkerSettings? ManagedWorker => Json["worker"] is JsonObject worker
         ? new(worker["templateVersion"]!.GetValue<int>(), Guid.Parse(worker["generation"]!.GetValue<string>()),
             worker["labels"]!.AsArray().Select(label => label!.GetValue<string>()).ToArray(),
             worker["maxConcurrency"]!.GetValue<int>())
         : null;
+}
+
+public static class GuestTypes
+{
+    public const string Vm = "vm";
+    public const string Container = "container";
 }
 
 public sealed record ManagedWorkerSettings(int TemplateVersion, Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency);
@@ -147,7 +164,10 @@ public sealed record RecipeDefinition(
     string? InputsSchema,
     string Verify,
     string? Image,
-    string? GuestFilesystem = null);
+    string? GuestFilesystem = null,
+    string GuestType = GuestTypes.Vm,
+    IReadOnlyList<string>? Modules = null,
+    IReadOnlyList<string>? Secrets = null);
 
 /// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
 public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.octopushy.invalid/v1/template.schema.json",
-  "title": "VM template (templates/<template>/template.yaml)",
+  "title": "VM or container template (templates/<template>/template.yaml)",
   "type": "object",
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
@@ -14,7 +14,7 @@
           "properties": {
             "url": { "type": "string", "pattern": "^https?://" },
             "checksum": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64}|sha512:[0-9a-f]{128})$" },
-            "fileName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.(qcow2|raw|img|vmdk)$" }
+            "fileName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.(qcow2|raw|img|vmdk|tar\\.gz|tar\\.xz|tar\\.zst)$" }
           },
           "required": ["url", "checksum"],
           "additionalProperties": false
