@@ -52,6 +52,7 @@ variable "guest" {
     condition = alltrue([
       for server in var.guest.network.dns :
       server != split("/", var.guest.network.address)[0] && !startswith(server, "127.")
+      && can(regex("^[0-9a-fA-F.:]+$", server))
     ]) && length(var.guest.network.dns) > 0
     error_message = "network.dns must name other resolvers: the container must not resolve through itself."
   }
@@ -59,6 +60,16 @@ variable "guest" {
   validation {
     condition     = contains([for mount in var.guest.hardware.mountPoints : mount.path], "/etc/dns")
     error_message = "Declare a mount point for /etc/dns: it holds the server's identity."
+  }
+
+  # These reach the install's command line.
+  validation {
+    condition = (
+      can(regex("^[0-9a-f]{64}$", var.guest.inputs.technitium.sha256))
+      && can(regex("^[0-9a-f]{128}$", var.guest.inputs.technitium.aspnetcoreSha512))
+      && can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.guest.inputs.technitium.aspnetcoreVersion))
+    )
+    error_message = "inputs.technitium needs a version of numbers, and checksums in lower-case hex."
   }
 
   # 15.6.2 fixes cluster configuration sync.

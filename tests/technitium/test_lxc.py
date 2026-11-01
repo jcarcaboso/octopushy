@@ -40,7 +40,6 @@ class PasswordTests(unittest.TestCase):
         self.assertIn("local.bootstrap_key", block)
         install = re.search(r'resource "terraform_data" "install" \{.*?^\}', main, re.S | re.M).group()
         self.assertNotRegex(install, r"(?m)^[^#]*BOOTSTRAP")
-        self.assertIn("SEAL_NONCE", install)
 
     def test_the_guest_unseals_it_with_what_proxmox_gave_it(self):
         self.assertIn("/root/.ssh/authorized_keys", INSTALL)
@@ -48,24 +47,98 @@ class PasswordTests(unittest.TestCase):
         self.assertRegex(INSTALL, r"(?m)^unseal\(\)")
         self.assertIn("fail \"the bootstrap key is missing", INSTALL)
 
+    def test_a_seal_has_a_random_nonce_of_its_own(self):
+        # A clock is no nonce: one key and one nonce twice give the difference of two passwords.
+        main = (MODULE / "main.tf").read_text()
+        self.assertNotIn("plantimestamp", main)
+        self.assertNotIn("SEAL_NONCE", main)
+        self.assertRegex(main, r"for nonce in \[uuid\(\)\]")
+
+    def test_the_sealing_key_is_not_derived_from_the_ssh_key(self):
+        main = (MODULE / "main.tf").read_text()
+        self.assertIn('resource "tls_private_key" "seal"', main)
+        bootstrap = re.search(r"(?m)^\s*bootstrap\s*=.*$", main).group()
+        self.assertIn("tls_private_key.seal", bootstrap)
+        self.assertNotIn("tls_private_key.install", bootstrap)
+
+    def seal(self, secret, key="ab" * 32, nonce="0e7f2c9a-6f7e-4f7e-8f7e-0123456789ab", identity="krb-dns-01/10.1.0.32"):
+        """The HCL half of the seal, in Python, to hold the bash half to."""
+        import base64, hashlib
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
+        encrypt, authenticate = sha(f"octopushy-seal-encrypt:{key}"), sha(f"octopushy-seal-authenticate:{key}")
+        plain = base64.b64encode(secret.encode()).decode().rstrip("=")
+        cipher = ""
+        for i, c in enumerate(plain):
+            block = base64.b64encode(hashlib.sha256(f"{encrypt}:{nonce}:{i // 40}".encode()).digest()).decode()
+            cipher += alphabet[(alphabet.index(c) + alphabet.index(block[i % 40])) % 64]
+        tag = sha(f"{authenticate}:" + sha(f"{authenticate}:{identity}:{nonce}:{cipher}"))
+        return f"{nonce}.{cipher}.{tag}"
+
+    def unseal(self, sealed, key="ab" * 32, identity="krb-dns-01/10.1.0.32", used=None):
+        import subprocess, tempfile
+        function = re.search(r"(?ms)^unseal\(\) \{.*?^\}", INSTALL).group()
+        with tempfile.TemporaryDirectory() as work:
+            Path(work, "sealed").write_text(sealed)
+            spent = used or f"{work}/spent"
+            script = f"set -euo pipefail\nfail() {{ echo \"$*\" >&2; exit 1; }}\n{function}\nunseal {work}/sealed {key} '{identity}' {spent} {work}/plain\n"
+            done = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            plain = Path(work, "plain")
+            return done, plain.read_bytes() if plain.exists() else None
+
     def test_the_seal_opens(self):
         """The bash half of the seal against the same construction as the HCL half."""
-        import base64, hashlib, subprocess, tempfile
-        key, nonce = "ab" * 32, "2026-11-01T00:00:00Z"
-        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         for secret in ("A test password, with & = + % in it", "x" * 12, "é-unicode-ü-secret", "y" * 200):
-            plain = base64.b64encode(secret.encode()).decode().rstrip("=")
-            sealed = ""
-            for i, c in enumerate(plain):
-                block = base64.b64encode(hashlib.sha256(f"{key}:{nonce}:{i // 40}".encode()).digest()).decode()
-                sealed += alphabet[(alphabet.index(c) + alphabet.index(block[i % 40])) % 64]
-            self.assertNotIn(plain[:12], sealed)
-            function = re.search(r"(?ms)^unseal\(\) \{.*?^\}", INSTALL).group()
-            with tempfile.TemporaryDirectory() as work:
-                Path(work, "sealed").write_text(sealed)
-                script = f"set -euo pipefail\n{function}\nunseal {work}/sealed {key} {nonce} {work}/plain\n"
-                subprocess.run(["bash", "-c", script], check=True)
-                self.assertEqual(Path(work, "plain").read_bytes(), secret.encode())
+            sealed = self.seal(secret)
+            self.assertNotIn(__import__("base64").b64encode(secret.encode()).decode()[:12], sealed)
+            done, plain = self.unseal(sealed)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(plain, secret.encode())
+
+    def test_a_tampered_seal_gives_nothing_up(self):
+        sealed = self.seal("A test password, with & = + % in it")
+        nonce, cipher, tag = sealed.split(".")
+        flipped = "B" if cipher[3] != "B" else "C"
+        for changed in (
+            f"{nonce}.{cipher[:3]}{flipped}{cipher[4:]}.{tag}",
+            f"{nonce}.{cipher}0.{tag}",
+            f"{nonce}.{cipher}.{'0' * 64}",
+            f"{'1' * 8}{nonce[8:]}.{cipher}.{tag}",
+            f"{nonce}.{cipher}",
+        ):
+            done, plain = self.unseal(changed)
+            self.assertNotEqual(done.returncode, 0, changed)
+            self.assertIsNone(plain, "something was written before the tag was checked")
+            self.assertIn("seal", done.stderr)
+
+    def test_a_seal_opens_only_on_the_guest_it_was_made_for(self):
+        done, plain = self.unseal(self.seal("a test password here"), identity="mrb-dns-01/10.1.0.42")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIsNone(plain)
+
+    def test_a_key_opens_nothing_it_did_not_seal(self):
+        done, plain = self.unseal(self.seal("a test password here"), key="cd" * 32)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIsNone(plain)
+
+    def test_a_nonce_is_never_used_twice_with_a_key(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as work:
+            used = f"{work}/spent"
+            sealed = self.seal("the first test password")
+            self.assertEqual(self.unseal(sealed, used=used)[0].returncode, 0)
+            # The same nonce again, as the old clock could give it, over another password.
+            again = self.seal("another test password")
+            done, plain = self.unseal(again, used=used)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIsNone(plain)
+            self.assertIn("nonce", done.stderr)
+
+    def test_inputs_cannot_reach_the_install_as_shell(self):
+        variables = (MODULE / "variables.tf").read_text()
+        for name in ("sha256", "aspnetcoreVersion", "aspnetcoreSha512"):
+            self.assertIn(f"var.guest.inputs.technitium.{name}", variables)
+        self.assertIn('can(regex("^[0-9a-fA-F.:]+$", server))', variables)
 
     def test_the_file_goes_to_curl_as_a_file(self):
         self.assertIn('--data-urlencode "pass@$password"', INSTALL)
@@ -88,6 +161,7 @@ class PasswordTests(unittest.TestCase):
     def test_the_certificate_names_the_address_so_it_can_be_pinned(self):
         # A certificate with only a common name cannot anchor the provider's connection.
         self.assertIn("subjectAltName=IP:$address", INSTALL)
+        self.assertIn("basicConstraints=critical,CA:FALSE", INSTALL)
         self.assertIn("DNS_SERVER_WEB_SERVICE_TLS_CERTIFICATE_PATH", INSTALL)
         self.assertNotIn("DNS_SERVER_WEB_SERVICE_USE_SELF_SIGNED_CERT=true", INSTALL)
 

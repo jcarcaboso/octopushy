@@ -7,11 +7,15 @@ locals {
   # OpenTofu can check SSH's host key only against a public key, and nothing can give it this
   # container's before it connects, so whoever answers on the network gets what is uploaded.
   # The password is therefore sealed to this key, which reaches the container only as the
-  # comment of an SSH key in Proxmox's API, and never over SSH. It is derived from the private
-  # key in this stack's state, so it needs no provider of its own.
-  bootstrap     = sha256("octopushy-bootstrap:${tls_private_key.install.private_key_openssh}")
+  # comment of an SSH key in Proxmox's API, and never over SSH. This is a hand-built seal,
+  # because OpenTofu has no encryption function; docs/technitium-lxc.md says what it is worth.
+  bootstrap     = sha256("octopushy-bootstrap:${tls_private_key.seal.private_key_openssh}")
   bootstrap_key = "${trimspace(tls_private_key.install.public_key_openssh)} octopushy-bootstrap=${local.bootstrap}"
   seal_alphabet = split("", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+  # One key for each job, so neither can stand in for the other.
+  seal_encrypt      = sha256("octopushy-seal-encrypt:${local.bootstrap}")
+  seal_authenticate = sha256("octopushy-seal-authenticate:${local.bootstrap}")
+  seal_identity     = "${var.guest.id}/${local.address}"
 
   dns_sources   = length(local.firewall.dnsSources) == 0 ? null : join(",", local.firewall.dnsSources)
   admin_sources = length(local.firewall.adminSources) == 0 ? null : join(",", local.firewall.adminSources)
@@ -20,6 +24,11 @@ locals {
 # Lets OpenTofu reach the container, whose template has no way in otherwise. Proxmox has no
 # user-data or exec for LXC. The private key lives in this guest's state.
 resource "tls_private_key" "install" {
+  algorithm = "ED25519"
+}
+
+# Used for its randomness only: the sealing key has nothing to do with the key SSH uses.
+resource "tls_private_key" "seal" {
   algorithm = "ED25519"
 }
 
@@ -79,13 +88,19 @@ resource "terraform_data" "install" {
     destination = "${local.work}/install.sh"
   }
 
-  # OpenTofu has no way to encrypt, so this adds, mod 64, the password's base64 to a keystream
-  # of SHA-256 blocks under the key above and a nonce that differs from plan to plan. install.sh
-  # takes it back out. Each block gives 40 of its 43 full characters.
+  # nonce.cipher.tag. The nonce is random and made here, so that every upload has its own, and a
+  # retry after a failed install does too. cipher adds, mod 64, the password's base64 to a
+  # keystream of SHA-256 blocks under the key and nonce; each block gives 40 of its 43 full
+  # characters. tag covers this guest, the nonce and the cipher, and is hashed twice so that it
+  # cannot be extended. install.sh checks the tag before it opens anything.
   provisioner "file" {
-    content = join("", [for i, c in split("", replace(base64encode(var.admin_password), "=", "")) :
+    content = one([for nonce in [uuid()] : one([for cipher in [join("", [
+      for i, c in split("", replace(base64encode(var.admin_password), "=", "")) :
       local.seal_alphabet[(index(local.seal_alphabet, c) + index(local.seal_alphabet,
-    substr(base64sha256("${local.bootstrap}:${plantimestamp()}:${floor(i / 40)}"), i % 40, 1))) % 64]])
+      substr(base64sha256("${local.seal_encrypt}:${nonce}:${floor(i / 40)}"), i % 40, 1))) % 64]
+      ])] :
+      "${nonce}.${cipher}.${sha256("${local.seal_authenticate}:${sha256("${local.seal_authenticate}:${local.seal_identity}:${nonce}:${cipher}")}")}"
+    ])])
     destination = "${local.work}/admin-password.sealed"
   }
 
@@ -96,7 +111,6 @@ resource "terraform_data" "install" {
       "ASPNETCORE_VERSION=${local.technitium.aspnetcoreVersion}",
       "ASPNETCORE_SHA512=${local.technitium.aspnetcoreSha512}",
       "GUEST_ADDRESS=${local.address}",
-      "SEAL_NONCE=${plantimestamp()}",
       "NAMESERVERS='${join(" ", var.guest.network.dns)}'",
       "bash ${local.work}/install.sh",
     ])]

@@ -21,20 +21,32 @@ runtime_sha512=${ASPNETCORE_SHA512:?set ASPNETCORE_SHA512}
 address=${GUEST_ADDRESS:?set GUEST_ADDRESS}
 nameservers=${NAMESERVERS:?set NAMESERVERS}
 
-# Takes back out what main.tf added, into a file nobody else can read.
+# Checks what main.tf made, and only then takes back out what it added, into a file nobody else
+# can read: unseal SEALED KEY IDENTITY SPENT OUT. Nothing is written if it does not check out,
+# and a nonce is only ever opened once, which SPENT remembers across installs.
 unseal() {
   local alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-  local text block='' plain='' prefix i
-  text=$(<"$1")
-  for ((i = 0; i < ${#text}; i++)); do
-    ((i % 40)) || block=$(printf '%s' "$2:$3:$((i / 40))" | sha256sum | cut -d' ' -f1 | tr a-f A-F | basenc --base16 -d | base64 -w0)
-    prefix=${alphabet%%"${text:i:1}"*}
+  local nonce cipher tag rest encrypt authenticate block='' plain='' prefix i
+  seal_hash() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+  IFS=. read -r nonce cipher tag rest <"$1" || true
+  [[ -n $nonce && -n $cipher && -n $tag && -z $rest ]] || fail "the seal is malformed, so it was not opened"
+  encrypt=$(seal_hash "octopushy-seal-encrypt:$2")
+  authenticate=$(seal_hash "octopushy-seal-authenticate:$2")
+  [[ $tag == "$(seal_hash "$authenticate:$(seal_hash "$authenticate:$3:$nonce:$cipher")")" ]] \
+    || fail "the seal does not verify: it was changed on its way, or was made for another guest"
+  if grep -qxF -e "$nonce" "$4" 2>/dev/null; then
+    fail "this seal's nonce was used before, so it was not opened"
+  fi
+  (umask 077 && printf '%s\n' "$nonce" >>"$4")
+  for ((i = 0; i < ${#cipher}; i++)); do
+    ((i % 40)) || block=$(printf '%s' "$encrypt:$nonce:$((i / 40))" | sha256sum | cut -d' ' -f1 | tr a-f A-F | basenc --base16 -d | base64 -w0)
+    prefix=${alphabet%%"${cipher:i:1}"*}
     local sum=${#prefix}
     prefix=${alphabet%%"${block:i%40:1}"*}
     plain+=${alphabet:(sum - ${#prefix} + 64) % 64:1}
   done
   while ((${#plain} % 4)); do plain+='='; done
-  (umask 077 && printf '%s' "$plain" | base64 -d >"$4")
+  (umask 077 && printf '%s' "$plain" | base64 -d >"$5")
 }
 
 work=/run/octopushy-technitium
@@ -71,15 +83,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Identity written to the root disk would be lost with it.
+mountpoint -q "$config" || fail "$config is not a mount point; declare it under hardware.mountPoints"
 if [[ -s $sealed ]]; then
   bootstrap=$(sed -n 's/.* octopushy-bootstrap=\([0-9a-f]\{64\}\)$/\1/p' /root/.ssh/authorized_keys | head -n 1)
   [[ -n $bootstrap ]] || fail "the bootstrap key is missing from authorized_keys; Proxmox writes it only when it creates the container"
-  unseal "$sealed" "$bootstrap" "${SEAL_NONCE:?set SEAL_NONCE}" "$password"
+  unseal "$sealed" "$bootstrap" "$(</proc/sys/kernel/hostname)/$address" "$config/octopushy-seal-nonces" "$password"
   rm -f "$sealed"
 fi
 [[ -s $password ]] || fail "$password is missing or empty"
-# Identity written to the root disk would be lost with it.
-mountpoint -q "$config" || fail "$config is not a mount point; declare it under hardware.mountPoints"
 
 export DEBIAN_FRONTEND=noninteractive
 packages=(ca-certificates curl jq libicu76 libgssapi-krb5-2 nftables openssl unattended-upgrades)
@@ -224,13 +236,14 @@ if [[ ! -e $config/auth.config ]]; then
   chown dns-server "$password"
   chmod 0400 "$password"
   # Technitium's own certificate has only a common name, which nothing can verify. This one
-  # names the address, so that an operator can pin it for the provider and the agent. After a
-  # failed first start dns.config holds its password, and a new one would lock HTTPS out.
+  # names the address, so that an operator can pin it for the provider and the agent, and it
+  # cannot sign another, since the provider takes it as a CA. After a failed first start
+  # dns.config holds its password, and a new one would lock HTTPS out.
   : >"$work/tls.password"
   if [[ ! -e $config/dns.config || ! -e $certificate ]]; then
     (umask 077 && openssl rand -hex 24 >"$work/tls.password")
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
-      -subj "/CN=$address" -addext "subjectAltName=IP:$address" \
+      -subj "/CN=$address" -addext "subjectAltName=IP:$address" -addext "basicConstraints=critical,CA:FALSE" \
       -keyout "$work/tls.key" -out "$work/tls.crt" 2>/dev/null
     openssl pkcs12 -export -inkey "$work/tls.key" -in "$work/tls.crt" -out "$certificate" \
       -certpbe AES-256-CBC -keypbe AES-256-CBC -macalg sha256 -passout "file:$work/tls.password"

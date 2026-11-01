@@ -169,10 +169,15 @@ printf '#!/bin/sh\ncp /run/octopushy-technitium/admin-password.sealed /root/capt
 plan | tail -1
 apply >/dev/null
 in_ct 'cat /root/captured; rm /root/captured' >"$work/captured"
+plan -replace=terraform_data.install | tail -1
+apply >/dev/null
+in_ct 'cat /root/captured; rm /root/captured' >"$work/captured-again"
 cp "$work/install.sh.kept" "$work/run/repo/$module/install.sh"
+[[ $(cut -d. -f1 "$work/captured") != "$(cut -d. -f1 "$work/captured-again")" ]] || fail "two uploads shared a nonce"
 python3 -I - "$password" "$work/captured" <<'PY'
 import base64, sys
 secret, captured = sys.argv[1].encode(), open(sys.argv[2], "rb").read().strip()
+assert captured.count(b".") == 2, captured
 assert len(captured) > 20, captured
 encoded = base64.b64encode(secret).rstrip(b"=")
 assert secret not in captured and encoded not in captured and encoded[:8] not in captured, "the upload is readable"
@@ -181,6 +186,25 @@ PY
 in_ct 'grep -q "octopushy-bootstrap=" /root/.ssh/authorized_keys'
 plan | tail -1
 installs
+
+log "A seal that was changed, or that comes round again, opens nothing"
+by_hand() { # the file to upload as the seal
+  podman exec "$name-ct" install -d -m 0700 /run/octopushy-technitium
+  podman cp "$work/run/repo/$module/install.sh" "$name-ct:/run/octopushy-technitium/install.sh"
+  podman cp "$1" "$name-ct:/run/octopushy-technitium/admin-password.sealed"
+  podman exec -e TECHNITIUM_VERSION=15.6.2 \
+    -e TECHNITIUM_SHA256=51f2d4ebaf156a85035e820afde5e1d428f1920a37d7f0c65203fb1766917e08 -e ASPNETCORE_VERSION=10.0.14 \
+    -e ASPNETCORE_SHA512=dd024fd2616926a555b75cbf7a836f6dce998199f0596d9d75676dca2b9d59c8ee8673c6ac23473c0f1a4bdd59eb5cd02fe9ab097eeaf2dd8c8bd117c85e7031 \
+    -e GUEST_ADDRESS="$address" -e NAMESERVERS=10.199.0.1 "$name-ct" bash /run/octopushy-technitium/install.sh 2>&1
+}
+sed 's/\.\(.\)/.A\1/' "$work/captured" >"$work/tampered"
+if out=$(by_hand "$work/tampered"); then fail "a changed seal was opened"; fi
+grep -q 'the seal does not verify' <<<"$out" || { echo "$out"; fail "unexpected failure for a changed seal"; }
+by_hand "$work/captured" >/dev/null || fail "a good seal did not open"
+if out=$(by_hand "$work/captured"); then fail "a seal was opened twice"; fi
+grep -q 'nonce was used before' <<<"$out" || { echo "$out"; fail "unexpected failure for a replayed seal"; }
+in_ct '! test -e /run/octopushy-technitium'
+echo "refused both"
 
 log "The certificate can be pinned"
 in_ct "openssl s_client -connect 127.0.0.1:53443 </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName" | grep -q "IP Address:$address" \
