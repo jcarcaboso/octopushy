@@ -28,7 +28,7 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     /// </summary>
     public void RegisterSecrets(Guid attemptId, IEnumerable<string> values) =>
         _secrets[attemptId] = values
-            .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 6).Prepend(v) : [v])
+            .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 4).Prepend(v) : [v])
             .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
 
     public string Mask(Guid attemptId, string text)

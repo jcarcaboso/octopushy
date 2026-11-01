@@ -8,13 +8,13 @@
 //!   attempt.json        marker (see attempts::workspace)
 //!   repo/               the extracted repository snapshot; `root` is inside it
 //!   ansible/            the generated inventory, known_hosts and vars: nothing secret
-//!   out/recap.json      what `octopushy_recap` recorded
 //!   out/prepared.json   what a prepare playbook wrote
 //!   home/               HOME for Ansible
 //! ```
 //!
 //! Secrets never enter the workspace. They reach `octopushy-ansible` on stdin, which keeps
-//! them in memory; see `agent/ansible/octopushy-ansible`.
+//! them in memory; see `agent/ansible/octopushy-ansible`. The recap, which can hold a templated
+//! task name, comes back as its last line on stderr, after the logger masked it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -40,6 +40,11 @@ const MAX_PREPARED: u64 = 256 * 1024;
 const MAX_TASK_LINES: usize = 2000;
 const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const SECRET_DIR_PREFIX: &str = "/tmp/octopushy-attempt-";
+const RECAP_PREFIX: &str = "octopushy-recap: ";
+
+/// Exit statuses that mean the tool never started: `octopushy-ansible` refused to run, or
+/// the container runtime could not start it.
+const NEVER_STARTED: &[i32] = &[78, 125, 126, 127];
 
 /// What ssh says when it never got as far as running anything on the guest.
 const NEVER_CONNECTED: &[&str] = &[
@@ -112,7 +117,7 @@ fn default_port() -> u16 {
     22
 }
 
-/// What `octopushy_recap` writes.
+/// What `octopushy_recap` records, as `octopushy-ansible` reports it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Recap {
@@ -378,7 +383,11 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         "ansible_port": input.host.port,
         "ansible_user": input.host.user,
         "ansible_host_key_checking": true,
+        "ansible_ssh_host_key_checking": true,
         "ansible_ssh_args": ssh_args,
+        "ansible_ssh_executable": "/usr/bin/ssh",
+        "ansible_scp_executable": "/usr/bin/scp",
+        "ansible_sftp_executable": "/usr/bin/sftp",
         "octopushy": octopushy,
     });
     write(
@@ -390,13 +399,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         Value::Object(input.vars.clone()).to_string().as_bytes(),
     )?;
 
-    let settings = vec![
-        ("HOME".to_owned(), tool_path(&home)?),
-        (
-            "OCTOPUSHY_RESULT_FILE".to_owned(),
-            tool_path(&out_dir.join("recap.json"))?,
-        ),
-    ];
+    let settings = vec![("HOME".to_owned(), tool_path(&home)?)];
     Ok(Prepared {
         input,
         root: canonical,
@@ -773,10 +776,17 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         remove_secret_dir(&ctx.attempt_id);
     }
     let out = out?;
-    let recap = fs::read(prep.out_dir.join("recap.json"))
-        .ok()
-        .and_then(|text| serde_json::from_slice::<Recap>(&text).ok());
+    let recap = read_recap(&out);
     settle(&prep, ctx, &out, recap, minutes)
+}
+
+/// The recap line, already masked like every other line of output.
+fn read_recap(out: &ToolOutput) -> Option<Recap> {
+    out.stderr_tail
+        .iter()
+        .rev()
+        .find_map(|line| line.trim_end().strip_prefix(RECAP_PREFIX))
+        .and_then(|text| serde_json::from_str(text).ok())
 }
 
 /// Whether ssh failed before anything ran on the guest.
@@ -804,7 +814,12 @@ fn settle(
     }
     let code = exit_text(out);
     let Some(recap) = recap else {
-        return Err(Failure::msg(failed_before_tasks(out)));
+        if out.code.is_some_and(|c| NEVER_STARTED.contains(&c)) {
+            return Err(Failure::msg(failed_before_tasks(out)));
+        }
+        return Err(Failure::Uncertain(format!(
+            "ansible-playbook ended (exit status {code}) without saying how far it got; whether a change was made is unknown. Inspect the guest, and any lock it holds, before running it again"
+        )));
     };
     let outputs = |recap: &Recap| {
         json!({
@@ -812,7 +827,7 @@ fn settle(
             "tasks": recap.tasks,
             "recap": recap.stats,
             "failedTask": recap.failed_task.as_deref().map(|t| ctx.log.mask(t)),
-            "unreachableTask": recap.unreachable_task,
+            "unreachableTask": recap.unreachable_task.as_deref().map(|t| ctx.log.mask(t)),
         })
     };
     if !recap.finished {
@@ -824,6 +839,16 @@ fn settle(
         }
         return Err(Failure::Uncertain(format!(
             "ansible-playbook ended (exit status {code}) without finishing; whether a change was made is unknown. Inspect the guest, and any lock it holds, before running it again"
+        )));
+    }
+    // Before any outcome: one reported earlier says nothing of a task the guest then lost.
+    if recap.unreachable.is_some() && out.code != Some(0) {
+        if never_connected(&recap) {
+            return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
+        }
+        return Err(Failure::Uncertain(format!(
+            "the guest stopped answering during {}; whether the task finished is unknown. Inspect the guest, and any lock it holds, before running it again",
+            recap.unreachable_task.as_deref().unwrap_or("a task")
         )));
     }
     if let Some(outcome) = &recap.outcome {
@@ -842,15 +867,6 @@ fn settle(
     }
     if out.code == Some(0) {
         return Ok(Success::outputs(outputs(&recap)));
-    }
-    if recap.unreachable.is_some() {
-        if never_connected(&recap) {
-            return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
-        }
-        return Err(Failure::Uncertain(format!(
-            "the guest stopped answering during {}; whether the task finished is unknown. Inspect the guest, and any lock it holds, before running it again",
-            recap.unreachable_task.as_deref().unwrap_or("a task")
-        )));
     }
     Err(Failure::with_outputs(
         match recap.failed_task.as_deref() {

@@ -13,9 +13,13 @@ identified by its SSH host key. So `access.hostKey` is a store reference that a 
 name but not fill, a run refuses to start without it, a mismatch fails closed, and Octopushy
 never scans for a key.
 
-An installation's Proxmox tokens and `system/` keys cannot be delivered to a playbook.
-`preview` and `prepare` run before approval and get no secrets, as a plan gets none it
-should not have. Nothing here stops a commit from sending a guest's own setup secrets
-somewhere else, or code on a `local` runtime agent from reading that agent's identity; both
-follow from accepting tool-native code, as 0002 did, and the second is the reason to run
+An installation's Proxmox tokens and `system/` keys cannot be delivered to a playbook, and
+neither can any key that has already gone to Proxmox or OpenTofu work, whatever today's
+definitions say. `preview` and `prepare` run before approval and get no secrets.
+
+The pin is against a network impostor and a mistaken setting. It is not against hostile
+repository code, which runs locally with the SSH agent's socket and the run's secrets, and
+can connect anywhere with them or send them anywhere. Code on a `local` runtime agent
+can also read that agent's identity. All of this follows from accepting tool-native code,
+as 0002 did: review before merging is the defence, and the last point is the reason to run
 sensitive work on an agent of its own. Scoping a secret to reviewed code is separate work.

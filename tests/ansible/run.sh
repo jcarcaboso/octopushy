@@ -250,6 +250,8 @@ log "A failed task is a known failure"
 run=$(start_action fail)
 wait_run "$run" failed
 call "$api/api/runs/$run" | jq -e '.run.detail | contains("A task that fails")' >/dev/null || fail "the failed task is not named"
+if call "$api/api/runs/$run" | grep -qF -- 'word-with-'; then fail "a templated task name put a secret in the run's evidence"; fi
+if grep -rqF -- 'word-with-' "$work/agent" "$work/agent.log" "$work/server/logs" 2>/dev/null; then fail "a templated task name put a secret on disk"; fi
 
 log "A wrong pin is refused and nothing runs"
 stranger=$(cut -d' ' -f1-2 "$work/keys/stranger.pub")

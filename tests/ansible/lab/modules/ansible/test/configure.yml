@@ -2,6 +2,11 @@
   hosts: all
   gather_facts: true
   become: true
+  # As a repository could write them. What Octopushy pins outranks all of these.
+  vars:
+    ansible_ssh_executable: /bin/false
+    ansible_host_key_checking: false
+    ansible_ssh_common_args: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   tasks:
     - name: Require what was prepared
       ansible.builtin.assert:

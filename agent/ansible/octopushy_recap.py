@@ -1,4 +1,8 @@
-"""Records what a run did, for the agent to report. It never records a task's result."""
+"""Records what a run did, for the agent to report. It never records a task's result.
+
+A task's name is templated, so it can hold a secret. This file stays in memory, in the private
+directory `octopushy-ansible` owns; the agent masks it before anything keeps it.
+"""
 import json
 import os
 
@@ -13,6 +17,7 @@ DOCUMENTATION = """
 """
 
 MAX_DETAIL = 1024
+MAX_NAME = 512
 
 
 class CallbackModule(CallbackBase):
@@ -57,7 +62,7 @@ class CallbackModule(CallbackBase):
     def v2_runner_on_failed(self, result, ignore_errors=False):
         self.reached()
         if not ignore_errors:
-            self.result["failedTask"] = str(result.task_name)
+            self.result["failedTask"] = str(result.task_name)[:MAX_NAME]
             self.write()
 
     def v2_runner_on_unreachable(self, result):
@@ -65,7 +70,7 @@ class CallbackModule(CallbackBase):
         # with the reason, after a banner that can be long, so the end is what is kept.
         message = result._result.get("msg") if hasattr(result, "_result") else None
         self.result["unreachable"] = str(message or "")[-MAX_DETAIL:]
-        self.result["unreachableTask"] = str(result.task_name)
+        self.result["unreachableTask"] = str(result.task_name)[:MAX_NAME]
         self.write()
 
     def v2_playbook_on_stats(self, stats):

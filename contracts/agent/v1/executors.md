@@ -398,7 +398,8 @@ Input (the same for both actions, except as noted):
   start with `ansible_` or `octopushy`, in any case.
 - Extra vars are, in order: `vars`, prepared values, `approvedVars`, the generated connection,
   secrets. The connection sets `ansible_host`, `ansible_port`, `ansible_user`,
-  `ansible_host_key_checking: true`, `ansible_ssh_args` and `octopushy`.
+  `ansible_host_key_checking: true`, `ansible_ssh_args`, the `ssh`, `scp` and `sftp` executables,
+  and `octopushy`.
 - No `--check`, `--tags`, `--limit` or `--start-at-task` is ever passed.
 - Outputs of a failed or uncertain run never hold a task's result.
 
@@ -442,18 +443,20 @@ the environment or the workspace. A secret file's extra var holds its path.
 }
 ```
 
-The result comes from the exit status and the recap of the `octopushy_recap` callback:
+The result comes from the exit status and the recap of the `octopushy_recap` callback. A task's
+name can hold a secret, so the recap stays in memory: `octopushy-ansible` prints it as the
+last line of stderr, `octopushy-recap: {…}`, and the agent reads it after masking.
 
 | What happened | Outcome |
 |---|---|
 | Exit 0 | `succeeded` |
-| `set_stats` set a declared `octopushy_outcome`, whatever the exit | `succeeded`, with `outcome` and `detail` |
+| `set_stats` set a declared `octopushy_outcome`, and the guest stayed reachable | `succeeded`, with `outcome` and `detail` |
 | `octopushy_outcome` is not declared | `failed` |
 | A task failed, and the recap was written | `failed`, naming the task |
-| No task started | `failed` |
+| No task started, or exit 78, 125, 126 or 127 with no recap: the tool never ran | `failed` |
 | ssh never connected on the first task: refused host key, refused login, no route | `failed` |
-| The guest was lost after that, or during a task | `uncertain` |
-| Killed, or ended without a recap after a task started | `uncertain` |
+| The guest was lost after that, or during a task, even after an outcome was reported | `uncertain` |
+| Killed, or ended without a recap | `uncertain` |
 | Past `timeoutMinutes`, which is stopped with SIGTERM | `uncertain` |
 
 An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.

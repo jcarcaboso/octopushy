@@ -39,10 +39,10 @@ if [ -n "${OCTOPUSHY_PREPARED_FILE:-}" ]; then
   exit 0
 fi
 if [ -n "${OCTOPUSHY_STDIN:-}" ]; then cat > "$REC/stdin.json"; fi
-if [ -f "$REC/recap.json" ]; then cp "$REC/recap.json" "$OCTOPUSHY_RESULT_FILE"; fi
 if [ -f "$REC/sleep" ]; then sleep "$(cat "$REC/sleep")"; fi
 if [ -f "$REC/kill" ]; then kill -9 $$; fi
 echo "output with $(cat "$REC/echo" 2>/dev/null)"
+if [ -f "$REC/recap.json" ]; then echo "octopushy-recap: $(cat "$REC/recap.json")" >&2; fi
 exit "$(cat "$REC/exit" 2>/dev/null || echo 0)"
 "#;
 
@@ -361,6 +361,14 @@ async fn the_connection_is_pinned_and_comes_last() {
     assert_eq!(connection["ansible_host"], "10.0.0.5");
     assert_eq!(connection["ansible_user"], "ops");
     assert_eq!(connection["ansible_host_key_checking"], true);
+    assert_eq!(connection["ansible_ssh_host_key_checking"], true);
+    for (var, path) in [
+        ("ansible_ssh_executable", "/usr/bin/ssh"),
+        ("ansible_scp_executable", "/usr/bin/scp"),
+        ("ansible_sftp_executable", "/usr/bin/sftp"),
+    ] {
+        assert_eq!(connection[var], path);
+    }
     let ssh = connection["ansible_ssh_args"].as_str().unwrap();
     assert!(ssh.contains("StrictHostKeyChecking=yes"), "{ssh}");
     assert!(ssh.contains("GlobalKnownHostsFile=/dev/null"), "{ssh}");
@@ -439,11 +447,97 @@ async fn a_failed_task_is_a_known_failure() {
 }
 
 #[tokio::test]
-async fn a_run_that_never_started_a_task_is_a_known_failure() {
+async fn a_tool_that_never_started_is_a_known_failure() {
+    for code in ["78", "125", "126", "127"] {
+        let fx = Fixture::new();
+        fx.set("exit", code);
+        let done = run(&fx).await;
+        assert!(matches!(done.result, Err(Failure::Failed { .. })), "{code}");
+    }
+}
+
+#[tokio::test]
+async fn a_recap_that_says_no_task_started_is_a_known_failure() {
     let fx = Fixture::new();
-    fx.set("exit", "125");
+    fx.set(
+        "recap.json",
+        r#"{"reached":false,"finished":false,"tasks":0}"#,
+    );
+    fx.set("exit", "4");
     let done = run(&fx).await;
     assert!(matches!(done.result, Err(Failure::Failed { .. })));
+}
+
+#[tokio::test]
+async fn a_run_that_left_no_recap_is_uncertain() {
+    let fx = Fixture::new();
+    fx.set("exit", "1");
+    let done = run(&fx).await;
+    assert!(matches!(done.result, Err(Failure::Uncertain(_))));
+}
+
+#[tokio::test]
+async fn a_guest_lost_after_an_outcome_was_reported_is_uncertain() {
+    let fx = Fixture::new();
+    let mut lost = recap(true, true);
+    lost["outcome"] = json!("deferred");
+    lost["unreachable"] = json!("Shared connection to 10.0.0.5 closed.");
+    lost["unreachableTask"] = json!("Later task");
+    fx.set("recap.json", &lost.to_string());
+    fx.set("exit", "4");
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn a_secret_in_a_task_name_is_masked_in_what_is_kept() {
+    let fx = Fixture::new();
+    let mut failed = recap(true, true);
+    failed["failedTask"] = json!(format!("Connect with {PASSWORD}"));
+    fx.set("recap.json", &failed.to_string());
+    fx.set("exit", "2");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { outputs, .. }) => {
+            let outputs = outputs.unwrap().to_string();
+            assert!(!outputs.contains("scale"), "{outputs}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!done.log.contains("scale"), "{}", done.log);
+    let mut stack = vec![done.workspace.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                assert!(!text.contains("scale"), "{path:?}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_secret_in_the_task_a_guest_was_lost_on_is_masked() {
+    let fx = Fixture::new();
+    let mut lost = recap(false, true);
+    lost["unreachable"] = json!("Connection refused");
+    lost["unreachableTask"] = json!(format!("Connect with {PASSWORD}"));
+    fx.set("recap.json", &lost.to_string());
+    fx.set("exit", "4");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { outputs, .. }) => {
+            let outputs = outputs.unwrap().to_string();
+            assert!(!outputs.contains("scale"), "{outputs}");
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[tokio::test]

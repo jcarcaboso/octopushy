@@ -502,6 +502,95 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_rollback_configures_the_commit_the_branch_returned_to()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var first = await server.LatestRunAsync(Guest, Operations.Configure);
+
+        server.Repository.Write("modules/ansible/app/site.yml", "- hosts: all\n# a mistake\n");
+        server.Commit("A change that is rolled back");
+        await server.SyncAsync();
+        await server.WithDbAsync(async db =>
+        {
+            // The branch moves back before the mistake runs.
+            var settings = await db.RepositorySettings.SingleAsync();
+            settings.HeadCommit = first.Commit;
+            await db.SaveChangesAsync();
+        });
+        await ScheduleAsync(server);
+        var latest = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(first.Commit, latest.Commit);
+    }
+
+    [Fact]
+    public async Task A_guest_behind_its_definition_cannot_be_configured_by_hand()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+
+        const string guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var text = File.ReadAllText(Path.Combine(server.Repository.Root, guest));
+        server.Repository.Write(guest, text.Replace("memory: 2048", "memory: 4096"));
+        server.Commit("Resize");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "the host refused");
+        await server.TickAsync();
+
+        var resource = await server.ResourceAsync(Guest);
+        var response = await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "configure" });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_token_that_went_to_Proxmox_work_cannot_reach_a_playbook_after_its_installation_changes()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+
+        // The definitions stop naming the old key, as removing its installation would.
+        await server.SetSecretAsync("proxmox/korriban/next-read-only", "octopushy@pve!agent=next");
+        await server.SetSecretAsync("proxmox/korriban/next-privileged", "octopushy@pve!writer=next");
+        const string installation = "labs/home/proxmox/korriban/installation.yaml";
+        const string guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var root = server.Repository.Root;
+        server.Repository.Write(installation, File.ReadAllText(Path.Combine(root, installation))
+            .Replace("proxmox/korriban/read-only-token", "proxmox/korriban/next-read-only")
+            .Replace("proxmox/korriban/privileged-token", "proxmox/korriban/next-privileged"));
+        server.Repository.Write(guest, File.ReadAllText(Path.Combine(root, guest))
+            .Replace("store: app/tailscale", "store: proxmox/korriban/privileged-token"));
+        server.Commit("Reuse a token that no definition names");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
+        await server.TickAsync();
+        await ScheduleAsync(server);
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("a playbook cannot use it", run.Detail);
+        Assert.Empty(agent.TakeAssignments());
+    }
+
+    [Fact]
     public async Task The_controller_masks_each_line_of_a_key_as_well()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
@@ -511,8 +600,10 @@ public class ConfigureRunTests(PostgresFixture postgres)
         await PreviewAsync(agent);
         var playbook = await agent.NextAsync("run");
         var logs = server.Services.GetRequiredService<AttemptLogStore>();
-        var masked = logs.Mask(Guid.Parse(playbook.AttemptId), "line b3BlbnNzaC1rZXk printed alone");
-        Assert.Equal("line *** printed alone", masked);
+        var attempt = Guid.Parse(playbook.AttemptId);
+        Assert.Equal("line *** printed alone", logs.Mask(attempt, "line b3BlbnNzaC1rZXk printed alone"));
+        logs.RegisterSecrets(attempt, ["ab12\ncd34"]);
+        Assert.Equal("*** and ***", logs.Mask(attempt, "ab12 and cd34"));
     }
 
     [Fact]

@@ -168,6 +168,27 @@ class Runs(unittest.TestCase):
         self.assertIn("SSH_AUTH_SOCK=", env)
         self.assertFalse(Path((self.record / "path").read_text().strip()).exists())
 
+    def test_the_recap_leaves_on_the_last_line_of_stderr(self):
+        self.script("ansible-playbook", """
+            #!/bin/sh
+            echo '{"reached": true, "finished": true, "tasks": 2}' > "$OCTOPUSHY_RESULT_FILE"
+            case "$OCTOPUSHY_RESULT_FILE" in /tmp/*) ;; *) exit 9 ;; esac
+        """)
+        done = self.run_it("site.yml", secrets={"sshKey": KEY})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        last = done.stderr.decode().strip().splitlines()[-1]
+        self.assertEqual(json.loads(last.removeprefix("octopushy-recap: "))["tasks"], 2)
+
+    def test_a_run_that_recorded_nothing_says_no_task_started(self):
+        done = self.run_it("site.yml", secrets={"sshKey": KEY}, env={"FAKE_EXIT": "4"})
+        self.assertEqual(done.returncode, 4)
+        last = done.stderr.decode().strip().splitlines()[-1]
+        self.assertEqual(json.loads(last.removeprefix("octopushy-recap: "))["tasks"], 0)
+
+    def test_a_preview_reports_no_recap(self):
+        done = self.run_it("--list-tasks", "site.yml")
+        self.assertNotIn(b"octopushy-recap", done.stderr)
+
     def test_a_private_directory_the_agent_chose_is_removed(self):
         private = Path(tempfile.gettempdir()) / f"octopushy-attempt-test-{os.getpid()}"
         done = self.run_it("site.yml", secrets={"sshKey": KEY}, env={"OCTOPUSHY_SECRET_DIR": str(private)})

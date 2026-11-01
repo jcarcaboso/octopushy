@@ -93,6 +93,11 @@ internal static class CredentialBindings
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);
         var versions = await db.StoreVersions.AsNoTracking().Where(v => keys.Contains(v.Key)).ToListAsync(ct);
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
+        // What definitions say today is not enough: a removed installation's token stays stored,
+        // and its key stops looking like one. What it was released for does not change.
+        var usedElsewhere = context.Ansible is null ? [] : await db.SecretResolutions.AsNoTracking()
+            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == "ansible"))
+            .Select(r => r.Key).Distinct().ToListAsync(ct);
 
         // Recover old runs from release evidence, never from today's current pointer.
         var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
@@ -107,6 +112,12 @@ internal static class CredentialBindings
             if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal))
             {
                 problems.Add($"{key}: reserved system scope");
+                continue;
+            }
+
+            if (name != SecretNames.AnsibleHostKey && usedElsewhere.Contains(key))
+            {
+                problems.Add($"{key}: this credential has gone to Proxmox or OpenTofu work, so a playbook cannot use it");
                 continue;
             }
 

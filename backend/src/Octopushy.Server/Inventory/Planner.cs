@@ -45,8 +45,11 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
             if (guest.SetupRecipe is null)
                 throw new RunException("This guest has no setup recipe.");
-            if (resource.BoundVmid is null)
-                throw new RunException("Provision this guest before configuring it.");
+            var lastProvision = await db.Runs.AsNoTracking()
+                .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
+                .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
+            if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+                throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
             var inputs = ConfigureInputs.Build(repository, guest);
             var chosen = action ?? inputs.Configure.OnChange?.Id
                 ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
@@ -66,7 +69,10 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     public Task ScheduleConfigurationsAsync(CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
-            var revision = await RepositoryTrust.EligibleRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+            // The head, not the newest loaded: a branch rolled back to an earlier commit must not
+            // configure the one it left. An invalid head proposes nothing until it is fixed.
+            var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().Where(r => r.RepositoryValid)
+                .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
             if (revision is null) return 0;
 
             var due = await db.GuestConfigurations

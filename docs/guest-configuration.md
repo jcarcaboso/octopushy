@@ -90,7 +90,9 @@ connection, and they are refused in `setup.inputs`, `setup.secrets`, `setup.secr
 Each input hash gets one automatic run. A failure is not retried by itself: it waits for a
 new commit or a person. A guest that is not in sync with its provisioning waits for that
 first, so one commit that changes both runs them in order. A guest whose recipe declares no
-`onChange` action is only ever run by hand.
+`onChange` action is only ever run by hand. Automatic runs use the head of the branch, so a
+rollback configures the commit it returned to. A person cannot start a run on a guest whose
+provisioning has not caught up either.
 
 A schedule is a later slice because it needs a cron evaluator, missed-run rules and a
 maintenance-window decision, none of which the first consumer needs on day one. Nothing
@@ -157,9 +159,9 @@ promotes nothing.
 |---|---|---|
 | Exit 0 | `succeeded` | `succeeded`, snapshot promoted |
 | A task failed (exit 2, recap present) | `failed` | `failed`. The change is partial and known; run again |
-| The tool never started a task: pull failure, syntax error, host key refused on the first connection | `failed` | `failed`. Nothing happened on the guest |
-| Unreachable after a task started | `uncertain` | `uncertain` |
-| Killed, timed out, no recap after a task started | `uncertain` | `uncertain` |
+| The tool never started a task: pull failure, syntax error, host key or login refused on the first connection | `failed` | `failed`. Nothing happened on the guest |
+| Unreachable after a task started, even if an outcome was reported first | `uncertain` | `uncertain` |
+| Killed, timed out, or ended without a recap | `uncertain` | `uncertain` |
 | Agent lost or restarted while it ran | `uncertain` | `uncertain` |
 | A declared outcome | `succeeded` | Waits on `outcome-approval`, or ends as declared |
 
@@ -218,8 +220,9 @@ file. It **never scans** a host: the first thing it learns about a host's key is
 operator put in the store.
 
 The value lives in the store rather than in Git for the same reason trust does: a commit
-may point a guest at a new address, but it cannot put a new key behind one. A commit can
-only reference an entry an operator set.
+may point a guest at a new address, but it cannot put a new key behind one. It can only
+reference an entry an operator set. It has to be a plain entry, because a preview receives
+it: a secret posing as a pin is refused.
 
 A mismatch is a failed run that says so. A rebuilt VM has a new key, so its configure run
 fails closed until someone sets the new one. That is the point, not a defect to smooth over.
@@ -284,8 +287,12 @@ A secret reaches Ansible like this, on every tool runtime:
 Ansible runs with `ANSIBLE_PIPELINING=True`, so module arguments go over the SSH channel
 rather than through temporary files on either side, and with `ANSIBLE_NO_TARGET_SYSLOG=True`,
 so they do not reach the guest's journal. `ANSIBLE_LOG_PATH`, keeping remote files and
-verbosity are fixed too. A recap callback writes counts, the failed task's name and the
-declared outcome. **It never records task results.**
+verbosity are fixed too. A recap callback records counts, the failed task's name and the
+declared outcome, and **never a task's result**. A task's name is templated, so it can hold a
+secret even with `no_log`. The recap therefore stays in the private directory, and
+`octopushy-ansible` hands it to the agent as the last line of stderr, where the logger
+masks it like any other line. It never reaches the workspace, which can outlive a run
+for as long as an agent is disconnected.
 
 **Masking.** Every line of tool output and every error is masked with the attempt's secrets.
 The check of multi-line values for this design found three gaps, all fixed here:
@@ -300,9 +307,10 @@ The check of multi-line values for this design found three gaps, all fixed here:
 
 The first line of defence stays with the playbook: **tasks that handle secrets need
 `no_log: true`.** Masking recognizes literal text. It cannot recognize a value that a
-playbook encoded, split or hashed, and a line of a private key shorter than six characters
-is not masked on its own. The controller's second pass now covers each line of a multi-line
-value as well.
+playbook encoded, split or hashed, and a line of a multi-line value shorter than four
+characters is not masked on its own, because that would match ordinary text. Output is
+masked a line at a time, so those lines are the only form a value printed across lines
+takes. The controller's second pass covers each line of a multi-line value as well.
 
 ## Trust
 
@@ -317,8 +325,18 @@ has the reasoning; the result:
   same trust domain as its provisioning.
 - **One new gate, and it is the host key.** Credentials go only to endpoints an operator
   trusted. For a guest, the endpoint's identity is its host key, set out of band.
+- **What the pin does not do.** It stops a machine on the network answering as the guest,
+  and it stops a setting in a play or an `ansible.cfg` from turning the check off: the
+  connection is pinned with extra vars, including the `ssh` binary. It does not stop hostile
+  repository code. A local task runs on the agent with the SSH agent's socket and the
+  run's secrets within reach, so it can call `ssh` however it likes. That is what
+  accepting tool-native code means, and reviewing commits is the defence against it.
 - **A narrower blast radius than the store.** Definitions cannot name a `system/` key or an
   installation's Proxmox token as an `access` key or a setup secret; both fail validation.
+  That check reads today's definitions, so the controller also refuses, at every release,
+  a key that has ever gone to Proxmox or OpenTofu work. A removed installation's token
+  stays stored, and this is what keeps it out of a playbook. It also means a key cannot be
+  shared between an OpenTofu backend and a playbook: give each its own.
 - **Code runs before approval.** `preview` and `prepare` run repository code with no
   secrets, like `tofu plan`. In a container that code sees only its workspace. With the
   `local` runtime it runs as the agent's user, in the agent's container, where the agent's
@@ -360,8 +378,19 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
 `secrets` list, `provision.inputs` and `provision.secrets`. This design uses the same
 shapes, `setup.inputs`, `setup.secrets` and a recipe `secrets` list, so one recipe format
 covers both. Its `technitium` executor stays what it is: a product API, not a guest
-configuration seam. The generic "install software on an LXC" request, with `ha-db` first,
-needs no second mechanism: `type: container`, an `sshd`, and `setup.recipe`.
+configuration seam.
+
+**One seam for installing on a guest.** The generic "install software on an LXC" request, with
+`ha-db` first, needs no second mechanism: `type: container`, an `sshd`, and `setup.recipe`.
+That branch's container already installs over SSH, through OpenTofu provisioners, which its
+own documentation says cannot authenticate who answers, so it seals what it sends. A plan
+noted on November 1 extracts that into a generic repository install module. Doing so would
+leave two ways to declare what runs on a guest, and the second has no pin, no preview
+of tasks, no declared outcomes, and secrets that pass through OpenTofu. **The recommendation
+is to build `ha-db` as a configure recipe instead.** It reuses `setup.secrets`, the pin and
+the approval flow. What it needs from that branch is `type: container` and a root SSH key in
+the container, and neither depends on the install module. This is the decision to settle
+before that stacked work starts.
 
 - **Host keys on a container.** Proxmox generates them when it creates the container, and
   the create task's log shows the fingerprint, which is a Proxmox-authenticated source

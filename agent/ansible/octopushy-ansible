@@ -7,7 +7,9 @@ JSON document with what must not be in argv, the environment or a file on disk:
     {"sshKey": "...", "secretVars": {"name": "value"}, "secretFiles": {"name": "value"}}
 
 The SSH key goes into a private ssh-agent. Secret vars and files go into a private directory
-under /tmp, which has to be a tmpfs, and are removed when Ansible ends.
+under /tmp, which has to be a tmpfs, and are removed when Ansible ends. So is the recap, which
+can hold a task's templated name: the last line on stderr hands it to the agent, which masks
+every line. Nothing a run produces reaches the agent's workspace.
 """
 import ctypes
 import json
@@ -22,6 +24,7 @@ import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 TMP = "/tmp"
+RECAP_PREFIX = "octopushy-recap: "
 # What a run needs to be safe whatever a repository's ansible.cfg says.
 FIXED_ENVIRONMENT = {
     "ANSIBLE_CALLBACK_PLUGINS": HERE,
@@ -145,6 +148,16 @@ def ensure_user(private, environment):
         )
 
 
+def report_recap(path):
+    """The agent reads this line. Without a recap no task started, which is a result too."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            recap = json.load(stream)
+    except (OSError, ValueError):
+        recap = {"reached": False, "finished": False, "tasks": 0}
+    print(RECAP_PREFIX + json.dumps(recap), file=sys.stderr, flush=True)
+
+
 def run(arguments, environment):
     """Runs ansible-playbook as a child, reaping whatever is orphaned while this is PID 1."""
     playbook = os.path.join(os.path.dirname(sys.executable), "ansible-playbook")
@@ -186,6 +199,11 @@ def main():
             if secrets.get("sshKey"):
                 agent = start_ssh_agent(private, secrets["sshKey"], environment)
             del secrets
+            recap = os.path.join(private, "recap.json")
+            environment["OCTOPUSHY_RESULT_FILE"] = recap
+            code = run(arguments, environment)
+            report_recap(recap)
+            return code
         return run(arguments, environment)
     finally:
         if agent is not None:
