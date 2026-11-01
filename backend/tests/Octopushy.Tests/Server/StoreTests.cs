@@ -30,6 +30,23 @@ public class EnvelopeTests
 public class VariableStoreTests(PostgresFixture postgres)
 {
     [Fact]
+    public async Task A_key_may_stand_alone_or_share_a_prefix_with_another_key()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        await using var scope = server.Services.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
+        string[] keys = ["a/b", "a/b/c", "solo", "system"];
+        foreach (var key in keys)
+        {
+            await store.SetAsync(key, "value", Visibilities.Plain, null, CancellationToken.None);
+        }
+
+        var stored = (await store.ListAsync(CancellationToken.None)).Select(e => e.Key).ToList();
+        Assert.All(keys, key => Assert.Contains(key, stored));
+        await Assert.ThrowsAsync<StoreException>(() => store.SetAsync("system/x", "value", Visibilities.Plain, null, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Values_are_versioned_encrypted_and_secrets_stay_secret()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);

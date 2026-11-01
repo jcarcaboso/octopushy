@@ -220,6 +220,28 @@ in integration or setup definitions. A reference contains only `store` and the
 optional `version`; neither a quoted version nor zero, a negative number, or a
 fraction is valid.
 
+**Renaming a key.** A key is the entry's identity: nothing renames or moves one, and
+moving a key to another folder is the same as renaming it. The reference is in Git,
+the stored value is encrypted under the key's name, and run history records it, so
+the change is a replacement made in this order:
+
+1. Set the new key. A secret's value cannot be read back, so enter it from its
+   source.
+2. Commit the changed references. A new key starts at version 1, so change any
+   `version` too.
+3. Review the plans this causes. A reference in a guest, in an installation's
+   `connection`, or in a state backend is part of what a guest's plan is built from,
+   so renaming a Proxmox token plans every guest of that installation again, and a
+   run waiting on the old definition is no longer current.
+4. Wait until **Used by** no longer lists the old key, which includes runs in
+   progress.
+5. Delete the old key. If it has execution history, deleting is refused: revoke its
+   versions instead. The key then stays listed.
+
+A reference to a key that is not set is listed under **Referenced but not set** and
+blocks its run until the key is set, so a step taken out of order stops the work
+rather than delivering nothing.
+
 For a new run, an unversioned reference pins the active store version before its
 first attempt; later attempts keep those pinned versions. An explicit version
 expresses the desired binding, not proof that the credential has been verified,

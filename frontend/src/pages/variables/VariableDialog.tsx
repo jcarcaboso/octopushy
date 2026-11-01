@@ -9,22 +9,27 @@ interface Props {
   existing: Variable | null;
   /** A key to start with, for a referenced key that is not set yet. */
   presetKey?: string;
+  /** The folder being browsed; a new key starts inside it. */
+  folder?: string;
   onClose: () => void;
 }
 
-const keyPattern = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+// The server's pattern, and the storeRef schema's.
+const keyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
 
 /** Rendered only while open, so every opening starts from the entry's current state. */
-export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
+export function VariableDialog({ existing, presetKey = "", folder = "", onClose }: Props) {
   const save = useSetVariable();
   const stage = useStageVariable();
   const wasSecret = existing?.visibility === "secret";
-  const [key, setKey] = useState(existing?.key ?? presetKey);
+  const prefix = folder ? `${folder}/` : "";
+  const [key, setKey] = useState(existing?.key ?? (presetKey || prefix));
   const [value, setValue] = useState(existing && !wasSecret ? (existing.value ?? "") : "");
   const [visibility, setVisibility] = useState<"secret" | "plain">(existing?.visibility === "plain" ? "plain" : "secret");
   const [description, setDescription] = useState(existing?.description ?? "");
 
   const keyValid = keyPattern.test(key.trim()) && !key.trim().startsWith("system/");
+  const keyWrong = !keyValid && key !== "" && key !== prefix;
   const valueChanged = existing ? (wasSecret ? value !== "" : value !== (existing.value ?? "")) : true;
   const visibilityChanged = existing ? visibility !== existing.visibility : true;
   const sendsValue = !existing || valueChanged || visibilityChanged;
@@ -84,16 +89,18 @@ export function VariableDialog({ existing, presetKey = "", onClose }: Props) {
             className="mono"
             value={key}
             onChange={(e) => setKey(e.target.value)}
+            onFocus={(e) => e.currentTarget.setSelectionRange(key.length, key.length)}
             disabled={Boolean(existing)}
             data-autofocus={!existing && !presetKey ? true : undefined}
             spellCheck={false}
             autoCapitalize="off"
             placeholder="proxmox/site-a/api-token"
-            aria-invalid={key !== "" && !keyValid ? true : undefined}
+            aria-invalid={keyWrong ? true : undefined}
             aria-describedby="variable-key-hint"
           />
-          <div id="variable-key-hint" className={key !== "" && !keyValid ? "field__error" : "field__hint"}>
-            Segments of letters, digits, '.', '_', or '-', separated by '/'. Keys under system/ belong to the server.
+          <div id="variable-key-hint" className={keyWrong ? "field__error" : "field__hint"}>
+            Segments of letters, digits, '.', '_', or '-', each starting with a letter or digit, separated by '/'. Keys under system/ belong to the
+            server.
           </div>
         </div>
         <div className="field">
