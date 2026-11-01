@@ -292,7 +292,9 @@ public class ClusterDefinitionTests
     {
         using var test = Repository();
         var before = MemberDigest(test);
-        test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.42").Replace("cores: 1", "cores: 2"));
+        // Hardware is not this: a mount point's volume decides what the container holds, so the
+        // whole of it is covered, and so is every field the guest is created from.
+        test.Write(SecondaryFile, Guest("moraband", 420, "10.1.0.42", "description: a DNS server\npolicy: { approval: manual }\nsetup: { diskReporter: { enabled: false } }"));
         Assert.Equal(before, MemberDigest(test));
     }
 

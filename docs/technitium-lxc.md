@@ -489,7 +489,8 @@ What someone with commit access can still do:
   commit's own definitions, so it is defence in depth at most; mark such a token protected if it
   matters, and the release check then applies to it as well.
 - Hold up work: a commit that changes trusted code stops those runs until someone trusts it.
-- Change what a guest does that trust does not list, such as its hardware, under `policy`.
+- Change what a guest does that trust does not list: its `description`, its `policy`, and its `setup`, such as
+  the disk reporter. Hardware is listed, so a resize waits for **Trust cluster** like any other change.
 
 What remains exposed at plan time: the password is in the environment of the trusted root's OpenTofu
 and of the provider it pins, on the agent. Anyone who controls that agent, or who gets you to trust

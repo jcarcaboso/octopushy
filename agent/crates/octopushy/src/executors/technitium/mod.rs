@@ -1532,8 +1532,17 @@ mod tests {
         assert!(exact_peer(&live, &removal(Some(9), Some("b"), "10.0.0.4")).is_none());
         // Never the primary, whatever it was told.
         assert!(exact_peer(&live, &removal(Some(1), Some("p"), "10.0.0.1")).is_none());
+        // An id alone is not enough: it needs its name or its address with it.
+        assert!(exact_peer(&live, &removal(Some(2), None, "x")).is_none());
+        assert!(exact_peer(&live, &removal(Some(2), Some("other"), "x")).is_none());
         assert_eq!(
-            exact_peer(&live, &removal(Some(2), None, "x"))
+            exact_peer(&live, &removal(Some(2), None, "10.0.0.4"))
+                .unwrap()
+                .name,
+            "d"
+        );
+        assert_eq!(
+            exact_peer(&live, &removal(Some(2), Some("d"), "x"))
                 .unwrap()
                 .name,
             "d"
