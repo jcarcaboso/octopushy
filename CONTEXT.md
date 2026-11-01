@@ -162,6 +162,12 @@ API endpoints it declares, given once when the installation is added or an
 endpoint changes.
 _Avoid_: Apply approval, a guarantee that code is safe, or trust of a single revision
 
+**Cluster trust**:
+An operator's decision to let an application cluster's admin password go to the
+addresses of its members, and be held by its recipe's code before a plan is approved.
+It is given again when a member's address or that code changes.
+_Avoid_: Apply approval, or a review of what a change will do
+
 **Repository source**:
 The configured origin and branch from which definition revisions are discovered.
 Work built from a previous source is not sent; it must be planned again.
@@ -178,8 +184,8 @@ server, connected through an adapter for its product.
 _Avoid_: Provider, which names where a secret's value comes from
 
 **Application cluster**:
-Service instances on several guests that a cluster recipe forms into one
-application, such as Technitium DNS with a primary and secondaries.
+Guests a cluster recipe forms into one application, such as Technitium DNS with a
+primary and secondaries. Its members are guests until services exist.
 _Avoid_: Proxmox cluster when referring to application membership
 
 **Maintenance window**:
@@ -199,8 +205,8 @@ its configuration source or execution history.
 _Avoid_: Status when referring to persistent infrastructure state
 
 **Built-in state**:
-OpenTofu state Octopushy keeps for a guest in its own database, encrypted and versioned,
-used unless the guest names an external state backend.
+OpenTofu state Octopushy keeps for a guest or an application cluster in its own database,
+encrypted and versioned, used unless a guest names an external state backend.
 _Avoid_: Local state, which OpenTofu means as a file that outlives a run
 
 **State-derived inventory**:
@@ -270,8 +276,9 @@ One execution of a step; a retry creates a new attempt without erasing the
 previous outcome.
 
 **Observation**:
-What an installation's Proxmox API reported at one time, gathered by an agent in
-the background. It changes nothing, so it is not a run; only its failures surface.
+What an installation's Proxmox API reported at one time, or what a cluster's members
+reported, gathered by an agent in the background. It changes nothing, so it is not a
+run; only its failures surface.
 _Avoid_: Observe run
 
 **Approval**:

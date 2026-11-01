@@ -66,7 +66,9 @@ migration plan for that repository.
 endpoints an operator [trusted](installation-trust.md) for it. A new installation,
 or a new endpoint for one, waits for that trust; other changes run as soon as they
 are synced. This is separate from the per-resource apply policy described below,
-and cannot be enabled or weakened by a setting in the lab repository.
+and cannot be enabled or weakened by a setting in the lab repository. An application
+cluster's admin password has the same boundary, over its members' addresses and its
+recipe's code.
 
 The lab repository is the desired configuration Octopushy reads. It is separate from
 Octopushy's own source code and holds two kinds of files:
@@ -81,8 +83,8 @@ Everything else lives elsewhere:
 | Where | What |
 |---|---|
 | Lab repository | Definitions, tool-native files, policies, variable-store key references |
-| Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot, the entries each integration holds for Octopushy, cluster membership as joined |
-| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state |
+| Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot, the entries each integration holds for Octopushy |
+| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state, which for a cluster records who has joined |
 
 ## Layout
 
@@ -93,7 +95,7 @@ lab-repo/
 │   ├── home/
 │   │   ├── lab.yaml                        # integrations, DNS zones, windows
 │   │   ├── clusters/
-│   │   │   └── technitium/cluster.yaml     # relates services on several guests
+│   │   │   └── technitium/cluster.yaml     # relates guests of this lab
 │   │   └── proxmox/
 │   │       ├── korriban/                   # a standalone host or a cluster
 │   │       │   ├── installation.yaml
@@ -142,7 +144,8 @@ lab-repo/
    declared with `renamedFrom: <old id>`.
 5. **Everything outside the tree is a reference:** templates, profiles,
    dependencies between services on different guests, the service or cluster an
-   integration runs on, and the members of an application cluster. Inside a lab,
+   integration runs on, and the members of an application cluster, which are guests
+   until services exist. Inside a lab,
    an address may leave out the lab, as in `korriban/krb-crt-01/vaultwarden`. The
    dashboard's graph shows the tree and these references together, and search finds
    any resource by name, address, or reference.
@@ -152,7 +155,8 @@ lab-repo/
 7. **Settings flow down the tree.** The approval and destructive settings,
    maintenance windows, and agent labels set on a lab apply to everything below
    it; an installation, guest, service, or cluster can override them, and the
-   nearest setting wins. Approval is per
+   nearest setting wins. A cluster sits directly under its lab, and what it sets does
+   not reach its member guests. Approval is per
    resource: a guest's setting covers changes to that guest, and each service has
    its own, so approving a VM change never approves its services. VM configuration
    does not inherit (rule 3).
@@ -546,47 +550,50 @@ ports:
 ```yaml
 # labs/home/clusters/technitium/cluster.yaml
 schemaVersion: 1
-type: technitium                  # the cluster recipe: how to form, join, and leave
-members:                          # service instances on different guests
-  - { service: korriban/krb-dns-01/technitium, role: primary }   # formed here
-  - { service: moraband/mrb-dns-01/technitium, role: secondary } # joined to it
-  - { service: umbrel/umb-dns-01/technitium, role: secondary }
-settings:                         # shared by all members, validated by the recipe
+type: technitium                  # selects recipes/technitium-cluster
+members:                          # guests on different hosts, in this lab
+  - { guest: korriban/krb-dns-01, role: primary }   # formed here
+  - { guest: moraband/mrb-dns-01, role: secondary } # joined to it
+settings:                         # shared by all members
   clusterDomain: cluster.home.arpa
   forwardZones:
     - { zone: home.arpa, forwarder: 10.1.0.1 }
-credentials: { store: clusters/technitium/home/admin }
+credentials: { store: dns/technitium/admin-password }
+tls: { verify: false }
 policy:
   approval: manual
 ```
 
-An application cluster relates service instances that run on different guests,
-usually on different Proxmox hosts. It is not a Proxmox cluster (case C8):
+An application cluster relates guests of one lab, usually on different Proxmox hosts. It is not a
+Proxmox cluster (case C8). [Technitium in Proxmox containers](technitium-lxc.md#a-cluster) is the
+operator's guide; the implementation differs from the original proposal as noted here.
 
-- **Members stay standalone.** Each member is an ordinary service instance on its
-  own guest, with its own files, deployment, ports, and approval. The cluster file
-  only lists the members and holds what they share. A service belongs to at most
-  one cluster.
-- **Forming is a separate step, after the members.** Once the first member with the
-  forming role (Technitium's primary) is deployed and verified, the recipe forms
-  the cluster on it. Then each other member is joined to it as it becomes ready.
-  Each join is its own step with its own outcome, so a member that fails to join
-  does not hold back the others. A member added later is joined the same way.
-- **The recipe is the reusable part.** A cluster's `type` names a recipe that
-  implements a small contract: form, join, leave, apply settings, and verify, plus
-  optional actions such as promoting a new primary. Roles mean what the recipe
-  defines. Technitium comes first; Docker Swarm or database replication would be
-  other recipes on the same basis. Octopushy owns the order, the locks, and the
-  record of who has joined; the recipe owns the product's API.
-- **Role changes and removals are explicit.** Changing the primary of a formed
-  cluster is a promotion, and the preview shows it as one. Removing a member makes
-  it leave the cluster, which counts as a delete under the cluster's destructive
-  setting; the member's service and guest are retired separately. A service still
-  listed in a cluster cannot be retired.
-- **The cluster has its own policy,** flowing down from the lab. Approving a
-  cluster change never approves its members' service changes.
-- **Each step locks the cluster and the members it touches.** Other services on
-  those guests can deploy meanwhile.
+- **Members are guests,** because services are not implemented yet. Each stays an ordinary guest,
+  with its own files, deployment, and approval; the cluster file lists them and holds what they
+  share. A guest belongs to at most one cluster. References are checked: they resolve, there is
+  one primary and at least one secondary, all in this lab, each with a static address. Members on
+  one Proxmox host are a warning.
+- **Forming comes after the members.** A cluster's run is blocked, naming the guests it waits for,
+  until every member is applied and verified. It forms the cluster on the primary and joins the
+  others in one step, in which each member has its own outcome, so a member that fails to join does
+  not hold back the others. A member added later joins the same way.
+- **The contract is a root and an executor.** The recipe's OpenTofu root applies settings, and
+  the `technitium` executor joins, removes, and verifies, because OpenTofu cannot join without
+  putting the password in a saved plan, and cannot see a rebuilt member at all. Other kinds of
+  cluster would bring a root and an executor of their own.
+- **OpenTofu state records who has joined.** There is no table: each secondary is a
+  `terraform_data` resource, so adding one is a create in the preview and removing one a delete.
+  The agent checks members before every plan, so a member that is out of the cluster is a
+  replacement there, and follows approval.
+- **Role changes and removals are explicit.** Changing the primary of a formed cluster is a promotion,
+  which this version refuses, and so is changing `clusterDomain`. Removing a member makes it leave
+  the cluster, which counts as a delete under the cluster's destructive setting; its guest is
+  retired separately. A guest still listed in a cluster cannot be retired, and deleting its folder
+  proposes nothing. Deleting `cluster.yaml` destroys nothing: the cluster is reported as missing.
+- **The cluster has its own policy,** flowing down from the lab. Approving a cluster change never
+  approves its members' changes. Its `execution.agentLabels` flow down the same way.
+- **Its runs do not lock the members.** Other work on those guests can go on meanwhile, and a guest
+  that applies a change gets the cluster checked afterwards.
 - **A cluster belongs to one lab,** and so do its members.
 
 ### Maintenance windows
@@ -642,9 +649,9 @@ New VM → configured guest → working service:
 3. Add `services/<name>/` under the guest. When the secrets resolve and are
    delivered, Octopushy proposes deploying that instance: it opens the instance's
    ports on the guest, deploys it, creates its DNS records, then verifies it.
-4. For a cluster, add `clusters/<id>/cluster.yaml` listing the member services.
-   Once the first member is verified, Octopushy proposes forming the cluster on it,
-   then joining each of the others.
+4. For a cluster, add `clusters/<id>/cluster.yaml` listing the member guests. Once
+   every member is verified and the cluster is trusted, one run forms it on the primary
+   and joins the others, then verifies each.
 
 Each step is a separate proposal. A failure in one guest or instance blocks only
 what depends on it.
@@ -661,7 +668,7 @@ what depends on it.
 | `dns.records` in `service.json` and `config/dns/providers.json` (Pi-hole or Technitium) | `dns` in each `service.yaml`; integrations and zones in `lab.yaml` |
 | A reverse proxy on each apps machine, with Traefik labels in each Compose file | The same, not managed by Octopushy for now |
 | Service firewall declarations merged into the node's NixOS configuration | `ports` in each `service.yaml`, applied in the guest's operating system by a step of its own |
-| `homelab/clusters/technitium/<cluster>/cluster.json` with `primary`, `secondaries`, `removeSecondaries` | `labs/<lab>/clusters/<id>/cluster.yaml` with members and roles; removing a member is a delete |
+| `homelab/clusters/technitium/<cluster>/cluster.json` with `primary`, `secondaries`, `removeSecondaries` | `labs/<lab>/clusters/<id>/cluster.yaml` with member guests and roles; removing a member is a delete |
 | `homelab/archived/` | `lifecycle: retired`, then deletion after a verified removal |
 
 Adopting existing `nodes` guests, including state handover and VMID bindings, is a

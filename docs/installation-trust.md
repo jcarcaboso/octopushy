@@ -1,6 +1,7 @@
 # Trusted Proxmox installations
 
-Octopushy sends Proxmox credentials only to API endpoints an operator trusted.
+Octopushy sends Proxmox credentials only to API endpoints an operator trusted, and
+[a cluster's admin password](#application-clusters) only to the members trusted for it.
 Trust belongs to a Proxmox installation, not to a commit: once an installation
 is trusted, every later revision of the repository runs without another click,
 unless it points that installation at a new endpoint. Trust is separate from
@@ -43,6 +44,34 @@ running mutations cannot be recalled.
   `trustedBy`.
 - `POST /api/installations/{id}/trust` with `{ "endpoints": [...] }`: trusts the
   declared endpoints when they match the request. The actor comes from the session.
+
+## Application clusters
+
+A [cluster](technitium-lxc.md#a-cluster)'s admin password is a credential too, and the lab repository
+decides where it would go: a member's address comes from its `guest.yaml`. So it gets the same
+guarantee. Trust is keyed by the cluster's address (`lab/clusters/id`) and holds the endpoint of
+every member, `https://<address>:53443`, when it was trusted.
+
+A cluster also trusts its recipe's code. An installation does not need this, but a cluster's plan
+holds the admin password in its environment, because the provider logs in while planning, so a
+commit must not be able to run code of its own there. Trust records a digest of `recipe.yaml`, which
+names the image, and of the root's folder, which holds the lock file that pins the provider. A
+cluster's root may hold only its own `.tf` files.
+
+1. A new cluster shows **Needs trust**. Its runs and checks wait, and receive no password.
+2. On the cluster's page, review the endpoints and the code, then choose **Trust cluster**.
+3. If a commit changes a member's address, adds a member, or changes the recipe, work waits again
+   until you trust what is declared now. Removing a member does not ask for this. Other clusters,
+   and every installation, are unaffected.
+
+The controller checks this before it releases the password or builds an assignment, as above. The
+password can also not reach an unreviewed plan another way: a backend environment value cannot use
+it, a Proxmox token cannot be it, and a guest's `provision.secrets` reach only an apply.
+
+- `GET /api/inventory` and `GET /api/clusters/{id}`: each cluster has `trust` with its declared
+  `endpoints`, the `untrusted` ones, `codeDigest`, `codeChanged`, `trustedAt` and `trustedBy`.
+- `POST /api/clusters/{id}/trust` with `{ "endpoints": [...], "codeDigest": "..." }`: trusts what is
+  declared when it matches the request. The actor comes from the session.
 
 ## Upgrading from revision trust
 

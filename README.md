@@ -19,7 +19,9 @@ services, and DNS come later. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
 [Native Technitium DNS in Proxmox containers](docs/technitium-lxc.md) is provisioned
-the same way, with its password kept out of saved plans.
+the same way, with its password kept out of saved plans. Declared as a
+[cluster](docs/technitium-lxc.md#a-cluster), Octopushy forms it, joins its members, owns
+its blocklists and shared settings, and verifies every member on every run.
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)
 adds separate native growth and capacity-verification steps, with targeted retry.
 This is limited to the documented ext4 base-image layout, not general guest setup
@@ -121,6 +123,7 @@ separate post-bootstrap opt-in before admitting LAN DNS traffic. NixOS activatio
 is a whole-guest operation, not an independent service deployment.
 The pinned Technitium package does not meet the role's known-fix minimum, so LAN
 exposure is blocked until a patched package is separately selected and tested.
+For a new cluster, the [LXC path](docs/technitium-lxc.md#a-cluster) supersedes this pair.
 The [two-VM DNS cluster preparation](examples/lab/modules/nixos/services/CLUSTER.md)
 places primary and secondary guests on the same Proxmox host as an explicit
 provisioning choice, with separate peer/client exposure switches. It does not

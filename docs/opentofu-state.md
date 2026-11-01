@@ -3,7 +3,9 @@
 Octopushy keeps each guest's OpenTofu state in its own PostgreSQL database. There is no
 backend or credential to set up: install Octopushy, add a lab repository, and provision.
 `stateBackends` in `octopushy.yaml` remains an optional override for a guest that names one
-with `provision.state`.
+with `provision.state`. An [application cluster](technitium-lxc.md#a-cluster) always keeps its
+state here, under a stack such as `home.clusters.technitium`; everything below about a guest
+holds for it, and its state is reached with the cluster's id on the same API.
 
 ## How it reaches OpenTofu
 

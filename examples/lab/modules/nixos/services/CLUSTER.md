@@ -1,5 +1,8 @@
 # Two DNS VMs on the same Proxmox host
 
+> For a new cluster, use [Technitium in Proxmox containers](../../../../../docs/technitium-lxc.md#a-cluster):
+> it supersedes this same-host NixOS pair.
+
 **Preparation only:** two separate NixOS guests on **umbrel**, not two processes
 in one guest. The pair shares a host, power, storage, and network failure domain;
 it is **not host failover**. No live deployment, DNS/router change, enrollment,
