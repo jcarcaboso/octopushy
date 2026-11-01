@@ -212,6 +212,12 @@ public sealed class ServerHarness : IAsyncDisposable
         await scope.ServiceProvider.GetRequiredService<VariableStore>().SetAsync(key, value, Visibilities.Secret, null, CancellationToken.None);
     }
 
+    public async Task SetPlainAsync(string key, string value)
+    {
+        await using var scope = Services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<VariableStore>().SetAsync(key, value, Visibilities.Plain, null, CancellationToken.None);
+    }
+
     public async Task WithDbAsync(Func<OctopushyDb, Task> action)
     {
         await using var scope = Services.CreateAsyncScope();
@@ -263,7 +269,7 @@ public sealed class ServerHarness : IAsyncDisposable
             Labels = labels,
             MaxConcurrency = 4,
             EnrolledAt = DateTimeOffset.UtcNow,
-            Executors = ["opentofu", "proxmox", "nixos-rootfs", "guest", "managed-worker"],
+            Executors = ["opentofu", "proxmox", "nixos-rootfs", "guest", "managed-worker", "ansible"],
             CertificateSerial = Guid.NewGuid().ToString("N"),
             CertificateExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
         };

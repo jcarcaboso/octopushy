@@ -43,9 +43,27 @@
       "additionalProperties": false
     },
     "setup": {
-      "description": "Post-provision guest setup. Only diskReporter is currently acted on.",
+      "description": "Post-provision guest setup: disk reporting, and a configure recipe.",
       "type": "object",
       "properties": {
+        "recipe": { "description": "A recipe with operation: configure.", "$ref": "common.schema.json#/$defs/id" },
+        "inputs": {
+          "description": "Extra vars for the recipe, validated by its inputs schema.",
+          "type": "object",
+          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" }
+        },
+        "secrets": {
+          "description": "Extra vars filled from the variable store. Only the step that runs the playbook receives them.",
+          "type": "object",
+          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+          "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+        },
+        "secretFiles": {
+          "description": "Extra vars holding the path of a private file with the store value, for tasks that copy a file.",
+          "type": "object",
+          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+          "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+        },
         "diskReporter": {
           "description": "Overrides automatic disk reporting when it is enabled on the control plane.",
           "type": "object",
@@ -60,8 +78,11 @@
     "access": {
       "type": "object",
       "properties": {
-        "address": { "type": "string" },
-        "sshKey": { "$ref": "common.schema.json#/$defs/storeRef" },
+        "address": { "description": "Where a configure run connects; by default the guest's static or reserved address.", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.:-]*(?![\\s\\S])" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "description": "The login of a configure run.", "type": "string", "pattern": "^[a-z_][a-z0-9_.-]*(?![\\s\\S])" },
+        "sshKey": { "description": "An unencrypted OpenSSH private key, stored as a secret.", "$ref": "common.schema.json#/$defs/storeRef" },
+        "hostKey": { "description": "The guest's public SSH host key, read through a trusted channel and stored by an operator. Octopushy never scans for it.", "$ref": "common.schema.json#/$defs/storeRef" },
         "sshAuthorizedKeys": { "type": "array", "items": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)" } }
       },
       "additionalProperties": false

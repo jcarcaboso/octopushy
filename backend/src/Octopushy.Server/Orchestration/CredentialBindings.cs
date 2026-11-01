@@ -8,10 +8,13 @@ namespace Octopushy.Server.Orchestration;
 internal static class CredentialBindings
 {
     // CA certificates are public trust material. Other current bindings feed credential channels.
-    internal static bool RequiresSecret(string name) => name != SecretNames.ProxmoxCa;
+    internal static bool RequiresSecret(string name) => name is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
 
     internal static List<string> Validate(RunContext context)
     {
+        if (context.Ansible is not null)
+            return ValidateAnsible(context);
+
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
@@ -60,6 +63,17 @@ internal static class CredentialBindings
         return problems;
     }
 
+    /// <summary>A configure run holds its SSH key, its pin and its own secrets: nothing that reaches Proxmox.</summary>
+    private static List<string> ValidateAnsible(RunContext context)
+    {
+        var problems = new List<string>();
+        if (context.Secrets.Keys.Any(n => n is SecretNames.ProxmoxSharedToken or SecretNames.ProxmoxReadOnlyToken or SecretNames.ProxmoxPrivilegedToken or SecretNames.ProxmoxToken))
+            problems.Add("A configure run carries no Proxmox credentials; inspect and replan");
+        if (!context.Secrets.ContainsKey(SecretNames.AnsibleSshKey) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
+            problems.Add("A configure run needs an SSH key and a pinned host key; inspect and replan");
+        return problems;
+    }
+
     /// <summary>
     /// Checks and pins the context's credential versions. An observation passes no run: it has
     /// no history to recover, and the caller stores the pinned context on its attempt.
@@ -105,6 +119,13 @@ internal static class CredentialBindings
             if (RequiresSecret(name) && entry.Visibility != Visibilities.Secret)
             {
                 problems.Add($"{key}: credential must be stored as secret, not plain");
+                continue;
+            }
+
+            // A pin is public and goes to steps with no secrets, so a secret must not pose as one.
+            if (name == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
+            {
+                problems.Add($"{key}: a host key is public; store it as plain");
                 continue;
             }
 

@@ -393,6 +393,50 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("enrollment_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GuestConfiguration", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("AppliedAction")
+                        .HasColumnType("text")
+                        .HasColumnName("applied_action");
+
+                    b.Property<DateTimeOffset?>("AppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("applied_at");
+
+                    b.Property<string>("AppliedHash")
+                        .HasColumnType("text")
+                        .HasColumnName("applied_hash");
+
+                    b.Property<Guid?>("AppliedRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("applied_revision_id");
+
+                    b.Property<string>("DesiredHash")
+                        .HasColumnType("text")
+                        .HasColumnName("desired_hash");
+
+                    b.Property<Guid?>("DesiredRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("desired_revision_id");
+
+                    b.Property<string>("ProposedHash")
+                        .HasColumnType("text")
+                        .HasColumnName("proposed_hash");
+
+                    b.Property<string>("Snapshot")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("snapshot");
+
+                    b.HasKey("ResourceId")
+                        .HasName("pk_guest_configurations");
+
+                    b.ToTable("guest_configurations", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -1326,6 +1370,16 @@ namespace Octopushy.Server.Data.Migrations
                         .HasConstraintName("fk_attempts_steps_step_id");
 
                     b.Navigation("Step");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GuestConfiguration", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithOne()
+                        .HasForeignKey("Octopushy.Server.Data.GuestConfiguration", "ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_guest_configurations_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
