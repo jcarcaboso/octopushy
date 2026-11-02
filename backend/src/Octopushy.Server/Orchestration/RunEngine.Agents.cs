@@ -35,6 +35,13 @@ public sealed partial class RunEngine
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken));
+            // A change that waited for an agent may have outlived its schedule since it was queued.
+            foreach (var attempt in queued.Where(a => a is { Mutating: true, Step.Run.Reason: RunReasons.Schedule }).ToList())
+            {
+                if (await StopIfLateAsync(db, attempt.Step!.RunId, clock.GetUtcNow(), cancellationToken))
+                    queued.Remove(attempt);
+            }
+
             var result = new List<(AgentSession Session, ServerMessage Message, Guid AttemptId)>();
             if (queued.Count == 0)
             {

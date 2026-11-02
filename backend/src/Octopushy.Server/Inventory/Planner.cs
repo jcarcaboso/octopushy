@@ -217,25 +217,20 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     }
 
     /// <summary>
-    /// A scheduled run stops waiting at its limit, counted from its time and not from when it was
-    /// started, if nothing that can change the guest has gone out. One starting hours late would
-    /// run at a time nobody chose. Past that point it ends the usual way. A run waiting for a person
-    /// is theirs to decide.
+    /// Stops scheduled runs left waiting past their limit, which would otherwise hold the guest.
+    /// This is tidying: what keeps a late run off the guest is the check at each release.
     /// </summary>
-    public async Task ExpireScheduledAsync(DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        var waiting = await engine.ExecuteAsync((db, _) => db.Runs.AsNoTracking()
-            .Where(r => r.Reason == RunReasons.Schedule
-                && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running || r.Status == RunStatuses.Blocked)
-                && !r.Steps.Any(s => s.Attempts.Any(a => a.Mutating && a.Status != AttemptStatuses.Queued)))
-            .Select(r => new { r.Id, r.Context, r.CreatedAt }).ToListAsync(cancellationToken), cancellationToken);
-        foreach (var run in waiting)
+    public Task ExpireScheduledAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, _) =>
         {
-            var scheduled = RunContext.Parse(run.Context).ScheduledFor ?? run.CreatedAt;
-            if (scheduled + ScheduleLateLimit < now)
-                await engine.CancelAsync(run.Id, "Nothing picked this up within an hour of its time. The next time tries again.", cancellationToken);
-        }
-    }
+            var waiting = await db.Runs.AsNoTracking()
+                .Where(r => r.Reason == RunReasons.Schedule
+                    && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running || r.Status == RunStatuses.Blocked))
+                .Select(r => r.Id).ToListAsync(cancellationToken);
+            foreach (var run in waiting)
+                await engine.StopIfLateAsync(db, run, now, cancellationToken);
+            return 0;
+        }, cancellationToken);
 
     private async Task<Run> ConfigureRunAsync(OctopushyDb db, LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
         string action, string reason, CancellationToken cancellationToken, DateTimeOffset? scheduledFor = null)

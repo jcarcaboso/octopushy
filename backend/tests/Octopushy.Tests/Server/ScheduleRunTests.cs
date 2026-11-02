@@ -22,13 +22,13 @@ public class ScheduleRunTests(PostgresFixture postgres)
 
     private static DateTimeOffset At(int hour, int minute = 0, int day = 0) => Today.AddDays(day).AddHours(hour).AddMinutes(minute);
 
-    private static TestRepository Scheduled(string policy = "", string outcomes = "", string action = "update-system", string destructive = "false")
+    private static TestRepository Scheduled(string policy = "", string outcomes = "", string action = "update-system", string destructive = "false", string cron = "0 6 * * *")
     {
         var test = Repository.Repository(policy, outcomes, destructive);
         var guest = Path.Combine(test.Root, GuestFile);
         test.Write(GuestFile, File.ReadAllText(guest).Replace(
             "access:\n  user: ops",
-            $"  schedules:\n    - {{ action: {action}, cron: \"0 6 * * *\" }}\naccess:\n  user: ops"));
+            $"  schedules:\n    - {{ action: {action}, cron: \"{cron}\" }}\naccess:\n  user: ops"));
         return test;
     }
 
@@ -37,6 +37,12 @@ public class ScheduleRunTests(PostgresFixture postgres)
           deferred:
             description: Work is running.
             approve: { vars: { allow_busy: true } }
+        """;
+
+    private const string Declared = """
+        outcomes:
+          refused: { description: The guest said no., result: failed }
+          unchanged: { description: Nothing needed doing., result: succeeded }
         """;
 
     private static Task FireAsync(ServerHarness server, DateTimeOffset now) =>
@@ -114,6 +120,32 @@ public class ScheduleRunTests(PostgresFixture postgres)
             Assert.Equal("configure", configuration.AppliedAction);
             Assert.Contains("\"1\"", configuration.Snapshot);
         }
+
+        await FireAsync(server, At(6, 1, day: 1));
+        Assert.NotEqual(run.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
+    }
+
+    [Theory]
+    [InlineData("refused", RunStatuses.Failed, "configure")]
+    [InlineData("unchanged", RunStatuses.Succeeded, "update-system")]
+    public async Task An_outcome_no_person_can_approve_ends_a_scheduled_run_as_it_declares(string outcome, string status, string appliedAction)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(outcomes: Declared));
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await FireAsync(server, At(1));
+        await FireAsync(server, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap(outcome, "From the playbook."));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(status, run.Status);
+        Assert.Contains(outcome, run.Detail);
+        Assert.Contains("From the playbook.", run.Detail);
+        Assert.DoesNotContain(run.Steps, s => s.Name == StepNames.OutcomeApproval);
+        // Only the declared success counts as applied; the first run's promotion otherwise stands.
+        Assert.Equal(appliedAction, await server.QueryAsync(db => db.GuestConfigurations.AsNoTracking().Select(c => c.AppliedAction).SingleAsync()));
 
         await FireAsync(server, At(6, 1, day: 1));
         Assert.NotEqual(run.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
@@ -330,6 +362,135 @@ public class ScheduleRunTests(PostgresFixture postgres)
 
         await ExpireAsync(server, At(8));
         Assert.NotEqual(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    /// <summary>One pass of the orchestrator's loop with its minute's checks due, in its order: the engine goes first.</summary>
+    private static async Task PassAsync(ServerHarness server, TestClock clock, DateTimeOffset now)
+    {
+        clock.Now = now;
+        await server.TickAsync();
+        await FireAsync(server, now);
+        await ExpireAsync(server, now);
+    }
+
+    private static Task<int> ChangesAsync(ServerHarness server, Guid run) =>
+        server.QueryAsync(db => db.Attempts.CountAsync(a => a.RunId == run && a.Mutating && a.Status != AttemptStatuses.Cancelled));
+
+    [Fact]
+    public async Task A_change_queued_in_time_does_not_go_out_after_the_limit()
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(), clock: clock);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        var late = await server.ConnectAgentAsync("home");
+
+        // The periodic pass is not due yet: the loop reaches its engine first.
+        clock.Now = At(7, 1);
+        await server.TickAsync();
+
+        Assert.Empty(late.TakeAssignments());
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Cancelled, run.Status);
+        Assert.Equal(0, await ChangesAsync(server, run.Id));
+    }
+
+    [Fact]
+    public async Task A_result_after_the_limit_does_not_release_the_change()
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(), clock: clock);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        var preview = await agent.NextAsync("preview");
+
+        // The callback runs on its own, between two periodic passes.
+        clock.Now = At(7, 1);
+        var (outputs, artifact) = ConfigureRunTests.Preview();
+        await agent.ReportAsync(preview, Outcome.Succeeded, outputs, artifacts: artifact);
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Cancelled, run.Status);
+        Assert.Contains("nothing reached the guest", run.Detail);
+        Assert.Equal(0, await ChangesAsync(server, run.Id));
+        await server.TickAsync();
+        Assert.Empty(agent.TakeAssignments());
+    }
+
+    [Fact]
+    public async Task A_change_still_goes_out_at_the_limit_itself()
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(), clock: clock);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+
+        await PassAsync(server, clock, At(6) + Planner.ScheduleLateLimit);
+        Assert.Contains(agent.TakeAssignments(), a => a.Action == "run");
+    }
+
+    [Fact]
+    public async Task A_person_who_approves_after_the_limit_decides_and_the_limit_stops_applying()
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled("policy:\n  destructive: manual\n", action: "configure", destructive: "true"), clock: clock);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        await server.TickAsync();
+
+        await PassAsync(server, clock, At(9));
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
+        await PassAsync(server, clock, At(9, 1));
+        Assert.Equal(RunStatuses.Running, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+
+        var next = await server.ConnectAgentAsync("home");
+        await next.NextAsync("run");
+        await ExpireAsync(server, At(9, 2));
+        Assert.Equal(RunStatuses.Running, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Theory]
+    // 02:30 does not exist on this morning: the clocks go from 02:00 to 03:00.
+    [InlineData("2026-03-29T00:00:00Z", "2026-03-29T01:00:00Z")]
+    // 02:30 happens twice on this morning: the clocks go from 03:00 back to 02:00.
+    [InlineData("2026-10-24T23:00:00Z", "2026-10-25T00:30:00Z")]
+    public async Task A_time_the_clocks_move_through_fires_once(string seen, string due)
+    {
+        var test = Scheduled(cron: "30 2 * * *");
+        test.Write("labs/home/lab.yaml", File.ReadAllText(Path.Combine(test.Root, "labs/home/lab.yaml")) + "timezone: Europe/Madrid\n");
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (_, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await FireAsync(server, DateTimeOffset.Parse(seen).ToUniversalTime());
+        var count = await ConfigureRunsAsync(server);
+
+        var fallsDue = DateTimeOffset.Parse(due).ToUniversalTime();
+        await FireAsync(server, fallsDue - TimeSpan.FromMinutes(1));
+        Assert.Equal(count, await ConfigureRunsAsync(server));
+        await FireAsync(server, fallsDue);
+        Assert.Equal(count + 1, await ConfigureRunsAsync(server));
+        Assert.Equal(fallsDue, (await StateAsync(server)).LastSlot);
+
+        // A second firing would be refused by the run in the way, and say so.
+        await FireAsync(server, fallsDue + TimeSpan.FromHours(1) + TimeSpan.FromMinutes(1));
+        Assert.Null((await StateAsync(server)).Note);
     }
 
     [Fact]

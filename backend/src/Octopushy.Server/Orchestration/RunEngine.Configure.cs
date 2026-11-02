@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
+using Octopushy.Server.Inventory;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -82,10 +83,39 @@ public sealed partial class RunEngine
         OutcomeOf(run) is { } reported ? $"The playbook reported {reported.Name}{(reported.Detail is { } detail ? $": {detail}" : "")}." : null;
 
     /// <summary>
+    /// Whether a scheduled run has lost the right to start changing its guest. It has that right
+    /// until its limit, counted from its time and not from when it was started: one starting
+    /// hours late would run at a time nobody chose. What has gone out ends the usual way, and a
+    /// person who is deciding, or has decided, overrides the limit: the time is then theirs.
+    /// </summary>
+    internal static bool MissedItsTime(Run run, DateTimeOffset now) =>
+        run.Reason == RunReasons.Schedule
+        && !RunStatuses.IsTerminal(run.Status)
+        && run.Status != RunStatuses.Uncertain
+        && (RunContext.Parse(run.Context).ScheduledFor ?? run.CreatedAt) + Planner.ScheduleLateLimit < now
+        && !run.Steps.Any(s => s.Status == StepStatuses.AwaitingApproval || s is { ApprovalRequired: true, Decision: "approved" })
+        && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && a.Status != AttemptStatuses.Queued);
+
+    /// <summary>
+    /// Cancels a scheduled run that has missed its time. Every release of a change comes through
+    /// here, so nothing depends on how recently the periodic pass ran.
+    /// </summary>
+    internal async Task<bool> StopIfLateAsync(OctopushyDb db, Guid runId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (!MissedItsTime(await LoadRunAsync(db, runId, cancellationToken), now))
+            return false;
+        await CancelInternalAsync(db, runId, "This did not start within an hour of its time, so nothing reached the guest. The next time tries again.", cancellationToken);
+        return true;
+    }
+
+    /// <summary>
     /// Settles a finished playbook. Success promotes what was prepared. A declared outcome waits
-    /// for a person if the recipe lets one approve it, once, and otherwise ends as it declares.
-    /// A scheduled run never waits on one: holding the guest for a person would block every
-    /// later run, so it ends here, promotes nothing, and the next time tries again.
+    /// for a person if the recipe lets one approve it, once, and otherwise ends as it declares:
+    /// a declared success promotes like any other, and a declared failure promotes nothing.
+    /// A scheduled run never waits on an approvable one: holding the guest for a person would
+    /// block every later run, so it ends as succeeded, promotes nothing, and the next time tries
+    /// again. An outcome no person can approve has nothing to wait for, so it ends as declared
+    /// on a scheduled run too.
     /// </summary>
     private async Task ApplyConfigureEffectsAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {

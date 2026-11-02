@@ -388,6 +388,8 @@ public sealed partial class RunEngine(
                     }
                     break;
                 case StepStatuses.Pending or StepStatuses.Blocked:
+                    if (AssignmentBuilder.ActionFor(step.Name).Mutating && await StopIfLateAsync(db, run.Id, clock.GetUtcNow(), cancellationToken))
+                        return;
                     var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
                     if (missing.Count > 0)
                     {
