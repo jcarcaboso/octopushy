@@ -43,10 +43,10 @@ fn named_vmids(value: &Value, found: &mut Vec<u64>) {
     match value {
         Value::Object(fields) => {
             for (key, field) in fields {
-                if let ("vm_id" | "container_id", Some(vmid)) = (key.as_str(), field.as_u64()) {
-                    if !found.contains(&vmid) {
-                        found.push(vmid);
-                    }
+                if let ("vm_id" | "container_id", Some(vmid)) = (key.as_str(), field.as_u64())
+                    && !found.contains(&vmid)
+                {
+                    found.push(vmid);
                 }
                 named_vmids(field, found);
             }
