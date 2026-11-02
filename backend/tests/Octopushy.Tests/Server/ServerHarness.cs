@@ -86,9 +86,17 @@ public sealed class PostgresFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
         await command.ExecuteNonQueryAsync();
-        // Each test owns a unique database; retaining an idle pool per database
-        // exhausts this shared disposable server as the suite grows.
-        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name, Pooling = false }.ConnectionString;
+        // Each test owns a unique database, so a pool that stayed open for each one would
+        // exhaust this shared disposable server as the suite grows. Pools empty themselves within
+        // seconds instead: turning pooling off makes every query log in again, which is most of
+        // what these tests would then spend their time on.
+        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
+        {
+            Database = name,
+            MaxPoolSize = 10,
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        }.ConnectionString;
         _databases.Add(connectionString);
         return connectionString;
     }
