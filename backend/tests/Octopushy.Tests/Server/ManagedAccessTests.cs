@@ -166,8 +166,28 @@ public class ManagedAccessTests(PostgresFixture postgres)
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync(run.ResourceId, CancellationToken.None);
         var plan = await agent.NextAsync("preview");
-        Assert.Contains(before.PublicKey, plan.InputJson);
+        var keys = JsonNode.Parse(plan.InputJson)!["variables"]!["guest"]!["sshAuthorizedKeys"]!.AsArray();
+        Assert.Contains(keys, k => k!.GetValue<string>() == before.PublicKey);
         Assert.Equal(before.PublicKey, (await KeyAsync(server)).PublicKey);
+    }
+
+    [Fact]
+    public async Task A_playbook_that_ran_nothing_on_the_guest_proves_nothing_about_the_key()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await ConfigureAsync(server);
+        await ConfigureRunTests.PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, new JsonObject
+        {
+            ["exitCode"] = 0,
+            ["tasks"] = 0,
+            ["recap"] = new JsonObject { ["ok"] = 0, ["changed"] = 0 },
+        });
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        Assert.Null((await KeyAsync(server)).VerifiedAt);
     }
 
     [Fact]

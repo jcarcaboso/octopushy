@@ -115,7 +115,7 @@ public sealed partial class RunEngine
                 return;
         }
 
-        await RecordVerifiedKeyAsync(db, run, cancellationToken);
+        await RecordVerifiedKeyAsync(db, run, step, cancellationToken);
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;
@@ -138,12 +138,18 @@ public sealed partial class RunEngine
             key.ProvisionedAt = now;
     }
 
-    /// <summary>A playbook logged in with Octopushy's key alone and finished, which is evidence the key works.</summary>
-    private async Task RecordVerifiedKeyAsync(OctopushyDb db, Run run, CancellationToken cancellationToken)
+    /// <summary>
+    /// A playbook logged in with Octopushy's key alone, which is evidence the key works. It takes a
+    /// task that ran on the guest: a playbook can finish without ever connecting.
+    /// </summary>
+    private async Task RecordVerifiedKeyAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {
         var context = RunContext.Parse(run.Context);
         if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(run.ResourceId)
             || !context.SecretVersions.TryGetValue(SecretNames.AnsibleSshKey, out var version))
+            return;
+        var recap = step.Outputs is { } outputs ? JsonNode.Parse(outputs)?["recap"] : null;
+        if ((recap?["ok"]?.GetValue<int>() ?? 0) + (recap?["changed"]?.GetValue<int>() ?? 0) == 0)
             return;
         var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken);
         if (key is not null)
