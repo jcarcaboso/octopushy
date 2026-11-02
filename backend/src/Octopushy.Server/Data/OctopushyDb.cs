@@ -17,6 +17,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
     public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
 
     public DbSet<GuestConfiguration> GuestConfigurations => Set<GuestConfiguration>();
+    public DbSet<GuestScheduleState> GuestSchedules => Set<GuestScheduleState>();
     public DbSet<GuestAccessKey> GuestAccessKeys => Set<GuestAccessKey>();
 
     public DbSet<Run> Runs => Set<Run>();
@@ -113,6 +114,12 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasKey(x => x.ResourceId);
             e.HasOne<Resource>().WithOne().HasForeignKey<GuestConfiguration>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.Snapshot).HasColumnType("jsonb");
+        });
+
+        model.Entity<GuestScheduleState>(e =>
+        {
+            e.HasKey(x => new { x.ResourceId, x.Action, x.Cron });
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
         });
 
         model.Entity<GuestAccessKey>(e =>

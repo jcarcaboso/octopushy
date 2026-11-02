@@ -5,6 +5,7 @@ using DotNet.Testcontainers.Configurations;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -17,6 +18,30 @@ using Octopushy.Server.Store;
 using Testcontainers.PostgreSql;
 
 namespace Octopushy.Tests.Server;
+
+/// <summary>The server's time, for a test that has to say what it is. It is real time until one does.</summary>
+public sealed class TestClock : TimeProvider
+{
+    private int _readsLeft;
+    private DateTimeOffset? _then;
+
+    public DateTimeOffset? Now { get; set; }
+
+    /// <summary>Moves the time on after this many reads, to land a change of time inside an operation.</summary>
+    public void MoveOnAfter(int reads, DateTimeOffset then) => (_readsLeft, _then) = (reads, then);
+
+    public override DateTimeOffset GetUtcNow()
+    {
+        var now = Now ?? System.GetUtcNow();
+        if (_then is { } then && _readsLeft-- <= 0)
+        {
+            Now = then;
+            _then = null;
+        }
+
+        return now;
+    }
+}
 
 [CollectionDefinition(Name)]
 public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
@@ -86,9 +111,17 @@ public sealed class PostgresFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
         await command.ExecuteNonQueryAsync();
-        // Each test owns a unique database; retaining an idle pool per database
-        // exhausts this shared disposable server as the suite grows.
-        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { Database = name, Pooling = false }.ConnectionString;
+        // Each test owns a unique database, so a pool that stayed open for each one would
+        // exhaust this shared disposable server as the suite grows. Pools empty themselves within
+        // seconds instead: turning pooling off makes every query log in again, which is most of
+        // what these tests would then spend their time on.
+        var connectionString = new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
+        {
+            Database = name,
+            MaxPoolSize = 10,
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        }.ConnectionString;
         _databases.Add(connectionString);
         return connectionString;
     }
@@ -104,13 +137,15 @@ public sealed class ServerHarness : IAsyncDisposable
     private readonly string _connectionString;
     private readonly string _dataDirectory;
     private readonly Dictionary<string, string>? _settings;
+    private readonly TimeProvider? _clock;
     private HttpClient? _trustClient;
 
-    private ServerHarness(string connectionString, TestRepository repository, Dictionary<string, string>? settings)
+    private ServerHarness(string connectionString, TestRepository repository, Dictionary<string, string>? settings, TimeProvider? clock)
     {
         Repository = repository;
         _connectionString = connectionString;
         _settings = settings;
+        _clock = clock;
         _dataDirectory = Path.Combine(Path.GetTempPath(), "octopushy-server-" + Guid.NewGuid().ToString("N"));
         _factory = CreateFactory();
     }
@@ -127,6 +162,11 @@ public sealed class ServerHarness : IAsyncDisposable
             {
                 builder.UseSetting(key, value);
             }
+
+            if (_clock is { } clock)
+            {
+                builder.ConfigureTestServices(services => services.AddSingleton(clock));
+            }
         });
 
     public TestRepository Repository { get; }
@@ -137,9 +177,9 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public string DataDirectory => _dataDirectory;
 
-    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null)
+    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null, TimeProvider? clock = null)
     {
-        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings);
+        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock);
         _ = harness._factory.Server;
         harness.Commit("Initial definitions");
         await harness.WithDbAsync(async db =>

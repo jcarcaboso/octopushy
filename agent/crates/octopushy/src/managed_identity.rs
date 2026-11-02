@@ -40,7 +40,16 @@ pub fn valid_uuid(value: &str) -> bool {
         })
         && value != "00000000-0000-0000-0000-000000000000"
 }
-fn lock(paths: &StatePaths, generation: &str) -> Result<fs::File> {
+/// Holds the lock until it is dropped, and releases it by asking rather than by closing.
+/// `flock` belongs to the open file description, which a child forked by any other thread of
+/// this process shares until it execs, so closing our descriptor can leave the lock held.
+struct IdentityLock(fs::File);
+impl Drop for IdentityLock {
+    fn drop(&mut self) {
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+fn lock(paths: &StatePaths, generation: &str) -> Result<IdentityLock> {
     if !valid_uuid(generation) {
         bail!("generation must be a nonzero canonical UUID");
     }
@@ -59,7 +68,7 @@ fn lock(paths: &StatePaths, generation: &str) -> Result<fs::File> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         bail!("managed identity is busy; inspect before retry");
     }
-    Ok(file)
+    Ok(IdentityLock(file))
 }
 fn load(paths: &StatePaths, generation: &str) -> Result<Prepared> {
     let prepared: Prepared =

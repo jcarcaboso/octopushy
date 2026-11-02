@@ -22,6 +22,8 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Orchestrator
                 {
                     nextObserveCheck = clock.GetUtcNow() + ObserveCheck;
                     await planner.ScheduleObservesAsync(stoppingToken);
+                    await planner.FireSchedulesAsync(clock.GetUtcNow(), stoppingToken);
+                    await planner.ExpireScheduledAsync(clock.GetUtcNow(), stoppingToken);
                 }
             }
             catch (Exception e) when (e is not OperationCanceledException)

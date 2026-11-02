@@ -23,6 +23,8 @@ setup:
     machine_tools_channel: stable
   secrets:                        # extra var -> variable store key; only the playbook gets these
     machine_tools_token: { store: machines/krb-app-01/tools-token }
+  schedules:                      # actions of the recipe, at times in the lab's timezone
+    - { action: update-tools, cron: "0 6 * * *" }
 access:
   sshAuthorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example
