@@ -182,7 +182,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             return (GuestStatuses.Retired, null);
         if (resource.MissingSince is not null && active is null)
             return (GuestStatuses.Missing, "The folder was deleted. Nothing has changed on the guest. Restore the folder to keep the service, or forget it once it is gone.");
-        if (!resource.Valid)
+        if (!resource.Valid && resource.MissingSince is null)
             return (GuestStatuses.Invalid, "Its definition or its guest's has errors.");
         if (active is not null && Waiting(active) is { } queued)
             return (GuestStatuses.Queued, queued);
@@ -663,7 +663,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     /// </summary>
     public async Task<GuestRelease?> ConfigureReleaseAsync(Resource resource, CancellationToken cancellationToken)
     {
-        if (resource.RetiredAt is not null || !resource.Valid)
+        // A missing service's Valid says how it last stood, and its removal is built from a revision that was valid.
+        if (resource.RetiredAt is not null || !resource.Valid && resource.MissingSince is null)
             return null;
         ConfigureInputs inputs;
         if (resource.MissingSince is not null)

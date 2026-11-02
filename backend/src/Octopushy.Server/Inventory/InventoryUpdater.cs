@@ -126,9 +126,10 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             foreach (var resource in byAddress.Values.Where(r => !seen.Contains(r.Id) && r.RetiredAt is null))
             {
                 // Services are found through their guest. One that cannot be read says nothing about their folders.
-                if (resource.Kind == ResourceKinds.Service && repository.Resource(resource.ParentAddress ?? "") is { Json: null })
+                if (resource.Kind == ResourceKinds.Service && resource.MissingSince is null && repository.Resource(resource.ParentAddress ?? "") is { Json: null })
                 {
                     resource.Valid = false;
+                    resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(resource.ParentAddress!).ToList(), IssueJson);
                     await SupersedeAsync(db, activeRuns, revision, resource, $"The guest's definition is invalid in {Short(revision.Commit)}.", cancellationToken);
                     continue;
                 }

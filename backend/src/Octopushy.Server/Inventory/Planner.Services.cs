@@ -75,6 +75,25 @@ public sealed partial class Planner
                 .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
             if (revision is null) return 0;
 
+            // A removal that had to wait for a run to end: deleting the folder was the only other time anything looks.
+            var removals = new List<Run>();
+            var head = await revisions.GetAsync(revision.Commit, cancellationToken);
+            foreach (var missing in await db.Resources.Where(r => r.Kind == ResourceKinds.Service && r.MissingSince != null && r.RetiredAt == null).ToListAsync(cancellationToken))
+            {
+                try
+                {
+                    if (await ServiceRemoval.ProposeAsync(db, revisions, factory, head, missing, revision, clock.GetUtcNow(), force: false, cancellationToken) is { } removal)
+                        removals.Add(removal);
+                }
+                catch (RunException)
+                {
+                    // Said when the folder went; nothing here would add to it, every pass.
+                }
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            await engine.AddRunsAsync(db, removals, cancellationToken);
+
             var due = await db.GuestConfigurations
                 .Where(c => c.DesiredHash != null && c.DesiredHash != c.ProposedHash)
                 .Join(db.Resources.Where(r => r.Kind == ResourceKinds.Service && r.Valid && r.RetiredAt == null && r.MissingSince == null
@@ -82,9 +101,9 @@ public sealed partial class Planner
                             && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled)),
                     c => c.ResourceId, r => r.Id, (c, r) => new { Configuration = c, Resource = r })
                 .ToListAsync(cancellationToken);
-            if (due.Count == 0) return 0;
+            if (due.Count == 0) return removals.Count;
 
-            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var repository = head;
             var runs = new List<Run>();
             foreach (var item in due)
             {

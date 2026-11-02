@@ -51,14 +51,14 @@ public static class GuestWork
             return "The guest is retired.";
         if (guest.MissingSince is not null || guest.RetiredAt is not null || !guest.Valid)
             return "The guest's definition is missing or invalid.";
-        // A plan that was rejected, cancelled or refused changed nothing, so it holds nothing back. One that may have changed something does.
+        // A plan that was rejected, cancelled or refused changed nothing, so it says nothing about the machine. The
+        // newest run that did decides: an apply that failed stays the last word until one works.
         var lastProvision = await db.Runs.AsNoTracking()
-            .Where(r => r.ResourceId == guest.Id && r.Operation == Operations.Provision)
-            .OrderByDescending(r => r.CreatedAt)
-            .Select(r => new { r.Status, Changed = db.Attempts.Any(a => a.RunId == r.Id && a.Mutating) })
-            .FirstOrDefaultAsync(cancellationToken);
-        if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision is null
-            || lastProvision.Status != RunStatuses.Succeeded && (!RunStatuses.IsTerminal(lastProvision.Status) || lastProvision.Changed))
+            .Where(r => r.ResourceId == guest.Id && r.Operation == Operations.Provision
+                && (r.Status == RunStatuses.Succeeded || db.Attempts.Any(a => a.RunId == r.Id && a.Mutating)
+                    || r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled))
+            .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
+        if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
             return "Waiting for the guest's provisioning to catch up with its definition.";
         if (definition.SetupRecipe is { } recipe && repository.Recipes.GetValueOrDefault(recipe)?.Configure?.OnChange is not null)
         {

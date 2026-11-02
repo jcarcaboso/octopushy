@@ -151,7 +151,7 @@ actions:
 - **With none,** nothing runs. The service keeps running on the guest, shown as *missing*.
 - **Forget** stops tracking a missing service and changes nothing on the guest. It is the way out of a removal that cannot succeed.
 - **If no run ever reached the guest,** there is nothing to remove, so it is retired at once. A deployment that failed partway did reach
-  it, and one still going is waited for.
+  it, and one still going is waited for: the removal is proposed when it ends.
 - **Restoring the folder** cancels a removal that has not started.
 - **What the action deletes is the recipe's choice.** `ha-db`'s stop their services and leave the data on disk.
 - **Retiring the guest takes its services with it.** **New, and narrower than rule 11:** the guest's own destroy

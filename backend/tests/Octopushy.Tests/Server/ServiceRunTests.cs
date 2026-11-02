@@ -563,9 +563,88 @@ public class ServiceRunTests(PostgresFixture postgres)
         // It fails partway, so something is on the guest and a person can have it removed.
         await agent.ReportAsync(playbook, Outcome.Failed, error: "failed partway");
         await server.TickAsync();
-        (await http.PostAsJsonAsync($"/api/services/{resource.Id}/run", new { action = (string?)null })).EnsureSuccessStatusCode();
+        await ScheduleAsync(server);
         var removal = await server.LatestRunAsync(address, Operations.Configure);
         Assert.StartsWith("removal:", removal.InputsHash);
+
+        // Once.
+        var count = await ConfigureRunsAsync(server, address);
+        await ScheduleAsync(server);
+        Assert.Equal(count, await ConfigureRunsAsync(server, address));
+    }
+
+    [Fact]
+    public async Task A_removal_stays_trustable_when_the_guest_broke_after_the_folder_went()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab(actions: Removal));
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await server.WithDbAsync(async db =>
+        {
+            (await db.StoreEntries.FirstAsync(e => e.Key == "svc/password")).Protected = true;
+            await db.SaveChangesAsync();
+        });
+        await ScheduleAsync(server);
+        await server.TickAsync();
+        var alpha = (await server.ResourceAsync(Alpha)).Id;
+        foreach (var id in new[] { alpha, (await server.ResourceAsync(Beta)).Id })
+            await TrustAsync(http, id);
+        await PreviewAsync(agent);
+        await PreviewAsync(agent);
+        await server.TickAsync();
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+
+        server.Repository.Write(Repository.AlphaPath, Repository.Service().Replace("greeting: hello", "greeting: newer"));
+        server.Commit("Change alpha");
+        await server.SyncAndTrustAsync(http);
+        await TrustAsync(http, alpha);
+
+        server.Repository.Delete($"{ServicesFolder}/alpha");
+        server.Commit("Remove alpha");
+        await server.SyncAsync();
+        var text = await File.ReadAllTextAsync(Path.Combine(server.Repository.Root, Repository.GuestPath));
+        server.Repository.Write(Repository.GuestPath, ("notAField: true\n" + text).TrimEnd('\n'));
+        server.Commit("Break the guest");
+        await server.SyncAsync();
+        server.Repository.Write(Repository.GuestPath, text.TrimEnd('\n'));
+        server.Commit("Fix the guest");
+        await server.SyncAndTrustAsync(http);
+        await ScheduleAsync(server);
+        await server.TickAsync();
+
+        Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Alpha, Operations.Configure)).Status);
+        await TrustAsync(http, alpha);
+        await server.TickAsync();
+        Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(Alpha, Operations.Configure)).Status);
+    }
+
+    [Fact]
+    public async Task A_rejected_plan_does_not_hide_an_apply_that_failed()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab(labPolicy: "policy: { destructive: manual }"));
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        var planner = server.Services.GetRequiredService<Planner>();
+        var resource = await server.ResourceAsync(Guest);
+
+        await planner.PlanGuestAsync(resource.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextKeepingOthersAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact("one"));
+        await agent.ReportAsync(await agent.NextKeepingOthersAsync("apply"), Outcome.Failed, error: "partway");
+        await server.TickAsync();
+
+        await planner.PlanGuestAsync(resource.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextKeepingOthersAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("two"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var step = run.Steps.Single(s => s.Name == StepNames.Approval);
+        (await http.PostAsJsonAsync($"/api/runs/{run.Id}/steps/{step.Id}/reject", new { note = "no" })).EnsureSuccessStatusCode();
+        await server.TickAsync();
+
+        await ScheduleAsync(server);
+        Assert.Equal(0, await ConfigureRunsAsync(server, Alpha));
     }
 
     [Fact]

@@ -6,7 +6,7 @@
     victoriametrics_data: /var/lib/victoria-metrics
     victoriametrics_port: "{{ octopushy.ports | map(attribute='port') | first | default(8428) }}"
     victoriametrics_release: "/opt/victoria-metrics/v{{ victoriametrics_version }}"
-    victoriametrics_days: {d: 1, w: 7, y: 365}
+    victoriametrics_days: {d: 1, w: 7, M: 30, y: 365}   # M only reads what an older value recorded
 
 # systemd takes a quoted value as it is, as long as the quote does not appear in it.
 - name: Check that the password can be written down
