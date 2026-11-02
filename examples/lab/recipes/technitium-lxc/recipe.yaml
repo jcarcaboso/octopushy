@@ -3,7 +3,7 @@ description: Native Technitium DNS Server in an unprivileged container; see docs
 operation: provision
 executor: opentofu
 root: ../../modules/opentofu/technitium-lxc
-modules: [../../modules/opentofu/proxmox-lxc]   # other files the root uses, so changes reach its guests
+modules: [../../modules/opentofu/lxc-app, ../../modules/opentofu/proxmox-lxc]   # other files the root uses, so changes reach its guests
 inputs: inputs.schema.json
 secrets: [admin_password]                       # each guest names its store key in provision.secrets
 verify: proxmox

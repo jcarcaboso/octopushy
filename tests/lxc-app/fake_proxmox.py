@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""The part of the Proxmox API that bpg/proxmox needs to create a container, and nothing more.
+"""The part of the Proxmox API that bpg/proxmox needs to manage a container, and nothing more.
 
 It creates nothing: it remembers what it was asked for, in requests.log for the test to read,
-and answers as Proxmox does. The container the test connects to is started by run.sh; the
-SSH keys it receives here go to where that container reads them.
+and answers as Proxmox does, including its refusal to delete a protected container. The container
+the test connects to is started by the test; the SSH keys it receives here go to where that
+container reads them. Used by tests/technitium-lxc and tests/ha-db.
+
+    fake_proxmox.py SHARE CERTIFICATE KEY [NODE]
 """
 import http.server
 import json
@@ -14,10 +17,11 @@ import sys
 import urllib.parse
 
 share, certificate, key = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+node_name = sys.argv[4] if len(sys.argv) > 4 else "korriban"
 files = {}
 containers = {}
 firewalls = {}
-UPID = "UPID:korriban:00000001:00000001:00000001:fake:0:root@pam:"
+UPID = f"UPID:{node_name}:00000001:00000001:00000001:fake:0:root@pam:"
 
 
 def stored_config(vmid, container):
@@ -80,7 +84,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/version":
             return self.answer({"version": "9.1.1", "release": "9.1", "repoid": "fake"})
         if path == "/cluster/resources":
-            return self.answer([{"id": f"lxc/{vmid}", "type": "lxc", "vmid": vmid, "node": "korriban",
+            return self.answer([{"id": f"lxc/{vmid}", "type": "lxc", "vmid": vmid, "node": node_name,
                                  "name": container.get("hostname"), "status": container["status"]}
                                 for vmid, container in containers.items()])
         if rest.startswith("query-url-metadata"):
@@ -88,6 +92,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if download := re.fullmatch(r"storage/([^/]+)/download-url", rest):
             volume = f"{download.group(1)}:vztmpl/{form['filename']}"
             files[volume] = {"volid": volume, "content": "vztmpl", "format": "tzst", "size": 1, "ctime": 1}
+            return self.answer(UPID)
+        if (content := re.fullmatch(r"storage/([^/]+)/content/(.+)", rest)) and method == "DELETE":
+            files.pop(urllib.parse.unquote(content.group(2)), None)
             return self.answer(UPID)
         if re.fullmatch(r"storage/[^/]+/content", rest):
             return self.answer(list(files.values()))
@@ -106,12 +113,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if sub in ("/status/start", "/status/reboot"):
                 container["status"] = "running"
                 return self.answer(UPID)
+            if sub in ("/status/stop", "/status/shutdown"):
+                container["status"] = "stopped"
+                return self.answer(UPID)
+            if sub == "" and method == "DELETE":
+                # Proxmox refuses, with a 500, whatever the caller is allowed to do.
+                if str(container.get("protection", "0")) == "1":
+                    return self.answer(None, 500, f"can't remove CT {vmid} - protection mode enabled")
+                del containers[vmid]
+                return self.answer(UPID)
             if sub == "/status/current":
                 return self.answer({"status": container["status"], "vmid": vmid, "name": container.get("hostname")})
             if sub == "/interfaces":
                 return self.answer(interfaces(container))
             if sub == "/config":
                 if method == "PUT":
+                    for removed in form.pop("delete", "").split(","):
+                        container.pop(removed, None)
                     container.update(form)
                     return self.answer(None)
                 return self.answer(stored_config(vmid, container))

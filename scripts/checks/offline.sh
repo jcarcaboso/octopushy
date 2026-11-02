@@ -10,6 +10,7 @@ python3 -m unittest discover -s tests/fedora -p 'test_*.py' -v
 python3 -m unittest discover -s tests/remote-worker -p 'test_*.py' -v
 python3 -m unittest discover -s tests/e2e -p 'test_*.py' -v
 python3 -m unittest discover -s tests/installation-trust -p 'test_*.py' -v
+python3 -m unittest discover -s tests/lxc-app -p 'test_*.py' -v
 python3 tests/technitium/check.py -v
 python3 -m unittest discover -s tests/technitium -p 'test_*.py' -v
 (cd old && python3 -m unittest discover -s tests -v)
