@@ -56,6 +56,12 @@ export function ConfigurePreviewView({ preview }: { preview: ConfigurePreview })
           </ul>
         </details>
       ) : null}
+      {preview.ports ? (
+        <details className="outputs" open>
+          <summary>Ports the playbook applies</summary>
+          <JsonBlock value={preview.ports} />
+        </details>
+      ) : null}
       {preview.vars ? (
         <details className="outputs">
           <summary>Inputs</summary>

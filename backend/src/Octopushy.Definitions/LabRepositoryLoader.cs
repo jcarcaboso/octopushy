@@ -49,6 +49,12 @@ public sealed partial class LabRepositoryLoader
             LoadLab(labDirectory, labs, installations, guests, clusters, entries);
         }
 
+        var services = new List<ServiceDefinition>();
+        foreach (var guest in guests)
+        {
+            LoadServices(guest, services, entries);
+        }
+
         foreach (var recipe in recipes.Values)
         {
             CheckRecipe(recipe);
@@ -99,6 +105,12 @@ public sealed partial class LabRepositoryLoader
             CheckGuest(guest, settings, installations, templates, recipes);
             CheckSetup(guest, recipes, installations);
         }
+
+        foreach (var service in services)
+        {
+            CheckService(service, guests.First(g => g.Address == service.Guest), services, recipes, installations);
+        }
+
         foreach (var duplicate in guests.Where(g => g.ManagedWorker is not null)
                      .GroupBy(g => g.ManagedWorker!.Generation).Where(g => g.Count() > 1))
         {
@@ -109,13 +121,14 @@ public sealed partial class LabRepositoryLoader
 
         CheckClusters(clusters, guests, installations, recipes, settings);
 
-        var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, clusters, settings) }).ToList();
+        var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, services, clusters, settings) }).ToList();
         return new LabRepository(
             _root,
             _repositoryValid ? settings : null,
             labs,
             installations,
             guests,
+            services,
             clusters,
             templates,
             recipes,
@@ -125,7 +138,7 @@ public sealed partial class LabRepositoryLoader
             _repositoryValid);
     }
 
-    private bool IsValid(ResourceEntry entry, List<GuestDefinition> guests, List<ClusterDefinition> clusters, RepositoryDefinition? settings)
+    private bool IsValid(ResourceEntry entry, List<GuestDefinition> guests, List<ServiceDefinition> services, List<ClusterDefinition> clusters, RepositoryDefinition? settings)
     {
         if (!_repositoryValid || settings is null || entry.Json is null)
         {
@@ -149,6 +162,12 @@ public sealed partial class LabRepositoryLoader
         {
             return clusters.FirstOrDefault(c => c.Address == entry.Address) is { } cluster
                 && !_invalidRecipes.Contains(cluster.Recipe);
+        }
+
+        if (entry.Kind == ResourceKind.Service)
+        {
+            return services.FirstOrDefault(s => s.Address == entry.Address) is { } service
+                && !_invalidRecipes.Contains(service.Recipe);
         }
 
         if (entry.Kind != ResourceKind.Guest)
@@ -362,7 +381,8 @@ public sealed partial class LabRepositoryLoader
                     p.Value!["snapshot"] is not null,
                     p.Value!["destructive"]!.GetValue<bool>(),
                     p.Value!["onChange"]?.GetValue<bool>() ?? false,
-                    p.Value!["timeoutMinutes"]?.GetValue<int>()),
+                    p.Value!["timeoutMinutes"]?.GetValue<int>(),
+                    p.Value!["removal"]?.GetValue<bool>() ?? false),
                 StringComparer.Ordinal),
             (json["outcomes"] as JsonObject)?.ToDictionary(
                 p => p.Key,
@@ -478,6 +498,16 @@ public sealed partial class LabRepositoryLoader
         if (configure.Actions.Values.Any(a => a.OnChange && a.UsesAppliedSnapshot))
         {
             Invalid("An onChange action cannot reuse a snapshot: a new machine has none.");
+        }
+
+        if (configure.Actions.Values.Count(a => a.Removal) > 1)
+        {
+            Invalid("At most one action may set removal.");
+        }
+
+        if (configure.Actions.Values.Any(a => a.Removal && (a.OnChange || !a.Destructive)))
+        {
+            Invalid("A removal action has to be destructive, and cannot run on a change.");
         }
     }
 
@@ -1056,6 +1086,64 @@ public sealed partial class LabRepositoryLoader
         }
     }
 
+    private void LoadServices(GuestDefinition guest, List<ServiceDefinition> services, List<ResourceEntry> entries)
+    {
+        foreach (var directory in SubDirectories(Path.Combine(_root, guest.Directory, "services")))
+        {
+            var id = Path.GetFileName(directory);
+            var address = $"{guest.Address}/{id}";
+            var file = Relative(Path.Combine(directory, "service.yaml"));
+            if (!CheckId(id, file, address))
+            {
+                continue;
+            }
+
+            if (!File.Exists(Path.Combine(directory, "service.yaml")))
+            {
+                Warning(file, null, $"The service folder {Relative(directory)} has no service.yaml and is ignored.", address);
+                continue;
+            }
+
+            var (json, document) = ReadDefinition(file, DefinitionKind.Service, address);
+            entries.Add(new ResourceEntry(ResourceKind.Service, address, guest.Address, file, json, false));
+            if (json is null || document is null)
+            {
+                continue;
+            }
+
+            CollectStoreUses(json, address, file, document);
+            services.Add(new ServiceDefinition(
+                id,
+                guest.Address,
+                file,
+                Relative(directory),
+                json,
+                json["deploy"]!["recipe"]!.GetValue<string>(),
+                ParsePolicy(json["policy"]),
+                ParseLabels(json["execution"])));
+        }
+    }
+
+    private void CheckService(ServiceDefinition service, GuestDefinition guest, List<ServiceDefinition> services, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
+    {
+        void Invalid(string pointer, string message) => Error(service.File, LineOf(service.File, pointer), message, service.Address);
+
+        if (guest.ManagedWorker is not null)
+            Invalid("/deploy", "A managed worker runs no services.");
+        var duplicates = service.Ports.GroupBy(p => (p!["port"]!.GetValue<int>(), p["protocol"]!.GetValue<string>())).Where(g => g.Count() > 1);
+        foreach (var duplicate in duplicates)
+            Invalid("/ports", $"Port {duplicate.Key.Item1}/{duplicate.Key.Item2} is declared twice.");
+        // Who is taking a port is a fact about the guest, and only Octopushy can see all of them.
+        foreach (var other in service.Ports.Select(p => (Port: p!["port"]!.GetValue<int>(), Protocol: p["protocol"]!.GetValue<string>())).Distinct())
+        {
+            if (services.Where(s => s.Guest == guest.Address && s.Address != service.Address)
+                    .Any(s => s.Ports.Any(p => p!["port"]!.GetValue<int>() == other.Port && p["protocol"]!.GetValue<string>() == other.Protocol)))
+                Invalid("/ports", $"Port {other.Port}/{other.Protocol} is also declared by another service on {guest.Id}.");
+        }
+
+        CheckBinding(service.File, service.Address, "/deploy", "deploy", service.Json["deploy"], service.Recipe, guest, recipes, installations, "A guest with services");
+    }
+
     private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
     {
         if (guest.SetupRecipe is not { } id)
@@ -1065,41 +1153,48 @@ public sealed partial class LabRepositoryLoader
             return;
         }
 
-        void Invalid(string pointer, string message) => Error(guest.File, LineOf(guest.File, pointer), message, guest.Address);
-
         if (guest.ManagedWorker is not null)
-            Invalid("/setup/recipe", "A managed worker is configured by its image; it cannot have a setup recipe.");
+            Error(guest.File, LineOf(guest.File, "/setup/recipe"), "A managed worker is configured by its image; it cannot have a setup recipe.", guest.Address);
+        CheckBinding(guest.File, guest.Address, "/setup", "setup", guest.Json["setup"], id, guest, recipes, installations, "A guest with a setup recipe");
+    }
+
+    /// <summary>What a guest's <c>setup</c> and a service's <c>deploy</c> have in common: a configure recipe, and what it is given.</summary>
+    private void CheckBinding(string file, string address, string pointer, string section, JsonNode? binding, string id, GuestDefinition guest,
+        Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations, string who)
+    {
+        void Invalid(string at, string message) => Error(file, LineOf(file, at), message, address);
+
         if (!recipes.TryGetValue(id, out var recipe))
         {
-            Invalid("/setup/recipe", $"The recipe '{id}' does not exist under recipes/.");
+            Invalid($"{pointer}/recipe", $"The recipe '{id}' does not exist under recipes/.");
             return;
         }
 
         if (recipe.Configure is not { } configure)
         {
-            Invalid("/setup/recipe", $"The recipe '{id}' does not configure guests.");
+            Invalid($"{pointer}/recipe", $"The recipe '{id}' does not configure guests.");
             return;
         }
 
         if (ConfigureInputs.AddressOf(guest) is null)
-            Invalid("/access", "A guest with a setup recipe needs access.address, or a static or reserved address.");
+            Invalid(pointer, $"{who} needs access.address, or a static or reserved address.");
         foreach (var field in new[] { "user", "sshKey", "hostKey" })
         {
             if (guest.Json["access"]?[field] is null)
-                Invalid("/access", $"A guest with a setup recipe needs access.{field}.");
+                Invalid(pointer, $"{who} needs access.{field}.");
         }
 
-        var secrets = ConfigureInputs.Secrets(guest, "secrets");
-        var files = ConfigureInputs.Secrets(guest, "secretFiles");
+        var secrets = ConfigureInputs.Secrets(binding, "secrets");
+        var files = ConfigureInputs.Secrets(binding, "secretFiles");
         foreach (var name in configure.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
         {
-            Invalid("/setup", $"The recipe '{id}' needs setup.secrets.{name} or setup.secretFiles.{name}.");
+            Invalid(pointer, $"The recipe '{id}' needs {section}.secrets.{name} or {section}.secretFiles.{name}.");
         }
 
-        var inputs = (guest.Json["setup"]?["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
+        var inputs = (binding?["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
         foreach (var name in secrets.Keys.Intersect(files.Keys).Concat(secrets.Keys.Concat(files.Keys).Intersect(inputs)))
         {
-            Invalid("/setup", $"{name} is set more than once in setup.");
+            Invalid(pointer, $"{name} is set more than once in {section}.");
         }
 
         // A token that can write to Proxmox is not an input to a playbook, and neither is one
@@ -1111,15 +1206,15 @@ public sealed partial class LabRepositoryLoader
         foreach (var (name, reference) in delivered)
         {
             if (connectionKeys.Contains(reference.Key))
-                Invalid("/setup", $"{name} cannot use a Proxmox API token.");
+                Invalid(pointer, $"{name} cannot use a Proxmox API token.");
         }
 
         if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
         {
-            var instance = guest.Json["setup"]?["inputs"]?.DeepClone() ?? new JsonObject();
+            var instance = binding?["inputs"]?.DeepClone() ?? new JsonObject();
             foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
-                Invalid($"/setup/inputs{error.Pointer}", $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})");
+                Invalid($"{pointer}/inputs{error.Pointer}", $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})");
             }
         }
     }

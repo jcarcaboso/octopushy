@@ -91,6 +91,34 @@ export function useGuest(id: string) {
   });
 }
 
+export function useService(id: string) {
+  return useQuery({
+    queryKey: ["service", id],
+    queryFn: () => unwrap(api.GET("/api/services/{id}", { params: { path: { id } } })),
+    refetchInterval: (query) => (query.state.data?.service.activeRun ? 4_000 : 15_000),
+  });
+}
+
+export function useRunService(id: string) {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (action: string) => unwrap(api.POST("/api/services/{id}/run", { params: { path: { id } }, body: { action } })),
+    onSuccess: () => refresh(),
+  });
+}
+
+export function useForgetService(id: string) {
+  const client = useQueryClient();
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/services/{id}/forget", { params: { path: { id } } })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["service", id] });
+      refresh();
+    },
+  });
+}
+
 export function useCreateDiskReporter(id: string) {
   const client = useQueryClient();
   return useMutation({
@@ -588,6 +616,21 @@ export function useTrustGuest() {
     mutationFn: ({ id, ...body }: TrustGuestRequest & { id: string }) =>
       unwrap(api.POST("/api/guests/{id}/trust", { params: { path: { id } }, body })),
     onSuccess: () => refreshRuns(),
+  });
+}
+
+/** Trust for a guest's setup or a service: what a configure run of it would carry. */
+export function useTrustConfigure() {
+  const client = useQueryClient();
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, ...body }: TrustGuestRequest & { id: string }) =>
+      unwrap(api.POST("/api/resources/{id}/trust-configure", { params: { path: { id } }, body })),
+    onSuccess: (_result, { id }) => {
+      void client.invalidateQueries({ queryKey: ["service", id] });
+      refreshRuns();
+    },
   });
 }
 

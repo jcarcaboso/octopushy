@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "victoriametrics inputs",
+  "type": "object",
+  "properties": {
+    "victoriametrics_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?![\\s\\S])" },
+    "victoriametrics_sha256": { "description": "Of the linux-amd64 release archive.", "type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])" },
+    "victoriametrics_retention": { "description": "A number of days, weeks, months or years.", "type": "string", "pattern": "^[1-9][0-9]*[dwMy](?![\\s\\S])" },
+    "victoriametrics_username": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?![\\s\\S])" },
+    "victoriametrics_keep": { "description": "A regular expression: only metrics whose name matches are stored.", "type": "string", "pattern": "^[A-Za-z0-9_:.*|()]+(?![\\s\\S])" },
+    "victoriametrics_memory": { "type": "string", "pattern": "^[0-9]+[KMG]iB(?![\\s\\S])" },
+    "credentials_revision": { "description": "A store change starts no run: raise this to apply a new password.", "type": "integer", "minimum": 1 }
+  },
+  "required": ["victoriametrics_version", "victoriametrics_sha256", "victoriametrics_retention", "victoriametrics_username", "credentials_revision"],
+  "additionalProperties": false
+}

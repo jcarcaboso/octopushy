@@ -1,0 +1,11 @@
+---
+# Stops the service and leaves the data for a person to keep or delete.
+- name: Remove VictoriaMetrics
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Stop VictoriaMetrics
+      ansible.builtin.systemd_service:
+        name: victoria-metrics
+        enabled: false
+        state: stopped

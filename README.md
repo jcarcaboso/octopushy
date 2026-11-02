@@ -15,14 +15,16 @@ sequence, see [Progress and next steps](docs/progress-and-next-steps.md).
 verified, and retired; installations are observed through the Proxmox API. Optional
 post-provision setup installs the disk reporter; the [repository editor](docs/repository-editor.md)
 edits the lab repository in drafts and publishes them as commits. A guest can be
-[configured by Ansible](docs/guest-configuration.md) once it is provisioned. General
-services, and DNS come later. The first Python proof of concept is archived
+[configured by Ansible](docs/guest-configuration.md) once it is provisioned. DNS and a
+Compose runtime come later. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
 [Native Technitium DNS in Proxmox containers](docs/technitium-lxc.md) is provisioned
 the same way, with its password kept out of saved plans. Declared as a
 [cluster](docs/technitium-lxc.md#a-cluster), Octopushy forms it, joins its members, owns
 its blocklists and shared settings, and verifies every member on every run.
+[Services](docs/services.md) are the layer above a machine: each is a `service.yaml` under a guest, deployed by Ansible
+with its own approval, status and failures, as `ha-db` does with PostgreSQL and VictoriaMetrics in one container.
 A guest marked `stateful` keeps its [data](docs/lxc-recipes.md#stateful-guests): a plan that would replace or
 destroy it stops before approval, and a first deployment that failed can still be retried.
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)

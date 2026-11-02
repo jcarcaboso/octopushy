@@ -123,7 +123,13 @@ public sealed record AnsibleContext(
     IReadOnlyList<string> SecretFiles,
     Dictionary<string, AnsibleOutcome> Outcomes,
     /// <summary>What changed under the recipe and its project since the guest's last successful run; null when it has none.</summary>
-    IReadOnlyList<string>? ChangedFiles);
+    IReadOnlyList<string>? ChangedFiles,
+    /// <summary>The service this run deploys, or null for a guest's setup. It uses the guest's connection either way.</summary>
+    string? Service = null,
+    /// <summary>What the service declares it listens on, for the playbook to apply and a person to see.</summary>
+    JsonArray? Ports = null,
+    /// <summary>This run removes a service whose folder was deleted.</summary>
+    bool Removal = false);
 
 /// <summary>A declared outcome, as the run was built with it.</summary>
 public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);

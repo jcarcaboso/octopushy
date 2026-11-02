@@ -1,0 +1,5 @@
+# Managed by Octopushy.
+listen_addresses = '*'
+{% for name, value in (postgresql_settings | default({})).items() %}
+{{ name }} = '{{ value }}'
+{% endfor %}

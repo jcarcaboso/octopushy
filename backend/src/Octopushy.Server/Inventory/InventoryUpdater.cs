@@ -35,6 +35,14 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 byAddress.Remove(previous);
                 renamed.Address = guest.Address;
                 byAddress[guest.Address] = renamed;
+                // A service's address starts with its guest's, and its identity goes with it.
+                foreach (var service in byAddress.Values.Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == previous).ToList())
+                {
+                    byAddress.Remove(service.Address);
+                    service.Address = guest.Address + service.Address[previous.Length..];
+                    service.ParentAddress = guest.Address;
+                    byAddress[service.Address] = service;
+                }
             }
         }
 
@@ -117,10 +125,13 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 await WithdrawAsync(db, activeRuns, revision, resource, $"The definition of {resource.Address} disappeared in {Short(revision.Commit)}.",
                     cancellationToken, keepRemoval: true);
                 // Deleting a folder asks for removal; the destructive policy decides whether it waits for approval.
-                if (resource.Kind != ResourceKinds.Guest) continue;
+                if (resource.Kind is not (ResourceKinds.Guest or ResourceKinds.Service)) continue;
                 try
                 {
-                    if (await GuestRemoval.ProposeAsync(db, revisions, factory, repository, resource, revision, force: false, cancellationToken) is { } removal)
+                    var removal = resource.Kind == ResourceKinds.Guest
+                        ? await GuestRemoval.ProposeAsync(db, revisions, factory, repository, resource, revision, force: false, cancellationToken)
+                        : await ServiceRemoval.ProposeAsync(db, revisions, factory, repository, resource, revision, now, force: false, cancellationToken);
+                    if (removal is not null)
                         runs.Add(removal);
                 }
                 catch (RunException error)
@@ -208,6 +219,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         }
 
         await UpdateConfigurationsAsync(db, activeRuns, revision, repository, guests, cancellationToken);
+        await UpdateServicesAsync(db, activeRuns, revision, repository, byAddress, seen, cancellationToken);
 
         foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Installation && seen.Contains(r.Id) && r.Valid))
         {
@@ -279,6 +291,46 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
     }
 
     /// <summary>
+    /// The same for each service. A service's definition may be fine while its guest is not ready: that
+    /// is the scheduler's to wait for, and the wanted hash is recorded regardless.
+    /// </summary>
+    private async Task UpdateServicesAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, LabRepository repository,
+        Dictionary<string, Resource> byAddress, HashSet<Guid> seen, CancellationToken cancellationToken)
+    {
+        var configurations = await db.GuestConfigurations.ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Service && seen.Contains(r.Id) && r.RetiredAt is null).ToList())
+        {
+            var service = repository.Service(resource.Address);
+            configurations.TryGetValue(resource.Id, out var configuration);
+            var usable = resource.Valid && service is not null && repository.IsValid(service.Guest) && repository.Guest(service.Guest)!.Retired is false;
+            if (configuration is null)
+            {
+                if (!usable)
+                    continue;
+                configuration = new GuestConfiguration { ResourceId = resource.Id };
+                db.GuestConfigurations.Add(configuration);
+                configurations[resource.Id] = configuration;
+            }
+
+            var hash = usable ? ConfigureInputs.Build(repository, service!).Hash : null;
+            if (configuration.DesiredHash == hash)
+                continue;
+            configuration.DesiredHash = hash;
+            // A folder that came back wants what it had: its removal is what was proposed last, not a deployment.
+            if (configuration.ProposedHash?.StartsWith("removal:", StringComparison.Ordinal) == true)
+                configuration.ProposedHash = configuration.AppliedHash;
+            configuration.DesiredRevisionId = usable ? revision.Id : configuration.DesiredRevisionId;
+            // A restored folder comes back here too, and that cancels a removal that has not started.
+            foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Configure
+                && r.RevisionId != revision.Id && RunEngine.CanSupersede(r)).ToList())
+            {
+                await engine.CancelInternalAsync(db, run.Id, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+                activeRuns.Remove(run);
+            }
+        }
+    }
+
+    /// <summary>
     /// A bound guest keeps its installation and VMID; changing them would silently point the
     /// guest at another VM. A VMID bound to one guest cannot be claimed by another.
     /// </summary>
@@ -311,8 +363,8 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         var cancelled = false;
         foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id).ToList())
         {
-            // A guest that stays deleted keeps its proposed removal.
-            if (keepRemoval && run.Operation == Operations.Retire && RunContext.Parse(run.Context).DefinitionRemovedIn is not null)
+            // A guest or service that stays deleted keeps its proposed removal.
+            if (keepRemoval && RunContext.Parse(run.Context).DefinitionRemovedIn is not null)
                 continue;
             if (RunEngine.CanSupersede(run))
             {
@@ -349,6 +401,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         ResourceKind.Lab => ResourceKinds.Lab,
         ResourceKind.Installation => ResourceKinds.Installation,
         ResourceKind.Cluster => ResourceKinds.Cluster,
+        ResourceKind.Service => ResourceKinds.Service,
         _ => ResourceKinds.Guest,
     };
 

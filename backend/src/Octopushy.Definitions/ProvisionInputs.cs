@@ -155,7 +155,7 @@ public sealed record ProvisionInputs(
     }
 
     /// <summary>A hash of every file below a repository directory, by relative path and content, except <paramref name="except"/>.</summary>
-    public static string TreeHash(string repositoryRoot, string relativeDirectory, string? except = null)
+    public static string TreeHash(string repositoryRoot, string relativeDirectory, string? except = null, string? exceptDirectory = null)
     {
         var directory = Path.Combine(repositoryRoot, relativeDirectory);
         if (!Directory.Exists(directory))
@@ -166,7 +166,8 @@ public sealed record ProvisionInputs(
         var builder = new StringBuilder();
         foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
                      .Select(f => (Path: Path.GetRelativePath(directory, f).Replace('\\', '/'), Full: f))
-                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform") && f.Path != except)
+                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform") && f.Path != except
+                         && (exceptDirectory is null || !f.Path.StartsWith(exceptDirectory + "/", StringComparison.Ordinal)))
                      .OrderBy(f => f.Path, StringComparer.Ordinal))
         {
             using var stream = File.OpenRead(file.Full);

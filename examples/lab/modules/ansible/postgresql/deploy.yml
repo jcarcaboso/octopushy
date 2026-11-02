@@ -1,0 +1,171 @@
+---
+# Runs again without harm: it installs what is missing, rewrites a file only when it differs, restarts
+# only for what changed, never deletes data, and ends by checking itself. The password is one more
+# thing that converges, which is how it is rolled.
+#
+# What may connect comes from `ports` in service.yaml, as octopushy.ports, so there is one place to say it.
+- name: PostgreSQL
+  hosts: all
+  gather_facts: false
+  vars:
+    postgresql_port: 5432
+    postgresql_service: "postgresql@{{ postgresql_version }}-main"
+    postgresql_conf: "/etc/postgresql/{{ postgresql_version }}/main"
+    postgresql_socket: /var/run/postgresql
+    postgresql_dumps: /var/backups/postgresql
+    postgresql_private: /run/octopushy-postgresql
+    postgresql_port_declared: "{{ octopushy.ports | selectattr('port', 'equalto', postgresql_port) | list }}"
+    postgresql_clients: "{{ postgresql_port_declared | map(attribute='sources') | flatten }}"
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.systemd_service:
+        name: "{{ postgresql_service }}"
+        state: restarted
+    - name: Reload PostgreSQL
+      ansible.builtin.systemd_service:
+        name: "{{ postgresql_service }}"
+        state: reloaded
+  tasks:
+    # Open to everyone is what an unlimited port means, and that is not what a database should be by accident.
+    - name: Require a limit on who may connect
+      ansible.builtin.assert:
+        that: postgresql_clients | length > 0
+        fail_msg: service.yaml has to declare port 5432 with sources.
+
+    - name: Install PostgreSQL
+      ansible.builtin.apt:
+        name: "postgresql-{{ postgresql_version }}"
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 120
+
+    - name: Write the settings
+      ansible.builtin.template:
+        src: settings.conf.j2
+        dest: "{{ postgresql_conf }}/conf.d/octopushy.conf"
+        mode: "0644"
+      notify: Restart PostgreSQL
+
+    # Written whole, so that what is not listed is refused.
+    - name: Write who may connect
+      ansible.builtin.template:
+        src: pg_hba.conf.j2
+        dest: "{{ postgresql_conf }}/pg_hba.conf"
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      notify: Reload PostgreSQL
+
+    - name: Run PostgreSQL
+      ansible.builtin.systemd_service:
+        name: "{{ postgresql_service }}"
+        enabled: true
+        state: started
+
+    - name: Apply settings before anything connects
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for PostgreSQL
+      ansible.builtin.command:
+        argv: [pg_isready, -q, -h, "{{ postgresql_socket }}"]
+      register: postgresql_ready
+      until: postgresql_ready.rc == 0
+      retries: 60
+      delay: 1
+      changed_when: false
+
+    - name: Create the role and the database
+      ansible.builtin.command:
+        argv: [runuser, -u, postgres, --, psql, -X, -q, -v, ON_ERROR_STOP=1, -d, postgres]
+        stdin: |
+          SELECT 'CREATE ROLE {{ postgresql_role }} LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ postgresql_role }}') \gexec
+          SELECT 'CREATE DATABASE {{ postgresql_database }} OWNER {{ postgresql_role }} ENCODING ''UTF8'' LOCALE ''C.UTF-8'' TEMPLATE template0'
+            WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ postgresql_database }}') \gexec
+          ALTER DATABASE {{ postgresql_database }} OWNER TO {{ postgresql_role }};
+      changed_when: false
+
+    - name: Set the password, and check the role
+      block:
+        - name: Make a private directory
+          ansible.builtin.file:
+            path: "{{ postgresql_private }}"
+            state: directory
+            mode: "0700"
+
+        # The one place libpq reads a password from without a command line or an environment.
+        # Ansible's environment goes on the remote command line, so it is not used for this.
+        - name: Write a pgpass file
+          ansible.builtin.copy:
+            content: >-
+              *:*:{{ postgresql_database }}:{{ postgresql_role }}:{{
+              postgresql_password | replace('\', '\\') | replace(':', '\:') }}
+            dest: "{{ postgresql_private }}/pgpass"
+            mode: "0600"
+          no_log: true
+
+        - name: See whether the store's password already works
+          ansible.builtin.command:
+            argv: [psql, -X, -q, -w, -At, -h, "{{ postgresql_socket }}", -U, "{{ postgresql_role }}", -d, "{{ postgresql_database }}", -c, select 1]
+          environment:
+            PGPASSFILE: "{{ postgresql_private }}/pgpass"
+          register: postgresql_login
+          failed_when: false
+          changed_when: false
+
+        # This session is told not to log it: the server would otherwise write a failing statement,
+        # password and all, to its log.
+        - name: Set the password
+          ansible.builtin.command:
+            argv: [runuser, -u, postgres, --, psql, -X, -q, -v, ON_ERROR_STOP=1, -d, postgres]
+            stdin: |
+              SET log_statement = 'none';
+              SET log_min_error_statement = 'panic';
+              ALTER ROLE {{ postgresql_role }} PASSWORD '{{ postgresql_password | replace("'", "''") }}';
+          when: postgresql_login.rc != 0
+          no_log: true
+
+        - name: Check that the role logs in with its password
+          ansible.builtin.command:
+            argv: [psql, -X, -q, -w, -At, -h, "{{ postgresql_socket }}", -U, "{{ postgresql_role }}", -d, "{{ postgresql_database }}", -c, select 1]
+          environment:
+            PGPASSFILE: "{{ postgresql_private }}/pgpass"
+          register: postgresql_checked
+          until: postgresql_checked.rc == 0 and postgresql_checked.stdout == '1'
+          retries: 10
+          delay: 1
+          changed_when: false
+      always:
+        - name: Remove the private directory
+          ansible.builtin.file:
+            path: "{{ postgresql_private }}"
+            state: absent
+
+    - name: Check that the role needs its password
+      ansible.builtin.command:
+        argv: [psql, -X, -q, -w, -At, -h, "{{ postgresql_socket }}", -U, "{{ postgresql_role }}", -d, "{{ postgresql_database }}", -c, select 1]
+      environment:
+        PGPASSFILE: /dev/null
+      register: postgresql_without
+      failed_when: postgresql_without.rc == 0
+      changed_when: false
+
+    - name: Make the dump directory
+      ansible.builtin.file:
+        path: "{{ postgresql_dumps }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0700"
+
+    - name: Write the dump
+      ansible.builtin.template:
+        src: dump.sh.j2
+        dest: /usr/local/sbin/postgresql-dump
+        mode: "0755"
+
+    - name: Schedule the dump
+      ansible.builtin.template:
+        src: dump.cron.j2
+        dest: /etc/cron.d/postgresql-dump
+        mode: "0644"

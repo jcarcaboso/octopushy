@@ -37,6 +37,7 @@
           "snapshot": { "description": "applied reuses what the guest's last successful run prepared.", "enum": ["applied"] },
           "destructive": { "description": "Whether this action can delete data or a service. Octopushy cannot tell from a playbook, so this is required, and true waits under policy.destructive: manual.", "type": "boolean" },
           "onChange": { "description": "Run this action when the guest's setup or the recipe's files change. At most one action says so.", "type": "boolean" },
+          "removal": { "description": "Run this action when a service's folder is deleted. At most one action says so, and it has to be destructive.", "type": "boolean" },
           "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
         },
         "required": ["playbook", "destructive"],

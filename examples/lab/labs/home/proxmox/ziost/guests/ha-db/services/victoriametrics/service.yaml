@@ -1,0 +1,17 @@
+schemaVersion: 1
+description: Long-term storage for Home Assistant's sensors.
+deploy:
+  recipe: victoriametrics
+  inputs:
+    victoriametrics_version: 1.155.0
+    victoriametrics_sha256: 7180e65913d55ab99c0be8f4a3ad17a0fafe5598a21ff6327fecba3190d7b176
+    victoriametrics_retention: 2y # lowering this discards data: deploy refuses, shrink-retention does it
+    victoriametrics_username: homeassistant
+    victoriametrics_keep: ha_value
+    credentials_revision: 1       # raise it, with a new store version, to roll the password
+  secrets:                        # made by the operator; Octopushy never shows it again
+    victoriametrics_password: { store: ha-db/victoriametrics-password }
+ports:
+  - { port: 8428, protocol: tcp } # open to every source: every path but /health asks for the password
+policy:
+  destructive: manual

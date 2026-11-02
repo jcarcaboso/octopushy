@@ -9,6 +9,7 @@ import { RequireAuth } from "./components/RequireAuth";
 import { AgentsPage } from "./pages/AgentsPage";
 import { ClusterPage } from "./pages/ClusterPage";
 import { GuestPage } from "./pages/GuestPage";
+import { ServicePage } from "./pages/ServicePage";
 import { InstallationPage } from "./pages/InstallationPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -42,6 +43,7 @@ export function AppRoutes() {
         <Route index element={<OverviewPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="guests/:id" element={<GuestPage />} />
+        <Route path="services/:id" element={<ServicePage />} />
         <Route path="installations/:id" element={<InstallationPage />} />
         <Route path="clusters/:id" element={<ClusterPage />} />
         <Route path="runs" element={<RunsPage />} />

@@ -406,6 +406,14 @@ public sealed partial class RunEngine(
                         break;
                     }
 
+                    // One change to a guest at a time, its services included. What only looks, and what
+                    // waits for a person, holds nobody back.
+                    if (AssignmentBuilder.ActionFor(step.Name).Mutating && await GuestWork.HolderAsync(db, run, cancellationToken) is { } holder)
+                    {
+                        SetDetail(run, $"Waiting for run #{holder.Number}, which is changing the same guest.");
+                        break;
+                    }
+
                     if (step.Name == StepNames.Apply && context.Cluster is { } members)
                         await ClusterPlan.BindMembersAsync(db, run, members, clock.GetUtcNow(), cancellationToken);
                     CreateAttempt(db, run, step, context);
@@ -481,7 +489,7 @@ public sealed partial class RunEngine(
             return false;
         }
         if (run.Operation is Operations.Provision or Operations.Retire
-            && StatefulGuard.Refusal(await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken), outputs, context) is { } refusal)
+            && await StatefulGuard.RefusalAsync(db, await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken), outputs, context, cancellationToken) is { } refusal)
         {
             step.Status = StepStatuses.Failed;
             step.Detail = refusal;
@@ -515,7 +523,12 @@ public sealed partial class RunEngine(
         var vmNote = recoversVm ? $" The plan recreates {noun} {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
             : removesVm ? $" The plan destroys a {noun} and its disks."
             : "";
-        step.ApprovalRequired = manual || destructiveManual || vmHeld;
+        // A guest's destroy takes its services with it, whatever their own policies say, so a person looks.
+        var services = run.Operation == Operations.Retire
+            ? await db.Resources.AsNoTracking().Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == context.Address && r.RetiredAt == null)
+                .Select(r => r.Address).ToListAsync(cancellationToken)
+            : [];
+        step.ApprovalRequired = manual || destructiveManual || vmHeld || services.Count > 0;
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
@@ -540,6 +553,8 @@ public sealed partial class RunEngine(
                     ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
                     : $"The plan removes entries from the server and destructive is manual (set by {policy.DestructiveSetBy})."
                 : $"Approval is manual (set by {policy.ApprovalSetBy}).") + vmNote;
+        if (services.Count > 0)
+            step.Detail += $" Retiring this guest takes its services with it: {string.Join(", ", services)}.";
         if (prunes)
             step.Detail += $" It removes what nobody declared: {string.Join(", ", ClusterPlan.UndeclaredEntriesIn(InspectionOf(run)))}.";
         if (context.DiskReporter is not null)
@@ -710,6 +725,9 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
+                // Whatever ran in the guest went with it.
+                foreach (var service in await db.Resources.Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == resource.Address && r.RetiredAt == null).ToListAsync(cancellationToken))
+                    service.RetiredAt = now;
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);

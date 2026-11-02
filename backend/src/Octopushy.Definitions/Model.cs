@@ -17,6 +17,7 @@ public enum ResourceKind
     Installation,
     Guest,
     Cluster,
+    Service,
 }
 
 /// <summary>A variable-store key with an optional exact version, written as <c>{ store: key, version: 2 }</c>.</summary>
@@ -223,6 +224,9 @@ public sealed record ConfigureRecipe(
 {
     /// <summary>What runs when a guest or these files change, if anything does.</summary>
     public RecipeAction? OnChange => Actions.Values.FirstOrDefault(a => a.OnChange);
+
+    /// <summary>What runs when a service's folder is deleted, if anything does.</summary>
+    public RecipeAction? Removal => Actions.Values.FirstOrDefault(a => a.Removal);
 }
 
 /// <summary>One thing that can be run from a configure recipe.</summary>
@@ -234,7 +238,28 @@ public sealed record RecipeAction(
     bool UsesAppliedSnapshot,
     bool Destructive,
     bool OnChange,
-    int? TimeoutMinutes);
+    int? TimeoutMinutes,
+    bool Removal = false);
+
+/// <summary>
+/// One deployment of something on a guest: a resource of its own, with its own status, approval and
+/// failures. <see cref="Guest"/> is the guest's address. Its code may be a shared recipe; its definition is not shared.
+/// </summary>
+public sealed record ServiceDefinition(
+    string Id,
+    string Guest,
+    string File,
+    string Directory,
+    JsonObject Json,
+    string Recipe,
+    PolicySettings? Policy,
+    IReadOnlyList<string>? AgentLabels)
+{
+    public string Address => $"{Guest}/{Id}";
+
+    /// <summary>What the service declares it listens on, as written.</summary>
+    public JsonArray Ports => Json["ports"]?.DeepClone().AsArray() ?? [];
+}
 
 /// <summary>A result a playbook may report that is neither success nor failure.</summary>
 public sealed record RecipeOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result);

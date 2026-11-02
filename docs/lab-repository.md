@@ -150,9 +150,10 @@ lab-repo/
    an address may leave out the lab, as in `korriban/krb-crt-01/vaultwarden`. The
    dashboard's graph shows the tree and these references together, and search finds
    any resource by name, address, or reference.
-6. **Services are standalone.** A service folder belongs to one guest and holds
-   everything that instance needs: its definition, Compose file, and other files.
-   The same application on two guests is two independent folders.
+6. **Services are standalone.** A service folder belongs to one guest and holds what is that
+   instance's: its definition and any files of its own. The same application on two guests is
+   two independent folders, though both may name one shared recipe, as rule 8 allows code
+   to be shared. *Narrowed November 2, 2026: this used to say the folder holds everything.*
 7. **Settings flow down the tree.** The approval and destructive settings,
    maintenance windows, and agent labels set on a lab apply to everything below
    it; an installation, guest, service, or cluster can override them, and the
@@ -191,8 +192,9 @@ lab-repo/
     that destroys and recreates it) counts as a deployment and follows the approval
     setting; the preview still shows it as a recreate. Octopushy decides what a
     change does from the preview, such as an OpenTofu plan's delete and replace
-    actions, not from the edit. Retiring a guest retires its services first, each
-    under its own setting.
+    actions, not from the edit. A playbook has no such preview, so a [service's](services.md#removal) recipe declares
+    which actions are destructive. Retiring a guest takes its services with it, and always waits for a person when it
+    has any. *Changed November 2, 2026: this used to retire each service first, under its own setting.*
 
     **A VM or a container is the exception, because recreating one wipes its disks.** A
     provision plan that replaces or deletes a Proxmox VM (`proxmox_virtual_environment_vm`) or
@@ -497,34 +499,32 @@ on its page ([protected secrets](installation-trust.md#protected-secrets)).
 
 ### Service instance
 
+**Implemented November 2, 2026, as a first slice.** [Services](services.md) is the design: this section says what a
+definition holds, and what is not built yet is marked below.
+
 ```yaml
-# labs/home/proxmox/korriban/guests/krb-crt-01/services/vaultwarden/service.yaml
+# labs/home/proxmox/ziost/guests/ha-db/services/postgresql/service.yaml
 schemaVersion: 1
 deploy:
-  recipe: compose
-  compose: compose.yaml
-dependsOn: []                     # addresses of services this one needs
-secrets:
-  - key: services/vaultwarden/database-url
-    file: { name: database-url, mode: "0400" }
-  - key: services/vaultwarden/postgres-password
-    file: { name: postgres-password, mode: "0400" }
-dns:
-  - { name: vaultwarden.hlab.example.com, type: CNAME, value: hlab.example.com }
-verify:
-  http: { url: https://vaultwarden.hlab.example.com/alive, timeoutSeconds: 180 }
+  recipe: postgresql              # a configure recipe, as for a guest's setup
+  inputs:
+    postgresql_database: homeassistant
+  secrets:
+    postgresql_password: { store: ha-db/postgres-password }
+ports:
+  - { port: 5432, protocol: tcp, sources: [10.15.40.10] }
 policy:
-  approval: manual                # this service's changes wait for approval
+  destructive: manual
 ```
 
-Each service folder is one deployment instance, such as
-`home/korriban/krb-crt-01/vaultwarden`, with its own desired and applied release,
-outcome, approval, and failure domain. In `nodes`, Arcane runs on two guests as
-two separate directories; here it is likewise two standalone folders, one under
-each guest. Secrets are prerequisites of the deployment (section 5 of the
-agreement), and the binding here chooses how each one is delivered. It reaches
-the reverse proxy on its own guest through Traefik labels in `compose.yaml`. Its
-DNS records and ports are described under Network exposure below.
+Each service folder is one deployment instance, such as `home/ziost/ha-db/postgresql`, with its own desired and applied
+release, outcome, approval, and failure domain. A service run is a [configure run](guest-configuration.md) on that resource,
+over its guest's connection, once the guest's provisioning and setup have caught up. A recipe's code may be shared by
+several instances; an instance's definition and state are never shared ([how those fit](services.md#instances-are-standalone-code-may-be-shared)).
+
+**Not built:** `deploy.compose`, `dependsOn`, `dns` and `verify` are refused, not ignored, so a definition cannot
+promise what nothing does. `ports` is a declaration handed to the playbook. Octopushy opens and closes nothing. The sections below
+describe the design those would follow.
 
 ### Network exposure: DNS, ports, and routes
 
@@ -718,9 +718,9 @@ New VM → configured guest → working service:
    provisioning: the `proxmox-vm` recipe's OpenTofu plan for that guest.
 2. Once the guest is provisioned and verified, Octopushy runs its `setup.recipe`, if
    it has one. Only Ansible does this today; profiles are not applied yet.
-3. Add `services/<name>/` under the guest. When the secrets resolve and are
-   delivered, Octopushy proposes deploying that instance: it opens the instance's
-   ports on the guest, deploys it, creates its DNS records, then verifies it.
+3. Add `services/<name>/` under the guest. Once the guest's provisioning and setup have caught up,
+   Octopushy proposes deploying that instance, which runs its recipe's `onChange` action. The ports step and
+   DNS records are [not built yet](services.md#ports-and-dns).
 4. For a cluster, add `clusters/<id>/cluster.yaml` listing the member guests, with its password
    as a protected store entry. Trust the code, let the guests install, and trust their
    certificates: one run then forms it on the primary, joins the others, and verifies each.
@@ -737,7 +737,7 @@ what depends on it.
 | `homelab/templates/<role>/` (VM defaults and NixOS modules) | `templates/` for base images and `profiles/` for roles; sizes written into each `guest.yaml` |
 | `homelab/services/<node>_<service>/service.json`, one per instance | `guests/<id>/services/<service>/`, one standalone folder per instance |
 | Infisical paths in `service.json` | `{ store: <key> }` references; the provider is server configuration |
-| `dns.records` in `service.json` and `config/dns/providers.json` (Pi-hole or Technitium) | `dns` in each `service.yaml`; integrations and zones in `lab.yaml` |
+| `dns.records` in `service.json` and `config/dns/providers.json` (Pi-hole or Technitium) | `dns` in each `service.yaml`, not built yet; integrations and zones in `lab.yaml` |
 | A reverse proxy on each apps machine, with Traefik labels in each Compose file | The same, not managed by Octopushy for now |
 | Service firewall declarations merged into the node's NixOS configuration | `ports` in each `service.yaml`, applied in the guest's operating system by a step of its own |
 | `homelab/clusters/technitium/<cluster>/cluster.json` with `primary`, `secondaries`, `removeSecondaries` | `labs/<lab>/clusters/<id>/cluster.yaml` with member guests and roles; removing a member is a delete |

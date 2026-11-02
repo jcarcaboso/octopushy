@@ -378,3 +378,8 @@ _Avoid_: Unhealthy when the difference does not imply a service outage
 **Maintenance job**:
 A repeatable operation on selected resources, such as guest updates, subject to
 the same permissions, concurrency rules, and execution history as manual work.
+
+**Removal action**:
+The one action of a recipe marked `removal: true`, which runs when a service's folder is deleted. It waits for a person unless
+`destructive: automatic` is written down. A recipe with none leaves the service running, and a person forgets it.
+_Avoid_: Assuming that a deleted folder deletes data

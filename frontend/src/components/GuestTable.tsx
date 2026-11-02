@@ -52,6 +52,14 @@ export function GuestTable({ guests, label, emptyText = "No guests declared." }:
               <td className="cell-status">
                 <StatusBadge status={guest.status} />
                 {guest.statusDetail ? <div className="muted small cell-status__detail">{guest.statusDetail}</div> : null}
+                {guest.services?.map((service) => (
+                  <div key={service.id} className="small">
+                    <Link to={`/services/${service.id}`} className="mono">
+                      {service.name}
+                    </Link>{" "}
+                    <StatusBadge status={service.status} />
+                  </div>
+                ))}
               </td>
               <td>
                 <Power guest={guest} />

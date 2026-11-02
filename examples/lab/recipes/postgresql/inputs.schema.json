@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "postgresql inputs",
+  "type": "object",
+  "properties": {
+    "postgresql_version": { "description": "A major version Debian packages.", "type": "integer", "minimum": 13 },
+    "postgresql_database": { "type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}(?![\\s\\S])" },
+    "postgresql_role": { "type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}(?![\\s\\S])", "not": { "const": "postgres" } },
+    "postgresql_settings": {
+      "description": "postgresql.conf settings. listen_addresses is the recipe's.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z_]*(?![\\s\\S])", "not": { "const": "listen_addresses" } },
+      "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9_.]+(?![\\s\\S])" }
+    },
+    "postgresql_dump_minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+    "postgresql_dump_hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+    "credentials_revision": { "description": "A store change starts no run: raise this to apply a new password.", "type": "integer", "minimum": 1 }
+  },
+  "required": ["postgresql_version", "postgresql_database", "postgresql_role", "credentials_revision"],
+  "additionalProperties": false
+}

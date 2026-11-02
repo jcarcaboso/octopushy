@@ -18,6 +18,7 @@ public enum DefinitionKind
     Template,
     Recipe,
     Cluster,
+    Service,
 }
 
 /// <summary>The JSON Schemas shared with the editor, embedded from <c>contracts/schemas</c>.</summary>
@@ -40,6 +41,7 @@ public sealed class SchemaCatalog
         _schemas[DefinitionKind.Template] = Build(options, "template");
         _schemas[DefinitionKind.Recipe] = Build(options, "recipe");
         _schemas[DefinitionKind.Cluster] = Build(options, "cluster");
+        _schemas[DefinitionKind.Service] = Build(options, "service");
     }
 
     public static SchemaCatalog Instance => Shared.Value;

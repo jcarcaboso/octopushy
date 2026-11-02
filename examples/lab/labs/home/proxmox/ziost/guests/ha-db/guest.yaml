@@ -20,5 +20,13 @@ provision:
   recipe: proxmox-lxc
   inputs:
     startup: { order: 1, upDelay: 30 }  # before Home Assistant, which waits 30 seconds for it
+setup:
+  recipe: debian-base             # what the machine needs; PostgreSQL and VictoriaMetrics are services/
+access:
+  user: root                      # the login a container has; docs/services.md says how it gets one
+  sshKey: { store: ha-db/ssh-key }
+  hostKey: { store: ha-db/host-key }
+  sshAuthorizedKeys:              # Proxmox writes this when it creates the container, and only then
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 octopushy@ha-db
 policy:
   destructive: manual             # deleting this container waits for approval, once stateful is taken out

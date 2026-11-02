@@ -72,7 +72,7 @@ public class StatefulGuardTests(PostgresFixture postgres)
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "bridge 'lab' does not exist");
         await server.TickAsync();
         Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
-        Assert.False(StatefulGuard.Armed(await server.ResourceAsync(Guest)));
+        Assert.False(await ArmedAsync(server));
 
         await PlanAgainAsync(server);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(Replace, Tainted), artifacts: FakeAgent.PlanArtifact("again"));
@@ -84,7 +84,7 @@ public class StatefulGuardTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Succeeded, run.Status);
         Assert.Contains("whose first apply did not finish", run.Steps.Single(s => s.Name == StepNames.Approval).DecisionNote);
-        Assert.True(StatefulGuard.Armed(await server.ResourceAsync(Guest)));
+        Assert.True(await ArmedAsync(server));
     }
 
     [Fact]
@@ -247,7 +247,13 @@ public class StatefulGuardTests(PostgresFixture postgres)
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
-        Assert.True(StatefulGuard.Armed(await server.ResourceAsync(Guest)));
+        Assert.True(await ArmedAsync(server));
+    }
+
+    private static async Task<bool> ArmedAsync(ServerHarness server)
+    {
+        var resource = await server.ResourceAsync(Guest);
+        return await server.QueryAsync(db => StatefulGuard.ArmedAsync(db, resource, CancellationToken.None));
     }
 
     private static async Task PlanAgainAsync(ServerHarness server)

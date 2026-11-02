@@ -370,16 +370,18 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     }
 
     /// <summary>
-    /// A configure run: one action of the guest's setup recipe. It reaches the guest over SSH, so
-    /// it holds no Proxmox credentials. The installation's endpoint stays in its context because
-    /// trust in that installation still decides whether its guests are worked on.
+    /// A configure run: one action of the guest's setup recipe, or of a service's recipe when
+    /// <paramref name="service"/> is given. It reaches the guest over SSH, so it holds no Proxmox
+    /// credentials. The installation's endpoint stays in its context because trust in that
+    /// installation still decides whether its guests are worked on.
     /// </summary>
     public Run Configure(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
-        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles)
+        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles,
+        ServiceDefinition? service = null, string? removedIn = null)
     {
         if (guest.Retired)
             throw new RunException("A retired guest is not configured.");
-        var inputs = ConfigureInputs.Build(repository, guest);
+        var inputs = service is null ? ConfigureInputs.Build(repository, guest) : ConfigureInputs.Build(repository, service);
         if (!inputs.Configure.Actions.TryGetValue(actionId, out var action))
             throw new RunException($"The recipe {inputs.Recipe.Id} has no action {actionId}.");
         if (action.UsesAppliedSnapshot && configuration?.Snapshot is null)
@@ -409,19 +411,22 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         }
 
         var installation = repository.Installation(guest.InstallationAddress)!;
-        var policy = PolicyResolver.For(repository, guest);
-        var labels = PolicyResolver.AgentLabels(repository, guest);
+        var policy = service is null ? PolicyResolver.For(repository, guest) : PolicyResolver.For(repository, service);
+        var labels = service is null ? PolicyResolver.AgentLabels(repository, guest) : PolicyResolver.AgentLabels(repository, service);
         var context = new RunContext
         {
-            Address = guest.Address,
+            Address = service?.Address ?? guest.Address,
             Commit = revision.Commit,
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
-            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             Proxmox = new ProxmoxContext(ProvisionInputs.EndpointFor(installation, installation.Hosts[guest.Host]), installation.Connection.VerifyTls, null,
                 guest.Host, guest.Vmid, guest.Id, null),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
+            CodeDigest = inputs.CodeDigest,
+            ReviewedPaths = inputs.ReviewedPaths,
+            DefinitionRemovedIn = removedIn,
             Ansible = new AnsibleContext(
                 inputs.Recipe.Id,
                 action.Id,
@@ -433,7 +438,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 action.TimeoutMinutes,
                 inputs.Recipe.Image ?? options.Value.Tools.AnsibleImage,
                 guest.Id,
-                guest.Directory,
+                inputs.Directory,
                 inputs.Address,
                 inputs.Port,
                 inputs.User,
@@ -442,11 +447,14 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 inputs.SecretFiles.Keys.ToList(),
                 inputs.Configure.Outcomes.ToDictionary(
                     o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result), StringComparer.Ordinal),
-                changedFiles),
+                changedFiles,
+                service?.Id,
+                service?.Ports,
+                action.Removal),
         };
 
         var run = NewRun(resource, Operations.Configure, revision, reason, context);
-        run.InputsHash = inputs.Hash;
+        run.InputsHash = action.Removal ? $"removal:{inputs.Hash}" : inputs.Hash;
         AddSteps(run, inputs.Configure.Outcomes.Values.Any(o => o.ApproveVars is not null)
             ? [StepNames.Preview, StepNames.Approval, StepNames.Playbook, StepNames.OutcomeApproval, StepNames.PlaybookApproved]
             : [StepNames.Preview, StepNames.Approval, StepNames.Playbook]);

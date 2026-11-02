@@ -1,0 +1,4 @@
+# Managed by Octopushy. Keeps only what matches, so a new attribute cannot add series.
+- action: keep
+  source_labels: [__name__]
+  regex: {{ victoriametrics_keep | default('.*') }}

@@ -147,6 +147,49 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("configureGuest");
 
+        api.MapGet("/services/{id:guid}", async Task<Results<Ok<ServiceDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
+            await views.ServiceAsync(id, ct) is { } service ? TypedResults.Ok(service) : TypedResults.NotFound())
+            .WithTags("Inventory")
+            .WithName("getService");
+
+        api.MapPost("/services/{id:guid}/run", async (Guid id, ConfigureGuestRequest request, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.RunServiceAsync(id, request.Action, ct))))
+            .WithTags("Inventory")
+            .WithName("runService");
+
+        api.MapPost("/services/{id:guid}/forget", async (Guid id, Planner planner, CancellationToken ct) =>
+        {
+            await planner.ForgetServiceAsync(id, ct);
+            return TypedResults.NoContent();
+        })
+            .WithTags("Inventory")
+            .WithName("forgetService");
+
+        api.MapPost("/resources/{id:guid}/trust-configure", async (Guid id, TrustGuestRequest request, HttpContext http,
+            RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
+            {
+                var resource = await db.Resources.FirstOrDefaultAsync(r => r.Id == id && (r.Kind == ResourceKinds.Guest || r.Kind == ResourceKinds.Service) && r.RetiredAt == null, ct)
+                    ?? throw new RunException("There is no such guest or service.");
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                var views = services.GetRequiredService<Views>();
+                var release = await views.ConfigureReleaseAsync(resource, ct)
+                    ?? throw new RunException("Fix the definition before trusting it.");
+                if (release.Keys.Count == 0)
+                    throw new RunException("It binds no protected secret, so there is nothing to trust.");
+                // Trust exactly what the operator saw: a newer commit may run something else.
+                if (release.Digest != request.CodeDigest)
+                    throw new RunException("Its code, or how it runs, changed since it was shown. Review it again.");
+                foreach (var key in release.Keys)
+                    await ProtectedSecrets.GrantAsync(db, key, resource.Id, release.Digest, actor, clock.GetUtcNow(), ct);
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return await views.GuestTrustAsync(resource, release, ct);
+            }, ct)))
+            .WithTags("Inventory")
+            .WithName("trustConfigure");
+
         api.MapGet("/installations/{id:guid}", async Task<Results<Ok<InstallationDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.InstallationAsync(id, ct) is { } installation ? TypedResults.Ok(installation) : TypedResults.NotFound())
             .WithTags("Inventory")

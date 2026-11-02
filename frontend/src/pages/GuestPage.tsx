@@ -8,6 +8,7 @@ import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionView } from "../components/DefinitionView";
+import { ConfigureTrust } from "../components/ConfigureTrust";
 import { Execution } from "../components/Execution";
 import { IssueList } from "../components/IssueList";
 import { GuestConfigurationCard } from "../components/GuestConfiguration";
@@ -19,6 +20,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
+import { ServicesCard } from "../components/ServicesCard";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { formatBytes } from "../lib/format";
@@ -218,6 +220,7 @@ export function GuestPage() {
           </Callout>
         ) : null}
         <TrustCallout guest={data} />
+        <ConfigureTrust id={guest.id} trust={data.configureTrust} what="This guest's setup" />
         {data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
             The guest was removed and verified absent.
@@ -231,6 +234,7 @@ export function GuestPage() {
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>
+            {guest.services?.length ? <ServicesCard services={guest.services} /> : null}
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${guest.name}`} showAddress={false} />
             </Card>

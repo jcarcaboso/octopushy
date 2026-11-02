@@ -1,0 +1,18 @@
+schemaVersion: 1
+description: PostgreSQL from Debian, with one role and one database, and a nightly dump.
+operation: configure
+executor: ansible
+root: ../../modules/ansible/postgresql
+inputs: inputs.schema.json
+secrets: [postgresql_password]
+actions:
+  deploy:
+    description: Install, or bring what differs back to what is declared. Never deletes data.
+    playbook: deploy.yml
+    destructive: false
+    onChange: true
+  remove:
+    description: Stop and disable PostgreSQL. The databases and dumps stay on disk.
+    playbook: remove.yml
+    destructive: true
+    removal: true

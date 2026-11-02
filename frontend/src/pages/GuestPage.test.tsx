@@ -74,6 +74,7 @@ function detail(current: GuestTrust, status = "blocked"): GuestDetail {
     stateful: false,
     dataGuarded: false,
     configuration: null,
+    configureTrust: trust({ keys: [], codeDigest: null, execution: null }),
   };
 }
 

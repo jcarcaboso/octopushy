@@ -417,6 +417,9 @@ replaces a VM resets the guest's proposed configuration, so the new VM is config
 its new host key fails closed until the pin is updated. A configure run has no plan and
 never lifts protection, so none of that logic applies to it.
 
+**Services** ([design](services.md)) run through this same path, on a resource of their own: a service run is a configure
+run, and `BuildAnsibleAsync` now passes a code digest, so a protected secret reaches a setup or service run once it is trusted.
+
 ## What this does not do
 
 - No schedule, as above.

@@ -1,0 +1,17 @@
+---
+# Lowering retention makes VictoriaMetrics discard what is older, so this action refuses it, and
+# shrink-retention.yml is the action declared destructive.
+- name: VictoriaMetrics
+  hosts: all
+  gather_facts: false
+  vars:
+    victoriametrics_allow_shrink: false
+  tasks:
+    - name: Deploy
+      ansible.builtin.import_tasks: tasks/deploy.yml
+  handlers:
+    - name: Restart VictoriaMetrics
+      ansible.builtin.systemd_service:
+        name: victoria-metrics
+        state: restarted
+        daemon_reload: true

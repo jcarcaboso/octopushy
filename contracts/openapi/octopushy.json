@@ -642,6 +642,266 @@
         }
       }
     },
+    "/api/services/{id}": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/services/{id}/run": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "runService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureGuestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/services/{id}/forget": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "forgetService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/resources/{id}/trust-configure": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "trustConfigure",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustGuestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuestTrustDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/installations/{id}": {
       "get": {
         "tags": [
@@ -5109,7 +5369,8 @@
               "null",
               "string"
             ]
-          }
+          },
+          "ports": { }
         }
       },
       "ConfigureSecretDto": {
@@ -5649,7 +5910,8 @@
           "trust",
           "stateful",
           "dataGuarded",
-          "configuration"
+          "configuration",
+          "configureTrust"
         ],
         "type": "object",
         "properties": {
@@ -5799,6 +6061,9 @@
                 "$ref": "#/components/schemas/GuestConfigurationDto"
               }
             ]
+          },
+          "configureTrust": {
+            "$ref": "#/components/schemas/GuestTrustDto"
           }
         }
       },
@@ -5938,6 +6203,15 @@
                 "$ref": "#/components/schemas/RunSummaryDto"
               }
             ]
+          },
+          "services": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ServiceSummaryDto"
+            }
           }
         }
       },
@@ -7258,6 +7532,210 @@
             "type": [
               "null",
               "string"
+            ]
+          }
+        }
+      },
+      "ServiceDetailDto": {
+        "required": [
+          "service",
+          "guestId",
+          "guestAddress",
+          "definitionFile",
+          "definitionText",
+          "issues",
+          "policy",
+          "agentLabels",
+          "agentLabelsSetBy",
+          "actions",
+          "hasRemoval",
+          "appliedAction",
+          "appliedCommit",
+          "appliedAt",
+          "missingSince",
+          "retiredAt",
+          "runs",
+          "trust"
+        ],
+        "type": "object",
+        "properties": {
+          "service": {
+            "$ref": "#/components/schemas/ServiceSummaryDto"
+          },
+          "guestId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "guestAddress": {
+            "type": "string"
+          },
+          "definitionFile": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "definitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PolicyDto"
+              }
+            ]
+          },
+          "agentLabels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agentLabelsSetBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigureActionDto"
+            }
+          },
+          "hasRemoval": {
+            "type": "boolean"
+          },
+          "appliedAction": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "missingSince": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "retiredAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          },
+          "trust": {
+            "$ref": "#/components/schemas/GuestTrustDto"
+          }
+        }
+      },
+      "ServiceSummaryDto": {
+        "required": [
+          "id",
+          "address",
+          "name",
+          "recipe",
+          "status",
+          "statusDetail",
+          "valid",
+          "ports",
+          "activeRun",
+          "lastRun"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "statusDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "ports": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "activeRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
             ]
           }
         }

@@ -1,0 +1,6 @@
+# Managed by Octopushy. What is not listed here is refused.
+local   all                      postgres                peer
+local   {{ postgresql_database }}   {{ postgresql_role }}   scram-sha-256
+{% for client in postgresql_clients %}
+host    {{ postgresql_database }}   {{ postgresql_role }}   {{ client if '/' in client else client ~ '/32' }}   scram-sha-256
+{% endfor %}

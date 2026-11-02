@@ -7,6 +7,7 @@ public sealed class LabRepository(
     IReadOnlyList<LabDefinition> labs,
     IReadOnlyList<InstallationDefinition> installations,
     IReadOnlyList<GuestDefinition> guests,
+    IReadOnlyList<ServiceDefinition> services,
     IReadOnlyList<ClusterDefinition> clusters,
     IReadOnlyDictionary<string, TemplateDefinition> templates,
     IReadOnlyDictionary<string, RecipeDefinition> recipes,
@@ -27,13 +28,15 @@ public sealed class LabRepository(
 
     public IReadOnlyList<GuestDefinition> Guests { get; } = guests;
 
+    public IReadOnlyList<ServiceDefinition> Services { get; } = services;
+
     public IReadOnlyList<ClusterDefinition> Clusters { get; } = clusters;
 
     public IReadOnlyDictionary<string, TemplateDefinition> Templates { get; } = templates;
 
     public IReadOnlyDictionary<string, RecipeDefinition> Recipes { get; } = recipes;
 
-    /// <summary>Every lab, installation, guest, and cluster found, including those whose definition is invalid.</summary>
+    /// <summary>Every lab, installation, guest, service, and cluster found, including those whose definition is invalid.</summary>
     public IReadOnlyList<ResourceEntry> Resources { get; } = resources;
 
     public IReadOnlyList<DefinitionIssue> Issues { get; } = issues;
@@ -48,6 +51,11 @@ public sealed class LabRepository(
     public InstallationDefinition? Installation(string address) => Installations.FirstOrDefault(i => i.Address == address);
 
     public GuestDefinition? Guest(string address) => Guests.FirstOrDefault(g => g.Address == address);
+
+    public ServiceDefinition? Service(string address) => Services.FirstOrDefault(s => s.Address == address);
+
+    /// <summary>The services declared on a guest.</summary>
+    public IEnumerable<ServiceDefinition> ServicesOf(string guestAddress) => Services.Where(s => s.Guest == guestAddress);
 
     public ClusterDefinition? Cluster(string address) => Clusters.FirstOrDefault(c => c.Address == address);
 
@@ -64,9 +72,11 @@ public sealed class LabRepository(
     {
         var guest = Guest(address);
         var cluster = Cluster(address);
+        var service = Service(address);
         return Issues.Where(i =>
             i.Address == address
             || i.Address is null
+            || (service is not null && i.Address == $"recipes/{service.Recipe}")
             || (cluster is not null && i.Address == $"recipes/{cluster.Recipe}")
             || (guest is not null && (i.Address == $"recipes/{guest.Recipe}" || (guest.Template is { } t && i.Address == $"templates/{t}"))));
     }

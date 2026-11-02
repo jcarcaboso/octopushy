@@ -1,0 +1,16 @@
+---
+# Stops the service and leaves the data: the databases and the dumps stay on disk, for a person to
+# keep or delete. Deleting a service's folder never deletes them.
+- name: Remove PostgreSQL
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Stop the dump
+      ansible.builtin.file:
+        path: /etc/cron.d/postgresql-dump
+        state: absent
+    - name: Stop PostgreSQL
+      ansible.builtin.systemd_service:
+        name: "postgresql@{{ postgresql_version }}-main"
+        enabled: false
+        state: stopped

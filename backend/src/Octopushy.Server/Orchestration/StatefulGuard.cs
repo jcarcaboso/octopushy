@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
 
 namespace Octopushy.Server.Orchestration;
@@ -20,18 +21,31 @@ public static class StatefulGuard
         resource.Definition is { } definition
         && JsonNode.Parse(definition)?["stateful"] is JsonValue marker && marker.TryGetValue<bool>(out var stateful) && stateful;
 
-    /// <summary>A guest is deployed once a run verified it.</summary>
-    public static bool Armed(Resource resource) => Declared(resource) && resource.VerifiedAt is not null;
+    /// <summary>
+    /// A guest is deployed once a run verified it and, when it has setup or services, one of those has
+    /// succeeded. A playbook that fails is run again, and until one has worked there is no data to keep.
+    /// </summary>
+    public static async Task<bool> ArmedAsync(OctopushyDb db, Resource resource, CancellationToken cancellationToken)
+    {
+        if (!Declared(resource) || resource.VerifiedAt is null)
+            return false;
+        var configured = JsonNode.Parse(resource.Definition!)?["setup"]?["recipe"] is not null
+            || await db.Resources.AnyAsync(r => r.Kind == ResourceKinds.Service && r.ParentAddress == resource.Address, cancellationToken);
+        if (!configured)
+            return true;
+        var family = await GuestWork.FamilyAsync(db, resource.Id, cancellationToken);
+        return await db.Runs.AnyAsync(r => family.Contains(r.ResourceId) && r.Operation == Operations.Configure && r.Status == RunStatuses.Succeeded, cancellationToken);
+    }
 
     /// <summary>Why this plan must not go on, or null when it may go on to the policy.</summary>
-    public static string? Refusal(Resource resource, JsonNode? outputs, RunContext context)
+    public static async Task<string?> RefusalAsync(OctopushyDb db, Resource resource, JsonNode? outputs, RunContext context, CancellationToken cancellationToken)
     {
         var reserved = context.Proxmox.ReservedVmids is { Count: > 0 } vmids
             ? GuestVmPlan.ChangedVmids(outputs).Where(vmids.Contains).ToList() : [];
         if (reserved.Count > 0)
             return $"This plan would change VMID {string.Join(", ", reserved)}, which the installation reserves: Octopushy does not manage it. Nothing changed. Find what in the root reaches it.";
 
-        if (!Armed(resource))
+        if (!await ArmedAsync(db, resource, cancellationToken))
             return null;
 
         var noun = GuestVmPlan.Noun(context);

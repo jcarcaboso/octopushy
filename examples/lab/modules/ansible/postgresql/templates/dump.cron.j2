@@ -1,0 +1,2 @@
+# Managed by Octopushy. Keeps one dump per weekday.
+{{ postgresql_dump_minute | default(15) }} {{ postgresql_dump_hour | default(5) }} * * * postgres /usr/local/sbin/postgresql-dump

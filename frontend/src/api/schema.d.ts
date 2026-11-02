@@ -196,6 +196,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}/forget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["forgetService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resources/{id}/trust-configure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["trustConfigure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/installations/{id}": {
         parameters: {
             query?: never;
@@ -1157,6 +1221,7 @@ export interface components {
             prepared: null | components["schemas"]["JsonNode"];
             hostKeyFingerprints: string[];
             previewSha256: null | string;
+            ports?: unknown;
         };
         ConfigureSecretDto: {
             name: string;
@@ -1315,6 +1380,7 @@ export interface components {
             stateful: boolean;
             dataGuarded: boolean;
             configuration: null | components["schemas"]["GuestConfigurationDto"];
+            configureTrust: components["schemas"]["GuestTrustDto"];
         };
         GuestDiskUsageDto: {
             enabled: boolean;
@@ -1345,6 +1411,7 @@ export interface components {
             observed: null | components["schemas"]["ObservedGuestDto"];
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
+            services?: null | components["schemas"]["ServiceSummaryDto"][];
         };
         GuestTrustDto: {
             keys: string[];
@@ -1661,6 +1728,43 @@ export interface components {
             finishedAt: null | string;
             currentStep: null | string;
             waiting: null | string;
+        };
+        ServiceDetailDto: {
+            service: components["schemas"]["ServiceSummaryDto"];
+            /** Format: uuid */
+            guestId: null | string;
+            guestAddress: string;
+            definitionFile: null | string;
+            definitionText: null | string;
+            issues: components["schemas"]["IssueDto"][];
+            policy: null | components["schemas"]["PolicyDto"];
+            agentLabels: string[];
+            agentLabelsSetBy: null | string;
+            actions: components["schemas"]["ConfigureActionDto"][];
+            hasRemoval: boolean;
+            appliedAction: null | string;
+            appliedCommit: null | string;
+            /** Format: date-time */
+            appliedAt: null | string;
+            /** Format: date-time */
+            missingSince: null | string;
+            /** Format: date-time */
+            retiredAt: null | string;
+            runs: components["schemas"]["RunSummaryDto"][];
+            trust: components["schemas"]["GuestTrustDto"];
+        };
+        ServiceSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            address: string;
+            name: string;
+            recipe: null | string;
+            status: string;
+            statusDetail: null | string;
+            valid: boolean;
+            ports: null | components["schemas"]["JsonNode"];
+            activeRun: null | components["schemas"]["RunSummaryDto"];
+            lastRun: null | components["schemas"]["RunSummaryDto"];
         };
         SetupRequest: {
             setupCode: string;
@@ -2513,6 +2617,215 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetailDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    runService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigureGuestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    forgetService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    trustConfigure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustGuestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuestTrustDto"];
                 };
             };
             /** @description Bad Request */

@@ -1,0 +1,11 @@
+schemaVersion: 1
+description: What any Debian machine here needs, whatever runs on it. Python for Ansible, security updates, cron.
+operation: configure
+executor: ansible
+root: ../../modules/ansible/debian-base
+actions:
+  configure:
+    description: Prepare the machine.
+    playbook: configure.yml
+    destructive: false
+    onChange: true

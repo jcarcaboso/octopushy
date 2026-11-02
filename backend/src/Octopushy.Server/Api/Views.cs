@@ -24,6 +24,8 @@ public static class GuestStatuses
     public const string Invalid = "invalid";
     public const string Missing = "missing";
     public const string Retired = "retired";
+    /// <summary>A service whose guest is not ready for it yet. Nothing has failed.</summary>
+    public const string Waiting = "waiting";
     /// <summary>A cluster whose members did not pass the checks of its latest run.</summary>
     public const string VerificationFailed = "verification-failed";
 }
@@ -123,7 +125,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             (manifest?["secrets"] as JsonObject)?.Select(p => new ConfigureSecretDto(p.Key, p.Value?.GetValue<string>() ?? "")).ToList() ?? [],
             outputs["prepared"]?.DeepClone(),
             Strings(outputs["hostKeyFingerprints"]),
-            outputs["planSha256"]?.GetValue<string>());
+            outputs["planSha256"]?.GetValue<string>(),
+            manifest?["ports"]?.DeepClone());
     }
 
     public static (string Status, string? Detail) GuestStatus(Resource resource, Run? active, Run? last)
@@ -172,6 +175,137 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not provisioned from the current definition yet.");
     }
 
+    /// <summary>A service's status, from its own runs: neither its guest's failures nor a sibling's come into it.</summary>
+    public static (string Status, string? Detail) ServiceStatus(Resource resource, GuestConfiguration? configuration, Run? active, Run? last, string? waiting)
+    {
+        if (resource.RetiredAt is not null)
+            return (GuestStatuses.Retired, null);
+        if (resource.MissingSince is not null && active is null)
+            return (GuestStatuses.Missing, "The folder was deleted. Nothing has changed on the guest. Restore the folder to keep the service, or forget it once it is gone.");
+        if (!resource.Valid)
+            return (GuestStatuses.Invalid, "The definition has errors.");
+        if (active is not null && Waiting(active) is { } queued)
+            return (GuestStatuses.Queued, queued);
+        if (active is not null)
+        {
+            return (active.Status switch
+            {
+                RunStatuses.Queued => GuestStatuses.Queued,
+                RunStatuses.AwaitingApproval => GuestStatuses.AwaitingApproval,
+                RunStatuses.Blocked => GuestStatuses.Blocked,
+                RunStatuses.Uncertain => GuestStatuses.Uncertain,
+                _ => GuestStatuses.Running,
+            }, active.Detail);
+        }
+
+        if (configuration is { AppliedHash: not null } && configuration.AppliedHash == configuration.DesiredHash)
+            return (GuestStatuses.InSync, null);
+        if (waiting is not null)
+            return (GuestStatuses.Waiting, waiting);
+        return last is { Status: RunStatuses.Failed }
+            ? (GuestStatuses.Failed, last.Detail)
+            : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not deployed from the current definition yet.");
+    }
+
+    private static ServiceSummaryDto ServiceSummary(Resource resource, GuestConfiguration? configuration, Run? active, Run? last, string? waiting)
+    {
+        var (status, detail) = ServiceStatus(resource, configuration, active, last, waiting);
+        var definition = resource.Definition is null ? null : JsonNode.Parse(resource.Definition);
+        return new ServiceSummaryDto(
+            resource.Id,
+            resource.Address,
+            resource.Address.Split('/')[^1],
+            definition?["deploy"]?["recipe"]?.GetValue<string>(),
+            status,
+            detail,
+            resource.Valid,
+            definition?["ports"]?.DeepClone(),
+            active is null ? null : Summary(active, resource.Address, resource.Kind),
+            last is null ? null : Summary(last, resource.Address, resource.Kind));
+    }
+
+    /// <summary>The services of each of these guests, by guest address, as the inventory and the guest page show them.</summary>
+    private async Task<Dictionary<string, List<ServiceSummaryDto>>> ServicesOfAsync(IReadOnlyCollection<Resource> guests, LabRepository? repository, CancellationToken cancellationToken)
+    {
+        var addresses = guests.Select(g => g.Address).ToList();
+        var services = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Service && r.RetiredAt == null && r.ParentAddress != null && addresses.Contains(r.ParentAddress))
+            .OrderBy(r => r.Address).ToListAsync(cancellationToken);
+        var result = new Dictionary<string, List<ServiceSummaryDto>>(StringComparer.Ordinal);
+        if (services.Count == 0)
+            return result;
+        var runs = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
+        var ids = services.Select(s => s.Id).ToList();
+        var configurations = await db.GuestConfigurations.AsNoTracking().Where(c => ids.Contains(c.ResourceId)).ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        foreach (var guest in guests.Where(g => services.Any(s => s.ParentAddress == g.Address)))
+        {
+            var waiting = repository is null ? "Sync the current repository source first." : await GuestWork.ServicesWaitForAsync(db, guest, repository, cancellationToken);
+            result[guest.Address] = services.Where(s => s.ParentAddress == guest.Address).Select(s =>
+            {
+                var (active, last) = runs.GetValueOrDefault(s.Id);
+                return ServiceSummary(s, configurations.GetValueOrDefault(s.Id), active, last, waiting);
+            }).ToList();
+        }
+
+        return result;
+    }
+
+    public async Task<ServiceDetailDto?> ServiceAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Service, cancellationToken);
+        if (resource is null)
+            return null;
+
+        var runs = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+            .Where(r => r.ResourceId == id).OrderByDescending(r => r.CreatedAt).Take(30).ToListAsync(cancellationToken);
+        var guest = await db.Resources.AsNoTracking()
+            .Where(r => r.Address == resource.ParentAddress && r.Kind == ResourceKinds.Guest).OrderBy(r => r.RetiredAt.HasValue).FirstOrDefaultAsync(cancellationToken);
+        var head = await HeadRepositoryAsync(cancellationToken);
+        var configuration = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
+        var waiting = guest is null || head is null ? null : await GuestWork.ServicesWaitForAsync(db, guest, head.Repository, cancellationToken);
+        PolicyDto? policy = null;
+        ResolvedSetting<IReadOnlyList<string>>? labels = null;
+        var actions = new List<ConfigureActionDto>();
+        var removal = false;
+        if (head?.Repository.Service(resource.Address) is { } service && head.Repository.RepositoryValid)
+        {
+            var effective = PolicyResolver.For(head.Repository, service);
+            policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
+            labels = PolicyResolver.AgentLabels(head.Repository, service);
+            if (head.Repository.Recipes.GetValueOrDefault(service.Recipe)?.Configure is { } offered)
+            {
+                actions = offered.Actions.Values.Where(a => !a.Removal).Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList();
+                removal = offered.Removal is not null;
+            }
+        }
+        else if (resource.MissingSince is not null && configuration?.AppliedRevisionId is not null)
+        {
+            // Its definition is gone from the head, and what removes it is in the one last applied.
+            removal = await ServiceRemoval.DefinedAsync(db, revisions, resource, configuration, cancellationToken) is { Action: not null };
+        }
+
+        return new ServiceDetailDto(
+            ServiceSummary(resource, configuration, runs.FirstOrDefault(r => !RunStatuses.IsTerminal(r.Status)), runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status)), waiting),
+            guest?.Id,
+            resource.ParentAddress ?? "",
+            resource.DefinitionFile,
+            head is null ? null : await DefinitionTextAsync(head.Commit, resource.DefinitionFile, cancellationToken),
+            Issues(resource.Issues),
+            policy,
+            labels?.Value ?? [],
+            labels?.SetBy,
+            actions,
+            removal,
+            configuration?.AppliedAction,
+            configuration?.AppliedRevisionId is { } applied
+                ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null,
+            configuration?.AppliedAt,
+            resource.MissingSince,
+            resource.RetiredAt,
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Service)).ToList(),
+            await GuestTrustAsync(resource, await ConfigureReleaseAsync(resource, cancellationToken), cancellationToken));
+    }
+
     public async Task<RevisionDto?> LatestRevisionAsync(CancellationToken cancellationToken)
     {
         var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
@@ -202,6 +336,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var clusterTrusts = await db.ClusterTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
         var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
         var head = await HeadRepositoryAsync(cancellationToken);
+        var services = await ServicesOfAsync(resources.Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null).ToList(), head?.Repository, cancellationToken);
         var labs = resources.Where(r => r.Kind == ResourceKinds.Lab && r.RetiredAt == null).OrderBy(r => r.Address)
             .Select(lab => new LabDto(
                 lab.Id,
@@ -211,7 +346,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 Issues(lab.Issues),
                 resources.Where(r => r.Kind == ResourceKinds.Installation && r.ParentAddress == lab.Address && r.RetiredAt == null)
                     .OrderBy(r => r.Address)
-                    .Select(i => InstallationSummary(i, resources, runs, observations, observing, trusts.GetValueOrDefault(i.Address)))
+                    .Select(i => InstallationSummary(i, resources, runs, observations, observing, trusts.GetValueOrDefault(i.Address), services))
                     .ToList(),
                 resources.Where(r => r.Kind == ResourceKinds.Cluster && r.ParentAddress == lab.Address && r.RetiredAt == null)
                     .OrderBy(r => r.Address)
@@ -455,7 +590,10 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var installation = await db.Resources.AsNoTracking()
             .FirstOrDefaultAsync(r => r.Address == resource.ParentAddress && r.RetiredAt == null, cancellationToken);
         var observations = await LatestObservationsAsync(cancellationToken);
-        var summary = GuestSummary(resource, runs, installation is null ? null : observations.GetValueOrDefault(installation.Id));
+        var head = await HeadRepositoryAsync(cancellationToken);
+        var services = await ServicesOfAsync([resource], head?.Repository, cancellationToken);
+        var summary = GuestSummary(resource, runs, installation is null ? null : observations.GetValueOrDefault(installation.Id))
+            with { Services = services.GetValueOrDefault(resource.Address) ?? [] };
 
         var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
         PolicyDto? policy = null;
@@ -514,8 +652,31 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
             trust,
             StatefulGuard.Declared(resource),
-            StatefulGuard.Armed(resource),
-            configure);
+            await StatefulGuard.ArmedAsync(db, resource, cancellationToken),
+            configure,
+            await GuestTrustAsync(resource, await ConfigureReleaseAsync(resource, cancellationToken), cancellationToken));
+    }
+
+    /// <summary>
+    /// What trusting a guest's setup or a service covers, as declared now: the digest a run of it would
+    /// carry, and the protected keys it binds. Null when none can be built, which leaves nothing to trust.
+    /// </summary>
+    public async Task<GuestRelease?> ConfigureReleaseAsync(Resource resource, CancellationToken cancellationToken)
+    {
+        if (resource.RetiredAt is not null || resource.MissingSince is not null || !resource.Valid
+            || await HeadRepositoryAsync(cancellationToken) is not { } head || !head.Repository.IsValid(resource.Address))
+            return null;
+        ConfigureInputs inputs;
+        if (head.Repository.Service(resource.Address) is { } service)
+            inputs = ConfigureInputs.Build(head.Repository, service);
+        else if (head.Repository.Guest(resource.Address) is { SetupRecipe: not null } guest)
+            inputs = ConfigureInputs.Build(head.Repository, guest);
+        else
+            return null;
+        var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+        var keys = inputs.SecretVars.Values.Concat(inputs.SecretFiles.Values).Append(inputs.SshKey).Append(inputs.HostKey)
+            .Select(r => r.Key).Where(guarded.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        return new GuestRelease(inputs.CodeDigest, inputs.Execution, keys, null, null);
     }
 
 
@@ -655,7 +816,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs,
         IReadOnlyDictionary<Guid, JsonObject> observations,
         IReadOnlyDictionary<Guid, string?> observing,
-        InstallationTrust? trust)
+        InstallationTrust? trust,
+        IReadOnlyDictionary<string, List<ServiceSummaryDto>>? services = null)
     {
         var definition = installation.Definition is null ? null : JsonNode.Parse(installation.Definition);
         var observation = observations.GetValueOrDefault(installation.Id);
@@ -669,7 +831,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var guestSummaries = guests.Select(g =>
         {
             var (active, last) = runs.GetValueOrDefault(g.Id);
-            return GuestSummary(g, [.. new[] { active, last }.OfType<Run>()], observation);
+            return GuestSummary(g, [.. new[] { active, last }.OfType<Run>()], observation) with { Services = services?.GetValueOrDefault(g.Address) };
         }).ToList();
 
         var declaredHosts = (definition?["hosts"] as JsonObject)?.Select(p => (p.Key, Limit: p.Value?["limits"]?["concurrentOperations"]?.GetValue<int>())).ToList() ?? [];

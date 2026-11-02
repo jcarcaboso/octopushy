@@ -20,6 +20,17 @@ export function formatBytes(bytes: number | null): string {
   return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
+export interface ServicePort {
+  port: number;
+  protocol: string;
+  sources?: string[];
+}
+
+/** "5432/tcp from 10.15.40.10", or just "8428/tcp" for a port open to every source. */
+export function portLabel(port: ServicePort): string {
+  return `${port.port}/${port.protocol}${port.sources ? ` from ${port.sources.join(", ")}` : ""}`;
+}
+
 /** "1 guest", "3 guests". */
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -60,6 +71,8 @@ export function runResourcePath(run: { resourceKind: string; resourceId: string 
       return `/installations/${run.resourceId}`;
     case "cluster":
       return `/clusters/${run.resourceId}`;
+    case "service":
+      return `/services/${run.resourceId}`;
     default:
       return "/inventory";
   }

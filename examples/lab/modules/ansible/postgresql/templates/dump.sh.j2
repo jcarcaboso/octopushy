@@ -1,0 +1,10 @@
+#!/bin/sh
+# One dump per weekday, so seven are kept. It is written beside the old one and moved over it only
+# when it is whole, so a dump that fails never replaces a good one. These sit on the machine's own
+# disk and die with it: they cover mistakes, not a disk failure.
+set -eu
+dir={{ postgresql_dumps }}
+name={{ postgresql_database }}-$(date +%a).dump
+trap 'rm -f "$dir/.$name.partial"' EXIT
+pg_dump -Fc -f "$dir/.$name.partial" {{ postgresql_database }}
+mv -f "$dir/.$name.partial" "$dir/$name"

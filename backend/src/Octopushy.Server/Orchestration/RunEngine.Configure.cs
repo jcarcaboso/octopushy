@@ -43,7 +43,9 @@ public sealed partial class RunEngine
 
         var manual = policy.Approval == "manual";
         var destructiveManual = ansible.Destructive && policy.Destructive == "manual";
-        step.ApprovalRequired = manual || destructiveManual;
+        // Following an automatic approval is not enough for this, as for replacing a VM.
+        var removalHeld = ansible.Removal && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
+        step.ApprovalRequired = manual || destructiveManual || removalHeld;
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
@@ -58,7 +60,9 @@ public sealed partial class RunEngine
         }
 
         step.Status = StepStatuses.AwaitingApproval;
-        step.Detail = destructiveManual && !manual
+        step.Detail = removalHeld && !manual
+            ? $"The service's folder was deleted, and {ansible.Action} removes it. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
+            : destructiveManual && !manual
             ? $"The recipe declares {ansible.Action} destructive and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
         return false;
@@ -114,6 +118,13 @@ public sealed partial class RunEngine
                 return;
         }
 
+        if (context.Removal)
+        {
+            var removed = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
+            removed.RetiredAt = clock.GetUtcNow();
+            return;
+        }
+
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;
@@ -126,14 +137,21 @@ public sealed partial class RunEngine
             configuration.Snapshot = prepared.ToJsonString();
     }
 
-    /// <summary>A provision run that created or replaced something may have made a new machine, which has to be configured.</summary>
+    /// <summary>
+    /// A provision run that created or replaced something may have made a new machine, which has to be
+    /// configured, and its services deployed. What was applied was applied to the old one, so services
+    /// wait for setup again, in order.
+    /// </summary>
     private static async Task ProposeConfigurationAgainAsync(OctopushyDb db, Run run, CancellationToken cancellationToken)
     {
         var counts = run.Steps.Single(s => s.Name == StepNames.Plan).Outputs is { } text ? JsonNode.Parse(text)?["counts"] : null;
         if ((counts?["create"]?.GetValue<int>() ?? 0) + (counts?["replace"]?.GetValue<int>() ?? 0) == 0)
             return;
-        var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
-        if (configuration is not null)
+        var family = await GuestWork.FamilyAsync(db, run.ResourceId, cancellationToken);
+        foreach (var configuration in await db.GuestConfigurations.Where(c => family.Contains(c.ResourceId)).ToListAsync(cancellationToken))
+        {
             configuration.ProposedHash = null;
+            configuration.AppliedHash = null;
+        }
     }
 }

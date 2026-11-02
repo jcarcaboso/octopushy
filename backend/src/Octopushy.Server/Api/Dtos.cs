@@ -116,7 +116,9 @@ public sealed record ConfigurePreviewDto(
     IReadOnlyList<ConfigureSecretDto> Secrets,
     JsonNode? Prepared,
     IReadOnlyList<string> HostKeyFingerprints,
-    string? PreviewSha256);
+    string? PreviewSha256,
+    /// <summary>What a service declares it listens on; the playbook applies it.</summary>
+    JsonNode? Ports = null);
 
 public sealed record ConfigureSecretDto(string Name, string Reference);
 
@@ -183,7 +185,43 @@ public sealed record GuestSummaryDto(
     bool Valid,
     ObservedGuestDto? Observed,
     RunSummaryDto? ActiveRun,
+    RunSummaryDto? LastRun,
+    IReadOnlyList<ServiceSummaryDto>? Services = null);
+
+/// <summary>A service on a guest: its own status, from its own runs and what it waits for. What it listens on is as declared.</summary>
+public sealed record ServiceSummaryDto(
+    Guid Id,
+    string Address,
+    string Name,
+    string? Recipe,
+    string Status,
+    string? StatusDetail,
+    bool Valid,
+    JsonNode? Ports,
+    RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun);
+
+/// <summary>A service and its history.</summary>
+public sealed record ServiceDetailDto(
+    ServiceSummaryDto Service,
+    Guid? GuestId,
+    string GuestAddress,
+    string? DefinitionFile,
+    string? DefinitionText,
+    IReadOnlyList<IssueDto> Issues,
+    PolicyDto? Policy,
+    IReadOnlyList<string> AgentLabels,
+    string? AgentLabelsSetBy,
+    IReadOnlyList<ConfigureActionDto> Actions,
+    /// <summary>Whether deleting the folder runs something. Without it the service stays until someone forgets it.</summary>
+    bool HasRemoval,
+    string? AppliedAction,
+    string? AppliedCommit,
+    DateTimeOffset? AppliedAt,
+    DateTimeOffset? MissingSince,
+    DateTimeOffset? RetiredAt,
+    IReadOnlyList<RunSummaryDto> Runs,
+    GuestTrustDto Trust);
 
 /// <summary>
 /// The endpoints an installation declares now, and those not trusted yet. Credentials are sent
@@ -362,7 +400,8 @@ public sealed record GuestDetailDto(
     GuestTrustDto Trust,
     bool Stateful,
     bool DataGuarded,
-    GuestConfigurationDto? Configuration);
+    GuestConfigurationDto? Configuration,
+    GuestTrustDto ConfigureTrust);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

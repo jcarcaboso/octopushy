@@ -26,8 +26,9 @@ public sealed partial class AssignmentBuilder
         // Check authority and artifact integrity BEFORE resolving any plaintext.
         var outcome = step.Name == StepNames.PlaybookApproved ? await ApprovedOutcomeAsync(run, cancellationToken) : null;
         var preview = step.Name == StepNames.Preview ? null : await ApprovedPreviewAsync(run, step, cancellationToken);
-        if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
-            throw new AssignmentException("The guest is missing or retired.");
+        // A removal is what a deleted folder asks for, so it is the one run a missing resource gets.
+        if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && (r.MissingSince == null || ansible.Removal), cancellationToken))
+            throw new AssignmentException("The guest or service is missing or retired.");
         var snapshot = ansible.UsesAppliedSnapshot && step.Name == StepNames.Preview
             ? await db.GuestConfigurations.AsNoTracking().Where(c => c.ResourceId == run.ResourceId).Select(c => c.Snapshot).FirstOrDefaultAsync(cancellationToken)
                 ?? throw new AssignmentException("This action reuses what the last successful run prepared, and the guest has none yet.")
@@ -49,6 +50,10 @@ public sealed partial class AssignmentBuilder
         values.Remove(SecretNames.AnsibleHostKey, out var hostKey);
         if (string.IsNullOrWhiteSpace(hostKey))
             throw new CredentialUnavailableException($"Blocked credentials: {context.Secrets[SecretNames.AnsibleHostKey]}: empty");
+        // Code outside what was reviewed cannot run if it never arrives.
+        var reviewed = await ProtectedSecrets.AnyAsync(db, context.Secrets.Values, cancellationToken);
+        if (reviewed && context.ReviewedPaths is null)
+            throw new CredentialUnavailableException("This run holds a protected secret and has no reviewed code; run it again.");
 
         var input = new JsonObject
         {
@@ -72,6 +77,8 @@ public sealed partial class AssignmentBuilder
                 ["commit"] = context.Commit,
                 ["action"] = ansible.Action,
                 ["run"] = run.Id.ToString(),
+                ["service"] = ansible.Service,
+                ["ports"] = ansible.Ports?.DeepClone() ?? new JsonArray(),
             },
             ["guestDirectory"] = ansible.GuestDirectory,
             ["outcomes"] = new JsonArray(ansible.Outcomes.Keys.Select(k => (JsonNode?)k).ToArray()),
@@ -95,7 +102,9 @@ public sealed partial class AssignmentBuilder
             Action = step.Name == StepNames.Preview ? "preview" : "run",
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             InputJson = input.ToJsonString(),
-            FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken)),
+            FilesTarGz = ByteString.CopyFrom(reviewed
+                ? await mirror.BundleAsync(run.Commit!, context.ReviewedPaths!, cancellationToken)
+                : await mirror.BundleAsync(run.Commit!, cancellationToken)),
         };
         if (preview is not null)
             assignment.Artifacts.Add(preview);
@@ -120,6 +129,8 @@ public sealed partial class AssignmentBuilder
             ["image"] = ansible.Image,
             ["host"] = $"{ansible.User}@{ansible.Address}:{ansible.Port}",
             ["destructive"] = ansible.Destructive,
+            ["service"] = ansible.Service,
+            ["ports"] = ansible.Ports?.DeepClone(),
             ["vars"] = ansible.Vars.DeepClone(),
             ["secrets"] = new JsonObject(context.Secrets.Keys.Where(k => k != SecretNames.AnsibleHostKey).Order(StringComparer.Ordinal)
                 .Select(name => KeyValuePair.Create(name, (JsonNode?)$"{context.Secrets[name]} v{context.SecretVersions[name]}"))),

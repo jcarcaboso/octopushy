@@ -1,0 +1,22 @@
+schemaVersion: 1
+description: VictoriaMetrics, one checksum-pinned release, behind a password.
+operation: configure
+executor: ansible
+root: ../../modules/ansible/victoriametrics
+inputs: inputs.schema.json
+secrets: [victoriametrics_password]
+actions:
+  deploy:
+    description: Install, or bring what differs back to what is declared. Refuses to shorten retention.
+    playbook: deploy.yml
+    destructive: false
+    onChange: true
+  shrink-retention:
+    description: The same, allowed to shorten retention. VictoriaMetrics then discards what is older.
+    playbook: shrink-retention.yml
+    destructive: true
+  remove:
+    description: Stop and disable VictoriaMetrics. Its data stays on disk.
+    playbook: remove.yml
+    destructive: true
+    removal: true

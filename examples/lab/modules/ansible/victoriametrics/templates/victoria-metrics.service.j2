@@ -1,0 +1,18 @@
+[Unit]
+Description=VictoriaMetrics
+After=network-online.target
+
+[Service]
+User=victoriametrics
+EnvironmentFile={{ victoriametrics_config }}/auth.env
+ExecStart={{ victoriametrics_base }}/current/victoria-metrics-prod -envflag.enable -storageDataPath={{ victoriametrics_data }} -retentionPeriod={{ victoriametrics_retention }} -relabelConfig={{ victoriametrics_config }}/relabel.yaml -memory.allowedBytes={{ victoriametrics_memory | default('256MiB') }} -httpListenAddr=:{{ victoriametrics_port }}
+Restart=always
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ victoriametrics_data }}
+
+[Install]
+WantedBy=multi-user.target

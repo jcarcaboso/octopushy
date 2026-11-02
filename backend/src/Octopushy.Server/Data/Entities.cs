@@ -195,6 +195,7 @@ public static class ResourceKinds
     public const string Lab = "lab";
     public const string Installation = "installation";
     public const string Guest = "guest";
+    public const string Service = "service";
     public const string Cluster = "cluster";
 }
 

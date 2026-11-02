@@ -62,6 +62,11 @@ e2e: dev-db
 e2e-ansible runtime="podman":
     E2E_TOOL_RUNTIME={{runtime}} tests/ansible/run.sh
 
+# The service layer end to end, on the ha-db example: real OpenTofu, Ansible, PostgreSQL and VictoriaMetrics
+# in a throwaway Debian 13 container, with a stand-in for Proxmox. It installs for real, so it needs outbound access.
+services runtime="local":
+    E2E_TOOL_RUNTIME={{runtime}} tests/services/run.sh
+
 # A local demo with a real agent and a mock Proxmox, at http://127.0.0.1:5174.
 demo: dev-db
     tests/e2e/demo.sh

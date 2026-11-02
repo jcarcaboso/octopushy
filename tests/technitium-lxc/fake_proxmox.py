@@ -22,7 +22,7 @@ UPID = "UPID:korriban:00000001:00000001:00000001:fake:0:root@pam:"
 
 def stored_config(vmid, container):
     """What Proxmox answers: integers, a description with a newline, and allocated volumes."""
-    hidden = {"status", "ssh-public-keys", "ostemplate", "vmid", "storage", "start"}
+    hidden = {"status", "ssh-public-keys", "ostemplate", "vmid", "storage", "start", "node"}
     config = {k: int(v) if str(v).isdigit() else v for k, v in container.items() if k not in hidden}
     config["description"] = container.get("description", "") + "\n"
     config["digest"] = "a" * 40
@@ -79,8 +79,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == "/version":
             return self.answer({"version": "9.1.1", "release": "9.1", "repoid": "fake"})
+        # What an agent asks when it verifies a guest and observes an installation.
+        if path == "/access/permissions":
+            asked = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("path", ["/"])[0]
+            return self.answer({asked: {"VM.Audit": 1, "Sys.Audit": 1, "Datastore.Audit": 1}})
+        if path == "/nodes":
+            return self.answer([{"node": "ziost", "id": "node/ziost", "type": "node", "status": "online", "level": ""}])
         if path == "/cluster/resources":
-            return self.answer([{"id": f"lxc/{vmid}", "type": "lxc", "vmid": vmid, "node": "korriban",
+            return self.answer([{"id": f"lxc/{vmid}", "type": "lxc", "vmid": vmid, "node": container["node"],
                                  "name": container.get("hostname"), "status": container["status"]}
                                 for vmid, container in containers.items()])
         if rest.startswith("query-url-metadata"):
@@ -95,7 +101,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.answer({"status": "stopped", "exitstatus": "OK", "pid": 1, "type": "x", "upid": UPID})
         if rest == "lxc" and method == "POST":
             vmid = int(form["vmid"])
-            containers[vmid] = {**form, "status": "stopped"}
+            containers[vmid] = {**form, "status": "stopped", "node": node.group(1)}
             (share / "ssh/authorized_keys").write_text(form.get("ssh-public-keys", "") + "\n")
             return self.answer(UPID)
         if guest := re.fullmatch(r"lxc/(\d+)(/.*)?", rest):

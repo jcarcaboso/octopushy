@@ -1,0 +1,17 @@
+---
+# The one action that may shorten retention. The recipe declares it destructive, so it waits under
+# policy.destructive: manual. VictoriaMetrics discards what is older once this has run.
+- name: VictoriaMetrics, with less retention
+  hosts: all
+  gather_facts: false
+  vars:
+    victoriametrics_allow_shrink: true
+  tasks:
+    - name: Deploy
+      ansible.builtin.import_tasks: tasks/deploy.yml
+  handlers:
+    - name: Restart VictoriaMetrics
+      ansible.builtin.systemd_service:
+        name: victoria-metrics
+        state: restarted
+        daemon_reload: true

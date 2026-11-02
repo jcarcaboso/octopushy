@@ -1,0 +1,31 @@
+---
+# A guest's setup: what the machine needs whatever runs on it. Nothing here belongs to a service,
+# so a service never has to run this again, and this never touches a service.
+- name: Give Ansible what it needs
+  hosts: all
+  gather_facts: false
+  tasks:
+    # A template may have no Python, and every module but this one needs it.
+    - name: Install Python if it is missing
+      ansible.builtin.raw: >-
+        command -v python3 >/dev/null ||
+        { apt-get -o DPkg::Lock::Timeout=120 update -q &&
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -yq --no-install-recommends python3; }
+      changed_when: false
+
+- name: Prepare the machine
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the base packages
+      ansible.builtin.apt:
+        name: [ca-certificates, cron, unattended-upgrades]
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 120
+    - name: Run cron
+      ansible.builtin.systemd_service:
+        name: cron
+        enabled: true
+        state: started

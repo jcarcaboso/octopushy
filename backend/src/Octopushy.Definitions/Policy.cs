@@ -27,6 +27,15 @@ public static class PolicyResolver
         Resolve(Chain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
             .Append((guest.Address, guest.Policy)));
 
+    /// <summary>A service's guest passes its settings down; approving the guest still never approves the service.</summary>
+    public static EffectivePolicy For(LabRepository repository, ServiceDefinition service)
+    {
+        var guest = repository.Guest(service.Guest)!;
+        return Resolve(Chain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
+            .Append((guest.Address, guest.Policy))
+            .Append((service.Address, service.Policy)));
+    }
+
     public static EffectivePolicy For(LabRepository repository, InstallationDefinition installation) =>
         Resolve(Chain(repository, installation.Lab, installation));
 
@@ -41,6 +50,14 @@ public static class PolicyResolver
     public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, GuestDefinition guest) =>
         ResolveLabels(LabelChain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
             .Append((guest.Address, guest.AgentLabels)));
+
+    public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, ServiceDefinition service)
+    {
+        var guest = repository.Guest(service.Guest)!;
+        return ResolveLabels(LabelChain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
+            .Append((guest.Address, guest.AgentLabels))
+            .Append((service.Address, service.AgentLabels)));
+    }
 
     public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, InstallationDefinition installation) =>
         ResolveLabels(LabelChain(repository, installation.Lab, installation));
