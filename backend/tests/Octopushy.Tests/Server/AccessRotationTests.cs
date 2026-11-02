@@ -144,8 +144,9 @@ public class AccessRotationTests(PostgresFixture postgres)
         Assert.Null((await KeysAsync(server))[0].RemovedAt);
         var confirm = await agent.NextAsync("run");
         Assert.Equal(GuestAccessPlaybooks.Refused, Input(confirm)["playbook"]!.GetValue<string>());
-        Assert.True(Input(confirm)["expectRefused"]!.GetValue<bool>());
-        Assert.Contains(oldKey, confirm.Secrets.Values);
+        Assert.Equal(SecretNames.AnsibleRefusedKeys, Input(confirm)["expectRefused"]!.GetValue<string>());
+        Assert.Equal(oldKey, confirm.Secrets[SecretNames.AnsibleRefusedKeys]);
+        Assert.NotEqual(oldKey, confirm.Secrets[SecretNames.AnsibleSshKey]);
         await agent.ReportAsync(confirm, Outcome.Succeeded, Refused());
         await server.TickAsync();
 
@@ -252,6 +253,32 @@ public class AccessRotationTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Every_old_key_goes_to_the_agent_and_all_have_to_be_refused()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var __ = http;
+        var run = await RotateAsync(server, agent, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+        await DecideAsync(server, http, run, StepNames.PromoteKey);
+        await server.TickAsync();
+        await DecideAsync(server, http, run, StepNames.ApproveRemoval, approve: false);
+
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        var confirm = await agent.NextAsync("run");
+        Assert.Equal(2, confirm.Secrets[SecretNames.AnsibleRefusedKeys].Split("-----BEGIN ").Length - 1);
+        await agent.ReportAsync(confirm, Outcome.Succeeded, Refused(keys: 1));
+        await server.TickAsync();
+        var stopped = await server.LatestRunAsync(Guest, Operations.RotateAccess);
+        Assert.Equal(RunStatuses.Failed, stopped.Status);
+        Assert.Equal(AttemptStatuses.Failed, stopped.Steps.Single(s => s.Name == StepNames.ConfirmRefused).Attempts.Single().Status);
+        Assert.All((await KeysAsync(server)).Take(2), k => Assert.Null(k.RemovedAt));
+    }
+
+    [Fact]
     public async Task A_rotation_starts_by_proving_the_key_in_use_and_stops_if_it_cannot()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Managed());
@@ -310,7 +337,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         Assert.Equal(new[] { keys[0].PublicKey }, ManagedKeys(plan, keys));
 
         // One that makes a new machine stops, because that machine would have a key nobody holds.
-        await agent.ReportAsync(plan, Outcome.Succeeded, MachinePlan(), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(plan, Outcome.Succeeded, MachinePlan(310, "delete", "create"), artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
         var stopped = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, stopped.Status);
@@ -325,14 +352,14 @@ public class AccessRotationTests(PostgresFixture postgres)
         Input(plan)["variables"]!["guest"]!["sshAuthorizedKeys"]!.AsArray().Select(k => k!.GetValue<string>())
             .Intersect(keys.Select(k => k.PublicKey)).ToArray();
 
-    private static JsonObject MachinePlan(int vmid = 310) => new()
+    private static JsonObject MachinePlan(int vmid = 310, params string[] actions) => new()
     {
         ["hasChanges"] = true,
         ["changes"] = new JsonArray(new JsonObject
         {
             ["address"] = "proxmox_virtual_environment_vm.guest",
             ["type"] = GuestVmPlan.VmResourceType,
-            ["actions"] = new JsonArray("create"),
+            ["actions"] = new JsonArray((actions.Length == 0 ? ["create"] : actions).Select(a => JsonValue.Create(a)).ToArray<JsonNode?>()),
             ["vmId"] = vmid,
             ["node"] = "korriban",
         }),
@@ -340,10 +367,10 @@ public class AccessRotationTests(PostgresFixture postgres)
         ["toolVersion"] = "1.13.1",
     };
 
-    private static JsonObject Refused()
+    private static JsonObject Refused(int keys = 1)
     {
         var outputs = ConfigureRunTests.Recap();
-        outputs["refused"] = true;
+        outputs["refusedKeys"] = keys;
         return outputs;
     }
 

@@ -156,10 +156,16 @@ public sealed partial class RunEngine
             case StepNames.ConfirmRefused:
                 // Only sshd refusing them counts. Until then they stay on the list, so a later
                 // rotation looks again, and takes off whatever is still there.
-                if (outputs?["refused"]?.GetValue<bool>() != true)
+                if (outputs?["refusedKeys"]?.GetValue<int>() != rotation.Remove.Count)
                 {
                     step.Status = StepStatuses.Failed;
-                    step.Detail = "Nothing showed sshd refusing the old key.";
+                    step.Detail = "Nothing showed sshd refusing every old key.";
+                    if (step.Attempts.MaxBy(a => a.Number) is { } attempt)
+                    {
+                        attempt.Status = AttemptStatuses.Failed;
+                        attempt.Error = step.Detail;
+                    }
+
                     return;
                 }
 

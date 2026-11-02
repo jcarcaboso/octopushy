@@ -50,26 +50,32 @@ public sealed partial class AssignmentBuilder
         if (ownKey || (rotation is not null && step.Name != StepNames.Preview))
         {
             var key = GuestAccessCredentials.Key(run.ResourceId);
-            IReadOnlyList<int> versions = rotation is null ? [context.SecretVersions[SecretNames.AnsibleSshKey]]
-                : step.Name is StepNames.VerifyCurrent or StepNames.AuthorizeKey ? [rotation.Current]
-                : step.Name == StepNames.ConfirmRefused ? rotation.Remove
-                : [rotation.Candidate];
-            var released = new List<string>();
-            foreach (var version in versions)
+            async Task<string> ReleaseAsync(IEnumerable<int> versions)
             {
-                var value = await store.GetVersionInternalAsync(key, version, cancellationToken, rotation is not null);
-                if (value is null)
+                var released = new List<string>();
+                foreach (var version in versions)
                 {
-                    missing.Add($"{key} v{version}");
-                    continue;
+                    var value = await store.GetVersionInternalAsync(key, version, cancellationToken, rotation is not null);
+                    if (value is null)
+                    {
+                        missing.Add($"{key} v{version}");
+                        continue;
+                    }
+
+                    db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+                    released.Add(value);
                 }
 
-                db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
-                released.Add(value);
+                return string.Join("\n", released);
             }
 
+            IReadOnlyList<int> inUse = rotation is null ? [context.SecretVersions[SecretNames.AnsibleSshKey]]
+                : step.Name is StepNames.VerifyCurrent or StepNames.AuthorizeKey ? [rotation.Current]
+                : [rotation.Candidate];
+            values[SecretNames.AnsibleSshKey] = await ReleaseAsync(inUse);
+            if (step.Name == StepNames.ConfirmRefused)
+                values[SecretNames.AnsibleRefusedKeys] = await ReleaseAsync(rotation!.Remove);
             await db.SaveChangesAsync(cancellationToken);
-            values[SecretNames.AnsibleSshKey] = string.Join("\n", released);
         }
 
         if (missing.Count > 0)
@@ -114,7 +120,7 @@ public sealed partial class AssignmentBuilder
         if (step.Name != StepNames.Preview)
             input["sshKey"] = SecretNames.AnsibleSshKey;
         if (step.Name == StepNames.ConfirmRefused)
-            input["expectRefused"] = true;
+            input["expectRefused"] = SecretNames.AnsibleRefusedKeys;
         if (outcome?.ApproveVars is { } vars)
             input["approvedVars"] = vars.DeepClone();
 

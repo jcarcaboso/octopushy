@@ -62,6 +62,12 @@ const NEVER_CONNECTED: &[&str] = &[
     "Too many authentication failures",
 ];
 
+/// Refused logins that sshd's PerSourcePenalties lets through in a row. Past that, this address
+/// would be blocked, and a blocked login says nothing about a key.
+const FREE_REFUSALS: usize = 2;
+/// Long enough for one refusal's penalty to run out before the next is earned.
+const REFUSAL_SPACING: Duration = Duration::from_secs(6);
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Input {
@@ -103,9 +109,10 @@ struct Input {
     /// What the controller wants an approval to cover, recorded in the preview unchanged.
     #[serde(default)]
     manifest: Value,
-    /// The run succeeds only if sshd turns these keys away. A login is the failure.
+    /// The secret holding keys that were removed. The run logs in with each one alone and needs
+    /// sshd to turn it away, and then needs `ssh_key` to get in, at that moment and from here.
     #[serde(default)]
-    expect_refused: bool,
+    expect_refused: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -701,23 +708,125 @@ fn approved_preview(ctx: &ExecContext) -> Result<Option<Map<String, Value>>, Fai
 }
 
 /// The document `octopushy-ansible` reads from stdin.
-fn secrets_document(input: &Input, ctx: &ExecContext) -> Result<Vec<u8>, Failure> {
+fn secrets_document(input: &Input, ctx: &ExecContext, key: &str) -> Result<Vec<u8>, Failure> {
     let resolve = |names: &BTreeMap<String, String>| -> Result<Map<String, Value>, Failure> {
         names
             .iter()
             .map(|(name, secret)| Ok((name.clone(), json!(ctx.secrets.get(secret)?))))
             .collect()
     };
-    let key = input
-        .ssh_key
-        .as_ref()
-        .ok_or_else(|| Failure::msg("the input names no SSH key"))?;
     let document = json!({
-        "sshKey": ctx.secrets.get(key)?,
+        "sshKey": key,
         "secretVars": resolve(&input.secret_vars)?,
         "secretFiles": resolve(&input.secret_files)?,
     });
     Ok(serde_json::to_vec(&document).map_err(anyhow::Error::from)?)
+}
+
+/// The SSH key the input names.
+fn own_key<'c>(input: &Input, ctx: &'c ExecContext) -> Result<&'c str, Failure> {
+    let name = input
+        .ssh_key
+        .as_ref()
+        .ok_or_else(|| Failure::msg("the input names no SSH key"))?;
+    ctx.secrets.get(name)
+}
+
+/// The keys a value holds, one after another, each ending at its PEM end line.
+fn split_keys(value: &str) -> Result<Vec<String>, Failure> {
+    let mut keys = Vec::new();
+    let mut key = String::new();
+    for line in value.lines() {
+        if key.is_empty() && line.trim().is_empty() {
+            continue;
+        }
+        key.push_str(line);
+        key.push('\n');
+        if line.trim_start().starts_with("-----END ") {
+            keys.push(std::mem::take(&mut key));
+        }
+    }
+    if keys.is_empty() || !key.is_empty() {
+        return Err(Failure::msg("the keys to try could not be told apart"));
+    }
+    Ok(keys)
+}
+
+/// One `ansible-playbook` run, under the run's limit.
+struct Play<'a> {
+    tool: Ansible<'a>,
+    args: Vec<String>,
+    settings: Vec<(String, String)>,
+    minutes: u64,
+}
+
+impl Play<'_> {
+    async fn run(&self, step: &str, stdin: Vec<u8>) -> Result<ToolOutput, Failure> {
+        let stop = self.tool.ctx.cancel.child_token();
+        let timer = {
+            let stop = stop.clone();
+            let minutes = self.minutes;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(minutes.saturating_mul(60))).await;
+                stop.cancel();
+            })
+        };
+        let out = self
+            .tool
+            .run(
+                step,
+                self.args.clone(),
+                self.settings.clone(),
+                Some(stdin),
+                false,
+                &stop,
+            )
+            .await;
+        timer.abort();
+        out
+    }
+
+    async fn once(&self) -> ExecResult {
+        let (prep, ctx) = (self.tool.prep, self.tool.ctx);
+        let stdin = secrets_document(&prep.input, ctx, own_key(&prep.input, ctx)?)?;
+        let out = self.run("playbook", stdin).await?;
+        let recap = read_recap(&out, ctx);
+        settle(prep, &out, recap, self.minutes)
+    }
+
+    /// Each key alone, so sshd's answer is about that key and every one of them was offered.
+    /// The key in use comes last: a refusal only means something if sshd takes a key that is
+    /// authorized, at that moment, from this address.
+    async fn confirm_refused(&self, secret: &str) -> ExecResult {
+        let (prep, ctx) = (self.tool.prep, self.tool.ctx);
+        let keys = split_keys(ctx.secrets.get(secret)?)?;
+        let total = keys.len();
+        for (index, key) in keys.iter().enumerate() {
+            if index >= FREE_REFUSALS {
+                tokio::time::sleep(REFUSAL_SPACING).await;
+            }
+            let which = format!("old key {} of {total}", index + 1);
+            ctx.log
+                .agent(format!("logging in with {which}, which sshd has to refuse"));
+            let stdin = secrets_document(&prep.input, ctx, key)?;
+            let out = self.run(&format!("refused-{index}"), stdin).await?;
+            let recap = read_recap(&out, ctx);
+            settle_refused(prep, &out, recap, self.minutes, &which)?;
+        }
+        ctx.log
+            .agent("logging in with the key in use, which sshd has to take");
+        let stdin = secrets_document(&prep.input, ctx, own_key(&prep.input, ctx)?)?;
+        let out = self.run("control", stdin).await?;
+        let recap = read_recap(&out, ctx);
+        let mut success = settle(prep, &out, recap, self.minutes).map_err(|failure| {
+            Failure::msg(format!(
+                "the key in use did not log in straight afterwards, so sshd turning the old keys away shows nothing about them: {}",
+                failure.message()
+            ))
+        })?;
+        success.outputs["refusedKeys"] = json!(total);
+        Ok(success)
+    }
 }
 
 async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
@@ -756,7 +865,6 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
     let mut args = tool.common_args(&extra)?;
     args.push(tool.path(&prep.root.join(relative(&prep.input.playbook, "playbook")?))?);
-    let stdin = secrets_document(&prep.input, ctx)?;
 
     let mut settings = vec![("OCTOPUSHY_STDIN".to_owned(), "1".to_owned())];
     if !cfg.runtime.is_container() {
@@ -770,24 +878,20 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         .input
         .timeout_minutes
         .unwrap_or(DEFAULT_TIMEOUT_MINUTES);
-    let stop = ctx.cancel.child_token();
-    let timer = {
-        let stop = stop.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(minutes.saturating_mul(60))).await;
-            stop.cancel();
-        })
+    let play = Play {
+        tool,
+        args,
+        settings,
+        minutes,
     };
-    let out = tool
-        .run("playbook", args, settings, Some(stdin), false, &stop)
-        .await;
-    timer.abort();
+    let result = match &prep.input.expect_refused {
+        Some(secret) => play.confirm_refused(secret).await,
+        None => play.once().await,
+    };
     if !cfg.runtime.is_container() {
         remove_secret_dir(&ctx.attempt_id);
     }
-    let out = out?;
-    let recap = read_recap(&out, ctx);
-    settle(&prep, &out, recap, minutes)
+    result
 }
 
 /// The recap, with what is free text masked and then cut to size. Masking comes after parsing
@@ -825,6 +929,46 @@ fn never_connected(recap: &Recap) -> bool {
 /// What a run's exit status and recap mean. Whatever cannot be shown to have stayed off the
 /// guest, or to have ended there, is uncertain.
 fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64) -> ExecResult {
+    let recap = finished(out, recap, minutes)?;
+    let code = exit_text(out);
+    // Before any outcome, and even at exit 0: a play that ignores an unreachable host has not
+    // found out how that task ended, and an earlier outcome says nothing about it.
+    if recap.unreachable.is_some() {
+        if never_connected(&recap) {
+            return Err(unreachable_failure(prep, &recap, &outputs(out, &recap)));
+        }
+        return Err(Failure::Uncertain(format!(
+            "the guest stopped answering during {}; whether the task finished is unknown. Inspect the guest, and any lock it holds, before running it again",
+            recap.unreachable_task.as_deref().unwrap_or("a task")
+        )));
+    }
+    if let Some(outcome) = &recap.outcome {
+        if !prep.input.outcomes.iter().any(|o| o == outcome) {
+            // Not repeated: only a declared name is known not to be a secret.
+            return Err(Failure::with_outputs(
+                "the playbook reported an outcome the recipe does not declare",
+                outputs(out, &recap),
+            ));
+        }
+        let mut result = outputs(out, &recap);
+        result["outcome"] = json!(outcome);
+        result["detail"] = json!(recap.detail);
+        return Ok(Success::outputs(result));
+    }
+    if out.code == Some(0) {
+        return Ok(Success::outputs(outputs(out, &recap)));
+    }
+    Err(Failure::with_outputs(
+        match recap.failed_task.as_deref() {
+            Some(task) => format!("the task {task:?} failed (exit status {code})"),
+            None => format!("ansible-playbook failed (exit status {code})"),
+        },
+        outputs(out, &recap),
+    ))
+}
+
+/// What the recap says, once it is known the run ended and left one.
+fn finished(out: &ToolOutput, recap: Option<Recap>, minutes: u64) -> Result<Recap, Failure> {
     if out.cancelled {
         return Err(Failure::Uncertain(format!(
             "the playbook passed its limit of {minutes} minutes and was stopped; whether it finished what it was doing is unknown. Inspect the guest, and any lock it holds, before running it again"
@@ -839,56 +983,28 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
             "ansible-playbook ended (exit status {code}) without saying how far it got; whether a change was made is unknown. Inspect the guest, and any lock it holds, before running it again"
         )));
     };
-    let outputs = |recap: &Recap| {
-        json!({
-            "exitCode": out.code,
-            "tasks": recap.tasks,
-            "recap": recap.stats,
-            "failedTask": recap.failed_task,
-            "unreachableTask": recap.unreachable_task,
-        })
-    };
-    if prep.input.expect_refused {
-        return settle_refused(prep, &recap, outputs(&recap));
-    }
-    // Before any outcome, and even at exit 0: a play that ignores an unreachable host has not
-    // found out how that task ended, and an earlier outcome says nothing about it.
-    if recap.unreachable.is_some() {
-        if never_connected(&recap) {
-            return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
-        }
-        return Err(Failure::Uncertain(format!(
-            "the guest stopped answering during {}; whether the task finished is unknown. Inspect the guest, and any lock it holds, before running it again",
-            recap.unreachable_task.as_deref().unwrap_or("a task")
-        )));
-    }
-    if let Some(outcome) = &recap.outcome {
-        if !prep.input.outcomes.iter().any(|o| o == outcome) {
-            // Not repeated: only a declared name is known not to be a secret.
-            return Err(Failure::with_outputs(
-                "the playbook reported an outcome the recipe does not declare",
-                outputs(&recap),
-            ));
-        }
-        let mut result = outputs(&recap);
-        result["outcome"] = json!(outcome);
-        result["detail"] = json!(recap.detail);
-        return Ok(Success::outputs(result));
-    }
-    if out.code == Some(0) {
-        return Ok(Success::outputs(outputs(&recap)));
-    }
-    Err(Failure::with_outputs(
-        match recap.failed_task.as_deref() {
-            Some(task) => format!("the task {task:?} failed (exit status {code})"),
-            None => format!("ansible-playbook failed (exit status {code})"),
-        },
-        outputs(&recap),
-    ))
+    Ok(recap)
+}
+
+fn outputs(out: &ToolOutput, recap: &Recap) -> Value {
+    json!({
+        "exitCode": out.code,
+        "tasks": recap.tasks,
+        "recap": recap.stats,
+        "failedTask": recap.failed_task,
+        "unreachableTask": recap.unreachable_task,
+    })
 }
 
 /// Only sshd's own refusal counts: a guest that did not answer has said nothing about a key.
-fn settle_refused(prep: &Prepared, recap: &Recap, mut result: Value) -> ExecResult {
+fn settle_refused(
+    prep: &Prepared,
+    out: &ToolOutput,
+    recap: Option<Recap>,
+    minutes: u64,
+    which: &str,
+) -> Result<(), Failure> {
+    let recap = finished(out, recap, minutes)?;
     let refused = !recap.reached
         && recap
             .unreachable
@@ -896,16 +1012,18 @@ fn settle_refused(prep: &Prepared, recap: &Recap, mut result: Value) -> ExecResu
             // With the bracket it is sshd listing its methods. Without, it can be a local firewall.
             .is_some_and(|m| m.contains("Permission denied ("));
     if refused {
-        result["refused"] = json!(true);
-        return Ok(Success::outputs(result));
+        return Ok(());
     }
+    let result = outputs(out, &recap);
     if recap.reached {
         return Err(Failure::with_outputs(
-            "sshd still accepts a key that was removed. It is not in authorized_keys, so another file or setting authorizes it; it stays listed as authorized until sshd refuses it",
+            format!(
+                "sshd still accepts {which}, which was removed. It is not in authorized_keys, so another file or setting authorizes it; it stays listed as authorized until sshd refuses it"
+            ),
             result,
         ));
     }
-    Err(unreachable_failure(prep, recap, &result))
+    Err(unreachable_failure(prep, &recap, &result))
 }
 
 fn failed_before_tasks(out: &ToolOutput) -> String {

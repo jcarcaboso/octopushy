@@ -220,6 +220,7 @@ public static class SecretNames
     public const string DiskReporterToken = "disk-reporter.token";
 
     public const string AnsibleSshKey = "ansible.ssh-key";
+    public const string AnsibleRefusedKeys = "ansible.refused-keys";
     public const string AnsibleHostKey = "ansible.host-key";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";

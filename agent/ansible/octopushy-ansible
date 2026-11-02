@@ -14,7 +14,6 @@ import ctypes
 import json
 import os
 import pwd
-import re
 import shutil
 import signal
 import subprocess
@@ -100,18 +99,17 @@ def start_ssh_agent(private, key, environment):
         if os.path.exists(socket):
             break
         time.sleep(0.02)
-    # More than one only to show sshd refuses them all.
-    for one in re.findall(r"-----BEGIN .*?-----END [^\n]*", key.replace("\r\n", "\n"), re.S) or [key]:
-        added = subprocess.run(
-            ["ssh-add", "-q", "-"],
-            input=(one.strip() + "\n").encode(),
-            env=environment,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        if added.returncode != 0:
-            agent.kill()
-            fail("the SSH private key could not be loaded; it must be an unencrypted OpenSSH key")
+    normalized = key.replace("\r\n", "\n").strip() + "\n"
+    added = subprocess.run(
+        ["ssh-add", "-q", "-"],
+        input=normalized.encode(),
+        env=environment,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if added.returncode != 0:
+        agent.kill()
+        fail("the SSH private key could not be loaded; it must be an unencrypted OpenSSH key")
     return agent
 
 

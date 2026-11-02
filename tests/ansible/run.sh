@@ -398,14 +398,30 @@ podman exec "$target" rm /home/ops/.ssh/authorized_keys2
 run=$(start_action configure)
 wait_run "$run" succeeded
 
-log "The next rotation shows sshd refusing every old key it has left"
+log "With two old keys, the second is the one sshd still takes"
+second_key=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.publicKey)
+second_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2' <<<"$second_key"
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts old key 2 of 2' \
+  || fail "the run does not say which old key sshd took"
+[[ $(key_state "$second_version") == old ]] || fail "a key sshd still takes does not read as old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+
+log "The next rotation shows sshd refusing all three old keys it has left"
 run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
 for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
 decide "$run" promote-key
 decide "$run" approve-removal
 wait_run "$run" succeeded
+logs_of "$run" | grep -q 'old key 3 of 3' || fail "not every old key was tried"
+if logs_of "$run" | grep -q 'PRIVATE KEY'; then fail "a private key reached a log"; fi
 [[ $(key_state "$kept_version") == removed ]] || fail "the key left behind was not removed by the next rotation"
-[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 3 ]] \
+[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 4 ]] \
   || fail "not every old key reads as removed"
 
 log "What a rotation removes, against a real sshd"

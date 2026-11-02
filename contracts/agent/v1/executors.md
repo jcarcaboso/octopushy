@@ -414,10 +414,12 @@ Input (the same for both actions, except as noted):
   and `octopushy`.
 - No `--check`, `--tags`, `--limit` or `--start-at-task` is ever passed.
 - Outputs of a failed or uncertain run never hold a task's result.
-- `expectRefused: true`, on `run` only, turns the run into a check that `sshd` turns the key away.
-  It succeeds with `refused: true` in its outputs only when nothing reached the guest and `ssh`
-  reported `Permission denied (…)`. A login is a failure, and so is anything else that happened.
-  `sshKey` may then hold several keys, one after another, and all of them are offered.
+- `expectRefused`, on `run` only, names a secret holding keys that were removed, one after another.
+  The playbook runs once with each key alone, and each time nothing may reach the guest and `ssh`
+  must report `Permission denied (…)`. Then it runs with `sshKey`, which has to log in. Only then
+  does the run succeed, with the number of keys in `refusedKeys` in its outputs. Anything else is a
+  failure. From the third key on, runs are spaced so that `PerSourcePenalties` does not block the
+  address.
 
 ### `preview`
 
