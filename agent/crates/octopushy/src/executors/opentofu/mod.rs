@@ -874,6 +874,7 @@ mod tests {
             stdout: Vec::new(),
             stderr_tail: tail.iter().map(|l| (*l).to_owned()).collect(),
             stderr_marked: false,
+            control: None,
             cancelled: false,
         };
         let message = format!("{:?}", super::step_failed("plan", &out));

@@ -160,16 +160,16 @@ actions:
 A run reaches a container over SSH, with the same pin as a VM. Two things need saying, because cloud-init does not
 apply to a container and Proxmox has no guest exec for one.
 
-**`sshd` and a login user.** The Debian 13 template ships `openssh-server`, and `root` is the login:
+**`sshd` and a login user.** The Debian 13 template ships `openssh-server` and `python3`, and `root` is the login:
 
 - `access.sshAuthorizedKeys` holds the public half. Proxmox writes it into `/root/.ssh/authorized_keys` when it creates the
   container, and only then, so a change to it later does nothing.
 - `access.sshKey` is a store reference to the private half, and `access.user: root`.
 - Debian's default `PermitRootLogin prohibit-password` accepts the key and no password.
 
-**The first pin.** Proxmox generates the host keys itself, in `pct create`, so the key exists before the container first
-starts, and `rewrite_ssh_host_keys` in pve-container prints each fingerprint into the create task's log. Octopushy never scans,
-so a person reads the key through Proxmox:
+**The first pin.** The template holds host keys of its own, and every container made from it would share them, so Proxmox
+replaces them in `pct create`: `rewrite_ssh_host_keys` in pve-container makes new ones and prints each fingerprint into the
+create task's log. So the key exists before the container first starts. Octopushy never scans, so a person reads the key through Proxmox:
 
 ```sh
 # on the Proxmox host, as root
@@ -183,7 +183,7 @@ interface does the same job.
 
 If you would rather not use a shell on the host, the create task's log gives the fingerprint through the Proxmox API,
 so a key copied from anywhere can be checked against it with `ssh-keygen -lf`. That is the same anchor, with one more step.
-The source says this, and **it has not been seen on a host**. A replaced container has new keys, so its runs fail closed
+This comes from reading pve-container, and **it has not been seen on a host**. A replaced container has new keys, so its runs fail closed
 until the pin is set again.
 
 Nothing here gives a run Proxmox credentials: service and configure runs hold the SSH key, the pin and their own
@@ -264,6 +264,27 @@ secrets, tick **Protected**, and put them in Home Assistant's `secrets.yaml`. Th
 On the container, the VictoriaMetrics password is in `/etc/victoria-metrics/auth.env`, mode 0600, as it must be. PostgreSQL holds a SCRAM hash.
 
 `pg_dump` output lives in the same container, so it is **not** a backup against losing it. See [backups](lxc-recipes.md#backups).
+
+### The first deployment, in order
+
+Nothing here has run on a real Proxmox host. Everything below is what the end-to-end test does, with the host's part
+done by hand, and the rest comes from reading Proxmox's source.
+
+1. **Make the login key,** `ssh-keygen -t ed25519 -N '' -C octopushy@ha-db -f ha-db-key`. Put the public line in `access.sshAuthorizedKeys`
+   **before the container exists**: Proxmox reads it only then. Put the private key under Variables as the secret `ha-db/ssh-key`.
+2. **Make the passwords,** `openssl rand -hex 24`, twice. Add them as the secrets `ha-db/postgres-password` and
+   `ha-db/victoriametrics-password`, tick **Protected** on both, and keep a copy for Home Assistant.
+3. **Check the definitions.** `sources` has Home Assistant's address, and `reservedVmids` lists VM 100.
+4. **Open the network.** The agent needs port 22 of 10.15.30.40. The container needs Debian's mirrors and `github.com`. Home Assistant,
+   10.15.40.10, needs ports 5432 and 8428 of 10.15.30.40: a firewall rule, outside this repository.
+5. **Commit, and let it provision.** Trust the installation if it is new, and approve if the policy asks.
+6. **Set the pin.** On the host, `pct exec 102 -- cat /etc/ssh/ssh_host_ed25519_key.pub`, then set that line as the plain entry
+   `ha-db/host-key`. Setup goes on by itself.
+7. **Trust each service** on its page, once you have reviewed the recipes. Each then deploys, one at a time.
+8. **Connect Home Assistant.** Add the InfluxDB integration first (version 1, `http://10.15.30.40:8428`, user `homeassistant`, database
+   `ha`), then the recorder's `db_url` and the `influxdb:` block, from `secrets.yaml`.
+9. **Make VM 100 start after it,** `qm set 100 --startup order=2`: that is a setting on the host, outside this repository.
+10. **Add a Proxmox backup job** for container 102, to storage other than `vm-ssd`.
 
 ## What is not here
 
