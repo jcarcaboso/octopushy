@@ -1,7 +1,7 @@
 # Guest disk reporter
 
 A separate, one-shot Rust binary for **Linux VMs with systemd**. It calls
-`statvfs("/")`, sends `{"usedBytes": …}` over HTTPS, and exits. There is no HTTP
+`statvfs("/")`, sends `{"usedBytes": …}` to the controller, and exits. There is no
 listener, directory scan, CPU/memory sampling, persistent connection, or local
 queue. The default timer runs approximately hourly, with up to one minute of
 jitter, and first runs two minutes after boot (or shortly after enabling it if
@@ -44,7 +44,7 @@ Releases are built by hand, like the rest of the project.
 
 Deploy the backend with the included `GuestDiskUsage` database migration first
 (the normal `octopushy-server migrate` deployment step), then the updated frontend
-and execution agents. Publish the release binary at a direct HTTPS URL and record
+and execution agents. Publish the release binary at a direct URL and record
 its digest with `sha256sum agent/target/release/octopushy-disk-reporter`.
 
 Set the backend configuration once (environment variables use `__` instead of `:`):
@@ -77,8 +77,8 @@ plan → approval → apply → verify → install-disk-reporter
 ```
 
 The final step uses Proxmox/QEMU guest execution, without SSH keys or an inbound
-VM listener. It checks identity, downloads over HTTPS, verifies SHA-256 **before
-executing the binary**, installs the timer, and sends the first report immediately.
+VM listener. It checks identity, downloads the binary, verifies SHA-256 **before
+executing it**, installs the timer, and sends the first report immediately.
 Retire runs never install. Verification is required for setup, even with a recipe
 that normally skips it. **Plan now** installs or repairs existing VMs even when
 OpenTofu has no changes; manual approval still gates this in-VM mutation.
@@ -92,9 +92,10 @@ Guest prerequisites:
   Opt out for NixOS/immutable guests; this installer is not a declarative NixOS module.
 - Root QEMU guest execution; `/usr/bin/timeout`, `/bin/sh`, `curl`, `systemctl`,
   `flock`, and standard coreutils (`base64`, `sha256sum`, `install`, `mktemp`).
-- Access to both HTTPS endpoints, with certificates valid on the VM. Optional
-  `CaCertificatePem` contains a public CA bundle for **both** download and reporting;
-  it replaces system trust for those requests. Never supply a private key.
+- Access to both endpoints, with certificates valid on the VM for any that use
+  HTTPS. Optional `CaCertificatePem` contains a public CA bundle for **both** download
+  and reporting; it replaces system trust for those requests, and needs an `https://`
+  `PublicUrl`. Never supply a private key.
 - The Proxmox token must have `VM.Audit` and `VM.GuestAgent.Unrestricted` on the VM
   (`VM.Monitor` on older Proxmox versions). Restrict this powerful privilege to
   the managed VMs. Execution agents must advertise the `guest` executor.
@@ -136,7 +137,7 @@ run's recovery/close flow before planning again.
 This remains available when automatic installation is disabled or to administer
 a guest directly.
 
-1. Open the guest page, **System disk → Configure reporter**. Enter the HTTPS
+1. Open the guest page, **System disk → Configure reporter**. Enter the
    web/API address reachable from the VM (not the execution-agent port) and the
    reporting interval, then create a token.
 2. Save the displayed `config.json` and `token` files. The token is shown only
@@ -182,10 +183,34 @@ a replacement token immediately invalidates the previous one. Merely editing
 the JSON file does not reconfigure an already loaded timer.
 
 For a private CA, add `"caCertificateFile": "/etc/octopushy-disk-reporter/ca.pem"`
-and install that PEM certificate as mode 0644. Certificate/hostname verification
-is mandatory; HTTP URLs, URL credentials, and redirects are rejected. The API
-also requires HTTPS (use the existing trusted-forwarded-header configuration
-behind a TLS reverse proxy, with the backend port kept private).
+and install that PEM certificate as mode 0644. Over `https://`, certificate and
+hostname verification is mandatory. URL credentials and redirects are rejected on
+both schemes. Keep the backend port private and report through the web address.
+
+### Plain HTTP
+
+For a controller with no TLS proxy in front, use its `http://` address, for example
+`http://10.1.0.50:8081`, for `PublicUrl` or `endpoint`. No extra setting is needed.
+
+Nothing is encrypted over `http://`. **Anyone on the network path can read the
+reporting token** and use it to submit false disk usage for that VM until it is
+revoked. The token can do nothing else, and every other report check still applies.
+The reporter runs unattended, so it prints no warning about this; the guest page does.
+
+`BinaryUrl` may use `http://` too. The download can be tampered with on the way, but
+the installer checks `BinarySha256` before running anything, so a changed binary is
+refused rather than executed. Only the reporter's availability depends on that path.
+
+A CA verifies TLS, so a CA with an `http://` reporting address is an error, not a
+setting that is ignored: `CaCertificatePem` stops the server at startup, and
+`caCertificateFile` stops the reporter. A private CA for an `https://` binary host
+therefore cannot be combined with an `http://` `PublicUrl`; use `http://` for that
+download or a publicly trusted certificate.
+
+A reporter built before plain HTTP was allowed refuses an `http://` endpoint. Build
+and publish a new binary, update `BinarySha256`, and upgrade the execution agents,
+then run **Plan now** on each guest. Managed NixOS workers carry the reporter in
+their image, so they need a worker image built from this version.
 
 A request has a ten-second timeout. Failures exit nonzero and are recorded in
 the journal; the next timer run sends a fresh value. There are no immediate

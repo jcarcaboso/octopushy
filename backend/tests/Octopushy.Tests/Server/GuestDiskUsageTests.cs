@@ -75,8 +75,10 @@ public class GuestDiskUsageTests(PostgresFixture postgres)
         Assert.False(GuestDiskUsageEndpoints.View(guest, saved).Enabled);
     }
 
-    [Fact]
-    public async Task Reports_require_https_valid_bounded_json_and_an_active_guest()
+    [Theory]
+    [InlineData("https://localhost:8080")]
+    [InlineData("http://localhost:8080")]
+    public async Task Reports_require_valid_bounded_json_and_an_active_guest(string origin)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAsync();
@@ -87,9 +89,8 @@ public class GuestDiskUsageTests(PostgresFixture postgres)
         var created = await browser.PostAsJsonAsync(path + "/token", new { });
         var token = (await created.Content.ReadFromJsonAsync<DiskReporterToken>())!;
         using var reporter = server.CreateClient();
-        reporter.BaseAddress = new Uri("https://localhost:8080");
+        reporter.BaseAddress = new Uri(origin);
         reporter.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
-        Assert.Equal(HttpStatusCode.BadRequest, (await reporter.PostAsJsonAsync("http://localhost:8080" + path, new { usedBytes = 1 })).StatusCode);
         foreach (var invalid in new[] { "{}", "null", "[]", "{\"usedBytes\":-1}", "{\"usedBytes\":1.5}", "{\"usedBytes\":\"2\"}",
                      "{\"usedBytes\":9223372036854775808}", "{\"usedBytes\":1,\"unknown\":2}" })
         {
@@ -102,6 +103,13 @@ public class GuestDiskUsageTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await reporter.PostAsync(path, oversized)).StatusCode);
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, (await reporter.PostAsync(path, new StringContent("{\"usedBytes\":1}"))).StatusCode);
         Assert.Null(await server.QueryAsync(db => db.GuestDiskUsages.Where(d => d.ResourceId == guest.Id).Select(d => d.UsedBytes).SingleAsync()));
+        Assert.Equal(HttpStatusCode.NoContent, (await reporter.PostAsJsonAsync(path, new { usedBytes = 7 })).StatusCode);
+        Assert.Equal(7, await server.QueryAsync(db => db.GuestDiskUsages.Where(d => d.ResourceId == guest.Id).Select(d => d.UsedBytes).SingleAsync()));
+        // The token is still the only authority on either scheme.
+        using var stranger = server.CreateClient();
+        stranger.BaseAddress = new Uri(origin);
+        stranger.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", new string('f', 64));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await stranger.PostAsJsonAsync(path, new { usedBytes = 8 })).StatusCode);
         await server.WithDbAsync(async db =>
         {
             var resource = await db.Resources.SingleAsync(r => r.Id == guest.Id);

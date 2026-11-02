@@ -58,9 +58,9 @@ artifact is needed.
 
 For ordinary guests this is `installationMode=fhs-download-v1` (the default;
 controllers omit the mode field on this legacy wire shape for compatibility).
-`reporter` is a strict object: HTTPS URLs without userinfo/query/fragment, a SHA-256
-digest, interval 60–604800 seconds, and an optional public CA bundle (at most
-16 KiB) for both download and reporting.
+`reporter` is a strict object: `http` or `https` URLs without userinfo/query/fragment,
+a SHA-256 digest, interval 60–604800 seconds, and an optional public CA bundle (at
+most 16 KiB) for both download and reporting. A CA needs an `https` `endpoint`.
 
 The executor confirms a running, non-template QEMU VM with matching name/node
 and checks guest-exec privileges. It sends the installer as plain `input-data`
@@ -95,7 +95,7 @@ control worker; older executors reject the unknown native mode before execution.
 
 The fixed helper checks the enrolled guest generation, atomically writes protected
 runtime credential files, starts the image's hardened systemd oneshot, and waits
-for its new authenticated HTTPS/204 upload before starting the hourly timer.
+for its new authenticated 204 upload before starting the hourly timer.
 Native success outputs have `installed`, `firstReportSent`, `installationMode`,
 `imageSha256` (frozen image provenance expectation, not a measured running-OS
 attestation), and `intervalSeconds`, but **no** `binarySha256`. Unconfigured image

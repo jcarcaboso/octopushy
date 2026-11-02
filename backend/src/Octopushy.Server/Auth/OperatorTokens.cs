@@ -28,7 +28,7 @@ public sealed class OperatorTokenAuthentication(
         if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             return AuthenticateResult.NoResult();
         var raw = header[7..];
-        if (!Request.IsHttps || raw.Length != Prefix.Length + 32 + 1 + 64
+        if (raw.Length != Prefix.Length + 32 + 1 + 64
             || !raw.StartsWith(Prefix, StringComparison.Ordinal) || raw[Prefix.Length + 32] != '_'
             || !Guid.TryParseExact(raw.Substring(Prefix.Length, 32), "N", out var id))
             return AuthenticateResult.Fail("Invalid operator credential.");
@@ -69,8 +69,6 @@ public static class OperatorTokenEndpoints
             OperatorTokenRequest request, HttpContext http, OctopushyDb db, TimeProvider clock, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
-            if (!http.Request.IsHttps)
-                return TypedResults.Problem(statusCode: 400, title: "Operator credentials require HTTPS.");
             var name = request.Name?.Trim();
             if (string.IsNullOrEmpty(name) || name.Length > 80 || name.Any(char.IsControl) || request.ExpiresInDays is < 1 or > 365)
                 return TypedResults.Problem(statusCode: 400, title: "Choose a name of up to 80 characters and an expiry between 1 and 365 days.");
