@@ -85,7 +85,9 @@ script from `$OCTOPUSHY_APP` with:
 | `app.environment` | Each entry, as an environment variable. |
 
 Everything under `/run/octopushy-install` is removed however the script ends, the secrets included:
-`run.sh` traps its exit, a hang-up, an interrupt and a termination.
+`run.sh` traps its exit, a hang-up, an interrupt and a termination. A `SIGKILL`, such as the kernel
+killing it out of memory, cannot be trapped: the secrets then stay in that tmpfs, mode 0600, until the
+next install or reboot.
 
 **A script must be run again without harm.** The install runs whenever the container is created, a
 file or a value it depends on changes, or the install is tainted by a failure. So it must converge:
@@ -247,8 +249,9 @@ replaces this resource and OpenTofu refuses. `depends_on` creates it only after 
 stand-in for Proxmox's API that refuses to delete a protected container as Proxmox does:
 
 1. **A change that forces the container's replacement fails at the plan, with an error naming the guard, before any
-   approval.** A forced replacement, and an edit that Proxmox cannot make in place (here the VMID, which shows as
-   `vm_id = 102 -> 103 # forces replacement`), both end like this, verbatim from OpenTofu 1.13.1:
+   approval.** A forced replacement, and an edit that Proxmox cannot make in place, both end like this in the run's log,
+   verbatim from OpenTofu 1.13.1. Octopushy refuses a changed VMID earlier, so the edit you can reach is another datastore
+   for the root disk; the test changes the VMID directly in OpenTofu:
 
    ```text
    Plan: 4 to add, 0 to change, 4 to destroy.
@@ -267,10 +270,9 @@ stand-in for Proxmox's API that refuses to delete a protected container as Proxm
    ```
 
    `tofu plan` exits 1, so the agent's plan step fails and the run ends *failed* at the plan: nothing is
-   approved and Proxmox's protection is not touched. Octopushy keeps the last five lines of the error in the run's
-   detail, which are the ones above from `Resource instance terraform_data.keep_data` on (read from the agent's code, not
-   run through it). Do not follow the error's advice to `-exclude` the guard: Octopushy does not, and removing the
-   guard is [the way](#retiring-a-stateful-guest).
+   approved and Proxmox's protection is not touched. The run's detail does not repeat OpenTofu's advice, because
+   `-exclude` really does let the replacement through. It says the plan would destroy the guard, that nothing changed, and
+   that the way to do this on purpose is to remove the guard in a commit of its own ([how](#retiring-a-stateful-guest)).
 2. **A change in place passes.** Cores 2 to 4 and memory 1024 to 1536 plan as `Plan: 0 to add, 1 to change, 0 to
    destroy.`, the container only, and apply (Proxmox received the new `cores`); PostgreSQL did not restart.
 3. **A version bump that installs again passes.** A new `retention` (2y to 3y) plans as the install replaced and nothing else,
@@ -307,6 +309,21 @@ it from the current revision. Tested with real OpenTofu:
   the only way for a deleted folder. If the folder was deleted first, its removal run fails at the plan and has changed
   nothing, so restore the folder (that cancels a removal that has not started changing anything), commit the guard's removal
   and apply it, then delete the folder again.
+
+The guard belongs to the recipe's root, not to one guest. Removing it unguards every guest of that recipe until it is back and
+applied to each.
+
+**A container deleted outside Octopushy** is stopped by the guard too: the plan wants to create it again, which replaces the
+guard, so it fails the same way although the data is already gone. Remove the guard in its own commit, apply, which creates the
+container and installs, restore the data from a [backup](#backups), then put the guard back.
+
+**A lost install or sealing key wedges the guest.** The keys are in the guest's state and reach the container only when it is
+created. If the state is lost or a key is replaced, every later install fails, refused on SSH or with *the seal does not verify*.
+Do not replace the container for this. As root on the host, use `pct exec` to put the new key from the plan, with its
+`octopushy-bootstrap=` comment, into `/root/.ssh/authorized_keys`, then plan again.
+
+**The guard watches the container, not what an install does to its data.** Lowering `victoriametrics.retention` is an ordinary
+in-place install, and VictoriaMetrics then discards what is older. Treat such a change as you would a delete.
 
 To replace the container on purpose (a template, or a layout change) is the same: remove the guard first, and expect the data to
 go with the old container, so restore it from a [backup](#backups). Put the guard back in a commit after the replacement has

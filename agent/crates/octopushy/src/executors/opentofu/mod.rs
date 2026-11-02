@@ -613,7 +613,25 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
 
+/// The resource a plan was refused for destroying. OpenTofu ends that error by offering
+/// `-exclude`, which is how to lose what the resource is there to keep.
+fn guarded_resource(out: &ToolOutput) -> Option<&str> {
+    out.stderr_tail.iter().find_map(|line| {
+        line.trim()
+            .strip_prefix("Resource instance ")?
+            .strip_suffix(" has prevent_destroy set, but the")
+    })
+}
+
 fn step_failed(step: &str, out: &ToolOutput) -> Failure {
+    if let Some(resource) = guarded_resource(out) {
+        return Failure::msg(format!(
+            "tofu {step} refused: this plan would destroy {resource}, which keeps what it guards \
+             from being replaced or deleted by accident. Nothing changed. Check the log for what \
+             forces the replacement. To do this on purpose, remove the guard in a commit of its \
+             own first; do not exclude it from the plan"
+        ));
+    }
     let code = out
         .code
         .map(|c| c.to_string())
@@ -836,6 +854,34 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_guarded_resource_is_named_and_excluding_it_is_not_offered() {
+        let tail = [
+            "Error: Resource instance cannot be destroyed",
+            "",
+            "Resource instance terraform_data.keep_data has prevent_destroy set, but the",
+            "plan calls for it to be destroyed.",
+            "",
+            "To proceed, either disable prevent_destroy for this resource or exclude",
+            "instances of this resource from this round using:",
+            "    -exclude=\"terraform_data.keep_data\"",
+        ];
+        let out = super::ToolOutput {
+            code: Some(1),
+            stdout: Vec::new(),
+            stderr_tail: tail.iter().map(|l| (*l).to_owned()).collect(),
+            stderr_marked: false,
+            cancelled: false,
+        };
+        let message = format!("{:?}", super::step_failed("plan", &out));
+        assert!(
+            message.contains("would destroy terraform_data.keep_data"),
+            "{message}"
+        );
+        assert!(message.contains("in a commit of its own"), "{message}");
+        assert!(!message.contains("-exclude"), "{message}");
+    }
+
     use super::*;
 
     /// A provider listens on a Unix socket in TMPDIR, named as go-plugin names it.

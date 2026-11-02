@@ -94,13 +94,15 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
     && ["verify", "grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
     && !detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
   const plan = step.plan ? summarizePlan(step.plan) : null;
+  // A plan that failed has no result, which is not the same as one with nothing to change.
+  const planResult = plan && !(step.status === "failed" && !plan.hasChanges) ? plan : null;
   if (step.kind === "approval") {
     const planStep = detail.steps.find((s) => s.name === "plan");
     return <ApprovalPanel runId={detail.run.id} step={step} plan={planStep?.plan ? summarizePlan(planStep.plan) : null} workerUpdate={detail.workerUpdate} />;
   }
   return (
     <>
-      {plan ? <PlanChanges plan={plan} /> : null}
+      {planResult ? <PlanChanges plan={planResult} /> : null}
       {!plan && step.outputs !== null && step.outputs !== undefined ? (
         <details className="outputs">
           <summary>Outputs</summary>

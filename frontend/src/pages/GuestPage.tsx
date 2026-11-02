@@ -138,7 +138,7 @@ function TrustCallout({ guest }: { guest: GuestDetail }) {
         ) : (
           <>
             <p>
-              The secrets reach this code, in a plan or an apply, before any person approves it, so trust covers it. Review the recipe and
+              The secrets reach this code without anyone having to approve it, in the apply, and in the plan for a Proxmox token, so trust covers it. Review the recipe and
               its roots in the repository first; this is what you would be trusting. It holds until the code, or how the guest runs, changes.
             </p>
             <ul className="small">

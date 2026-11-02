@@ -493,7 +493,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         {
             (binding, secrets) = factory.Release(head.Repository, guest, resource, new DefinitionRevision { Commit = head.Commit });
         }
-        catch (RunException)
+        catch (Exception e) when (e is RunException or InvalidOperationException)
         {
             // A guest no run can be built for has nothing to trust; its page must still load.
             return null;

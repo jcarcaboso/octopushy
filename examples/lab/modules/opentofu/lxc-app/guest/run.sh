@@ -33,8 +33,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Takes the environment file as it is: a name that is not a plain name, or that could change how
-# this shell or its children load code, is refused, and a value is assigned, never evaluated.
+# Takes the environment file as it is: a name that is not a plain name, or one of those below that
+# change how this shell loads code, is refused, and a value is assigned, never evaluated. This is a
+# short list, not a sandbox: the names come from a recipe's reviewed code.
 load_environment() {
   local line name value
   while IFS= read -r line || [[ -n $line ]]; do

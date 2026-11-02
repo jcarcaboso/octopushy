@@ -229,6 +229,20 @@ describe("RunPage", () => {
     expect(requests.find((r) => r.method === "POST")!.body).toEqual({ planSha256: sha, note: null });
   });
 
+  it("does not call a failed plan a plan with no changes", async () => {
+    const detail = runDetail();
+    detail.steps[0].status = "failed";
+    detail.steps[0].detail = "tofu plan refused: this plan would destroy terraform_data.keep_data";
+    detail.steps[0].plan = {
+      hasChanges: false, planSha256: null, toolVersion: "1.13.1", changes: [],
+      counts: { create: 0, update: 0, delete: 0, replace: 0 },
+    };
+    mockApi({ "GET /api/runs/run-1": () => detail });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    expect((await screen.findAllByText(/this plan would destroy/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/No changes: the infrastructure already matches/)).not.toBeInTheDocument();
+  });
+
   it("rejects without a plan hash", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({
