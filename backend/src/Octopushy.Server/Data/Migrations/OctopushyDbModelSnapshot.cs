@@ -393,6 +393,52 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("enrollment_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GuestAccessKey", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.Property<bool>("Bootstrap")
+                        .HasColumnType("boolean")
+                        .HasColumnName("bootstrap");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_used_at");
+
+                    b.Property<Guid?>("LastUsedRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_used_run_id");
+
+                    b.Property<DateTimeOffset?>("ProvisionedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("provisioned_at");
+
+                    b.Property<string>("PublicKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("public_key");
+
+                    b.HasKey("ResourceId", "Version")
+                        .HasName("pk_guest_access_keys");
+
+                    b.ToTable("guest_access_keys", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.GuestConfiguration", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -1370,6 +1416,16 @@ namespace Octopushy.Server.Data.Migrations
                         .HasConstraintName("fk_attempts_steps_step_id");
 
                     b.Navigation("Step");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GuestAccessKey", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_guest_access_keys_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.GuestConfiguration", b =>

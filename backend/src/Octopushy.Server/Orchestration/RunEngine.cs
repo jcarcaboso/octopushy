@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 
@@ -609,6 +610,7 @@ public sealed partial class RunEngine(
                 }
 
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
+                await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Apply:
                 resource.Outputs = null;
@@ -626,6 +628,7 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
+                await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);

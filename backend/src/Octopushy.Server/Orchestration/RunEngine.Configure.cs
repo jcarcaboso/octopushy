@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -114,6 +115,7 @@ public sealed partial class RunEngine
                 return;
         }
 
+        await RecordKeyUseAsync(db, run, step, cancellationToken);
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;
@@ -124,6 +126,34 @@ public sealed partial class RunEngine
         var prepared = run.Steps.Single(s => s.Name == StepNames.Preview).Outputs is { } text ? JsonNode.Parse(text)?["prepared"] : null;
         if (prepared is JsonObject)
             configuration.Snapshot = prepared.ToJsonString();
+    }
+
+    /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>
+    private static async Task RecordProvisionedKeyAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (!RunContext.Parse(run.Context).ManagedAccess)
+            return;
+        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Bootstrap, cancellationToken);
+        if (key is not null)
+            key.ProvisionedAt = now;
+    }
+
+    /// <summary>A run holding this key finished having done something. That is use, not proof of a login.</summary>
+    private async Task RecordKeyUseAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
+    {
+        var context = RunContext.Parse(run.Context);
+        if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(run.ResourceId)
+            || !context.SecretVersions.TryGetValue(SecretNames.AnsibleSshKey, out var version))
+            return;
+        var recap = step.Outputs is { } outputs ? JsonNode.Parse(outputs)?["recap"] : null;
+        if ((recap?["ok"]?.GetValue<int>() ?? 0) + (recap?["changed"]?.GetValue<int>() ?? 0) == 0)
+            return;
+        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken);
+        if (key is not null)
+        {
+            key.LastUsedAt = clock.GetUtcNow();
+            key.LastUsedRunId = run.Id;
+        }
     }
 
     /// <summary>A provision run that created or replaced something may have made a new machine, which has to be configured.</summary>

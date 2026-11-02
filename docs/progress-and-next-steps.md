@@ -387,6 +387,11 @@ intended guest; wrong host keys, credentials, guest identity, or privilege fail
 closed; cleanup and log/output tests show no retained private-key material.
 This first step establishes access, not key rotation.
 
+**Status, November 2, 2026:** built for Ansible runs, not NixOS: each guest has a managed key
+of its own, recorded apart from the provisioning hash, and tested end to end against a real
+SSH target. See [SSH identity](guest-configuration.md#ssh-identity). The host key is still set by a
+person.
+
 ### 2. Move setup and service execution onto the worker
 
 Use the existing assignment, status, artifact, and result channels.

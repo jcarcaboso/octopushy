@@ -368,6 +368,9 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         "-o PasswordAuthentication=no".to_owned(),
         "-o KbdInteractiveAuthentication=no".to_owned(),
         "-o PreferredAuthentications=publickey".to_owned(),
+        // The key in the private agent and nothing else: not a default key in a home directory,
+        // which is what a run on the local runtime would otherwise offer too.
+        "-o IdentityFile=none".to_owned(),
         "-o ControlMaster=no".to_owned(),
         "-o ControlPath=none".to_owned(),
         "-o ServerAliveInterval=15".to_owned(),

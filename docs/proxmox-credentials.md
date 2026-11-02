@@ -145,6 +145,6 @@ restrictions, and state-backend least privilege remain separate work.
 - Provider compatibility repair and a live RO-refresh acceptance test.
 - Controller-owned approval floor, purpose/destination bindings, trusted runtime
   selection, and end-to-end transport hardening.
-- Guest SSH identities/rotation, service setup executors, secret delivery into
+- Service setup executors, secret delivery into
   guests, and actual remote-worker lifecycle acceptance.
 - Upstream token creation/revocation, KEK rotation, and retained-environment rollout.

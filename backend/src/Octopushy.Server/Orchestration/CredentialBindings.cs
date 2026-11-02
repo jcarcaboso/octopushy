@@ -125,7 +125,9 @@ internal static class CredentialBindings
 
         foreach (var (name, key) in bindings)
         {
-            if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal))
+            // A guest's own key is the one thing under system/ a run may bind, and only its own guest's.
+            var ownKey = name == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(run.ResourceId);
+            if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal) && !ownKey)
             {
                 problems.Add($"{key}: reserved system scope");
                 continue;

@@ -202,6 +202,17 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         return (Encoding.UTF8.GetString(plaintext), version.Version);
     }
 
+    /// <summary>
+    /// One exact version of a server-owned credential, for the single caller that releases it. A
+    /// revoked or unpromoted version is refused, as a run's other bindings are.
+    /// </summary>
+    public async Task<string?> GetVersionInternalAsync(string key, int number, CancellationToken cancellationToken)
+    {
+        var version = await db.StoreVersions.AsNoTracking()
+            .FirstOrDefaultAsync(v => v.Key == key && v.Version == number && v.RevokedAt == null && v.ActivatedAt != null, cancellationToken);
+        return version is null ? null : Encoding.UTF8.GetString(envelope.Open(version.Ciphertext, version.WrappedKey, Context(key, number)));
+    }
+
     /// <summary>The value of a plain entry; secrets are never returned.</summary>
     public async Task<string?> GetPlainAsync(string key, CancellationToken cancellationToken)
     {

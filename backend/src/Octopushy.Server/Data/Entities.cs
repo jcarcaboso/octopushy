@@ -216,6 +216,42 @@ public sealed class GuestDiskUsage
 }
 
 /// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
+/// <summary>
+/// One version of Octopushy's key for a guest, and what is known about it on the guest. This is
+/// kept apart from the provisioning hash, so what is authorized can change without a plan. The
+/// store's current version says which one runs use; this says where each one stands.
+/// </summary>
+public sealed class GuestAccessKey
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>The store version holding the private half.</summary>
+    public int Version { get; set; }
+
+    public required string PublicKey { get; set; }
+
+    public required string Fingerprint { get; set; }
+
+    /// <summary>
+    /// The version OpenTofu carries. It stays fixed while the machine exists: a changed key reboots a
+    /// VM and replaces a container, so a change of key on a running guest never goes that way.
+    /// </summary>
+    public bool Bootstrap { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>When an apply carrying this version finished. Cloud-init may still have to run.</summary>
+    public DateTimeOffset? ProvisionedAt { get; set; }
+
+    /// <summary>
+    /// When a run holding this key last finished with a task done. A playbook can do that without
+    /// connecting, so this says the key was in use. It is not proof of a login.
+    /// </summary>
+    public DateTimeOffset? LastUsedAt { get; set; }
+
+    public Guid? LastUsedRunId { get; set; }
+}
+
 public sealed class GuestConfiguration
 {
     public Guid ResourceId { get; set; }
