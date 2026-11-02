@@ -495,7 +495,7 @@ public sealed partial class RunEngine(
         // OpenTofu holds the key a machine was created with, which a rotation may have taken off it. A
         // replacement is a new machine, so it has to start with the key in use, and this plan does not.
         if (context.ManagedAccess && run.Operation == Operations.Provision
-            && ((outputs?["counts"]?["replace"]?.GetValue<int>() ?? 0) + (outputs?["counts"]?["create"]?.GetValue<int>() ?? 0)) > 0
+            && GuestVmPlan.MakesGuestMachine(outputs, context)
             && await GuestAccessCredentials.RebaseBootstrapAsync(db, run.ResourceId, cancellationToken))
         {
             step.Status = StepStatuses.Failed;
@@ -647,7 +647,7 @@ public sealed partial class RunEngine(
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
                 break;
-            case StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.RemoveKey or StepNames.VerifyRemoval:
+            case StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.VerifyRemoval:
                 await ApplyRotationEffectsAsync(db, run, step, now, cancellationToken);
                 break;
         }

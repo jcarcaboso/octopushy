@@ -345,6 +345,8 @@ if grep -rq 'OPENSSH PRIVATE KEY' "$work/agent" 2>/dev/null; then fail "a privat
 
 log "Rotating Octopushy's own key, in stages, beside a person's"
 person=$(ssh-keygen -q -t ed25519 -N '' -f "$work/keys/person" </dev/null >/dev/null; cat "$work/keys/person.pub")
+# A person's key whose comment quotes the key that will be removed: it has to stay.
+person="$person, replaces $managed"
 podman exec "$target" sh -c "printf '%s\n' '$person' >>/home/ops/.ssh/authorized_keys"
 keys_on_guest() { podman exec "$target" cat /home/ops/.ssh/authorized_keys; }
 decide() { # the step whose decision a person makes
@@ -364,10 +366,11 @@ for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; 
 decide "$run" promote-key
 guest_key=$(call "$api/api/guests/$(guest_id)" | jq -r '.managedAccess.publicKey')
 [[ $guest_key != "$managed" ]] || fail "promoting did not change the key in use"
-keys_on_guest | grep -qF "${managed% *}" || fail "the old key went before its removal was approved"
+has_key() { keys_on_guest | awk -v key="$1" 'index($0, key) == 1 { found = 1 } END { exit !found }'; }
+has_key "${managed% *}" || fail "the old key went before its removal was approved"
 decide "$run" approve-removal
 wait_run "$run" succeeded
-keys_on_guest | grep -qF "${managed% *}" && fail "the old key is still on the guest"
+if has_key "${managed% *}"; then fail "the old key is still on the guest"; fi
 keys_on_guest | grep -qF "$person" || fail "a rotation touched a person's key"
 keys_on_guest | grep -qF "${guest_key% *}" || fail "the new key is not on the guest"
 logs_of "$run" >"$work/rotation.log"

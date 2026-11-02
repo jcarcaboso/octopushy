@@ -132,8 +132,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         await DecideAsync(server, http, run, StepNames.ApproveRemoval);
         var remove = await agent.NextAsync("run");
         Assert.Equal(GuestAccessPlaybooks.Remove, Input(remove)["playbook"]!.GetValue<string>());
-        var exact = string.Join(' ', old.PublicKey.Split(' ')[..2]);
-        Assert.Equal(exact, Input(remove)["vars"]!["access_removed_keys"]!.AsArray().Single()!.GetValue<string>());
+        Assert.Equal(old.PublicKey.Split(' ')[1], Input(remove)["vars"]!["access_removed_keys"]!.AsArray().Single()!.GetValue<string>());
         Assert.DoesNotContain(oldKey, remove.Secrets.Values);
         await agent.ReportAsync(remove, Outcome.Succeeded, ConfigureRunTests.Recap());
         var verifyRemoval = await agent.NextAsync("run");
@@ -287,20 +286,84 @@ public class AccessRotationTests(PostgresFixture postgres)
         var planner = server.Services.GetRequiredService<Planner>();
         await planner.PlanGuestAsync(resource, CancellationToken.None);
         var plan = await agent.NextAsync("preview");
-        Assert.Contains(keys[0].PublicKey, plan.InputJson);
-        Assert.DoesNotContain(keys[1].PublicKey, plan.InputJson);
+        Assert.Equal(new[] { keys[0].PublicKey }, ManagedKeys(plan, keys));
 
         // One that makes a new machine stops, because that machine would have a key nobody holds.
-        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(plan, Outcome.Succeeded, MachinePlan(), artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
         var stopped = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, stopped.Status);
         Assert.Contains("Plan again", stopped.Detail);
 
         await planner.PlanGuestAsync(resource, CancellationToken.None);
-        var second = await agent.NextAsync("preview");
-        Assert.Contains(keys[1].PublicKey, second.InputJson);
-        Assert.DoesNotContain(keys[0].PublicKey, second.InputJson);
+        Assert.Equal(new[] { keys[1].PublicKey }, ManagedKeys(await agent.NextAsync("preview"), keys));
+    }
+
+    /// <summary>Which of Octopushy's keys a plan carries, read as values: JSON escapes some characters of a key.</summary>
+    private static string[] ManagedKeys(Assignment plan, List<GuestAccessKey> keys) =>
+        Input(plan)["variables"]!["guest"]!["sshAuthorizedKeys"]!.AsArray().Select(k => k!.GetValue<string>())
+            .Intersect(keys.Select(k => k.PublicKey)).ToArray();
+
+    private static JsonObject MachinePlan() => new()
+    {
+        ["hasChanges"] = true,
+        ["changes"] = new JsonArray(new JsonObject
+        {
+            ["address"] = "proxmox_virtual_environment_vm.guest",
+            ["type"] = GuestVmPlan.VmResourceType,
+            ["actions"] = new JsonArray("create"),
+        }),
+        ["counts"] = new JsonObject { ["create"] = 1, ["update"] = 0, ["delete"] = 0, ["replace"] = 0 },
+        ["toolVersion"] = "1.13.1",
+    };
+
+    private static async Task RotateToTheEndAsync(ServerHarness server, FakeAgent agent, HttpClient http, Guid resource)
+    {
+        var run = await RotateAsync(server, agent, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+        await DecideAsync(server, http, run, StepNames.PromoteKey);
+        await server.TickAsync();
+        await DecideAsync(server, http, run, StepNames.ApproveRemoval);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+    }
+
+    [Fact]
+    public async Task A_plan_that_makes_something_else_leaves_the_machines_key_alone()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var _ = http;
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        Assert.True((await KeysAsync(server))[0].Bootstrap);
+        Assert.NotEqual(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+    }
+
+    [Fact]
+    public async Task A_removal_nobody_could_verify_stays_on_the_list()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var _ = http;
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Failed, error: "Connection timed out");
+        await server.TickAsync();
+
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.RotateAccess)).Status);
+        var name = GuestAccessCredentials.Key(resource);
+        Assert.Null((await KeysAsync(server))[0].RemovedAt);
+        Assert.Null(await WithDbAsync(server, db => db.StoreVersions.AsNoTracking().Where(v => v.Key == name && v.Version == 1).Select(v => v.RevokedAt).SingleAsync()));
+
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource, CancellationToken.None);
+        Assert.Contains(1, RunContext.Parse((await server.LatestRunAsync(Guest, Operations.RotateAccess)).Context).AccessRotation!.Remove);
     }
 
     [Fact]

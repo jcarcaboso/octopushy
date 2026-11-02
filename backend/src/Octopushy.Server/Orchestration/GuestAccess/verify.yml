@@ -23,15 +23,9 @@
       changed_when: false
       failed_when: access_root.stdout != "0"
 
-    - name: Read the authorized keys
-      ansible.builtin.slurp:
-        src: ~/.ssh/authorized_keys
-      register: access_keys
-
     - name: Require that the keys removed are gone
-      ansible.builtin.assert:
-        that: item not in (access_keys.content | b64decode)
-        fail_msg: A key that was to be removed is still authorized.
-      loop: "{{ access_removed_keys | default([]) }}"
-      loop_control:
-        label: "{{ item | truncate(32) }}"
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/authorized_keys.py absent {{ access_removed_keys | map('quote') | join(' ') }}"
+        executable: /usr/bin/python3
+      changed_when: false
+      when: access_removed_keys is defined

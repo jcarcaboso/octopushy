@@ -6,7 +6,7 @@ namespace Octopushy.Server.Orchestration;
 
 /// <summary>
 /// The playbooks a rotation runs. They ship with the server and not in a lab repository, so that
-/// removing a key is the same exact-match code on every guest, reviewed here, and a repository
+/// removing a key is the same code on every guest, reviewed here, and a repository
 /// cannot change what "the old controller-owned key" means.
 /// </summary>
 public static class GuestAccessPlaybooks
@@ -15,6 +15,7 @@ public static class GuestAccessPlaybooks
     public const string Authorize = "authorize.yml";
     public const string Verify = "verify.yml";
     public const string Remove = "remove.yml";
+    private const string Script = "authorized_keys.py";
 
     /// <summary>The files a rotation's steps receive in place of a repository snapshot.</summary>
     public static byte[] Bundle()
@@ -24,7 +25,7 @@ public static class GuestAccessPlaybooks
         using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
         {
             var assembly = Assembly.GetExecutingAssembly();
-            foreach (var name in new[] { Authorize, Verify, Remove })
+            foreach (var name in new[] { Authorize, Verify, Remove, Script })
             {
                 using var content = assembly.GetManifestResourceStream($"{Root}/{name}")
                     ?? throw new InvalidOperationException($"The playbook {name} is not in the server.");

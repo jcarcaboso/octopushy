@@ -6,6 +6,7 @@ namespace Octopushy.Server.Orchestration;
 public static class GuestVmPlan
 {
     public const string VmResourceType = "proxmox_virtual_environment_vm";
+    public const string ContainerResourceType = "proxmox_virtual_environment_container";
 
     /// <summary>OpenTofu's reason for replacing a resource whose creation did not finish.</summary>
     private const string TaintedReason = "replace_because_tainted";
@@ -21,6 +22,16 @@ public static class GuestVmPlan
     private static bool IsGuests(JsonNode change, RunContext context) =>
         change["vmId"] is JsonValue id && id.TryGetValue<int>(out var vmid) && vmid == context.Proxmox.Vmid
         && change["node"]?.ToString() == context.Proxmox.Node;
+
+    /// <summary>
+    /// The plan makes this guest's machine, new or as a replacement. A plan that only makes something
+    /// else does not count, and neither does a change of another guest's machine.
+    /// </summary>
+    public static bool MakesGuestMachine(JsonNode? outputs, RunContext context) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
+            c["type"]?.ToString() is VmResourceType or ContainerResourceType
+            && Actions(c).Contains("create")
+            && (c["vmId"] is null || IsGuests(c, context)));
 
     /// <summary>The plan deletes or replaces some Proxmox VM, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();

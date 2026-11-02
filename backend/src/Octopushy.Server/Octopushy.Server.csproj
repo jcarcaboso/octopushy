@@ -30,6 +30,6 @@
                       LogicalName="WorkerTemplate/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Orchestration/GuestAccess/*.yml" LogicalName="guest-access/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Orchestration/GuestAccess/*.yml;Orchestration/GuestAccess/*.py" LogicalName="guest-access/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

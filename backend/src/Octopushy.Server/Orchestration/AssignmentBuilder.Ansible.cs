@@ -148,13 +148,13 @@ public sealed partial class AssignmentBuilder
         };
     }
 
-    /// <summary>The public keys a step of a rotation works with. Removal names exact keys, type and blob, without a comment.</summary>
+    /// <summary>The public keys a step of a rotation works with. Removal names a key by its blob, which is what identifies it.</summary>
     private async Task<JsonObject> RotationVarsAsync(Run run, AccessRotationContext rotation, string stepName, CancellationToken cancellationToken)
     {
         var keys = await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToDictionaryAsync(k => k.Version, cancellationToken);
         var vars = new JsonObject { ["access_candidate_key"] = keys[rotation.Candidate].PublicKey };
         if (stepName is StepNames.RemoveKey or StepNames.VerifyRemoval)
-            vars["access_removed_keys"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)string.Join(' ', keys[v].PublicKey.Split(' ')[..2])).ToArray());
+            vars["access_removed_keys"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)keys[v].PublicKey.Split(' ')[1]).ToArray());
         return vars;
     }
 

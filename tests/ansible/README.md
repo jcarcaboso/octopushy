@@ -27,5 +27,6 @@ It proves, against real tools:
 - A killed agent or a lost guest leaves the run uncertain, and the guest's lock stays. That lock
   then stops the next run as a known failure.
 
-`test_runner.py` tests `octopushy-ansible` with a fake `ansible-playbook`, and runs in
+`test_authorized_keys.py` tests how a rotation reads and changes `authorized_keys`.
+`test_runner.py` tests `octopushy-ansible` with a fake `ansible-playbook`. Both run in
 `scripts/checks/offline.sh`.

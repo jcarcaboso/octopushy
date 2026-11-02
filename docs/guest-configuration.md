@@ -268,16 +268,17 @@ preview -> approval -> authorize-key -> verify-key -> promote-key -> approve-rem
 | `verify-key` | Candidate alone | A fresh login, no multiplexing, strict host key: the expected login, and root through `become` |
 | `promote-key` | none | **A person, whatever the policy.** Moves this guest's binding to the candidate and records the evidence |
 | `approve-removal` | none | **A person, separately.** The old key stays on the guest until then |
-| `remove-key` | New | Removes the old controller-owned keys, by their exact type and blob |
-| `verify-removal` | New | Logs in again and shows the old key is gone. Only then is that version revoked in the store |
+| `remove-key` | New | Removes the old controller-owned keys, read from the key field of each line |
+| `verify-removal` | New | Logs in again and shows the old key is gone. Only then is it recorded as removed, and that version revoked in the store |
 
-- **People's keys are never touched.** `remove-key` matches exact keys of Octopushy's own and no pattern, and the playbooks ship with the server, so a repository cannot change what it removes.
+- **People's keys are never touched.** A small program reads each line of `authorized_keys` the way `sshd` does, options, tabs and comments included, and compares the key itself. A person's line that quotes the old key in its comment stays, and an old key separated by tabs goes. Every other line stays byte for byte. The program and playbooks ship with the server, so a repository cannot change what is removed.
 - **A candidate that cannot log in changes nothing in use.** The run fails, runs keep the working key, and the next rotation uses the same candidate again, because it may already be on the guest.
 - **An interruption is uncertain.** The run holds the guest until a person closes it, and nothing is removed to tidy up.
 - **Rejecting a stage ends the run where it stands.** After a rejected removal the new key is in use and the old one stays listed as still on the guest; the next rotation takes it off.
 - **One guest at a time.** Each guest has its own entry, so promoting one rotates no other.
 - **It reuses the store's versions.** Staging, promotion and revocation are the store's own transitions, on the same columns, with `system/` staying closed to the operator endpoints. The [credential lifecycle](credential-lifecycle.md) rotates a value and proves nothing about a guest, so what a rotation adds is the guest stages and their evidence, in `GuestAccessKey`.
-- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes a new machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again.
+- **A removal nobody could verify stays on the list.** If `verify-removal` fails, the old version is neither marked removed nor revoked, and the next rotation looks again.
+- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes this guest's machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again. A plan that makes anything else changes nothing.
 - **It cannot carry a first key.** It logs in with a key known to work, so it refuses a guest Octopushy has not logged in to.
 
 ### Host key trust

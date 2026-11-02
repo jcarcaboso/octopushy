@@ -138,7 +138,7 @@ public sealed partial class RunEngine
             configuration.Snapshot = prepared.ToJsonString();
     }
 
-    /// <summary>What each finished step of a rotation shows. Nothing is inferred from a step that did not finish.</summary>
+    /// <summary>What each finished step of a rotation shows. A change is recorded when a login has shown it, not when it was asked for.</summary>
     private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var rotation = RunContext.Parse(run.Context).AccessRotation!;
@@ -153,14 +153,14 @@ public sealed partial class RunEngine
                 verified.VerifiedAt = now;
                 verified.VerifiedRunId = run.Id;
                 break;
-            case StepNames.RemoveKey:
+            case StepNames.VerifyRemoval:
+                // Only a login showing them gone counts. Until then they stay on the list, so a
+                // later rotation looks again, and takes off whatever is still there.
                 foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
                 {
                     removed.RemovedAt = now;
                 }
 
-                break;
-            case StepNames.VerifyRemoval:
                 await GuestAccessCredentials.RevokeRemovedAsync(db, run.ResourceId, rotation, now, cancellationToken);
                 break;
         }
