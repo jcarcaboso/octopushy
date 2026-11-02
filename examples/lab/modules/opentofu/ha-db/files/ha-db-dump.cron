@@ -1,2 +1,0 @@
-# After Home Assistant's purge at 04:12. Keeps one dump per weekday.
-15 5 * * * postgres /usr/local/sbin/ha-db-dump

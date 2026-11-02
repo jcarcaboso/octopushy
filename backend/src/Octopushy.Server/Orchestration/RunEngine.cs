@@ -479,6 +479,14 @@ public sealed partial class RunEngine(
             Finish(run, RunStatuses.Failed, step.Detail);
             return false;
         }
+        if (run.Operation is Operations.Provision or Operations.Retire
+            && StatefulGuard.Refusal(await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken), outputs, context) is { } refusal)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = refusal;
+            Finish(run, RunStatuses.Failed, refusal);
+            return false;
+        }
         var privilegedRemains = run.Steps.Any(s => s.Kind == StepKinds.Agent && !StepStatuses.IsDone(s.Status)
             && AssignmentBuilder.TokenFor(s.Name) == SecretNames.ProxmoxPrivilegedToken);
         step.PlanSha256 = outputs?["planSha256"]?.GetValue<string>();

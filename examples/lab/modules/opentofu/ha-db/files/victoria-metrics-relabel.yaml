@@ -1,5 +1,0 @@
-# Home Assistant writes each attribute as a metric of its own, text ones included.
-# Keep the state alone, so a new attribute can't add series.
-- action: keep
-  source_labels: [__name__]
-  regex: ha_value

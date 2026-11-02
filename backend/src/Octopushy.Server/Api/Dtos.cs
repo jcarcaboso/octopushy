@@ -325,7 +325,9 @@ public sealed record GuestDetailDto(
     DateTimeOffset? RetiredAt,
     IReadOnlyList<RunSummaryDto> Runs,
     GuestDiskUsageDto DiskUsage,
-    GuestTrustDto Trust);
+    GuestTrustDto Trust,
+    bool Stateful,
+    bool DataGuarded);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

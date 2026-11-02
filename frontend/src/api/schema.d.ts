@@ -1257,6 +1257,8 @@ export interface components {
             runs: components["schemas"]["RunSummaryDto"][];
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
             trust: components["schemas"]["GuestTrustDto"];
+            stateful: boolean;
+            dataGuarded: boolean;
         };
         GuestDiskUsageDto: {
             enabled: boolean;

@@ -71,6 +71,8 @@ function detail(current: GuestTrust, status = "blocked"): GuestDetail {
     runs: [],
     diskUsage: { enabled: false, intervalSeconds: 3600, configuredBytes: null, usedBytes: null, receivedAt: null, staleAfter: null },
     trust: current,
+    stateful: false,
+    dataGuarded: false,
   };
 }
 
@@ -145,5 +147,18 @@ describe("GuestPage trust", () => {
     render();
     expect(await screen.findByText("home/ziost/ha-db")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Trust guest" })).not.toBeInTheDocument();
+  });
+
+  it("says whether a stateful guest's data is guarded yet", async () => {
+    const bound = { installation: "home/ziost", vmid: 102, boundAt: "2026-11-02T08:00:00Z" };
+    const guarded = { ...detail(trust({ keys: [] }), "in-sync"), binding: bound, stateful: true, dataGuarded: true };
+    mockApi({ [`GET /api/guests/${id}`]: () => guarded });
+    const view = render();
+    expect(await screen.findByText(/stops before approval/)).toBeInTheDocument();
+    view.unmount();
+
+    mockApi({ [`GET /api/guests/${id}`]: () => ({ ...guarded, dataGuarded: false }) });
+    render();
+    expect(await screen.findByText(/guarded once its first deployment is verified/)).toBeInTheDocument();
   });
 });

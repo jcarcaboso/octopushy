@@ -5365,7 +5365,9 @@
           "retiredAt",
           "runs",
           "diskUsage",
-          "trust"
+          "trust",
+          "stateful",
+          "dataGuarded"
         ],
         "type": "object",
         "properties": {
@@ -5499,6 +5501,12 @@
           },
           "trust": {
             "$ref": "#/components/schemas/GuestTrustDto"
+          },
+          "stateful": {
+            "type": "boolean"
+          },
+          "dataGuarded": {
+            "type": "boolean"
           }
         }
       },

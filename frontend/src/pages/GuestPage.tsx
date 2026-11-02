@@ -89,6 +89,14 @@ function Identity({ guest }: { guest: GuestDetail }) {
         { term: "Installation", value: <span className="mono">{guest.binding.installation}</span> },
         { term: "VMID", value: <span className="num">{guest.binding.vmid}</span> },
         { term: "Bound", value: <RelativeTime value={guest.binding.boundAt} /> },
+        ...(guest.stateful
+          ? [{
+              term: "Data",
+              value: guest.dataGuarded
+                ? "Stateful: a plan that would replace or delete this guest stops before approval."
+                : "Stateful: guarded once its first deployment is verified.",
+            }]
+          : []),
       ]}
     />
   );

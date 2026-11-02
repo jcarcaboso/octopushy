@@ -1,6 +1,7 @@
 schemaVersion: 1
 type: container
 lifecycle: active                 # active | retired
+stateful: true                    # holds data that exists nowhere else; see docs/lxc-recipes.md
 host: ziost
 vmid: 102
 template: debian-13-lxc
@@ -9,25 +10,15 @@ hardware:
   memory: 1024
   swap: 256
   disks:
-    - { size: 32, datastore: vm-ssd }   # the root disk, which holds both databases
+    - { size: 32, datastore: vm-ssd }   # the root disk, which holds the data
 network:
   bridge: apps
   mode: static
   address: 10.15.30.40/24
   gateway: 10.15.30.1
 provision:
-  recipe: ha-db
+  recipe: proxmox-lxc
   inputs:
-    startup: { order: 1, upDelay: 30 }  # before Home Assistant, which waits 30 seconds for them
-    postgresql:
-      clients: [10.15.40.10]            # Home Assistant, the only address pg_hba lets in
-    victoriametrics:                    # the recipe's defaults, written out to pin them here
-      version: 1.155.0
-      sha256: 7180e65913d55ab99c0be8f4a3ad17a0fafe5598a21ff6327fecba3190d7b176
-      retention: 2y
-    credentialsRevision: 1              # raise it with the store entries' versions to roll the passwords
-  secrets:                              # made by the operator; Octopushy never shows them again
-    postgres_password: { store: ha-db/postgres-password }
-    victoriametrics_password: { store: ha-db/victoriametrics-password }
+    startup: { order: 1, upDelay: 30 }  # before Home Assistant, which waits 30 seconds for it
 policy:
-  destructive: manual             # deleting this container and its databases waits for approval
+  destructive: manual             # deleting this container waits for approval, once stateful is taken out

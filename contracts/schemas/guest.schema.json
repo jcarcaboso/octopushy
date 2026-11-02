@@ -8,6 +8,10 @@
     "description": { "type": "string" },
     "type": { "enum": ["vm", "container"], "description": "A QEMU VM or a Proxmox LXC container. Its recipe must provision the same type." },
     "lifecycle": { "enum": ["active", "retired"] },
+    "stateful": {
+      "type": "boolean",
+      "description": "This guest holds data that exists nowhere else. Once it has been deployed, a plan that would replace, delete or recreate it fails before approval, whatever the policy says. Remove it in a commit of its own to do that on purpose."
+    },
     "renamedFrom": { "$ref": "common.schema.json#/$defs/id" },
     "host": { "$ref": "common.schema.json#/$defs/id" },
     "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999 },

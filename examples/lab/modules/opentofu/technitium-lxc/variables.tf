@@ -1,5 +1,5 @@
-# Octopushy passes these in octopushy.auto.tfvars.json. The lxc-app and proxmox-lxc modules check
-# what they use themselves; these are the settings this root needs on top of that.
+# Octopushy passes these in octopushy.auto.tfvars.json. The proxmox-lxc module checks what it
+# uses itself; these are the settings this root needs on top of that.
 
 variable "octopushy" {
   description = "The guest's address, its stack name, and the revision being planned."

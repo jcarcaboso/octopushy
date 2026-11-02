@@ -471,7 +471,9 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             GuestDiskUsageEndpoints.View(resource,
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
-            trust);
+            trust,
+            StatefulGuard.Declared(resource),
+            StatefulGuard.Armed(resource));
     }
 
 

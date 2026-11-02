@@ -51,10 +51,9 @@ install for this address.
 
 ## What gets installed
 
-Proxmox has no user-data or exec for containers, so [`lxc-app`](lxc-recipes.md#the-lxc-app-module), the
-module the root calls, generates an SSH key pair and creates the container with its public key.
-OpenTofu then connects as root, uploads the root's [`files/`](../examples/lab/modules/opentofu/technitium-lxc/files)
-directory, and runs [`install.sh`](../examples/lab/modules/opentofu/technitium-lxc/files/install.sh), which:
+Proxmox has no user-data or exec for containers, so the root generates an SSH key pair and
+creates the container with its public key. OpenTofu then connects as root and runs
+[`install.sh`](../examples/lab/modules/opentofu/technitium-lxc/install.sh), which:
 
 - installs the pinned ASP.NET Core runtime and Technitium, each checked against its digest,
   under `/opt/technitium`, next to any older version until the new one passes its checks;
@@ -69,11 +68,6 @@ directory, and runs [`install.sh`](../examples/lab/modules/opentofu/technitium-l
 - checks the running version, that the password works and `admin`/`admin` does not, that
   ports 53 and 53443 answer, and that `/etc/resolv.conf` still names `network.dns`. If any
   check fails, the apply fails.
-
-A state made before the root moved onto `lxc-app` moves with it (`moved` blocks in `main.tf`). What
-decides that the install runs again is now the container, the uploaded files, the environment and the
-script that runs it, so the first plan after the move installs once more. The install is written to run
-again, and changes nothing that is already right.
 
 It does not use upstream's `install.sh`, which always fetches the latest release and points
 `/etc/resolv.conf` at the server itself. It runs as the `dns-server` user, as upstream does.
@@ -126,18 +120,15 @@ variable is ephemeral, so it is in neither the saved plan nor the state.
 
 OpenTofu installs over SSH, and it **cannot authenticate who answers**: it checks a host key only
 against a public key, and nothing can give it this container's before it connects. So the password
-does not cross SSH in a form anyone else can read. The module generates a sealing key of its own and
+does not cross SSH in a form anyone else can read. The root generates a sealing key of its own and
 sends it to the container through the Proxmox API, as the comment of an SSH key, which Proxmox
-writes into `authorized_keys`. The apply seals the password to that key, and the module's `run.sh`
-opens it in the container into `$OCTOPUSHY_SECRETS/admin_password`, which `install.sh` reads; it is removed
-however the install ends. Someone impersonating the container on SSH receives ciphertext, the install
-script, and no key. Since the move to `lxc-app`, every secret of every recipe travels in this one seal;
-see [LXC recipes](lxc-recipes.md#the-seal).
+writes into `authorized_keys`. The apply seals the password to that key, and `install.sh` opens it
+in the container. Someone impersonating the container on SSH receives ciphertext, the install
+script, and no key.
 
 **This is a hand-built seal, not a vetted construction.** OpenTofu has no encryption function, so
 it is made from what OpenTofu has, and it has had no review beyond this project's. It is small
-enough to read in [`main.tf`](../examples/lab/modules/opentofu/lxc-app/main.tf) and
-[`run.sh`](../examples/lab/modules/opentofu/lxc-app/guest/run.sh):
+enough to read in [`main.tf`](../examples/lab/modules/opentofu/technitium-lxc/main.tf):
 
 - Two keys are hashed from the sealing key, one to encrypt and one to authenticate.
 - Each upload gets a random nonce from `uuid()`, made in that upload, so a retry has a new one.
@@ -145,9 +136,8 @@ enough to read in [`main.tf`](../examples/lab/modules/opentofu/lxc-app/main.tf) 
   nonce, and a counter.
 - The tag is a double SHA-256 over the authentication key, the guest's id and address, the nonce,
   and the cipher. It is not HMAC, which OpenTofu cannot compute.
-- `run.sh` checks the tag first and writes nothing unless it matches. It then records the nonce
-  in `/etc/dns/octopushy-seal-nonces` (this recipe puts the record on its `/etc/dns` volume), and refuses
-  one it has seen.
+- `install.sh` checks the tag first and writes nothing unless it matches. It then records the nonce
+  in `/etc/dns/octopushy-seal-nonces`, and refuses one it has seen.
 
 What this does: keeps the password from whoever answers on SSH, and from whoever records that
 session, as long as they do not have the sealing key. It refuses an upload that was changed, one

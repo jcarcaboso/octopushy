@@ -1,8 +1,11 @@
 schemaVersion: 1
 type: standalone                  # standalone | cluster
+reservedVmids: [100]              # Home Assistant's VM, made by hand: no guest here, and no plan, may touch it
 connection:
   endpoint: https://10.15.5.101:8006/
   tls: { verify: false }          # or caCertificate: { store: <key> }
+  # The shape later hardening would use (docs/lxc-recipes.md). One `token:` works too, and is what the
+  # real installation runs on for now. Either way, keeping a plan off VM 100 is reservedVmids' job, not the token's.
   readOnlyToken: { store: proxmox/ziost/read-only-token }
   privilegedToken: { store: proxmox/ziost/privileged-token }
 hosts:

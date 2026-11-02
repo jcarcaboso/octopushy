@@ -105,13 +105,13 @@ reachable
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/share/tls.key" -out "$work/share/tls.crt" -days 1 \
   -subj /CN=fake-proxmox -addext subjectAltName=IP:10.199.0.10 2>/dev/null
 podman run -d --name "$name-proxmox" --network "$name" --ip 10.199.0.10 -v "$work/share:/share:Z" \
-  -v "$root/tests/lxc-app/fake_proxmox.py:/fake_proxmox.py:ro,Z" docker.io/library/python:3-alpine \
+  -v "$root/tests/technitium-lxc/fake_proxmox.py:/fake_proxmox.py:ro,Z" docker.io/library/python:3-alpine \
   python3 -I /fake_proxmox.py /share /share/tls.crt /share/tls.key >/dev/null
 start_container
 
 log "Repository, as the agent lays it out"
 rm -rf "$work/run/repo" && mkdir -p "$work/run/repo/modules/opentofu"
-cp -r "$root"/examples/lab/modules/opentofu/{proxmox-lxc,lxc-app,technitium-lxc} "$work/run/repo/modules/opentofu/"
+cp -r "$root"/examples/lab/modules/opentofu/{proxmox-lxc,technitium-lxc} "$work/run/repo/modules/opentofu/"
 cat >"$work/run/repo/$module/octopushy.auto.tfvars.json" <<JSON
 {
   "octopushy": { "address": "home/korriban/krb-dns-01", "stack": "home.korriban.krb-dns-01", "lab": "home",
@@ -153,7 +153,7 @@ log "First apply"
 in_ct 'rm -f /root/samples /root/stop-sampling
 ( while [ ! -e /root/stop-sampling ]; do
     systemctl show dns.service -p Environment -p EnvironmentFiles; cat /run/systemd/system/dns.service.d/*.conf
-    ls -l /run/systemd/system/dns.service.d /run/octopushy-technitium; ls -lR /run/octopushy-install; sleep 0.1
+    ls -l /run/systemd/system/dns.service.d /run/octopushy-technitium; sleep 0.1
   done >>/root/samples 2>&1 ) >/dev/null 2>&1 &'
 plan | tail -1
 installs
@@ -161,14 +161,8 @@ sleep 1
 in_ct 'touch /root/stop-sampling; sleep 1'
 grep -q 'DNS_SERVER_WEB_SERVICE_HTTPS_PORT=53443' <(in_ct 'cat /root/samples') || fail "the sampling did not see the first start"
 if in_ct 'grep -E "[0-9a-f]{48}" /root/samples' >/dev/null; then fail "the TLS password was visible to local users during the first start"; fi
-# The secret was a file of its own, readable by nobody but root, in a folder nobody else could enter.
-# A trailing dot after the mode is an SELinux label.
-modes=$(in_ct 'grep -E " (admin_password|secrets|octopushy-install)$" /root/samples | cut -c1-12 | sort -u')
-[[ $modes == *-rw-------* ]] || { echo "$modes"; fail "the secret was not a file of mode 0600"; }
-[[ $(grep -c '^drwx------' <<<"$modes") -ge 1 && $(grep -vcE '^(-rw-------|drwx------)' <<<"$modes") == 0 ]] \
-  || { echo "$modes"; fail "the secrets were not in a folder of mode 0700"; }
 in_ct 'rm -f /root/samples /root/stop-sampling'
-echo "the TLS password was not readable, and the secret was a file of mode 0600"
+echo "the TLS password was not readable"
 in_ct 'systemctl is-enabled dns.service dns-http-guard.service; systemctl is-active dns.service dns-http-guard.service'
 [[ $(plan | grep -c 'No changes') == 1 ]] || fail "a second plan should have no changes"
 
@@ -198,21 +192,16 @@ for port, expected in ((5380, False), (53443, True), (53, True), (22, True)):
 
 log "What anyone answering on SSH would have received"
 # OpenTofu does not check the host key, so this is what an impostor gets. A stand-in for
-# run.sh keeps the upload, which is otherwise gone by the time a test could look.
-runner=$work/run/repo/modules/opentofu/lxc-app/guest/run.sh
-cp "$runner" "$work/run.sh.kept"
-printf '#!/bin/sh\ncp /run/octopushy-install/secrets.sealed /root/captured\ncp -r /run/octopushy-install/app /root/captured-app\ncp /run/octopushy-install/environment /root/captured-environment\n' >"$runner"
+# install.sh keeps the upload, which is otherwise gone by the time a test could look.
+cp "$work/run/repo/$module/install.sh" "$work/install.sh.kept"
+printf '#!/bin/sh\ncp /run/octopushy-technitium/admin-password.sealed /root/captured\n' >"$work/run/repo/$module/install.sh"
 plan | tail -1
 apply >/dev/null
 in_ct 'cat /root/captured; rm /root/captured' >"$work/captured"
-in_ct 'cat /root/captured-environment; ls /root/captured-app; rm -rf /root/captured-app /root/captured-environment' >"$work/uploaded"
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 apply >/dev/null
-in_ct 'cat /root/captured; rm /root/captured; rm -rf /root/captured-app /root/captured-environment' >"$work/captured-again"
-cp "$work/run.sh.kept" "$runner"
-grep -q '^TECHNITIUM_VERSION=15.6.2$' "$work/uploaded" || fail "the environment file was not uploaded as NAME=value lines"
-grep -qx 'install.sh' "$work/uploaded" || fail "the files directory was not uploaded"
-if grep -qF -- "$password" "$work/uploaded"; then fail "the password crossed SSH outside the seal"; fi
+in_ct 'cat /root/captured; rm /root/captured' >"$work/captured-again"
+cp "$work/install.sh.kept" "$work/run/repo/$module/install.sh"
 [[ $(cut -d. -f1 "$work/captured") != "$(cut -d. -f1 "$work/captured-again")" ]] || fail "two uploads shared a nonce"
 python3 -I - "$password" "$work/captured" <<'PY'
 import base64, sys
@@ -229,30 +218,21 @@ installs
 
 log "A seal that was changed, or that comes round again, opens nothing"
 by_hand() { # the file to upload as the seal
-  podman exec "$name-ct" sh -c 'rm -rf /run/octopushy-install && install -d -m 0700 /run/octopushy-install /run/octopushy-install/app'
-  podman cp "$work/run/repo/$module/files/install.sh" "$name-ct:/run/octopushy-install/app/install.sh"
-  podman cp "$work/run/repo/modules/opentofu/lxc-app/guest/run.sh" "$name-ct:/run/octopushy-install/run.sh"
-  podman cp "$work/environment" "$name-ct:/run/octopushy-install/environment"
-  podman cp "$1" "$name-ct:/run/octopushy-install/secrets.sealed"
-  podman exec "$name-ct" bash /run/octopushy-install/run.sh 2>&1
+  podman exec "$name-ct" install -d -m 0700 /run/octopushy-technitium
+  podman cp "$work/run/repo/$module/install.sh" "$name-ct:/run/octopushy-technitium/install.sh"
+  podman cp "$1" "$name-ct:/run/octopushy-technitium/admin-password.sealed"
+  podman exec -e TECHNITIUM_VERSION=15.6.2 \
+    -e TECHNITIUM_SHA256=51f2d4ebaf156a85035e820afde5e1d428f1920a37d7f0c65203fb1766917e08 -e ASPNETCORE_VERSION=10.0.14 \
+    -e ASPNETCORE_SHA512=dd024fd2616926a555b75cbf7a836f6dce998199f0596d9d75676dca2b9d59c8ee8673c6ac23473c0f1a4bdd59eb5cd02fe9ab097eeaf2dd8c8bd117c85e7031 \
+    -e GUEST_ADDRESS="$address" -e NAMESERVERS=10.199.0.1 "$name-ct" bash /run/octopushy-technitium/install.sh 2>&1
 }
-cat >"$work/environment" <<ENV
-ASPNETCORE_SHA512=dd024fd2616926a555b75cbf7a836f6dce998199f0596d9d75676dca2b9d59c8ee8673c6ac23473c0f1a4bdd59eb5cd02fe9ab097eeaf2dd8c8bd117c85e7031
-ASPNETCORE_VERSION=10.0.14
-NAMESERVERS=10.199.0.1
-OCTOPUSHY_ADDRESS=$address
-OCTOPUSHY_NONCES=/etc/dns/octopushy-seal-nonces
-OCTOPUSHY_SCRIPT=install.sh
-TECHNITIUM_SHA256=51f2d4ebaf156a85035e820afde5e1d428f1920a37d7f0c65203fb1766917e08
-TECHNITIUM_VERSION=15.6.2
-ENV
 sed 's/\.\(.\)/.A\1/' "$work/captured" >"$work/tampered"
 if out=$(by_hand "$work/tampered"); then fail "a changed seal was opened"; fi
 grep -q 'the seal does not verify' <<<"$out" || { echo "$out"; fail "unexpected failure for a changed seal"; }
 by_hand "$work/captured" >/dev/null || fail "a good seal did not open"
 if out=$(by_hand "$work/captured"); then fail "a seal was opened twice"; fi
 grep -q 'nonce was used before' <<<"$out" || { echo "$out"; fail "unexpected failure for a replayed seal"; }
-in_ct '! test -e /run/octopushy-technitium && ! test -e /run/octopushy-install'
+in_ct '! test -e /run/octopushy-technitium'
 echo "refused both"
 
 log "The certificate can be pinned"
@@ -286,13 +266,13 @@ for place, content in places.items():
 print(f"not in {len(places)} places")
 PY
 }
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 scan
 # Octopushy gives the plan no password. Being ephemeral, it would stay out even if it did.
-TF_VAR_admin_password=$password tofu_env="-e TF_VAR_admin_password" plan -replace=module.app.terraform_data.install | tail -1
+TF_VAR_admin_password=$password tofu_env="-e TF_VAR_admin_password" plan -replace=terraform_data.install | tail -1
 scan
 in_ct "! grep -rlF -- '$password' /etc /run /var/tmp /tmp /var/log /root 2>/dev/null"
-in_ct '! test -e /run/octopushy-technitium && ! test -e /run/octopushy-install && ! test -e /run/systemd/system/dns.service.d'
+in_ct '! test -e /run/octopushy-technitium && ! test -e /run/systemd/system/dns.service.d'
 echo "not in the container either"
 
 log "Installing again changes nothing"
@@ -303,31 +283,30 @@ installs
 [[ $(in_ct 'systemctl show -p MainPID --value dns.service') == "$service" ]] || fail "the service restarted"
 
 log "A wrong password fails the apply and stays out of the guest"
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 if apply 'another password here' >"$work/wrong.log"; then fail "a wrong password was accepted"; fi
 grep -q 'the intended admin password does not work' "$work/wrong.log" || fail "unexpected failure"
 in_ct 'systemctl is-active dns.service; ! test -e /run/octopushy-technitium'
 
 log "No password fails the apply"
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 if TF_VAR_admin_password= tofu apply -input=false -no-color /w/out/plan.bin >/dev/null 2>&1; then
   fail "an apply without the password succeeded"
 fi
 
 log "A first start that falls back to admin/admin fails, and the next one is a real first start"
 in_ct 'systemctl stop dns.service; rm /etc/dns/auth.config'
-podman exec "$name-ct" sh -c 'mkdir -p /run/octopushy-install/secrets && printf "\nrest" >/run/octopushy-install/secrets/admin_password'
-podman cp "$work/run/repo/$module/files/install.sh" "$name-ct:/run/octopushy-install/install.sh"
+podman exec "$name-ct" sh -c 'mkdir -p /run/octopushy-technitium && printf "\nrest" >/run/octopushy-technitium/admin-password'
+podman cp "$work/run/repo/$module/install.sh" "$name-ct:/run/octopushy-technitium/install.sh"
 if podman exec -e TECHNITIUM_VERSION=15.6.2 \
   -e TECHNITIUM_SHA256=51f2d4ebaf156a85035e820afde5e1d428f1920a37d7f0c65203fb1766917e08 -e ASPNETCORE_VERSION=10.0.14 \
   -e ASPNETCORE_SHA512=dd024fd2616926a555b75cbf7a836f6dce998199f0596d9d75676dca2b9d59c8ee8673c6ac23473c0f1a4bdd59eb5cd02fe9ab097eeaf2dd8c8bd117c85e7031 \
-  -e OCTOPUSHY_SECRETS=/run/octopushy-install/secrets -e OCTOPUSHY_ADDRESS="$address" -e NAMESERVERS=10.199.0.1 \
-  "$name-ct" bash /run/octopushy-install/install.sh; then
+  -e GUEST_ADDRESS="$address" -e NAMESERVERS=10.199.0.1 "$name-ct" bash /run/octopushy-technitium/install.sh; then
   fail "the fallback to admin/admin was not noticed"
 fi
-in_ct '! test -e /etc/dns/auth.config; ! test -e /run/octopushy-technitium; rm -rf /run/octopushy-install'
+in_ct '! test -e /etc/dns/auth.config; ! test -e /run/octopushy-technitium'
 certificate=$(in_ct 'sha256sum /etc/dns/octopushy-https.pfx')
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 installs
 [[ $(in_ct 'sha256sum /etc/dns/octopushy-https.pfx') == "$certificate" ]] || fail "a second first start changed the certificate"
 
@@ -335,7 +314,7 @@ log "A new root disk with the same /etc/dns"
 before=$(identity)
 podman rm -f -t 0 "$name-ct" >/dev/null
 start_container
-plan -replace=module.app.terraform_data.install | tail -1
+plan -replace=terraform_data.install | tail -1
 installs
 [[ $(identity) == "$before" ]] || fail "/etc/dns changed"
 

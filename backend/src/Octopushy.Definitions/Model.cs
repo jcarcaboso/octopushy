@@ -90,6 +90,10 @@ public sealed record InstallationDefinition(
     public string Address => $"{Lab}/{Id}";
 
     public string DisplayName => Json["name"]?.GetValue<string>() ?? Id;
+
+    /// <summary>VMIDs Octopushy does not manage here. Nothing else keeps a plan off them when the token can reach them.</summary>
+    public IReadOnlyList<int> ReservedVmids =>
+        (Json["reservedVmids"] as JsonArray)?.Select(v => v!.GetValue<int>()).ToList() ?? [];
 }
 
 public sealed record GuestDefinition(

@@ -232,7 +232,7 @@ describe("RunPage", () => {
   it("does not call a failed plan a plan with no changes", async () => {
     const detail = runDetail();
     detail.steps[0].status = "failed";
-    detail.steps[0].detail = "tofu plan refused: this plan would destroy terraform_data.keep_data";
+    detail.steps[0].detail = "tofu plan refused: this plan would destroy terraform_data.cluster";
     detail.steps[0].plan = {
       hasChanges: false, planSha256: null, toolVersion: "1.13.1", changes: [],
       counts: { create: 0, update: 0, delete: 0, replace: 0 },

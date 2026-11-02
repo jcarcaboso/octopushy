@@ -830,6 +830,11 @@ public sealed partial class LabRepositoryLoader
                 Error(guest.File, LineOf(guest.File, "/vmid"), $"VMID {guest.Vmid} is also declared by {others} in this installation.", guest.Address);
             }
         }
+
+        foreach (var guest in guests.Where(g => installation.ReservedVmids.Contains(g.Vmid)))
+        {
+            Error(guest.File, LineOf(guest.File, "/vmid"), $"VMID {guest.Vmid} is reserved in {installation.File}: Octopushy does not manage it.", guest.Address);
+        }
     }
 
     private void CheckGuest(

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs in the container as root, started by lxc-app's run.sh, which OpenTofu runs over SSH. Installs the pinned
+# Runs in the container as root, over SSH from this root's provisioners. Installs the pinned
 # ASP.NET Core runtime and Technitium DNS Server next to any older versions, switches to them,
 # and checks the result. Running it again changes nothing that is already right.
 #
@@ -7,23 +7,51 @@
 # /etc/resolv.conf at 127.0.0.1. The container keeps resolving through the network.dns that
 # Proxmox wrote there, so nothing here depends on the server it installs.
 #
-# $OCTOPUSHY_SECRETS/admin_password holds the admin password. run.sh opened it from a seal made
-# with a key only this container has, because OpenTofu cannot tell who it is talking to on SSH, and
-# removes it however this ends. Technitium reads the password only while /etc/dns has no
-# auth.config, and takes admin/admin if it cannot, so the login is checked afterwards. It reaches
-# curl as a file and never as an argument; the copy this script makes for Technitium's first
-# start is removed however this ends too.
+# $work/admin-password.sealed holds the admin password, sealed to a key only this container has:
+# OpenTofu cannot tell who it is talking to on SSH, so nothing readable travels that way.
+# Technitium reads the password only while /etc/dns has no auth.config, and takes admin/admin if
+# it cannot, so the login is checked afterwards. It reaches curl as a file and never as an
+# argument, and it is removed however this ends.
 set -euo pipefail
 
 version=${TECHNITIUM_VERSION:?set TECHNITIUM_VERSION}
 sha256=${TECHNITIUM_SHA256:?set TECHNITIUM_SHA256}
 runtime_version=${ASPNETCORE_VERSION:?set ASPNETCORE_VERSION}
 runtime_sha512=${ASPNETCORE_SHA512:?set ASPNETCORE_SHA512}
-address=${OCTOPUSHY_ADDRESS:?run this through lxc-app}
+address=${GUEST_ADDRESS:?set GUEST_ADDRESS}
 nameservers=${NAMESERVERS:?set NAMESERVERS}
+
+# Checks what main.tf made, and only then takes back out what it added, into a file nobody else
+# can read: unseal SEALED KEY IDENTITY SPENT OUT. Nothing is written if it does not check out,
+# and a nonce is only ever opened once, which SPENT remembers across installs.
+unseal() {
+  local alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  local nonce cipher tag rest encrypt authenticate block='' plain='' prefix i
+  seal_hash() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+  IFS=. read -r nonce cipher tag rest <"$1" || true
+  [[ -n $nonce && -n $cipher && -n $tag && -z $rest ]] || fail "the seal is malformed, so it was not opened"
+  encrypt=$(seal_hash "octopushy-seal-encrypt:$2")
+  authenticate=$(seal_hash "octopushy-seal-authenticate:$2")
+  [[ $tag == "$(seal_hash "$authenticate:$(seal_hash "$authenticate:$3:$nonce:$cipher")")" ]] \
+    || fail "the seal does not verify: it was changed on its way, or was made for another guest"
+  if grep -qxF -e "$nonce" "$4" 2>/dev/null; then
+    fail "this seal's nonce was used before, so it was not opened"
+  fi
+  (umask 077 && printf '%s\n' "$nonce" >>"$4")
+  for ((i = 0; i < ${#cipher}; i++)); do
+    ((i % 40)) || block=$(printf '%s' "$encrypt:$nonce:$((i / 40))" | sha256sum | cut -d' ' -f1 | tr a-f A-F | basenc --base16 -d | base64 -w0)
+    prefix=${alphabet%%"${cipher:i:1}"*}
+    local sum=${#prefix}
+    prefix=${alphabet%%"${block:i%40:1}"*}
+    plain+=${alphabet:(sum - ${#prefix} + 64) % 64:1}
+  done
+  while ((${#plain} % 4)); do plain+='='; done
+  (umask 077 && printf '%s' "$plain" | base64 -d >"$5")
+}
 
 work=/run/octopushy-technitium
 password=$work/admin-password
+sealed=$work/admin-password.sealed
 config=/etc/dns
 certificate=$config/octopushy-https.pfx
 base=/opt/technitium
@@ -57,9 +85,13 @@ trap cleanup EXIT
 
 # Identity written to the root disk would be lost with it.
 mountpoint -q "$config" || fail "$config is not a mount point; declare it under hardware.mountPoints"
-[[ -s ${OCTOPUSHY_SECRETS:?run this through lxc-app}/admin_password ]] || fail "the admin_password secret is missing or empty"
-install -d -m 0700 "$work"
-(umask 077 && cp "$OCTOPUSHY_SECRETS/admin_password" "$password")
+if [[ -s $sealed ]]; then
+  bootstrap=$(sed -n 's/.* octopushy-bootstrap=\([0-9a-f]\{64\}\)$/\1/p' /root/.ssh/authorized_keys | head -n 1)
+  [[ -n $bootstrap ]] || fail "the bootstrap key is missing from authorized_keys; Proxmox writes it only when it creates the container"
+  unseal "$sealed" "$bootstrap" "$(</proc/sys/kernel/hostname)/$address" "$config/octopushy-seal-nonces" "$password"
+  rm -f "$sealed"
+fi
+[[ -s $password ]] || fail "$password is missing or empty"
 
 export DEBIAN_FRONTEND=noninteractive
 packages=(ca-certificates curl jq libicu76 libgssapi-krb5-2 nftables openssl unattended-upgrades)

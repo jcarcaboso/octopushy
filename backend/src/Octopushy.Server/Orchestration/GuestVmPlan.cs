@@ -36,6 +36,18 @@ public static class GuestVmPlan
         && change["vmId"] is JsonValue id && id.TryGetValue<int>(out var vmid) && vmid == context.Proxmox.Vmid
         && change["node"]?.ToString() == context.Proxmox.Node;
 
+    /// <summary>The plan creates a resource of this guest's kind with nothing to replace, so the one it had is gone.</summary>
+    public static bool CreatesGuest(JsonNode? outputs, RunContext context) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c => c["type"]?.ToString() == OwnType(context)
+            && Actions(c) is var actions && actions.Contains("create") && !actions.Contains("delete"));
+
+    /// <summary>The VMIDs of the Proxmox VMs and containers the plan changes in any way, as the state names them.</summary>
+    public static IEnumerable<int> ChangedVmids(JsonNode? outputs) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>()
+            .Where(c => c["type"]?.ToString() is VmResourceType or ContainerResourceType)
+            .Select(c => c["vmId"] is JsonValue id && id.TryGetValue<int>(out var vmid) ? vmid : (int?)null)
+            .OfType<int>().Distinct();
+
     /// <summary>The plan deletes or replaces some Proxmox VM or container, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();
 

@@ -9,8 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "examples/lab"
 MODULE = LAB / "modules/opentofu/technitium-lxc"
 BASE = LAB / "modules/opentofu/proxmox-lxc"
-APP = LAB / "modules/opentofu/lxc-app"
-INSTALL = (MODULE / "files/install.sh").read_text()
+INSTALL = (MODULE / "install.sh").read_text()
 GUESTS = [
     LAB / "labs/home/proxmox/korriban/guests/krb-dns-01/guest.yaml",
     LAB / "labs/home/proxmox/moraband/guests/mrb-dns-01/guest.yaml",
@@ -24,19 +23,116 @@ class PasswordTests(unittest.TestCase):
         self.assertIn("ephemeral   = true", block)
         self.assertIn("default     = null", block)
 
-    def test_it_only_reaches_the_guest_through_lxc_apps_seal(self):
+    def test_it_only_reaches_the_guest_sealed(self):
         # OpenTofu cannot check who answers on SSH, so what it uploads must be useless to anyone
-        # but the container Proxmox created. The seal itself is checked in tests/lxc-app.
+        # but the container Proxmox created.
         sources = (MODULE / "main.tf").read_text() + (MODULE / "outputs.tf").read_text()
         self.assertEqual(sources.count("var.admin_password"), 1)
-        self.assertRegex(sources, r"secrets = \{\n\s+admin_password = var\.admin_password\n\s+\}")
-        self.assertNotIn("provisioner", sources)
-        self.assertIn('source = "../lxc-app"', sources)
+        self.assertNotRegex(sources, r"content\s*=\s*var\.admin_password")
+        self.assertIn("admin-password.sealed", sources)
+        self.assertNotRegex(sources, r'destination\s*=\s*"\$\{local\.work\}/admin-password"')
 
-    def test_the_guest_reads_it_from_a_file_lxc_app_opened(self):
-        self.assertIn("$OCTOPUSHY_SECRETS/admin_password", INSTALL)
-        self.assertNotIn("unseal", INSTALL)
-        self.assertNotIn("authorized_keys", INSTALL)
+    def test_the_sealing_key_goes_only_through_the_proxmox_api(self):
+        main = (MODULE / "main.tf").read_text()
+        self.assertIn("octopushy-bootstrap=${local.bootstrap}", main)
+        block = re.search(r'module "container" \{.*?^\}', main, re.S | re.M).group()
+        self.assertIn("extra_ssh_keys", block)
+        self.assertIn("local.bootstrap_key", block)
+        install = re.search(r'resource "terraform_data" "install" \{.*?^\}', main, re.S | re.M).group()
+        self.assertNotRegex(install, r"(?m)^[^#]*BOOTSTRAP")
+
+    def test_the_guest_unseals_it_with_what_proxmox_gave_it(self):
+        self.assertIn("/root/.ssh/authorized_keys", INSTALL)
+        self.assertIn("octopushy-bootstrap=", INSTALL)
+        self.assertRegex(INSTALL, r"(?m)^unseal\(\)")
+        self.assertIn("fail \"the bootstrap key is missing", INSTALL)
+
+    def test_a_seal_has_a_random_nonce_of_its_own(self):
+        # A clock is no nonce: one key and one nonce twice give the difference of two passwords.
+        main = (MODULE / "main.tf").read_text()
+        self.assertNotIn("plantimestamp", main)
+        self.assertNotIn("SEAL_NONCE", main)
+        self.assertRegex(main, r"for nonce in \[uuid\(\)\]")
+
+    def test_the_sealing_key_is_not_derived_from_the_ssh_key(self):
+        main = (MODULE / "main.tf").read_text()
+        self.assertIn('resource "tls_private_key" "seal"', main)
+        bootstrap = re.search(r"(?m)^\s*bootstrap\s*=.*$", main).group()
+        self.assertIn("tls_private_key.seal", bootstrap)
+        self.assertNotIn("tls_private_key.install", bootstrap)
+
+    def seal(self, secret, key="ab" * 32, nonce="0e7f2c9a-6f7e-4f7e-8f7e-0123456789ab", identity="krb-dns-01/10.1.0.32"):
+        """The HCL half of the seal, in Python, to hold the bash half to."""
+        import base64, hashlib
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
+        encrypt, authenticate = sha(f"octopushy-seal-encrypt:{key}"), sha(f"octopushy-seal-authenticate:{key}")
+        plain = base64.b64encode(secret.encode()).decode().rstrip("=")
+        cipher = ""
+        for i, c in enumerate(plain):
+            block = base64.b64encode(hashlib.sha256(f"{encrypt}:{nonce}:{i // 40}".encode()).digest()).decode()
+            cipher += alphabet[(alphabet.index(c) + alphabet.index(block[i % 40])) % 64]
+        tag = sha(f"{authenticate}:" + sha(f"{authenticate}:{identity}:{nonce}:{cipher}"))
+        return f"{nonce}.{cipher}.{tag}"
+
+    def unseal(self, sealed, key="ab" * 32, identity="krb-dns-01/10.1.0.32", used=None):
+        import subprocess, tempfile
+        function = re.search(r"(?ms)^unseal\(\) \{.*?^\}", INSTALL).group()
+        with tempfile.TemporaryDirectory() as work:
+            Path(work, "sealed").write_text(sealed)
+            spent = used or f"{work}/spent"
+            script = f"set -euo pipefail\nfail() {{ echo \"$*\" >&2; exit 1; }}\n{function}\nunseal {work}/sealed {key} '{identity}' {spent} {work}/plain\n"
+            done = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            plain = Path(work, "plain")
+            return done, plain.read_bytes() if plain.exists() else None
+
+    def test_the_seal_opens(self):
+        """The bash half of the seal against the same construction as the HCL half."""
+        for secret in ("A test password, with & = + % in it", "x" * 12, "é-unicode-ü-secret", "y" * 200):
+            sealed = self.seal(secret)
+            self.assertNotIn(__import__("base64").b64encode(secret.encode()).decode()[:12], sealed)
+            done, plain = self.unseal(sealed)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(plain, secret.encode())
+
+    def test_a_tampered_seal_gives_nothing_up(self):
+        sealed = self.seal("A test password, with & = + % in it")
+        nonce, cipher, tag = sealed.split(".")
+        flipped = "B" if cipher[3] != "B" else "C"
+        for changed in (
+            f"{nonce}.{cipher[:3]}{flipped}{cipher[4:]}.{tag}",
+            f"{nonce}.{cipher}0.{tag}",
+            f"{nonce}.{cipher}.{'0' * 64}",
+            f"{'1' * 8}{nonce[8:]}.{cipher}.{tag}",
+            f"{nonce}.{cipher}",
+        ):
+            done, plain = self.unseal(changed)
+            self.assertNotEqual(done.returncode, 0, changed)
+            self.assertIsNone(plain, "something was written before the tag was checked")
+            self.assertIn("seal", done.stderr)
+
+    def test_a_seal_opens_only_on_the_guest_it_was_made_for(self):
+        done, plain = self.unseal(self.seal("a test password here"), identity="mrb-dns-01/10.1.0.42")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIsNone(plain)
+
+    def test_a_key_opens_nothing_it_did_not_seal(self):
+        done, plain = self.unseal(self.seal("a test password here"), key="cd" * 32)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIsNone(plain)
+
+    def test_a_nonce_is_never_used_twice_with_a_key(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as work:
+            used = f"{work}/spent"
+            sealed = self.seal("the first test password")
+            self.assertEqual(self.unseal(sealed, used=used)[0].returncode, 0)
+            # The same nonce again, as the old clock could give it, over another password.
+            again = self.seal("another test password")
+            done, plain = self.unseal(again, used=used)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIsNone(plain)
+            self.assertIn("nonce", done.stderr)
 
     def test_inputs_cannot_reach_the_install_as_shell(self):
         variables = (MODULE / "variables.tf").read_text()
@@ -116,14 +212,11 @@ class ContainerTests(unittest.TestCase):
                         r"start_on_boot = true", r'content_type\s+= "vztmpl"'):
             self.assertRegex(main, setting)
 
-    def test_the_technitium_root_reuses_the_modules(self):
-        self.assertIn('source = "../proxmox-lxc"', (APP / "main.tf").read_text())
+    def test_the_technitium_root_reuses_the_module(self):
+        self.assertIn('source = "../proxmox-lxc"', (MODULE / "main.tf").read_text())
         recipe = (LAB / "recipes/technitium-lxc/recipe.yaml").read_text()
-        self.assertIn("modules: [../../modules/opentofu/lxc-app, ../../modules/opentofu/proxmox-lxc]", recipe)
+        self.assertIn("modules: [../../modules/opentofu/proxmox-lxc]", recipe)
         self.assertFalse(list(MODULE.glob("*container*")))
-        self.assertEqual(sorted(path.name for path in MODULE.iterdir() if path.is_file() and path.suffix == ".tf"),
-                         ["main.tf", "outputs.tf", "variables.tf", "versions.tf"])
-        self.assertEqual([path.name for path in (MODULE / "files").iterdir()], ["install.sh"])
 
     def test_port_5380_is_never_opened(self):
         rules = re.findall(r'dport = "(\d+)"', (MODULE / "main.tf").read_text())

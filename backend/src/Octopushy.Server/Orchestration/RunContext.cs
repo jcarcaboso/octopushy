@@ -116,7 +116,9 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4,
     /// <summary><c>lxc</c> for a container. Null, for a VM, leaves the wire input as it always was.</summary>
-    string? GuestKind = null)
+    string? GuestKind = null,
+    /// <summary>VMIDs the installation reserves: a plan that would change one fails before approval.</summary>
+    IReadOnlyList<int>? ReservedVmids = null)
 {
     /// <summary>For work that does not go through Proxmox.</summary>
     public static readonly ProxmoxContext None = new("", true, null, null, null, null, null);

@@ -181,7 +181,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 env,
                 secretEnv),
             Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest),
-                guest.IsContainer ? "lxc" : null),
+                guest.IsContainer ? "lxc" : null, inputs.Installation.ReservedVmids),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
