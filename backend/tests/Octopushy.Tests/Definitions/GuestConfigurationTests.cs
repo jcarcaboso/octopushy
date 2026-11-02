@@ -210,6 +210,7 @@ public class GuestConfigurationTests
     [InlineData("    - { action: reinstall, cron: \"0 6 * * *\" }\n", "has no such action")]
     [InlineData("    - { action: configure, cron: \"not a cron\" }\n", "is not a cron expression")]
     [InlineData("    - { action: configure, cron: \"0 6 * * * *\" }\n", "is not a cron expression")]
+    [InlineData("    - { action: configure, cron: \"0 6 31 2 *\" }\n", "never falls due")]
     [InlineData("    - { action: configure, cron: \"0 6 * * *\" }\n    - { action: configure, cron: \"0 6 * * *\" }\n", "listed twice")]
     public void A_schedule_that_cannot_run_is_refused(string schedules, string message)
     {

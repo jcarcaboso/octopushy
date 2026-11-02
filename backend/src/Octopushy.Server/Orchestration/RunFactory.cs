@@ -228,7 +228,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     /// trust in that installation still decides whether its guests are worked on.
     /// </summary>
     public Run Configure(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
-        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles)
+        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles, DateTimeOffset? scheduledFor = null)
     {
         if (guest.Retired)
             throw new RunException("A retired guest is not configured.");
@@ -275,6 +275,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 guest.Host, guest.Vmid, guest.Id, null),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
+            ScheduledFor = scheduledFor,
             Ansible = new AnsibleContext(
                 inputs.Recipe.Id,
                 action.Id,

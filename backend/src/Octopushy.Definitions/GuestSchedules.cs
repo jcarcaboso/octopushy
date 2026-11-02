@@ -21,6 +21,9 @@ public static class GuestSchedules
 
     public static bool IsCron(string text) => CronExpression.TryParse(text, CronFormat.Standard, out _);
 
+    /// <summary>Whether an expression that parses ever falls due: February 31 does not.</summary>
+    public static bool EverFires(string cron) => Next(cron, TimeZoneInfo.Utc, DateTimeOffset.UnixEpoch) is not null;
+
     /// <summary>The time zone maintenance times are written in: the lab's, or UTC if it names none.</summary>
     public static TimeZoneInfo ZoneOf(string? timezone) =>
         string.IsNullOrEmpty(timezone) ? TimeZoneInfo.Utc : TimeZoneInfo.FindSystemTimeZoneById(timezone);

@@ -792,6 +792,8 @@ public sealed partial class LabRepositoryLoader
                 Invalid($"/setup/schedules/{index}/action", $"The schedule runs '{schedule.Action}', and the recipe '{id}' has no such action.");
             if (!GuestSchedules.IsCron(schedule.Cron))
                 Invalid($"/setup/schedules/{index}/cron", $"'{schedule.Cron}' is not a cron expression: five fields, minute to day of the week.");
+            else if (!GuestSchedules.EverFires(schedule.Cron))
+                Invalid($"/setup/schedules/{index}/cron", $"'{schedule.Cron}' never falls due.");
         }
 
         if (schedules.Distinct().Count() != schedules.Count)

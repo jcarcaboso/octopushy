@@ -263,6 +263,9 @@ public class ScheduleRunTests(PostgresFixture postgres)
         await FireAsync(server, At(6, 1));
     }
 
+    private static Task ExpireAsync(ServerHarness server, DateTimeOffset now) =>
+        server.Services.GetRequiredService<Planner>().ExpireScheduledAsync(now, CancellationToken.None);
+
     [Fact]
     public async Task A_scheduled_run_no_agent_picked_up_stops_waiting_after_the_limit()
     {
@@ -274,13 +277,69 @@ public class ScheduleRunTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal(RunReasons.Schedule, run.Reason);
 
-        var planner = server.Services.GetRequiredService<Planner>();
-        await planner.ExpireScheduledAsync(DateTimeOffset.UtcNow + Planner.ScheduleLateLimit - TimeSpan.FromMinutes(1), CancellationToken.None);
+        await ExpireAsync(server, At(6) + Planner.ScheduleLateLimit - TimeSpan.FromMinutes(1));
         Assert.NotEqual(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
 
-        await planner.ExpireScheduledAsync(DateTimeOffset.UtcNow + Planner.ScheduleLateLimit + TimeSpan.FromMinutes(1), CancellationToken.None);
+        await ExpireAsync(server, At(6) + Planner.ScheduleLateLimit + TimeSpan.FromMinutes(1));
         var stopped = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal(run.Id, stopped.Id);
         Assert.Equal(RunStatuses.Cancelled, stopped.Status);
+    }
+
+    [Fact]
+    public async Task A_catch_up_keeps_the_limit_of_the_time_it_was_for()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled());
+        var (_, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await FireAsync(server, At(1));
+        await FireAsync(server, At(6, 59));
+
+        await ExpireAsync(server, At(7, 1));
+        Assert.Equal(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Fact]
+    public async Task A_finished_preview_does_not_keep_a_run_that_changed_nothing_waiting()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled());
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await FireAsync(server, At(1));
+        await FireAsync(server, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        await server.TickAsync();
+
+        await ExpireAsync(server, At(8));
+        Assert.Equal(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        await FireAsync(server, At(6, 1, day: 1));
+        Assert.NotEqual(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Fact]
+    public async Task A_run_that_has_gone_out_to_change_the_guest_is_not_cancelled()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled());
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await FireAsync(server, At(1));
+        await FireAsync(server, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        await agent.NextAsync("run");
+
+        await ExpireAsync(server, At(8));
+        Assert.NotEqual(RunStatuses.Cancelled, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Fact]
+    public async Task A_time_zone_only_a_guest_with_no_schedule_uses_cannot_stop_the_pass()
+    {
+        var test = Repository.Repository();
+        test.Write("labs/home/lab.yaml", File.ReadAllText(Path.Combine(test.Root, "labs/home/lab.yaml")) + "timezone: Mars/Olympus\n");
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (_, _, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await FireAsync(server, At(6, 1));
     }
 }

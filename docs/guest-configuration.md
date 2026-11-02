@@ -109,7 +109,7 @@ setup:
 It belongs on the guest because one recipe serves machines with different maintenance times,
 and a field on a recipe action would force one time on all of them. The expression has five
 fields and is read in the lab's `timezone`, or UTC if the lab names none. A schedule that names
-an action the recipe lacks, an expression that does not parse, or a time zone that does not
+an action the recipe lacks, an expression that does not parse or never falls due, or a time zone that does not
 exist is a validation error. Changing a schedule starts no run: it says when an action runs,
 not what it does, so it is outside the configure hash.
 
@@ -120,7 +120,7 @@ page shows its next time and what the last firing did.
 | Case | What happens |
 |---|---|
 | **Missed.** Octopushy was down at that time | **At most one catch-up, within an hour.** Back within the hour, it runs once. Later, the time is skipped and noted on the guest, because a schedule says when, and an action that reboots should not run at whatever hour a server came back. Only the newest time counts, so there is never a backlog |
-| **Missed.** No agent took the run | The run waits for an agent for the same hour, then is cancelled with that reason. It has released nothing and touched nothing |
+| **Missed.** No agent took the run | The run waits until an hour after its time, not an hour after a catch-up started it, then is cancelled with that reason. A finished preview does not change that, because nothing has reached the guest. Once a step that can change the guest has gone out, it ends the usual way |
 | **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
 | **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
 | **Approval.** `policy.approval: manual`, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run |

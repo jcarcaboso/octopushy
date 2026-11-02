@@ -42,7 +42,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     /// follows changes. A person's run queues behind what is running. A schedule's does not: it
     /// is refused, so nothing piles up behind a run that is waiting or uncertain.
     /// </summary>
-    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual") =>
+    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual", DateTimeOffset? scheduledFor = null) =>
         engine.ExecuteAsync(async (db, _) =>
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
@@ -62,7 +62,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var inputs = ConfigureInputs.Build(repository, guest);
             var chosen = action ?? inputs.Configure.OnChange?.Id
                 ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
-            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken);
+            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken, scheduledFor);
             if (chosen == inputs.Configure.OnChange?.Id
                 && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
                 configuration.ProposedHash = inputs.Hash;
@@ -135,14 +135,18 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var resources = await db.Resources.AsNoTracking()
                 .Where(r => r.Kind == ResourceKinds.Guest && r.Valid && r.RetiredAt == null && r.MissingSince == null)
                 .ToListAsync(cancellationToken);
-            var fire = new List<GuestScheduleState>();
+            var fire = new List<(GuestScheduleState State, DateTimeOffset Slot)>();
             var declared = new HashSet<GuestScheduleState>();
             foreach (var resource in resources)
             {
                 if (repository.Guest(resource.Address) is not { } guest || !repository.IsValid(resource.Address))
                     continue;
+                // Only a guest with a schedule reads the zone: its lab's zone is validated only then.
+                var schedules = GuestSchedules.Of(guest);
+                if (schedules.Count == 0)
+                    continue;
                 var zone = GuestSchedules.ZoneOf(repository.Lab(guest.Lab)?.Timezone);
-                foreach (var schedule in GuestSchedules.Of(guest))
+                foreach (var schedule in schedules)
                 {
                     var state = states.Find(s => s.ResourceId == resource.Id && s.Action == schedule.Action && s.Cron == schedule.Cron);
                     if (state is null)
@@ -161,7 +165,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                     if (GuestSchedules.Latest(schedule.Cron, zone, now - ScheduleLateLimit, now) is { } slot)
                     {
                         state.LastSlot = slot;
-                        fire.Add(state);
+                        fire.Add((state, slot));
                     }
                     else
                     {
@@ -179,9 +183,9 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             return fire;
         }, cancellationToken);
 
-        foreach (var state in due)
+        foreach (var (state, slot) in due)
         {
-            var (run, note) = await StartScheduledAsync(state, cancellationToken);
+            var (run, note) = await StartScheduledAsync(state, slot, cancellationToken);
             await engine.ExecuteAsync(async (db, _) =>
             {
                 var current = await db.GuestSchedules.FirstOrDefaultAsync(
@@ -195,11 +199,11 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
         }
     }
 
-    private async Task<(Guid? Run, string? Note)> StartScheduledAsync(GuestScheduleState state, CancellationToken cancellationToken)
+    private async Task<(Guid? Run, string? Note)> StartScheduledAsync(GuestScheduleState state, DateTimeOffset slot, CancellationToken cancellationToken)
     {
         try
         {
-            return (await ConfigureGuestAsync(state.ResourceId, state.Action, cancellationToken, RunReasons.Schedule), null);
+            return (await ConfigureGuestAsync(state.ResourceId, state.Action, cancellationToken, RunReasons.Schedule, slot), null);
         }
         catch (RunException e)
         {
@@ -212,23 +216,29 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
         }
     }
 
-    /// <summary>A scheduled run no agent picked up by its limit stops waiting: one starting hours late would run at a time nobody chose.</summary>
+    /// <summary>
+    /// A scheduled run stops waiting at its limit, counted from its time and not from when it was
+    /// started, if nothing that can change the guest has gone out. One starting hours late would
+    /// run at a time nobody chose. Past that point it ends the usual way. A run waiting for a person
+    /// is theirs to decide.
+    /// </summary>
     public async Task ExpireScheduledAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var cutoff = now - ScheduleLateLimit;
-        var stale = await engine.ExecuteAsync((db, _) => db.Runs.AsNoTracking()
-            .Where(r => r.Reason == RunReasons.Schedule && r.CreatedAt < cutoff
+        var waiting = await engine.ExecuteAsync((db, _) => db.Runs.AsNoTracking()
+            .Where(r => r.Reason == RunReasons.Schedule
                 && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running || r.Status == RunStatuses.Blocked)
-                && r.Steps.All(s => s.Attempts.All(a => a.Status == AttemptStatuses.Queued)))
-            .Select(r => r.Id).ToListAsync(cancellationToken), cancellationToken);
-        foreach (var id in stale)
+                && !r.Steps.Any(s => s.Attempts.Any(a => a.Mutating && a.Status != AttemptStatuses.Queued)))
+            .Select(r => new { r.Id, r.Context, r.CreatedAt }).ToListAsync(cancellationToken), cancellationToken);
+        foreach (var run in waiting)
         {
-            await engine.CancelAsync(id, "Nothing picked this up within an hour of its time. The next time tries again.", cancellationToken);
+            var scheduled = RunContext.Parse(run.Context).ScheduledFor ?? run.CreatedAt;
+            if (scheduled + ScheduleLateLimit < now)
+                await engine.CancelAsync(run.Id, "Nothing picked this up within an hour of its time. The next time tries again.", cancellationToken);
         }
     }
 
     private async Task<Run> ConfigureRunAsync(OctopushyDb db, LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
-        string action, string reason, CancellationToken cancellationToken)
+        string action, string reason, CancellationToken cancellationToken, DateTimeOffset? scheduledFor = null)
     {
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
         var recipe = repository.Recipes[guest.SetupRecipe!];
@@ -237,7 +247,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             : null;
         var changed = applied is null ? null
             : await mirror.ChangedFilesAsync(applied, revision.Commit, [Path.GetDirectoryName(recipe.File)!, recipe.Root, guest.Directory], cancellationToken);
-        return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed);
+        return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed, scheduledFor);
     }
 
     /// <summary>Observes an installation now, in the background, unless an observation of it is under way.</summary>
