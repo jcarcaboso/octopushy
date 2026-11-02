@@ -1,19 +1,22 @@
 #!/usr/bin/python3
-"""Changes the login's authorized_keys by which key a line authorizes, and nothing else.
+"""Changes the login's authorized_keys by which key a line authorizes.
 
     authorized_keys.py add "<public key line>"
-    authorized_keys.py remove <SHA256 fingerprint>...
-    authorized_keys.py absent <SHA256 fingerprint>...
+    authorized_keys.py remove <fingerprint in use> <SHA256 fingerprint>...
+    authorized_keys.py absent <fingerprint in use> <SHA256 fingerprint>...
 
 The guest's own OpenSSH says what each line is: every physical line goes through ssh-keygen -l,
-which reads it as sshd does, options, quoting and all. Nothing here parses a key, so nothing
-here can disagree with sshd about one. Lines end at a newline and nowhere else, and every line
-that is not a key named stays byte for byte.
+so nothing here parses a key. Lines end at a newline and nowhere else. What is left is the key
+Octopushy logged in with: if it cannot be found, the check has not worked, whatever the reason, and
+nothing is written and nothing reads as gone. So a removal can never take the key in use.
+
+A line whose key is one named goes, whatever else it says. Every other line stays byte for byte.
 
 An add appends and rewrites nothing, so it cannot lose what someone else wrote. A removal has to
 replace the file: it reads it again just before doing so, and starts over if it changed.
-Prints "changed" if the file changed. Absent exits 1 if a key named is still authorized. Anything
-that stops the check exits 3, so an unknown never reads as gone.
+Prints "changed" if the file changed. Absent exits 1 if a key named is still authorized, and
+anything that stops the check exits 3. This is the guest's word on a file. Whether sshd takes a
+key is sshd's: confirm-refused asks it.
 """
 import os
 import re
@@ -25,6 +28,34 @@ import tempfile
 PATH = os.path.expanduser("~/.ssh/authorized_keys")
 FINGERPRINT = re.compile(rb"\d+ (SHA256:[A-Za-z0-9+/]+)[ \n]")
 ATTEMPTS = 5
+
+
+def past_options(text):
+    """Where sshd's advance_past_options stops: a backslash escapes only a double quote."""
+    quoted = False
+    index = 0
+    while index < len(text):
+        character = text[index:index + 1]
+        if not quoted and character in (b" ", b"\t"):
+            break
+        if character == b"\\" and text[index + 1:index + 2] == b'"':
+            index += 2
+            continue
+        if character == b'"':
+            quoted = not quoted
+        index += 1
+    return index
+
+
+def as_sshd_reads(line):
+    """The line, in the shape ssh-keygen needs to read it as sshd does.
+
+    sshd skips a CR inside a key and any run of blanks after the options. ssh-keygen stops at the
+    first and takes only one of the second. Neither changes which key a line holds.
+    """
+    text = line.split(b"\0", 1)[0].replace(b"\r", b"").lstrip(b" \t")
+    end = past_options(text)
+    return text[:end] + b" " + text[end:].lstrip(b" \t")
 
 
 class Fingerprints:
@@ -42,10 +73,9 @@ class Fingerprints:
         """The key a line authorizes, or None if sshd would not take it as one."""
         if not line.strip():
             return None
-        # sshd skips a CR inside a key, where ssh-keygen would stop reading at it. Neither takes one
-        # for a field separator, so without it the line still says the same thing to both.
+        # A blank first line, because on the first line "PRIVATE KEY" anywhere reads as a private key.
         with open(self.path, "wb") as stream:
-            stream.write(line.replace(b"\r", b"") + b"\n")
+            stream.write(b"\n" + as_sshd_reads(line) + b"\n")
         result = subprocess.run(
             ["ssh-keygen", "-l", "-E", "sha256", "-f", self.path],
             stdin=subprocess.DEVNULL, capture_output=True, check=False,
@@ -75,7 +105,9 @@ def add(key):
     prefix = b"\n" if data and not data.endswith(b"\n") else b""
     descriptor = os.open(PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(descriptor, prefix + line + b"\n")
+        payload = prefix + line + b"\n"
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("the key was only partly written")
     finally:
         os.close(descriptor)
     print("changed")
@@ -91,7 +123,13 @@ def replace(before, after):
             stream.write(after)
             stream.flush()
             os.fsync(stream.fileno())
-        shutil.copymode(target, temporary)
+        # Mode and SELinux label, then owner, as far as this login may set them.
+        shutil.copystat(target, temporary)
+        status = os.stat(target)
+        try:
+            os.chown(temporary, status.st_uid, status.st_gid)
+        except PermissionError:
+            pass
         if read() != before:
             return False
         os.replace(temporary, target)
@@ -101,12 +139,15 @@ def replace(before, after):
             os.unlink(temporary)
 
 
-def remove(targets):
+def remove(in_use, targets):
     with Fingerprints() as fingerprints:
         for _ in range(ATTEMPTS):
             data = read()
             lines = data.split(b"\n")
-            kept = [line for line in lines if fingerprints.of(line) not in targets]
+            prints = [fingerprints.of(line) for line in lines]
+            if in_use not in prints:
+                raise ValueError("the key in use is not in authorized_keys, so this file cannot be read")
+            kept = [line for line, printed in zip(lines, prints) if printed not in targets]
             if len(kept) == len(lines):
                 return 0
             if replace(data, b"\n".join(kept)):
@@ -115,9 +156,12 @@ def remove(targets):
     raise OSError("authorized_keys kept changing")
 
 
-def absent(targets):
+def absent(in_use, targets):
     with Fingerprints() as fingerprints:
-        return 1 if {fingerprints.of(line) for line in read().split(b"\n")} & targets else 0
+        prints = {fingerprints.of(line) for line in read().split(b"\n")}
+    if in_use not in prints:
+        raise ValueError("the key in use is not in authorized_keys, so this file cannot be read")
+    return 1 if prints & targets else 0
 
 
 def main(arguments):
@@ -126,9 +170,9 @@ def main(arguments):
         if command == "add":
             return add(values[0])
         if command == "remove":
-            return remove(set(values))
+            return remove(values[0], set(values[1:]))
         if command == "absent":
-            return absent(set(values))
+            return absent(values[0], set(values[1:]))
         print(f"unknown command {command}", file=sys.stderr)
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)

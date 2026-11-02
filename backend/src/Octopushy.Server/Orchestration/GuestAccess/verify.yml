@@ -25,7 +25,7 @@
 
     - name: Require that the keys removed are gone
       ansible.builtin.script:
-        cmd: "{{ playbook_dir }}/authorized_keys.py absent {{ access_removed_keys | map('quote') | join(' ') }}"
+        cmd: "{{ playbook_dir }}/authorized_keys.py absent {{ access_kept_key | quote }} {{ access_removed_keys | map('quote') | join(' ') }}"
         executable: /usr/bin/python3
       changed_when: false
       when: access_removed_keys is defined

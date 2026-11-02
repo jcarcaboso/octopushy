@@ -139,7 +139,7 @@ public sealed partial class RunEngine
     }
 
     /// <summary>What each finished step of a rotation shows. A change is recorded when a login has shown it, not when it was asked for.</summary>
-    private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, DateTimeOffset now, CancellationToken cancellationToken)
+    private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var rotation = RunContext.Parse(run.Context).AccessRotation!;
         var keys = await db.GuestAccessKeys.Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
@@ -153,9 +153,16 @@ public sealed partial class RunEngine
                 verified.VerifiedAt = now;
                 verified.VerifiedRunId = run.Id;
                 break;
-            case StepNames.VerifyRemoval:
-                // Only a login showing them gone counts. Until then they stay on the list, so a
-                // later rotation looks again, and takes off whatever is still there.
+            case StepNames.ConfirmRefused:
+                // Only sshd refusing them counts. Until then they stay on the list, so a later
+                // rotation looks again, and takes off whatever is still there.
+                if (outputs?["refused"]?.GetValue<bool>() != true)
+                {
+                    step.Status = StepStatuses.Failed;
+                    step.Detail = "Nothing showed sshd refusing the old key.";
+                    return;
+                }
+
                 foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
                 {
                     removed.RemovedAt = now;

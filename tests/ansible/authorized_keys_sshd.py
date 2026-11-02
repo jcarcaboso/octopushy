@@ -9,6 +9,7 @@ what sshd takes them to be, so these are the shapes a text search gets wrong.
 """
 import json
 import os
+import secrets
 from pathlib import Path
 import socket
 import subprocess
@@ -16,7 +17,7 @@ import sys
 import tempfile
 
 SCRIPT = Path(__file__).resolve().parents[2] / "backend/src/Octopushy.Server/Orchestration/GuestAccess/authorized_keys.py"
-CONTAINER = "octopushy-authorized-keys"
+CONTAINER = f"octopushy-authorized-keys-{secrets.token_hex(4)}"
 
 
 def run(*arguments, data=None):
@@ -39,6 +40,10 @@ def cases(old, new, person):
     yield "tabs", f"ssh-ed25519\t{blob}\tcomment\n".encode() + tail
     yield "two copies", f"{old}\n".encode() + tail + f"{old}\n".encode()
     yield "options", f'environment="VAR=a b",no-pty {old}\n'.encode() + tail
+    yield "two blanks after the options", f"no-pty  {old}\n".encode() + tail
+    yield "a tab and blanks after the options", f"no-pty \t {old}\n".encode() + tail
+    yield "PRIVATE KEY in the comment", f"{old} PRIVATE KEY\n".encode() + tail
+    yield "PRIVATE KEY in an option", f'environment="A=PRIVATE KEY" {old}\n'.encode() + tail
     yield "options ending in two backslashes", ('environment="VAR=a\\\\" b" ' + plain + " c\n").encode() + tail
     yield "not UTF-8", plain.encode() + b" comment-\xff\n" + tail
     yield "long comment", old.encode() + b"x" * 200000 + b"\n" + tail
@@ -62,9 +67,11 @@ def main():
         run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", path)
         keys[name] = Path(path + ".pub").read_text().strip()
     Path(work.name, "authorized_keys").write_text(keys["new"] + "\n")
-    old_print = run("ssh-keygen", "-l", "-E", "sha256", "-f", os.path.join(work.name, "old.pub")).stdout.decode().split()[1]
+    old_print, new_print = (
+        run("ssh-keygen", "-l", "-E", "sha256", "-f", os.path.join(work.name, f"{key}.pub")).stdout.decode().split()[1] for key in ("old", "new")
+    )
+    blobs = [keys[key].split()[1].encode() for key in ("new", "person")]
     port = free_port()
-    run("podman", "rm", "-f", CONTAINER)
     started = run(
         "podman", "run", "-d", "--name", CONTAINER, "-p", f"127.0.0.1:{port}:22", "-v", f"{work.name}:/keys:ro,Z",
         "--cap-add", "SYS_CHROOT", "--cap-add", "AUDIT_WRITE", image, "/bin/sh", "-c",
@@ -91,13 +98,17 @@ def main():
             run("podman", "exec", "-i", CONTAINER, "sh", "-c", "cat > /home/ops/.ssh/authorized_keys; chown ops:ops /home/ops/.ssh/authorized_keys", data=content)
             before = {key: login(key) for key in keys}
             program = ("podman", "exec", "-u", "ops", "-e", "HOME=/home/ops", CONTAINER, "python3", "/tmp/authorized_keys.py")
-            removed = run(*program, "remove", old_print)
-            absent = run(*program, "absent", old_print)
+            removed = run(*program, "remove", new_print, old_print)
+            absent = run(*program, "absent", new_print, old_print)
             after = {key: login(key) for key in keys}
+            left = run("podman", "exec", CONTAINER, "cat", "/home/ops/.ssh/authorized_keys").stdout
+            kept = [line for line in left.split(b"\n") if line] == [
+                line for line in content.split(b"\n") if any(blob in line for blob in blobs)
+            ]
             # Every key has to work first, or the case proves nothing.
             good = all(before.values()) and removed.returncode == 0 and absent.returncode == 0 \
-                and not after["old"] and after["new"] and after["person"]
-            print(("ok  " if good else "FAIL"), name, json.dumps({"before": before, "after": after, "remove": removed.returncode, "absent": absent.returncode}), flush=True)
+                and not after["old"] and after["new"] and after["person"] and kept
+            print(("ok  " if good else "FAIL"), name, json.dumps({"before": before, "after": after, "remove": removed.returncode, "absent": absent.returncode, "byte for byte": kept}), flush=True)
             failures += 0 if good else 1
     finally:
         run("podman", "rm", "-f", CONTAINER)

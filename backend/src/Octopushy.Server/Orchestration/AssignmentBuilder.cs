@@ -49,7 +49,7 @@ public sealed partial class AssignmentBuilder(
         StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
         StepNames.Preview => new StepAction("ansible", "preview", false),
         StepNames.Playbook or StepNames.PlaybookApproved or StepNames.AuthorizeKey or StepNames.RemoveKey => new StepAction("ansible", "run", true),
-        StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval => new StepAction("ansible", "run", false),
+        StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval or StepNames.ConfirmRefused => new StepAction("ansible", "run", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 

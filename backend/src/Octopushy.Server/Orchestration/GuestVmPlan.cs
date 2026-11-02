@@ -33,6 +33,13 @@ public static class GuestVmPlan
             && Actions(c).Contains("create")
             && IsGuests(c, context));
 
+    /// <summary>The plan makes a machine it cannot place: its VMID or host is not known until apply, or the agent did not say.</summary>
+    public static bool MakesUnnamedMachine(JsonNode? outputs) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
+            c["type"]?.ToString() is VmResourceType or ContainerResourceType
+            && Actions(c).Contains("create")
+            && (c["vmId"] is null || c["node"] is null));
+
     /// <summary>The plan deletes or replaces some Proxmox VM, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();
 

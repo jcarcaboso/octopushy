@@ -103,6 +103,9 @@ struct Input {
     /// What the controller wants an approval to cover, recorded in the preview unchanged.
     #[serde(default)]
     manifest: Value,
+    /// The run succeeds only if sshd turns these keys away. A login is the failure.
+    #[serde(default)]
+    expect_refused: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -845,6 +848,9 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
             "unreachableTask": recap.unreachable_task,
         })
     };
+    if prep.input.expect_refused {
+        return settle_refused(prep, &recap, outputs(&recap));
+    }
     // Before any outcome, and even at exit 0: a play that ignores an unreachable host has not
     // found out how that task ended, and an earlier outcome says nothing about it.
     if recap.unreachable.is_some() {
@@ -879,6 +885,27 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
         },
         outputs(&recap),
     ))
+}
+
+/// Only sshd's own refusal counts: a guest that did not answer has said nothing about a key.
+fn settle_refused(prep: &Prepared, recap: &Recap, mut result: Value) -> ExecResult {
+    let refused = !recap.reached
+        && recap
+            .unreachable
+            .as_deref()
+            // With the bracket it is sshd listing its methods. Without, it can be a local firewall.
+            .is_some_and(|m| m.contains("Permission denied ("));
+    if refused {
+        result["refused"] = json!(true);
+        return Ok(Success::outputs(result));
+    }
+    if recap.reached {
+        return Err(Failure::with_outputs(
+            "sshd still accepts a key that was removed. It is not in authorized_keys, so another file or setting authorizes it; it stays listed as authorized until sshd refuses it",
+            result,
+        ));
+    }
+    Err(unreachable_failure(prep, recap, &result))
 }
 
 fn failed_before_tasks(out: &ToolOutput) -> String {

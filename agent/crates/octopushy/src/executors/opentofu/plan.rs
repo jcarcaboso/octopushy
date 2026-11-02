@@ -79,8 +79,11 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
         let before = rc
             .pointer("/change/before")
             .filter(|b| machine && !b.is_null());
-        // A machine that does not exist yet is named by what it would be.
-        let identity = before.or_else(|| rc.pointer("/change/after").filter(|_| machine));
+        // A machine that does not exist yet is named by what it would be. Only then: anything else
+        // that changes is named by the state, not by what the config says.
+        let creating = matches!(actions.as_slice(), [a] if a == "create");
+        let identity =
+            before.or_else(|| rc.pointer("/change/after").filter(|_| machine && creating));
         summary.changes.push(Change {
             address: text("address"),
             name: text("name"),

@@ -15,6 +15,7 @@ public static class GuestAccessPlaybooks
     public const string Authorize = "authorize.yml";
     public const string Verify = "verify.yml";
     public const string Remove = "remove.yml";
+    public const string Refused = "refused.yml";
     private const string Script = "authorized_keys.py";
 
     /// <summary>The files a rotation's steps receive in place of a repository snapshot.</summary>
@@ -25,7 +26,7 @@ public static class GuestAccessPlaybooks
         using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
         {
             var assembly = Assembly.GetExecutingAssembly();
-            foreach (var name in new[] { Authorize, Verify, Remove, Script })
+            foreach (var name in new[] { Authorize, Verify, Remove, Refused, Script })
             {
                 using var content = assembly.GetManifestResourceStream($"{Root}/{name}")
                     ?? throw new InvalidOperationException($"The playbook {name} is not in the server.");
@@ -41,6 +42,7 @@ public static class GuestAccessPlaybooks
         StepNames.Preview or StepNames.AuthorizeKey => Authorize,
         StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval => Verify,
         StepNames.RemoveKey => Remove,
+        StepNames.ConfirmRefused => Refused,
         _ => throw new InvalidOperationException($"The step '{stepName}' runs no playbook."),
     };
 }

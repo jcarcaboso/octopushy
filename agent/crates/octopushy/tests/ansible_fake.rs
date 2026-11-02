@@ -690,6 +690,53 @@ async fn a_guest_lost_during_a_task_is_uncertain() {
     assert!(matches!(done.result, Err(Failure::Uncertain(_))));
 }
 
+async fn expecting_refusal(fx: &Fixture) -> Finished {
+    let mut body = input();
+    body["expectRefused"] = json!(true);
+    exec(
+        fx,
+        "run",
+        body,
+        secrets(),
+        vec![preview_artifact(Value::Null)],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn only_sshd_refusing_a_login_is_success_when_a_refusal_is_expected() {
+    let fx = Fixture::new();
+    let mut refused = recap(false);
+    refused["unreachable"] = json!("ops@g: Permission denied (publickey).");
+    fx.set("recap.json", &refused.to_string());
+    fx.set("exit", "4");
+    let done = expecting_refusal(&fx).await;
+    match done.result {
+        Ok(success) => assert_eq!(success.outputs["refused"], json!(true)),
+        Err(failure) => panic!("{}", failure.message()),
+    }
+
+    // A login is the failure, even though the playbook did what it was asked.
+    fx.set("recap.json", &recap(true).to_string());
+    fx.set("exit", "0");
+    let done = expecting_refusal(&fx).await;
+    assert!(message(&done.result).contains("still accepts"));
+
+    // A guest that never answered has said nothing about the key.
+    for text in [
+        "Connection timed out",
+        "ssh: connect to host g port 22: Permission denied",
+        "Host key verification failed.",
+    ] {
+        let mut lost = recap(false);
+        lost["unreachable"] = json!(text);
+        fx.set("recap.json", &lost.to_string());
+        fx.set("exit", "4");
+        let done = expecting_refusal(&fx).await;
+        assert!(done.result.is_err(), "{text}");
+    }
+}
+
 #[tokio::test]
 async fn a_refused_host_key_is_a_failure_that_says_so() {
     let fx = Fixture::new();

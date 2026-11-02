@@ -1,0 +1,10 @@
+---
+# Run with the removed keys and nothing else. The agent succeeds only if sshd refuses them: a login
+# here is the failure. This is the one check nothing else can stand in for, because only sshd
+# knows every file and every line it reads.
+- name: Try to log in with a removed key
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Log in
+      ansible.builtin.ping:

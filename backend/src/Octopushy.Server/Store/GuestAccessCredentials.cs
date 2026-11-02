@@ -103,6 +103,14 @@ public static class GuestAccessCredentials
         }
     }
 
+    /// <summary>Whether what OpenTofu carries is older than the key in use.</summary>
+    public static async Task<bool> BootstrapIsBehindAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
+    {
+        var name = Key(resourceId);
+        var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
+        return current is not null && await db.GuestAccessKeys.AnyAsync(k => k.ResourceId == resourceId && k.Bootstrap && k.Version != current, cancellationToken);
+    }
+
     /// <summary>
     /// A new machine has to start with the key in use, not the one its predecessor started with.
     /// True if that changed what OpenTofu carries.

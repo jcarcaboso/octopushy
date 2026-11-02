@@ -84,7 +84,7 @@ class Program(unittest.TestCase):
             "\n"
         )
         self.file.write_text(self.old + "\n" + keep)
-        self.assertEqual(self.run_it("remove", self.old_print).stdout.strip(), "changed")
+        self.assertEqual(self.run_it("remove", self.new_print, self.old_print).stdout.strip(), "changed")
         self.assertEqual(self.file.read_text(), keep)
 
     def test_only_a_newline_ends_a_line(self):
@@ -92,53 +92,89 @@ class Program(unittest.TestCase):
             with self.subTest(separator=repr(separator)):
                 keep = f"{self.person}{separator}{self.old}\n{self.new}\n".encode()
                 self.file.write_bytes(self.old.encode() + b"\n" + keep)
-                self.run_it("remove", self.old_print)
+                self.run_it("remove", self.new_print, self.old_print)
                 self.assertEqual(self.file.read_bytes(), keep)
 
     def test_every_copy_goes_however_it_is_written(self):
         blob = self.old_blob
         for line in (
             f"ssh-ed25519\t{blob}", f"no-pty {self.old}", f"  ssh-ed25519   {blob}   x", f"{self.old}\r",
-            f"ssh-ed25519 {blob[:20]}\r{blob[20:]} c",
+            f"ssh-ed25519 {blob[:20]}\r{blob[20:]} c", f"no-pty  {self.old}", f"no-pty \t {self.old}",
+            f"no-pty  ssh-ed25519   {blob}", f"{self.old} PRIVATE KEY", f'environment="A=PRIVATE KEY" {self.old}',
+            f'environment="A=\\"b c" {self.old}',
         ):
             with self.subTest(line=line):
-                self.file.write_text(f"{line}\n{self.person}\n{self.old}\n")
-                self.assertEqual(self.run_it("absent", self.old_print).returncode, 1)
-                self.run_it("remove", self.old_print)
-                self.assertEqual(self.file.read_text(), self.person + "\n")
-                self.assertEqual(self.run_it("absent", self.old_print).returncode, 0)
+                self.file.write_text(f"{line}\n{self.new}\n{self.old}\n")
+                self.assertEqual(self.run_it("absent", self.new_print, self.old_print).returncode, 1)
+                self.run_it("remove", self.new_print, self.old_print)
+                self.assertEqual(self.file.read_text(), self.new + "\n")
+                self.assertEqual(self.run_it("absent", self.new_print, self.old_print).returncode, 0)
 
     def test_removing_a_key_that_is_not_there_writes_nothing(self):
-        self.file.write_text(self.person + "\n")
+        self.file.write_text(self.new + "\n")
         before = self.file.stat().st_mtime_ns
-        self.assertEqual(self.run_it("remove", self.old_print).stdout.strip(), "")
+        self.assertEqual(self.run_it("remove", self.new_print, self.old_print).stdout.strip(), "")
         self.assertEqual(self.file.stat().st_mtime_ns, before)
 
     def test_a_mention_does_not_read_as_a_key_still_authorized(self):
-        self.file.write_text(f"{self.person} replaces {self.old}\n")
-        self.assertEqual(self.run_it("absent", self.old_print).returncode, 0)
+        self.file.write_text(f"{self.new}\n{self.person} replaces {self.old}\n")
+        self.assertEqual(self.run_it("absent", self.new_print, self.old_print).returncode, 0)
 
-    def test_no_ssh_keygen_is_not_read_as_gone(self):
-        self.file.write_text(self.old + "\n")
-        result = self.run_it("absent", self.old_print, env={"PATH": "/nonexistent"})
-        self.assertEqual(result.returncode, 3)
+    def test_a_person_with_options_keeps_every_byte(self):
+        keep = f'no-pty,command="/bin/echo a  b"  {self.person}  spaced\n{self.new}\n'
+        self.file.write_text(f"no-pty {self.old}\n{keep}")
+        self.run_it("remove", self.new_print, self.old_print)
+        self.assertEqual(self.file.read_text(), keep)
+
+    def test_nothing_is_read_as_gone_unless_the_key_in_use_is_found(self):
+        path = self.home / "fake"
+        path.mkdir()
+        tool = path / "ssh-keygen"
+        for name, script in (
+            ("not there", None), ("fails", "exit 1"), ("killed", "kill -9 $$"), ("says something else", "echo 256 not a fingerprint"),
+        ):
+            with self.subTest(name):
+                tool.unlink(missing_ok=True)
+                if script:
+                    tool.write_text(f"#!/bin/sh\n{script}\n")
+                    tool.chmod(0o755)
+                self.file.write_text(f"{self.old}\n{self.new}\n")
+                for action in ("absent", "remove"):
+                    result = self.run_it(action, self.new_print, self.old_print, env={"PATH": str(path)})
+                    self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertEqual(self.file.read_text(), f"{self.old}\n{self.new}\n")
+
+    def test_a_file_without_the_key_in_use_is_not_written(self):
+        self.file.write_text(f"{self.old}\n{self.person}\n")
+        for action in ("absent", "remove"):
+            self.assertEqual(self.run_it(action, self.new_print, self.old_print).returncode, 3)
+        self.assertEqual(self.file.read_text(), f"{self.old}\n{self.person}\n")
+
+    def test_a_short_write_is_not_a_success(self):
+        self.file.write_text(self.person + "\n")
+        authorized_keys.PATH = str(self.file)
+        original = os.write
+        self.addCleanup(setattr, os, "write", original)
+        os.write = lambda descriptor, data: original(descriptor, data[:10])
+        with self.assertRaises(OSError):
+            authorized_keys.add(self.new)
 
     def test_a_symlinked_file_stays_a_symlink(self):
         real = self.home / "real_keys"
-        real.write_text(f"{self.old}\n{self.person}\n")
+        real.write_text(f"{self.old}\n{self.new}\n")
         self.file.symlink_to(real)
-        self.run_it("remove", self.old_print)
+        self.run_it("remove", self.new_print, self.old_print)
         self.assertTrue(self.file.is_symlink())
-        self.assertEqual(real.read_text(), self.person + "\n")
+        self.assertEqual(real.read_text(), self.new + "\n")
 
     def test_the_mode_of_the_file_is_kept(self):
-        self.file.write_text(f"{self.old}\n{self.person}\n")
+        self.file.write_text(f"{self.old}\n{self.new}\n")
         self.file.chmod(0o640)
-        self.run_it("remove", self.old_print)
+        self.run_it("remove", self.new_print, self.old_print)
         self.assertEqual(self.file.stat().st_mode & 0o777, 0o640)
 
     def test_a_write_during_a_removal_is_kept(self):
-        self.file.write_text(f"{self.old}\n{self.person}\n")
+        self.file.write_text(f"{self.old}\n{self.new}\n")
         authorized_keys.PATH = str(self.file)
         written = []
         original = authorized_keys.replace
@@ -147,23 +183,23 @@ class Program(unittest.TestCase):
             if not written:
                 written.append(True)
                 with open(self.file, "a") as stream:
-                    stream.write(self.new + "\n")
+                    stream.write(self.person + "\n")
             return original(before, after)
 
         authorized_keys.replace = someone_else_writes
         self.addCleanup(setattr, authorized_keys, "replace", original)
-        self.assertEqual(authorized_keys.remove({self.old_print}), 0)
-        self.assertEqual(self.file.read_text(), f"{self.person}\n{self.new}\n")
+        self.assertEqual(authorized_keys.remove(self.new_print, {self.old_print}), 0)
+        self.assertEqual(self.file.read_text(), f"{self.new}\n{self.person}\n")
 
     def test_a_file_that_keeps_changing_stops_the_removal(self):
-        self.file.write_text(f"{self.old}\n")
+        self.file.write_text(f"{self.old}\n{self.new}\n")
         authorized_keys.PATH = str(self.file)
         original = authorized_keys.replace
         authorized_keys.replace = lambda before, after: False
         self.addCleanup(setattr, authorized_keys, "replace", original)
         with self.assertRaises(OSError):
-            authorized_keys.remove({self.old_print})
-        self.assertEqual(self.file.read_text(), self.old + "\n")
+            authorized_keys.remove(self.new_print, {self.old_print})
+        self.assertEqual(self.file.read_text(), f"{self.old}\n{self.new}\n")
 
 
 if __name__ == "__main__":

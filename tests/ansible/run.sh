@@ -379,6 +379,35 @@ if grep -q 'PRIVATE KEY' "$work/rotation.log"; then fail "a private key reached 
 run=$(start_action configure)
 wait_run "$run" succeeded
 
+log "A key sshd still takes stays on the list, wherever it is"
+kept_key=$guest_key
+kept_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+key_state() { call "$api/api/guests/$(guest_id)" | jq -r --argjson version "$1" '.managedAccess.keys[] | select(.version==$version) | .state'; }
+podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2' <<<"$kept_key"
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+[[ $(call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .status') == failed ]] \
+  || fail "the rotation did not stop at sshd's answer"
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts' \
+  || fail "the run does not say sshd took the removed key"
+[[ $(key_state "$kept_version") == old ]] || fail "a key sshd still takes does not read as old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+run=$(start_action configure)
+wait_run "$run" succeeded
+
+log "The next rotation shows sshd refusing every old key it has left"
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" succeeded
+[[ $(key_state "$kept_version") == removed ]] || fail "the key left behind was not removed by the next rotation"
+[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 3 ]] \
+  || fail "not every old key reads as removed"
+
 log "What a rotation removes, against a real sshd"
 python3 "$root/tests/ansible/authorized_keys_sshd.py" localhost/octopushy-ansible-target:e2e
 

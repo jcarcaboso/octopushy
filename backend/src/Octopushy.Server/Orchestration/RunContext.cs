@@ -201,6 +201,8 @@ public static class StepNames
     public const string RemoveKey = "remove-key";
     /// <summary>A fresh login with the promoted key, and proof the old one is gone.</summary>
     public const string VerifyRemoval = "verify-removal";
+    /// <summary>A login with the old key, which sshd has to refuse. Only its answer shows the key is gone.</summary>
+    public const string ConfirmRefused = "confirm-refused";
 
     /// <summary>The steps a person decides, whatever the policy says.</summary>
     public static bool IsAccessDecision(string name) => name is PromoteKey or ApproveRemoval;

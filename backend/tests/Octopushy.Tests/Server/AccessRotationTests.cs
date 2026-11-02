@@ -89,7 +89,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         Assert.Equal(new[]
         {
             StepNames.Preview, StepNames.Approval, StepNames.VerifyCurrent, StepNames.AuthorizeKey, StepNames.VerifyKey,
-            StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval,
+            StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval, StepNames.ConfirmRefused,
         }, run.Steps.OrderBy(s => s.Ordinal).Select(s => s.Name));
         var candidate = (await KeysAsync(server))[1];
         Assert.NotEqual(old.PublicKey, candidate.PublicKey);
@@ -139,6 +139,14 @@ public class AccessRotationTests(PostgresFixture postgres)
         var verifyRemoval = await agent.NextAsync("run");
         Assert.Equal(GuestAccessPlaybooks.Verify, Input(verifyRemoval)["playbook"]!.GetValue<string>());
         await agent.ReportAsync(verifyRemoval, Outcome.Succeeded, ConfigureRunTests.Recap());
+
+        // The file says it is gone. Only sshd can say it no longer gets in, so that login uses the old key.
+        Assert.Null((await KeysAsync(server))[0].RemovedAt);
+        var confirm = await agent.NextAsync("run");
+        Assert.Equal(GuestAccessPlaybooks.Refused, Input(confirm)["playbook"]!.GetValue<string>());
+        Assert.True(Input(confirm)["expectRefused"]!.GetValue<bool>());
+        Assert.Contains(oldKey, confirm.Secrets.Values);
+        await agent.ReportAsync(confirm, Outcome.Succeeded, Refused());
         await server.TickAsync();
 
         var finished = await server.LatestRunAsync(Guest, Operations.RotateAccess);
@@ -291,6 +299,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         await DecideAsync(server, http, run, StepNames.ApproveRemoval);
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Refused());
         await server.TickAsync();
         var keys = await KeysAsync(server);
 
@@ -331,6 +340,13 @@ public class AccessRotationTests(PostgresFixture postgres)
         ["toolVersion"] = "1.13.1",
     };
 
+    private static JsonObject Refused()
+    {
+        var outputs = ConfigureRunTests.Recap();
+        outputs["refused"] = true;
+        return outputs;
+    }
+
     private static async Task RotateToTheEndAsync(ServerHarness server, FakeAgent agent, HttpClient http, Guid resource)
     {
         var run = await RotateAsync(server, agent, resource);
@@ -351,6 +367,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         using var _ = http;
         await RotateToTheEndAsync(server, agent, http, resource);
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Refused());
         await server.TickAsync();
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
@@ -368,6 +385,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         using var _ = http;
         await RotateToTheEndAsync(server, agent, http, resource);
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Refused());
         await server.TickAsync();
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
@@ -395,6 +413,53 @@ public class AccessRotationTests(PostgresFixture postgres)
 
         await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource, CancellationToken.None);
         Assert.Contains(1, RunContext.Parse((await server.LatestRunAsync(Guest, Operations.RotateAccess)).Context).AccessRotation!.Remove);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_key_sshd_was_not_seen_to_refuse_stays_on_the_list(bool reportedSuccess)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var _ = http;
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        // An agent too old to know the check logs in, or fails, and says nothing of sshd refusing.
+        if (reportedSuccess)
+            await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        else
+            await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Failed, error: "sshd still accepts a key that was removed.");
+        await server.TickAsync();
+
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.RotateAccess)).Status);
+        var name = GuestAccessCredentials.Key(resource);
+        Assert.Null((await KeysAsync(server))[0].RemovedAt);
+        Assert.Null(await WithDbAsync(server, db => db.StoreVersions.AsNoTracking().Where(v => v.Key == name && v.Version == 1).Select(v => v.RevokedAt).SingleAsync()));
+        Assert.Equal(2, await InUseAsync(server, resource));
+    }
+
+    [Fact]
+    public async Task A_plan_that_cannot_place_a_machine_stops_once_the_key_has_been_rotated()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var _ = http;
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Refused());
+        await server.TickAsync();
+
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
+        var plan = MachinePlan();
+        plan["changes"]![0]!.AsObject().Remove("vmId");
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, plan, artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("without saying its VMID", run.Detail);
+        Assert.True((await KeysAsync(server))[0].Bootstrap);
     }
 
     [Fact]

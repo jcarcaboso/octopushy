@@ -258,7 +258,7 @@ fails and `guest-file-open` for appending to `authorized_keys` is denied.
 **Rotate key** on the guest's page, or `POST /api/guests/{id}/access/rotate`, starts one run:
 
 ```text
-preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal
+preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal -> confirm-refused
 ```
 
 | Stage | Key used | What it does |
@@ -269,19 +269,21 @@ preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-
 | `verify-key` | Candidate alone | A fresh login, no multiplexing, strict host key: the expected login, and root through `become` |
 | `promote-key` | none | **A person, whatever the policy.** Moves this guest's binding to the candidate and records the evidence |
 | `approve-removal` | none | **A person, separately.** The old key stays on the guest until then |
-| `remove-key` | New | Removes the old controller-owned keys, read from the key field of each line |
-| `verify-removal` | New | Logs in again and shows the old key is gone. Only then is it recorded as removed, and that version revoked in the store |
+| `remove-key` | New | Takes off every line that authorizes an old controller-owned key, as the guest's OpenSSH reads it |
+| `verify-removal` | New | Logs in again and reads the file: no line holds the old key, and the key in use is still found |
+| `confirm-refused` | Old alone | Tries to log in, and has to be refused by `sshd`. Only then is the key recorded as removed, and that version revoked in the store |
 
-- **People's keys are never touched.** The guest's own OpenSSH says what each line authorizes: a small program passes every physical line through `ssh-keygen -l` and compares fingerprints, so nothing here parses a key and nothing can disagree with `sshd` about one. A line that only mentions the old key stays, and every other line stays byte for byte. The program and playbooks ship with the server, so a repository cannot change what is removed.
-- **What someone else writes is kept.** Adding appends. Removing has to replace the file, so it reads the file again just before doing so and starts over if it changed. A write in the instant between that read and the replacement would still be lost: sshd has no lock to take.
-- **Anything that stops the check is not read as gone.** Without `ssh-keygen` on the guest the program fails, and the stage with it.
+- **People's keys are never touched.** The guest's own OpenSSH says what each line holds: a small program passes every physical line through `ssh-keygen -l` and compares fingerprints, so nothing here parses a key. A line whose key is an old one goes, whatever else it says, and that includes a line `sshd` would have refused. A line that only mentions the old key stays, and every other line stays byte for byte. The program and playbooks ship with the server, so a repository cannot change what is removed.
+- **Only `sshd` can say a key is gone.** The file is one place a key can be: `AuthorizedKeysFile` can name others, and a login's `HOME` can be somewhere else. So the last stage logs in with the old key. If `sshd` lets it in, the run fails and names it, and if the guest did not answer, nothing is concluded.
+- **What someone else writes is kept.** Adding appends. Removing has to replace the file, so it reads the file again just before doing so and starts over if it changed. A write in the instant between that read and the replacement would still be lost: sshd has no lock to take. The replacement keeps the mode, label and, as far as the login may, the owner. A hard link to the file stays on the old copy.
+- **Anything that stops the check is not read as gone.** The program has to find the key Octopushy logged in with, in the same pass. If it cannot, because `ssh-keygen` failed or this is not the file `sshd` read, it stops, and writes nothing. So a removal can never take the key in use.
 - **A candidate that cannot log in changes nothing in use.** The run fails, runs keep the working key, and the next rotation uses the same candidate again, because it may already be on the guest.
 - **An interruption is uncertain.** The run holds the guest until a person closes it, and nothing is removed to tidy up.
 - **Rejecting a stage ends the run where it stands.** After a rejected removal the new key is in use and the old one stays listed as still on the guest; the next rotation takes it off.
 - **One guest at a time.** Each guest has its own entry, so promoting one rotates no other.
 - **It reuses the store's versions.** Staging, promotion and revocation are the store's own transitions, on the same columns, with `system/` staying closed to the operator endpoints. The [credential lifecycle](credential-lifecycle.md) rotates a value and proves nothing about a guest, so what a rotation adds is the guest stages and their evidence, in `GuestAccessKey`.
-- **A removal nobody could verify stays on the list.** If `verify-removal` fails, the old version is neither marked removed nor revoked, and the next rotation looks again.
-- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes this guest's machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again. A plan that makes anything else changes nothing.
+- **A removal nobody could verify stays on the list.** If `verify-removal` or `confirm-refused` fails, the old version is neither marked removed nor revoked, and the next rotation looks again.
+- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes this guest's machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again. A plan that makes anything else changes nothing. A plan that makes a machine without saying its VMID and host stops, once this guest's key has been rotated, because it might be this guest's.
 - **It cannot carry a first key.** Its first step logs in with the key in use, so a guest without one stops there, with nothing changed.
 
 ### Host key trust

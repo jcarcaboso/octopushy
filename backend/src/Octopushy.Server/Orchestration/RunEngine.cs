@@ -504,6 +504,16 @@ public sealed partial class RunEngine(
             return false;
         }
 
+        // A plan that cannot say which machine it makes might make this one, with a key nobody holds.
+        if (context.ManagedAccess && run.Operation == Operations.Provision
+            && GuestVmPlan.MakesUnnamedMachine(outputs) && await GuestAccessCredentials.BootstrapIsBehindAsync(db, run.ResourceId, cancellationToken))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "This plan makes a machine without saying its VMID and host, and this guest's key has been rotated. A new machine might not be reachable. Inspect it before going on.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
+
         var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
         var vmNote = recoversVm ? $" The plan recreates VM {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
             : removesVm ? " The plan destroys a VM and its disks."
@@ -647,8 +657,8 @@ public sealed partial class RunEngine(
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
                 break;
-            case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.VerifyRemoval:
-                await ApplyRotationEffectsAsync(db, run, step, now, cancellationToken);
+            case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.ConfirmRefused:
+                await ApplyRotationEffectsAsync(db, run, step, outputs, now, cancellationToken);
                 break;
         }
     }
