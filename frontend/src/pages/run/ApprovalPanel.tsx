@@ -16,6 +16,8 @@ interface Props {
   workerUpdate?: WorkerUpdate | null;
   /** The run configures a guest, so this names a preview rather than a plan. */
   configure?: boolean;
+  /** The run rotates a guest's key: approving does the stage described, and nothing else. */
+  rotation?: boolean;
 }
 
 function fingerprintLabel(setupOnly: boolean, configure: boolean) {
@@ -49,7 +51,7 @@ function Decided({ step, setupOnly, configure }: { step: Step; setupOnly: boolea
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false, rotation = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
@@ -81,7 +83,9 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
     <div className="approval">
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
-        {configure
+        {rotation
+          ? "Approving does this stage of the rotation and nothing else. People's keys on the guest are not touched."
+          : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
           : setupOnly
           ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."

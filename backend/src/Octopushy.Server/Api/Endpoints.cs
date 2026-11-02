@@ -147,6 +147,11 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("configureGuest");
 
+        api.MapPost("/guests/{id:guid}/access/rotate", async (Guid id, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.RotateAccessAsync(id, ct))))
+            .WithTags("Inventory")
+            .WithName("rotateGuestAccess");
+
         api.MapGet("/installations/{id:guid}", async Task<Results<Ok<InstallationDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.InstallationAsync(id, ct) is { } installation ? TypedResults.Ok(installation) : TypedResults.NotFound())
             .WithTags("Inventory")

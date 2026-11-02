@@ -1,0 +1,37 @@
+---
+# Run with one key and nothing else, on a new connection: this login is the evidence.
+- name: Verify access with this key alone
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read who this logged in as
+      ansible.builtin.command:
+        argv: [id, -un]
+      register: access_login
+      changed_when: false
+
+    - name: Require the expected login
+      ansible.builtin.assert:
+        that: access_login.stdout == ansible_user
+        fail_msg: This key logged in as {{ access_login.stdout }}, not {{ ansible_user }}.
+
+    - name: Require the privileges a run needs
+      become: true
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: access_root
+      changed_when: false
+      failed_when: access_root.stdout != "0"
+
+    - name: Read the authorized keys
+      ansible.builtin.slurp:
+        src: ~/.ssh/authorized_keys
+      register: access_keys
+
+    - name: Require that the keys removed are gone
+      ansible.builtin.assert:
+        that: item not in (access_keys.content | b64decode)
+        fail_msg: A key that was to be removed is still authorized.
+      loop: "{{ access_removed_keys | default([]) }}"
+      loop_control:
+        label: "{{ item | truncate(32) }}"

@@ -253,6 +253,33 @@ nothing further.
 The guest agent cannot carry a key: on Fedora, with SELinux enforcing, `guest-ssh-add-authorized-keys`
 fails and `guest-file-open` for appending to `authorized_keys` is denied.
 
+### Rotating the key
+
+**Rotate key** on the guest's page, or `POST /api/guests/{id}/access/rotate`, starts one run:
+
+```text
+preview -> approval -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal
+```
+
+| Stage | Key used | What it does |
+|---|---|---|
+| `preview`, `approval` | none | Shows the fingerprints going on and coming off. Follows `policy.approval` |
+| `authorize-key` | In use | Adds the candidate's public key beside what is there |
+| `verify-key` | Candidate alone | A fresh login, no multiplexing, strict host key: the expected login, and root through `become` |
+| `promote-key` | none | **A person, whatever the policy.** Moves this guest's binding to the candidate and records the evidence |
+| `approve-removal` | none | **A person, separately.** The old key stays on the guest until then |
+| `remove-key` | New | Removes the old controller-owned keys, by their exact type and blob |
+| `verify-removal` | New | Logs in again and shows the old key is gone. Only then is that version revoked in the store |
+
+- **People's keys are never touched.** `remove-key` matches exact keys of Octopushy's own and no pattern, and the playbooks ship with the server, so a repository cannot change what it removes.
+- **A candidate that cannot log in changes nothing in use.** The run fails, runs keep the working key, and the next rotation uses the same candidate again, because it may already be on the guest.
+- **An interruption is uncertain.** The run holds the guest until a person closes it, and nothing is removed to tidy up.
+- **Rejecting a stage ends the run where it stands.** After a rejected removal the new key is in use and the old one stays listed as still on the guest; the next rotation takes it off.
+- **One guest at a time.** Each guest has its own entry, so promoting one rotates no other.
+- **It reuses the store's versions.** Staging, promotion and revocation are the store's own transitions, on the same columns, with `system/` staying closed to the operator endpoints. The [credential lifecycle](credential-lifecycle.md) rotates a value and proves nothing about a guest, so what a rotation adds is the guest stages and their evidence, in `GuestAccessKey`.
+- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes a new machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again.
+- **It cannot carry a first key.** It logs in with a key known to work, so it refuses a guest Octopushy has not logged in to.
+
 ### Host key trust
 
 `access.hostKey` is a store reference to the guest's public host key, in the form

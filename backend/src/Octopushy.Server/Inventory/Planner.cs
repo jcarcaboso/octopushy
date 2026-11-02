@@ -5,6 +5,7 @@ using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Inventory;
 
@@ -57,6 +58,39 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             if (chosen == inputs.Configure.OnChange?.Id
                 && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
                 configuration.ProposedHash = inputs.Hash;
+            await engine.AddRunsAsync(db, [run], cancellationToken);
+            return run.Id;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Starts a staged rotation of a guest's own key. It needs a key that is known to work, because
+    /// it logs in with that key to add the next, so it cannot be how a guest gets its first.
+    /// </summary>
+    public Task<Guid> RotateAccessAsync(Guid resourceId, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, services) =>
+        {
+            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+            if (!ManagedAccess.Wanted(guest))
+                throw new RunException("This guest has no key of Octopushy's to rotate.");
+            if (await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
+                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                    .FirstOrDefaultAsync(cancellationToken) is { } active)
+                throw new RunException($"Run #{active.Number} is {active.Status}.");
+            var name = GuestAccessCredentials.Key(resource.Id);
+            var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
+            var inUse = current is null ? null
+                : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == resource.Id && k.Version == current, cancellationToken);
+            if (inUse?.VerifiedAt is null)
+                throw new RunException("Octopushy has not logged in with this guest's key yet, so it cannot add another with it.");
+
+            var candidate = await GuestAccessCredentials.StageAsync(
+                db, services.GetRequiredService<VariableStore>(), resource.Id, guest.Id, inUse.Version, clock.GetUtcNow(), cancellationToken);
+            // Every version of Octopushy's own that may still be on the guest, and nothing else.
+            var remove = await db.GuestAccessKeys.AsNoTracking()
+                .Where(k => k.ResourceId == resource.Id && k.RemovedAt == null && k.Version != candidate.Version)
+                .OrderBy(k => k.Version).Select(k => k.Version).ToListAsync(cancellationToken);
+            var run = factory.RotateAccess(repository, guest, resource, revision, new AccessRotationContext(inUse.Version, candidate.Version, remove));
             await engine.AddRunsAsync(db, [run], cancellationToken);
             return run.Id;
         }, cancellationToken);

@@ -343,4 +343,37 @@ call "$api/api/variables" >>"$work/own-key.log"
 if grep -q 'PRIVATE KEY' "$work/own-key.log"; then fail "a private key reached a log or a response"; fi
 if grep -rq 'OPENSSH PRIVATE KEY' "$work/agent" 2>/dev/null; then fail "a private key stayed on the agent's disk"; fi
 
+log "Rotating Octopushy's own key, in stages, beside a person's"
+person=$(ssh-keygen -q -t ed25519 -N '' -f "$work/keys/person" </dev/null >/dev/null; cat "$work/keys/person.pub")
+podman exec "$target" sh -c "printf '%s\n' '$person' >>/home/ops/.ssh/authorized_keys"
+keys_on_guest() { podman exec "$target" cat /home/ops/.ssh/authorized_keys; }
+decide() { # the step whose decision a person makes
+  local step
+  for _ in $(seq 1 60); do
+    step=$(call "$api/api/runs/$1" | jq -c --arg n "$2" '.steps[] | select(.name==$n and .status=="awaiting-approval")')
+    [[ -n $step ]] && break
+    sleep 1
+  done
+  [[ -n $step ]] || fail "$2 is not waiting for a person"
+  call -X POST "$api/api/runs/$1/steps/$(jq -r .id <<<"$step")/approve" \
+    -d "$(jq -cn --arg sha "$(jq -r .approval.planSha256 <<<"$step")" '{planSha256: $sha, note: "End to end."}')" >/dev/null
+}
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+[[ $(keys_on_guest | wc -l) == 3 ]] || fail "the candidate was not added beside the keys there"
+decide "$run" promote-key
+guest_key=$(call "$api/api/guests/$(guest_id)" | jq -r '.managedAccess.publicKey')
+[[ $guest_key != "$managed" ]] || fail "promoting did not change the key in use"
+keys_on_guest | grep -qF "${managed% *}" || fail "the old key went before its removal was approved"
+decide "$run" approve-removal
+wait_run "$run" succeeded
+keys_on_guest | grep -qF "${managed% *}" && fail "the old key is still on the guest"
+keys_on_guest | grep -qF "$person" || fail "a rotation touched a person's key"
+keys_on_guest | grep -qF "${guest_key% *}" || fail "the new key is not on the guest"
+logs_of "$run" >"$work/rotation.log"
+call "$api/api/runs/$run" >>"$work/rotation.log"
+if grep -q 'PRIVATE KEY' "$work/rotation.log"; then fail "a private key reached a log or a response"; fi
+run=$(start_action configure)
+wait_run "$run" succeeded
+
 log "Passed ($runtime)"

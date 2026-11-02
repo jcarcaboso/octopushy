@@ -38,6 +38,7 @@ public sealed partial class AssignmentBuilder
         if (problems.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
         // Only this server-owned key may leave system/, and the general resolver keeps refusing it.
+        var rotation = context.AccessRotation;
         var ownKey = names.Contains(SecretNames.AnsibleSshKey) && context.Secrets[SecretNames.AnsibleSshKey] == GuestAccessCredentials.Key(run.ResourceId);
         var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
@@ -46,11 +47,12 @@ public sealed partial class AssignmentBuilder
             attempt.Id,
             agentId,
             cancellationToken);
-        if (ownKey)
+        if (ownKey || (rotation is not null && step.Name != StepNames.Preview))
         {
-            var key = context.Secrets[SecretNames.AnsibleSshKey];
-            var version = context.SecretVersions[SecretNames.AnsibleSshKey];
-            var value = await store.GetVersionInternalAsync(key, version, cancellationToken);
+            var key = GuestAccessCredentials.Key(run.ResourceId);
+            var version = rotation is null ? context.SecretVersions[SecretNames.AnsibleSshKey]
+                : step.Name == StepNames.AuthorizeKey ? rotation.Current : rotation.Candidate;
+            var value = await store.GetVersionInternalAsync(key, version, cancellationToken, rotation is not null);
             if (value is null)
             {
                 missing.Add($"{key} v{version}");
@@ -74,7 +76,7 @@ public sealed partial class AssignmentBuilder
             ["image"] = ansible.Image,
             ["root"] = ansible.Root,
             ["action"] = ansible.Action,
-            ["playbook"] = ansible.Playbook,
+            ["playbook"] = rotation is null ? ansible.Playbook : GuestAccessPlaybooks.For(step.Name),
             ["prepare"] = ansible.Prepare,
             ["host"] = new JsonObject
             {
@@ -84,7 +86,7 @@ public sealed partial class AssignmentBuilder
                 ["user"] = ansible.User,
                 ["hostKey"] = hostKey,
             },
-            ["vars"] = ansible.Vars.DeepClone(),
+            ["vars"] = rotation is null ? ansible.Vars.DeepClone() : await RotationVarsAsync(run, rotation, step.Name, cancellationToken),
             ["context"] = new JsonObject
             {
                 ["address"] = context.Address,
@@ -95,7 +97,7 @@ public sealed partial class AssignmentBuilder
             ["guestDirectory"] = ansible.GuestDirectory,
             ["outcomes"] = new JsonArray(ansible.Outcomes.Keys.Select(k => (JsonNode?)k).ToArray()),
             ["timeoutMinutes"] = ansible.TimeoutMinutes,
-            ["manifest"] = Manifest(run, context),
+            ["manifest"] = rotation is null ? Manifest(run, context) : await RotationManifestAsync(run, context, rotation, cancellationToken),
             // A name, for the check to resolve; the values never reach a preview.
             ["secretVars"] = new JsonObject(ansible.SecretVars.Select(n => KeyValuePair.Create(n, (JsonNode?)SecretNames.AnsibleVar(n)))),
             ["secretFiles"] = new JsonObject(ansible.SecretFiles.Select(n => KeyValuePair.Create(n, (JsonNode?)SecretNames.AnsibleFile(n)))),
@@ -114,7 +116,7 @@ public sealed partial class AssignmentBuilder
             Action = step.Name == StepNames.Preview ? "preview" : "run",
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             InputJson = input.ToJsonString(),
-            FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken)),
+            FilesTarGz = ByteString.CopyFrom(rotation is null ? await mirror.BundleAsync(run.Commit!, cancellationToken) : GuestAccessPlaybooks.Bundle()),
         };
         if (preview is not null)
             assignment.Artifacts.Add(preview);
@@ -144,6 +146,30 @@ public sealed partial class AssignmentBuilder
                 .Select(name => KeyValuePair.Create(name, (JsonNode?)$"{context.Secrets[name]} v{context.SecretVersions[name]}"))),
             ["changedFiles"] = ansible.ChangedFiles is { } files ? new JsonArray(files.Select(f => (JsonNode?)f).ToArray()) : null,
         };
+    }
+
+    /// <summary>The public keys a step of a rotation works with. Removal names exact keys, type and blob, without a comment.</summary>
+    private async Task<JsonObject> RotationVarsAsync(Run run, AccessRotationContext rotation, string stepName, CancellationToken cancellationToken)
+    {
+        var keys = await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToDictionaryAsync(k => k.Version, cancellationToken);
+        var vars = new JsonObject { ["access_candidate_key"] = keys[rotation.Candidate].PublicKey };
+        if (stepName is StepNames.RemoveKey or StepNames.VerifyRemoval)
+            vars["access_removed_keys"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)string.Join(' ', keys[v].PublicKey.Split(' ')[..2])).ToArray());
+        return vars;
+    }
+
+    /// <summary>What a person approves: which key goes on, and which come off. An approval names this document.</summary>
+    private async Task<JsonObject> RotationManifestAsync(Run run, RunContext context, AccessRotationContext rotation, CancellationToken cancellationToken)
+    {
+        var keys = await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToDictionaryAsync(k => k.Version, cancellationToken);
+        var manifest = Manifest(run, context);
+        manifest["accessRotation"] = new JsonObject
+        {
+            ["current"] = keys[rotation.Current].Fingerprint,
+            ["candidate"] = keys[rotation.Candidate].Fingerprint,
+            ["remove"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)keys[v].Fingerprint).ToArray()),
+        };
+        return manifest;
     }
 
     /// <summary>The preview the run's approval names; any other is refused, as an apply refuses another plan.</summary>

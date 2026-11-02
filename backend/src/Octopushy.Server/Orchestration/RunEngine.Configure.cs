@@ -42,6 +42,16 @@ public sealed partial class RunEngine
             return false;
         }
 
+        if (StepNames.IsAccessDecision(step.Name))
+        {
+            step.ApprovalRequired = true;
+            step.Status = StepStatuses.AwaitingApproval;
+            step.Detail = step.Name == StepNames.PromoteKey
+                ? "A fresh login with the candidate key alone worked, with the privileges a run needs. Promoting makes it the key runs use on this guest, and no other."
+                : "Octopushy now uses the new key. Approving removes the old one from the guest. Other keys there are not touched.";
+            return false;
+        }
+
         var manual = policy.Approval == "manual";
         var destructiveManual = ansible.Destructive && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
@@ -126,6 +136,44 @@ public sealed partial class RunEngine
         var prepared = run.Steps.Single(s => s.Name == StepNames.Preview).Outputs is { } text ? JsonNode.Parse(text)?["prepared"] : null;
         if (prepared is JsonObject)
             configuration.Snapshot = prepared.ToJsonString();
+    }
+
+    /// <summary>What each finished step of a rotation shows. Nothing is inferred from a step that did not finish.</summary>
+    private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var rotation = RunContext.Parse(run.Context).AccessRotation!;
+        var keys = await db.GuestAccessKeys.Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
+        switch (step.Name)
+        {
+            case StepNames.AuthorizeKey:
+                keys.Single(k => k.Version == rotation.Candidate).AuthorizedAt = now;
+                break;
+            case StepNames.VerifyKey:
+                var verified = keys.Single(k => k.Version == rotation.Candidate);
+                verified.VerifiedAt = now;
+                verified.VerifiedRunId = run.Id;
+                break;
+            case StepNames.RemoveKey:
+                foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
+                {
+                    removed.RemovedAt = now;
+                }
+
+                break;
+            case StepNames.VerifyRemoval:
+                await GuestAccessCredentials.RevokeRemovedAsync(db, run.ResourceId, rotation, now, cancellationToken);
+                break;
+        }
+    }
+
+    /// <summary>A person's decision, on the record with what it rested on.</summary>
+    private async Task PromoteRotatedKeyAsync(OctopushyDb db, Guid runId, string user, string? note, CancellationToken cancellationToken)
+    {
+        var run = await LoadRunAsync(db, runId, cancellationToken);
+        var verification = run.Steps.Single(s => s.Name == StepNames.VerifyKey).Attempts.MaxBy(a => a.Number)!;
+        var evidence = $"Run #{run.Number}, attempt {verification.Id}: a fresh login with this key alone, finished {verification.FinishedAt:u}."
+            + (string.IsNullOrWhiteSpace(note) ? "" : $" {note.Trim()}");
+        await GuestAccessCredentials.PromoteAsync(db, run.ResourceId, RunContext.Parse(run.Context).AccessRotation!, user, evidence, clock.GetUtcNow(), cancellationToken);
     }
 
     /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>

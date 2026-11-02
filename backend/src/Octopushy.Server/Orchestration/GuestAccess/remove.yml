@@ -1,0 +1,15 @@
+---
+# Removes exact keys of Octopushy's own. Nothing here matches a pattern, so a person's key
+# cannot be caught by it, whatever is beside it in the file.
+- name: Remove the old controller-owned key
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Remove exactly these keys
+      ansible.builtin.lineinfile:
+        path: ~/.ssh/authorized_keys
+        search_string: "{{ item }}"
+        state: absent
+      loop: "{{ access_removed_keys }}"
+      loop_control:
+        label: "{{ item | truncate(32) }}"

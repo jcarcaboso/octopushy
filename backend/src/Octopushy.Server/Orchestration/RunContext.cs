@@ -66,6 +66,9 @@ public sealed record RunContext
     /// <summary>Whether Octopushy's own key goes to this guest with the keys it declares.</summary>
     public bool ManagedAccess { get; init; }
 
+    /// <summary>The versions a rotation of the guest's key works with.</summary>
+    public AccessRotationContext? AccessRotation { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
@@ -73,6 +76,12 @@ public sealed record RunContext
     public static RunContext Parse(string json) =>
         JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
 }
+
+/// <summary>
+/// A rotation of a guest's own key. <see cref="Current"/> adds the candidate; the candidate does
+/// everything after that; <see cref="Remove"/> are the versions it takes off the guest.
+/// </summary>
+public sealed record AccessRotationContext(int Current, int Candidate, IReadOnlyList<int> Remove);
 
 public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
 
@@ -179,6 +188,20 @@ public static class StepNames
     public const string OutcomeApproval = "outcome-approval";
     /// <summary>The one further run a person may approve after a declared outcome.</summary>
     public const string PlaybookApproved = "playbook-approved";
+    /// <summary>Adds a candidate key beside the keys on a guest, with the key in use.</summary>
+    public const string AuthorizeKey = "authorize-key";
+    /// <summary>A fresh login with the candidate alone, and the privileges a run needs.</summary>
+    public const string VerifyKey = "verify-key";
+    /// <summary>A person makes the candidate the key runs use, with that evidence in front of them.</summary>
+    public const string PromoteKey = "promote-key";
+    /// <summary>A separate decision to take the old key off the guest.</summary>
+    public const string ApproveRemoval = "approve-removal";
+    public const string RemoveKey = "remove-key";
+    /// <summary>A fresh login with the promoted key, and proof the old one is gone.</summary>
+    public const string VerifyRemoval = "verify-removal";
+
+    /// <summary>The steps a person decides, whatever the policy says.</summary>
+    public static bool IsAccessDecision(string name) => name is PromoteKey or ApproveRemoval;
 }
 
 /// <summary>The secret names executors look for.</summary>

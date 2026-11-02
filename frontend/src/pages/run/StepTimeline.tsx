@@ -100,7 +100,8 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
         step={step}
         plan={planStep?.plan ? summarizePlan(planStep.plan) : null}
         workerUpdate={detail.workerUpdate}
-        configure={detail.run.operation === "configure"}
+        configure={detail.run.operation === "configure" || detail.run.operation === "rotate-access"}
+        rotation={detail.run.operation === "rotate-access"}
       />
     );
   }

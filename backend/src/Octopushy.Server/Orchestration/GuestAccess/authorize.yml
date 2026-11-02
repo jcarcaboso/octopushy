@@ -1,0 +1,11 @@
+---
+# Adds a candidate key beside what is there. This is the only change it makes.
+- name: Authorize the candidate key
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Add the candidate to the login's authorized keys
+      ansible.builtin.lineinfile:
+        path: ~/.ssh/authorized_keys
+        line: "{{ access_candidate_key }}"
+        state: present

@@ -29,4 +29,7 @@
                       Exclude="../../../deploy/worker-template-v1/**/.terraform/**/*"
                       LogicalName="WorkerTemplate/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Orchestration/GuestAccess/*.yml" LogicalName="guest-access/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
