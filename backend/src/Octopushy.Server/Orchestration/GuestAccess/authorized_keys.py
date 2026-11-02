@@ -10,10 +10,14 @@ so nothing here parses a key. Lines end at a newline and nowhere else. What is l
 Octopushy logged in with: if it cannot be found, the check has not worked, whatever the reason, and
 nothing is written and nothing reads as gone. So a removal can never take the key in use.
 
-A line whose key is one named goes, whatever else it says. Every other line stays byte for byte.
+A line whose key is one named goes, whatever else it says. Every other line it read stays byte for
+byte.
 
 An add appends and rewrites nothing, so it cannot lose what someone else wrote. A removal has to
-replace the file: it reads it again just before doing so, and starts over if it changed.
+replace the file: it reads it again just before doing so, and starts over if it changed. A write to
+the file in the instant between that last read and the replacement is lost, a person's key included.
+sshd has no lock to take, so this is an accepted limit.
+
 Prints "changed" if the file changed. Absent exits 1 if a key named is still authorized, and
 anything that stops the check exits 3. This is the guest's word on a file. Whether sshd takes a
 key is sshd's: confirm-refused asks it.

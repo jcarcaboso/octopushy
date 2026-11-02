@@ -84,7 +84,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
         {rotation
-          ? "Approving does this stage of the rotation and nothing else. People's keys on the guest are not touched."
+          ? "Approving does this stage of the rotation and nothing else. It only ever chooses Octopushy's own keys on the guest."
           : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
           : setupOnly
