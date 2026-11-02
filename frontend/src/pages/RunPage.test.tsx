@@ -34,6 +34,47 @@ it.each([
   expect(screen.queryByRole("button", { name: "Retry guest step" }) !== null).toBe(offered);
 });
 
+it("shows what a configure run will do, and approves that preview", async () => {
+  const detail = runDetail({ operation: "configure", status: "awaiting-approval", currentStep: "approval" });
+  detail.steps[0] = {
+    ...detail.steps[0],
+    name: "preview",
+    plan: null,
+    configurePreview: {
+      action: "update-tools",
+      playbook: "playbooks/update-tools.yml",
+      commit: "e6b1282aa4d1c0ffee",
+      image: "docker.io/skorcius/octopushy:ansible-2.21.5-abc",
+      host: "ops@10.15.60.10:22",
+      toolVersion: "ansible-playbook [core 2.21.5]",
+      destructive: true,
+      tasks: ["play #1 (all): Configure", "  Install tools"],
+      changedFiles: ["M modules/ansible/ai-server/site.yml"],
+      vars: { hostname: "pve01-ai" },
+      secrets: [{ name: "ansible.ssh-key", reference: "access/pve01-ai/ssh-key v2" }],
+      prepared: { tools: ["t3 1.2.3"] },
+      hostKeyFingerprints: ["ssh-ed25519 SHA256:abcdef"],
+      previewSha256: sha,
+    },
+  };
+  const { requests } = mockApi({
+    "GET /api/runs/run-1": () => detail,
+    "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
+  });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  expect(await screen.findByText("ops@10.15.60.10:22")).toBeTruthy();
+  expect(screen.getByText("ssh-ed25519 SHA256:abcdef")).toBeTruthy();
+  expect(screen.getByText("access/pve01-ai/ssh-key v2")).toBeTruthy();
+  expect(screen.getByText("M modules/ansible/ai-server/site.yml")).toBeTruthy();
+  expect(screen.getByText("Declared by the recipe")).toBeTruthy();
+  expect(screen.getByText(/It shows what will run, not what will change/)).toBeTruthy();
+  expect(screen.getByText(/Octopushy cannot show what it will change/)).toBeTruthy();
+  expect(screen.getByText("Preview SHA-256")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/steps/step-approval/approve");
+});
+
 function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
   return {
     run: {

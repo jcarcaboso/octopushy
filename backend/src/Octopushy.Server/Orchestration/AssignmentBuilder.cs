@@ -21,7 +21,7 @@ public sealed class CredentialUnavailableException(string message) : Exception(m
 public sealed class ExecutionUntrustedException(string message) : Exception(message);
 
 /// <summary>Builds the assignment an agent receives for an attempt.</summary>
-public sealed class AssignmentBuilder(
+public sealed partial class AssignmentBuilder(
     OctopushyDb db,
     VariableStore store,
     RepositoryMirror mirror,
@@ -47,6 +47,8 @@ public sealed class AssignmentBuilder(
         StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         StepNames.UpdateWorkerOs => new StepAction("managed-worker", "update-os", true),
         StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
+        StepNames.Preview => new StepAction("ansible", "preview", false),
+        StepNames.Playbook or StepNames.PlaybookApproved => new StepAction("ansible", "run", true),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -54,6 +56,8 @@ public sealed class AssignmentBuilder(
     public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
         var action = ActionFor(stepName);
+        if (action.Executor == "ansible")
+            return AnsibleSecretsFor(stepName, context);
         var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
             ? context.OpenTofu!.SecretEnv.Values
@@ -91,6 +95,8 @@ public sealed class AssignmentBuilder(
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
         var stepName = step?.Name ?? StepNames.Observe;
         var action = ActionFor(stepName);
+        if (action.Executor == "ansible")
+            return await BuildAnsibleAsync(attempt, step!, run!, context, agentId, cancellationToken);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
         var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken

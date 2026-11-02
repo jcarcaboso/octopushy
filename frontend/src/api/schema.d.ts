@@ -180,6 +180,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/guests/{id}/configure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["configureGuest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/installations/{id}": {
         parameters: {
             query?: never;
@@ -906,6 +922,35 @@ export interface components {
             path: string;
             change: string;
         };
+        ConfigureActionDto: {
+            id: string;
+            description: null | string;
+            destructive: boolean;
+            onChange: boolean;
+        };
+        ConfigureGuestRequest: {
+            action: null | string;
+        };
+        ConfigurePreviewDto: {
+            action: string;
+            playbook: string;
+            commit: null | string;
+            image: null | string;
+            host: null | string;
+            toolVersion: null | string;
+            destructive: boolean;
+            tasks: string[];
+            changedFiles: null | string[];
+            vars: null | components["schemas"]["JsonNode"];
+            secrets: components["schemas"]["ConfigureSecretDto"][];
+            prepared: null | components["schemas"]["JsonNode"];
+            hostKeyFingerprints: string[];
+            previewSha256: null | string;
+        };
+        ConfigureSecretDto: {
+            name: string;
+            reference: string;
+        };
         CreatedOperatorToken: {
             /** Format: uuid */
             id: string;
@@ -1019,6 +1064,16 @@ export interface components {
             newIssues: components["schemas"]["IssueDto"][];
             formatIssues: components["schemas"]["IssueDto"][];
         };
+        GuestConfigurationDto: {
+            recipe: string;
+            actions: components["schemas"]["ConfigureActionDto"][];
+            inSync: boolean;
+            appliedAction: null | string;
+            appliedCommit: null | string;
+            /** Format: date-time */
+            appliedAt: null | string;
+            hasSnapshot: boolean;
+        };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];
             definitionFile: null | string;
@@ -1045,6 +1100,7 @@ export interface components {
             retiredAt: null | string;
             runs: components["schemas"]["RunSummaryDto"][];
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
+            configuration: null | components["schemas"]["GuestConfigurationDto"];
         };
         GuestDiskUsageDto: {
             enabled: boolean;
@@ -1402,6 +1458,7 @@ export interface components {
             plan: null | components["schemas"]["PlanDto"];
             approval: null | components["schemas"]["ApprovalDto"];
             attempts: components["schemas"]["AttemptDto"][];
+            configurePreview?: null | components["schemas"]["ConfigurePreviewDto"];
         };
         SystemVariableDto: {
             key: string;
@@ -2141,6 +2198,59 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    configureGuest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigureGuestRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {

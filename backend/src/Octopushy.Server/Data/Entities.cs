@@ -215,10 +215,36 @@ public sealed class GuestDiskUsage
     public DateTimeOffset? ReceivedAt { get; set; }
 }
 
+/// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
+public sealed class GuestConfiguration
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>The configure inputs of the latest revision; null when the guest has no recipe any more.</summary>
+    public string? DesiredHash { get; set; }
+
+    public Guid? DesiredRevisionId { get; set; }
+
+    /// <summary>The inputs the last automatic run was made for. Each hash gets one.</summary>
+    public string? ProposedHash { get; set; }
+
+    public string? AppliedHash { get; set; }
+
+    public Guid? AppliedRevisionId { get; set; }
+
+    public DateTimeOffset? AppliedAt { get; set; }
+
+    public string? AppliedAction { get; set; }
+
+    /// <summary>What the last successful run prepared, as JSON, for an action that reuses it.</summary>
+    public string? Snapshot { get; set; }
+}
+
 public static class Operations
 {
     public const string Provision = "provision";
     public const string Retire = "retire";
+    public const string Configure = "configure";
 }
 
 public static class RunStatuses

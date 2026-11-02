@@ -6,14 +6,74 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
-    "operation": { "enum": ["provision"] },
-    "executor": { "enum": ["opentofu"] },
-    "root": { "description": "The OpenTofu root module, relative to this file.", "type": "string", "minLength": 1 },
-    "inputs": { "description": "JSON Schema validating the guest's hardware and network, relative to this file.", "type": "string" },
+    "operation": { "enum": ["provision", "configure"], "description": "provision makes a guest; configure sets up one that exists, from a guest's setup.recipe." },
+    "executor": { "enum": ["opentofu", "ansible"] },
+    "root": { "description": "The OpenTofu root module or Ansible project, relative to this file.", "type": "string", "minLength": 1 },
+    "inputs": { "description": "JSON Schema validating the guest's hardware and network, or for a configure recipe its setup.inputs, relative to this file.", "type": "string" },
+    "secrets": {
+      "description": "The extra vars a guest must provide in setup.secrets or setup.secretFiles.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "uniqueItems": true
+    },
+    "actions": {
+      "description": "What can be run from this project, by name.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "playbook": { "description": "Relative to root.", "type": "string", "minLength": 1 },
+          "prepare": { "description": "A playbook run on the agent before approval, with no secrets and no access to the guest. What it writes to OCTOPUSHY_PREPARED_FILE becomes extra vars. Relative to root.", "type": "string", "minLength": 1 },
+          "snapshot": { "description": "applied reuses what the guest's last successful run prepared.", "enum": ["applied"] },
+          "destructive": { "description": "Whether this action can delete data or a service. Octopushy cannot tell from a playbook, so this is required, and true waits under policy.destructive: manual.", "type": "boolean" },
+          "onChange": { "description": "Run this action when the guest's setup or the recipe's files change. At most one action says so.", "type": "boolean" },
+          "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+        },
+        "required": ["playbook", "destructive"],
+        "not": { "required": ["prepare", "snapshot"] },
+        "additionalProperties": false
+      }
+    },
+    "outcomes": {
+      "description": "Results a playbook may report with set_stats, other than success or failure.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "approve": {
+            "description": "A person may approve running the action once more with these extra vars.",
+            "type": "object",
+            "properties": { "vars": { "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" } } },
+            "required": ["vars"],
+            "additionalProperties": false
+          },
+          "result": { "description": "How the run ends without an approval.", "enum": ["succeeded", "failed"] }
+        },
+        "not": { "required": ["approve", "result"] },
+        "additionalProperties": false
+      }
+    },
     "verify": { "enum": ["proxmox", "none"] },
     "guestFilesystem": { "description": "Explicitly authorizes native online root growth and capacity verification through the Proxmox guest agent, including reconciliation after an infrastructure no-op. Only the supported NixOS ext4 layout is accepted.", "enum": ["nixos-ext4-root"] },
-    "image": { "description": "Overrides the server's default OpenTofu image.", "type": "string" }
+    "image": { "description": "Overrides the server's default image for the executor. Ignored by an agent with the local tool runtime.", "type": "string" }
   },
   "required": ["schemaVersion", "operation", "executor", "root"],
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "configure" } }, "required": ["operation"] },
+      "then": {
+        "properties": { "executor": { "const": "ansible" }, "verify": false, "guestFilesystem": false },
+        "required": ["actions"]
+      },
+      "else": {
+        "properties": { "executor": { "const": "opentofu" }, "actions": false, "outcomes": false, "secrets": false }
+      }
+    }
+  ],
   "additionalProperties": false
 }

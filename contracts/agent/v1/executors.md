@@ -371,6 +371,111 @@ Sensitive outputs are listed by name in `sensitiveOutputs` and left out of
 next plan shows what is left. An apply interrupted by an agent restart is reported
 as `uncertain` once the agent is back.
 
+## `ansible`
+
+Runs a repository's playbooks against one guest over SSH. See
+[configuring a guest](../../../docs/guest-configuration.md). The container image's
+entrypoint, and the `local` runtime's `--ansible-binary`, is `octopushy-ansible`, which
+takes `ansible-playbook` arguments. It is not advertised if that program does not run.
+
+Input (the same for both actions, except as noted):
+
+```json
+{
+  "image": "docker.io/skorcius/octopushy:ansible-2.21.5-0123456789ab",
+  "root": "modules/ansible/machine-tools",
+  "action": "configure",
+  "playbook": "configure.yml",
+  "prepare": "prepare.yml",
+  "prepared": null,
+  "host": { "name": "krb-app-01", "address": "10.1.0.31", "port": 22, "user": "ops", "hostKey": "ssh-ed25519 AAAA…" },
+  "vars": { "machine_tools_channel": "stable" },
+  "approvedVars": {},
+  "secretVars": { "machine_tools_token": "ansible.var.machine_tools_token" },
+  "secretFiles": {},
+  "sshKey": "ansible.ssh-key",
+  "context": { "address": "home/korriban/krb-app-01", "commit": "…", "action": "configure", "run": "…" },
+  "guestDirectory": "labs/home/proxmox/korriban/guests/krb-app-01",
+  "outcomes": ["deferred"],
+  "timeoutMinutes": 180,
+  "manifest": { }
+}
+```
+
+- `files_tar_gz` holds the repository snapshot, as for `opentofu`.
+- `hostKey` is the pin, one `type base64 [comment]` per line. The executor writes
+  `known_hosts` from it. It is the value of a plain store entry, so it travels in the input.
+  The executor never scans a host.
+- `vars`, `approvedVars`, `secretVars`, `secretFiles` and the keys of a prepared document may not
+  start with `ansible_` or `octopushy`, in any case.
+- Extra vars are, in order: `vars`, prepared values, `approvedVars`, the generated connection,
+  secrets. The connection sets `ansible_host`, `ansible_port`, `ansible_user`,
+  `ansible_host_key_checking: true`, `ansible_ssh_args`, the `ssh`, `scp` and `sftp` executables,
+  and `octopushy`.
+- No `--check`, `--tags`, `--limit` or `--start-at-task` is ever passed.
+- Outputs of a failed or uncertain run never hold a task's result.
+
+### `preview`
+
+Read-only. Carries no secrets and no `sshKey`, and does not contact the guest. Runs
+`--version`, `--syntax-check` and `--list-tasks`, with `(secret)` standing in for each secret,
+then the `prepare` playbook locally, if there is one, with `OCTOPUSHY_PREPARED_FILE` set. The
+file must hold a JSON object of at most 256 KiB. `prepared` in the input supplies an earlier
+run's values instead, and setting it with `prepare` is refused.
+
+Output, and the content of the artifact `preview.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "action": "configure",
+  "playbook": "configure.yml",
+  "tasks": ["playbook: configure.yml", "  play #1 (all): Configure the machine"],
+  "prepared": { "machine_tools_release": "2.0.0" },
+  "toolVersion": "ansible-playbook [core 2.21.5]",
+  "hostKeyFingerprints": ["ssh-ed25519 SHA256:…"],
+  "manifest": { }
+}
+```
+
+The controller records the artifact's SHA-256 as `planSha256`, which the approval names.
+
+### `run`
+
+**Mutating and not cancellable.** The assignment carries `preview.json`, whose SHA-256 is
+checked, and the secrets `ansible.ssh-key`, `ansible.var.<name>` and `ansible.file.<name>`. They
+reach `octopushy-ansible` on stdin as `{"sshKey", "secretVars", "secretFiles"}`, never in argv,
+the environment or the workspace. A secret file's extra var holds its path.
+
+```json
+{
+  "exitCode": 0, "tasks": 12,
+  "recap": { "ok": 11, "changed": 3, "unreachable": 0, "failures": 0, "skipped": 1, "rescued": 0, "ignored": 0 },
+  "failedTask": null, "unreachableTask": null, "outcome": null, "detail": null
+}
+```
+
+The result comes from the exit status and the recap of the `octopushy_recap` callback. A task's
+name can hold a secret, so the recap stays in memory until the playbook ends, when the
+callback writes one line to stderr, `octopushy-recap: {…}`. The agent holds that line back
+from the log, parses it as written, then masks its text and cuts it to 1024 characters.
+
+| What happened | Outcome |
+|---|---|
+| Exit 0 | `succeeded` |
+| `set_stats` set a declared `octopushy_outcome`, and no task was unreachable | `succeeded`, with `outcome` and `detail` |
+| `octopushy_outcome` is not declared | `failed`, without repeating it |
+| A task failed, and the recap was written | `failed`, naming the task |
+| Exit 78, 125, 126 or 127 with no recap: the tool never ran | `failed` |
+| ssh never connected on the first task: refused host key, refused login, no route | `failed` |
+| The guest was lost after that, even after an outcome or in a task the play ignored | `uncertain` |
+| Killed, or ended any other way without a recap | `uncertain` |
+| Past `timeoutMinutes`, which is stopped with SIGTERM | `uncertain` |
+
+An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.
+With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
+restart for attempts it lost.
+
 ## `nixos-rootfs`
 
 An explicitly advertised capability, selected only by recipes opting into

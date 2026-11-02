@@ -216,7 +216,7 @@ async fn cancels_reads_but_never_mutations() {
 async fn failures_are_masked_and_unknown_executors_fail() {
     let h = harness();
     h.manager.accept(assignment("f1", "test", "fail", "{}"));
-    h.manager.accept(assignment("u1", "ansible", "run", "{}"));
+    h.manager.accept(assignment("u1", "salt", "run", "{}"));
     let mut c = Collector::default();
     let r = c.result(&h.manager, "f1").await;
     assert_eq!(r.outcome(), Outcome::Failed);

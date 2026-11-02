@@ -118,6 +118,9 @@ public sealed record GuestDefinition(
 
     public bool Retired => Lifecycle == "retired";
 
+    /// <summary>The configure recipe of <c>setup.recipe</c>, if the guest has one.</summary>
+    public string? SetupRecipe => Json["setup"]?["recipe"]?.GetValue<string>();
+
     public ManagedWorkerSettings? ManagedWorker => Json["worker"] is JsonObject worker
         ? new(worker["templateVersion"]!.GetValue<int>(), Guid.Parse(worker["generation"]!.GetValue<string>()),
             worker["labels"]!.AsArray().Select(label => label!.GetValue<string>()).ToArray(),
@@ -147,7 +150,32 @@ public sealed record RecipeDefinition(
     string? InputsSchema,
     string Verify,
     string? Image,
-    string? GuestFilesystem = null);
+    string? GuestFilesystem = null,
+    ConfigureRecipe? Configure = null);
+
+/// <summary>What a recipe with <c>operation: configure</c> offers.</summary>
+public sealed record ConfigureRecipe(
+    IReadOnlyDictionary<string, RecipeAction> Actions,
+    IReadOnlyDictionary<string, RecipeOutcome> Outcomes,
+    IReadOnlyList<string> Secrets)
+{
+    /// <summary>What runs when a guest or these files change, if anything does.</summary>
+    public RecipeAction? OnChange => Actions.Values.FirstOrDefault(a => a.OnChange);
+}
+
+/// <summary>One thing that can be run from a configure recipe.</summary>
+public sealed record RecipeAction(
+    string Id,
+    string? Description,
+    string Playbook,
+    string? Prepare,
+    bool UsesAppliedSnapshot,
+    bool Destructive,
+    bool OnChange,
+    int? TimeoutMinutes);
+
+/// <summary>A result a playbook may report that is neither success nor failure.</summary>
+public sealed record RecipeOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result);
 
 /// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
 public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);

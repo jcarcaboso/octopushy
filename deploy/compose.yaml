@@ -84,6 +84,9 @@ services:
     init: true
     # The first SIGTERM lets running applies finish; never cut one short.
     stop_grace_period: 30m
+    # Secrets of a guest's configuration stay in memory: Ansible refuses to run without this.
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     volumes:
       - agent:/var/lib/octopushy-agent
     networks: [agents]

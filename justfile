@@ -58,6 +58,10 @@ check-nix:
 e2e: dev-db
     tests/e2e/run.sh
 
+# End to end: a real ansible-playbook configuring a throwaway SSH container, on the given runtime.
+e2e-ansible runtime="podman":
+    E2E_TOOL_RUNTIME={{runtime}} tests/ansible/run.sh
+
 # A local demo with a real agent and a mock Proxmox, at http://127.0.0.1:5174.
 demo: dev-db
     tests/e2e/demo.sh

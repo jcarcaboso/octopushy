@@ -1,0 +1,19 @@
+- name: Defer unless a person approved
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Report that work is active
+      ansible.builtin.set_stats:
+        data: { octopushy_outcome: deferred, octopushy_detail: Three threads are running. }
+        aggregate: false
+        per_host: false
+      when: not (allow_busy | default(false))
+    - name: Stop before activating
+      ansible.builtin.meta: end_play
+      when: not (allow_busy | default(false))
+    - name: Activate
+      ansible.builtin.file:
+        path: /var/lib/activated
+        state: touch
+        mode: "0644"

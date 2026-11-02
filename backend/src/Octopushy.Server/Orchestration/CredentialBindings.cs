@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
@@ -8,10 +9,13 @@ namespace Octopushy.Server.Orchestration;
 internal static class CredentialBindings
 {
     // CA certificates are public trust material. Other current bindings feed credential channels.
-    internal static bool RequiresSecret(string name) => name != SecretNames.ProxmoxCa;
+    internal static bool RequiresSecret(string name) => name is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
 
     internal static List<string> Validate(RunContext context)
     {
+        if (context.Ansible is not null)
+            return ValidateAnsible(context);
+
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
@@ -61,6 +65,36 @@ internal static class CredentialBindings
     }
 
     /// <summary>
+    /// The keys a playbook may not hold, whatever today's definitions say: a removed installation's
+    /// token stays stored, and its key stops looking like one. So this asks what any installation
+    /// last declared, including those that are gone, and what a key has ever been released to.
+    /// </summary>
+    private static async Task<HashSet<string>> ProxmoxKeysAsync(OctopushyDb db, string[] keys, CancellationToken ct)
+    {
+        var released = await db.SecretResolutions.AsNoTracking()
+            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == "ansible"))
+            .Select(r => r.Key).Distinct().ToListAsync(ct);
+        var definitions = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.Definition != null)
+            .Select(r => r.Definition!).ToListAsync(ct);
+        var declared = definitions.Select(d => JsonNode.Parse(d)?["connection"])
+            .SelectMany(c => new[] { c?["token"], c?["readOnlyToken"], c?["privilegedToken"] })
+            .Select(reference => reference?["store"]?.GetValue<string>()).OfType<string>();
+        return [.. released, .. declared];
+    }
+
+    /// <summary>A configure run holds its SSH key, its pin and its own secrets: nothing that reaches Proxmox.</summary>
+    private static List<string> ValidateAnsible(RunContext context)
+    {
+        var problems = new List<string>();
+        if (context.Secrets.Keys.Any(n => n is SecretNames.ProxmoxSharedToken or SecretNames.ProxmoxReadOnlyToken or SecretNames.ProxmoxPrivilegedToken or SecretNames.ProxmoxToken))
+            problems.Add("A configure run carries no Proxmox credentials; inspect and replan");
+        if (!context.Secrets.ContainsKey(SecretNames.AnsibleSshKey) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
+            problems.Add("A configure run needs an SSH key and a pinned host key; inspect and replan");
+        return problems;
+    }
+
+    /// <summary>
     /// Checks and pins the context's credential versions. An observation passes no run: it has
     /// no history to recover, and the caller stores the pinned context on its attempt.
     /// </summary>
@@ -79,6 +113,7 @@ internal static class CredentialBindings
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);
         var versions = await db.StoreVersions.AsNoTracking().Where(v => keys.Contains(v.Key)).ToListAsync(ct);
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
+        var refused = context.Ansible is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
 
         // Recover old runs from release evidence, never from today's current pointer.
         var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
@@ -96,6 +131,12 @@ internal static class CredentialBindings
                 continue;
             }
 
+            if (name != SecretNames.AnsibleHostKey && refused.Contains(key))
+            {
+                problems.Add($"{key}: this is a credential of Proxmox or OpenTofu work, so a playbook cannot use it");
+                continue;
+            }
+
             if (!entries.TryGetValue(key, out var entry))
             {
                 problems.Add($"{key}: missing");
@@ -105,6 +146,13 @@ internal static class CredentialBindings
             if (RequiresSecret(name) && entry.Visibility != Visibilities.Secret)
             {
                 problems.Add($"{key}: credential must be stored as secret, not plain");
+                continue;
+            }
+
+            // A pin is public and goes to steps with no secrets, so a secret must not pose as one.
+            if (name == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
+            {
+                problems.Add($"{key}: a host key is public; store it as plain");
                 continue;
             }
 

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Options;
@@ -8,7 +9,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Server.Inventory;
 
 /// <summary>Starts runs and observations on request ("plan now", "observe now"), and observes installations on a schedule.</summary>
-public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, IOptions<OctopushyOptions> options, TimeProvider clock)
+public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, RepositoryMirror mirror, IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>
     /// Plans a guest at the latest revision, or retires it when its definition says so. A guest
@@ -35,6 +36,86 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             await engine.AddRunsAsync(db, [run], cancellationToken);
             return run.Id;
         }, cancellationToken);
+
+    /// <summary>Runs one action of a guest's setup recipe at the latest revision; by default the one that follows changes.</summary>
+    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, _) =>
+        {
+            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+            if (guest.SetupRecipe is null)
+                throw new RunException("This guest has no setup recipe.");
+            var lastProvision = await db.Runs.AsNoTracking()
+                .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
+                .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
+            if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+                throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
+            var inputs = ConfigureInputs.Build(repository, guest);
+            var chosen = action ?? inputs.Configure.OnChange?.Id
+                ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
+            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, "manual", cancellationToken);
+            if (chosen == inputs.Configure.OnChange?.Id
+                && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
+                configuration.ProposedHash = inputs.Hash;
+            await engine.AddRunsAsync(db, [run], cancellationToken);
+            return run.Id;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Proposes the onChange action of each guest whose configure inputs have changed, once its
+    /// provisioning has caught up. Each input hash gets one automatic run, so a failure waits for
+    /// a new commit or a person instead of repeating.
+    /// </summary>
+    public Task ScheduleConfigurationsAsync(CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, _) =>
+        {
+            // The head, not the newest loaded: a branch rolled back to an earlier commit must not
+            // configure the one it left. An invalid head proposes nothing until it is fixed.
+            var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().Where(r => r.RepositoryValid)
+                .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+            if (revision is null) return 0;
+
+            var due = await db.GuestConfigurations
+                .Where(c => c.DesiredHash != null && c.DesiredHash != c.ProposedHash)
+                .Join(db.Resources.Where(r => r.Valid && r.RetiredAt == null && r.MissingSince == null && r.BoundVmid != null
+                        && r.SyncedInputsHash == r.DesiredInputsHash
+                        && db.Runs.Where(run => run.ResourceId == r.Id && run.Operation == Operations.Provision)
+                            .OrderByDescending(run => run.CreatedAt).Select(run => run.Status).FirstOrDefault() == RunStatuses.Succeeded
+                        && !db.Runs.Any(run => run.ResourceId == r.Id && run.Status != RunStatuses.Succeeded
+                            && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled)),
+                    c => c.ResourceId, r => r.Id, (c, r) => new { Configuration = c, Resource = r })
+                .ToListAsync(cancellationToken);
+            if (due.Count == 0) return 0;
+
+            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var runs = new List<Run>();
+            foreach (var item in due)
+            {
+                if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Guest(item.Resource.Address) is not { SetupRecipe: not null } guest)
+                    continue;
+                var inputs = ConfigureInputs.Build(repository, guest);
+                item.Configuration.DesiredHash = inputs.Hash;
+                item.Configuration.ProposedHash = inputs.Hash;
+                if (inputs.Configure.OnChange is { } action)
+                    runs.Add(await ConfigureRunAsync(db, repository, guest, item.Resource, revision, action.Id, "revision", cancellationToken));
+            }
+
+            await engine.AddRunsAsync(db, runs, cancellationToken);
+            return runs.Count;
+        }, cancellationToken);
+
+    private async Task<Run> ConfigureRunAsync(OctopushyDb db, LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
+        string action, string reason, CancellationToken cancellationToken)
+    {
+        var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
+        var recipe = repository.Recipes[guest.SetupRecipe!];
+        var applied = configuration?.AppliedRevisionId is { } id
+            ? await db.Revisions.AsNoTracking().Where(r => r.Id == id).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken)
+            : null;
+        var changed = applied is null ? null
+            : await mirror.ChangedFilesAsync(applied, revision.Commit, [Path.GetDirectoryName(recipe.File)!, recipe.Root, guest.Directory], cancellationToken);
+        return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed);
+    }
 
     /// <summary>Observes an installation now, in the background, unless an observation of it is under way.</summary>
     public Task ObserveAsync(Guid resourceId, CancellationToken cancellationToken) =>

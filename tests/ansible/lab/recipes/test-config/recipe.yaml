@@ -1,0 +1,31 @@
+schemaVersion: 1
+description: Runs real playbooks against a throwaway SSH target.
+operation: configure
+executor: ansible
+root: ../../modules/ansible/test
+inputs: inputs.schema.json
+secrets: [app_password]
+actions:
+  configure:
+    playbook: configure.yml
+    prepare: prepare.yml
+    destructive: false
+    onChange: true
+  defer:
+    playbook: defer.yml
+    destructive: false
+  update-system:
+    playbook: update-system.yml
+    snapshot: applied
+    destructive: false
+  fail:
+    playbook: fail.yml
+    destructive: false
+  hang:
+    playbook: hang.yml
+    destructive: false
+outcomes:
+  deferred:
+    description: Work is active on the guest. Approving interrupts it.
+    approve:
+      vars: { allow_busy: true }

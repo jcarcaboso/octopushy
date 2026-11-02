@@ -12,6 +12,7 @@ import { summarizePlan } from "../../lib/plan";
 import { elapsed, formatDuration } from "../../lib/time";
 import { ApprovalPanel } from "./ApprovalPanel";
 import { AttemptList } from "./AttemptList";
+import { ConfigurePreviewView } from "./ConfigurePreview";
 import { PlanChanges } from "./PlanChanges";
 
 const stepNames: Record<string, string> = {
@@ -32,6 +33,10 @@ const stepNames: Record<string, string> = {
   "wait-updated-worker": "Wait for the original worker to reconnect",
   "drain-worker": "Drain the worker",
   "revoke-worker": "Remove the worker's enrollment",
+  preview: "Preview",
+  playbook: "Run the playbook",
+  "outcome-approval": "Decide on the outcome",
+  "playbook-approved": "Run the playbook again",
 };
 
 function describe(step: Step, operation: string): string | null {
@@ -41,7 +46,17 @@ function describe(step: Step, operation: string): string | null {
         ? "OpenTofu plans destroying the VM; the saved plan is what gets applied."
         : "OpenTofu plans the change; the saved plan is what gets applied.";
     case "approval":
-      return "The saved plan is approved by policy or by you.";
+      return operation === "configure"
+        ? "The preview is approved by policy or by you."
+        : "The saved plan is approved by policy or by you.";
+    case "preview":
+      return "Checks the playbook and lists its tasks, with no secrets and no contact with the guest. It shows what will run, not what will change.";
+    case "playbook":
+      return "Runs the playbook on the guest over SSH, against the pinned host key, with exactly what the preview listed.";
+    case "outcome-approval":
+      return "The playbook reported something that needs your decision. It ran once; this would run it once more.";
+    case "playbook-approved":
+      return "Runs the same commit and preview once more, with what the recipe says approving adds.";
     case "unprotect":
       return "Removes the VM's protection so it can be deleted.";
     case "apply":
@@ -79,12 +94,21 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {
     const planStep = detail.steps.find((s) => s.name === "plan");
-    return <ApprovalPanel runId={detail.run.id} step={step} plan={planStep?.plan ? summarizePlan(planStep.plan) : null} workerUpdate={detail.workerUpdate} />;
+    return (
+      <ApprovalPanel
+        runId={detail.run.id}
+        step={step}
+        plan={planStep?.plan ? summarizePlan(planStep.plan) : null}
+        workerUpdate={detail.workerUpdate}
+        configure={detail.run.operation === "configure"}
+      />
+    );
   }
   return (
     <>
       {plan ? <PlanChanges plan={plan} /> : null}
-      {!plan && step.outputs !== null && step.outputs !== undefined ? (
+      {step.configurePreview ? <ConfigurePreviewView preview={step.configurePreview} /> : null}
+      {!plan && !step.configurePreview && step.outputs !== null && step.outputs !== undefined ? (
         <details className="outputs">
           <summary>Outputs</summary>
           <JsonBlock value={step.outputs} />

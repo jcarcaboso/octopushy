@@ -17,6 +17,7 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Orchestrator
             try
             {
                 await engine.TickAsync(stoppingToken);
+                await planner.ScheduleConfigurationsAsync(stoppingToken);
                 if (clock.GetUtcNow() >= nextObserveCheck)
                 {
                     nextObserveCheck = clock.GetUtcNow() + ObserveCheck;

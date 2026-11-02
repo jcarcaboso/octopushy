@@ -14,9 +14,15 @@ interface Props {
   step: Step;
   plan: PlanSummary | null;
   workerUpdate?: WorkerUpdate | null;
+  /** The run configures a guest, so this names a preview rather than a plan. */
+  configure?: boolean;
 }
 
-function Decided({ step, setupOnly }: { step: Step; setupOnly: boolean }) {
+function fingerprintLabel(setupOnly: boolean, configure: boolean) {
+  return configure ? "Preview SHA-256" : setupOnly ? "Setup approval fingerprint" : "Plan SHA-256";
+}
+
+function Decided({ step, setupOnly, configure }: { step: Step; setupOnly: boolean; configure: boolean }) {
   const approval = step.approval!;
   const byPolicy = approval.decidedBy === "policy";
   const rejected = approval.decision === "rejected";
@@ -35,7 +41,7 @@ function Decided({ step, setupOnly }: { step: Step; setupOnly: boolean }) {
       {approval.note ? <p className="decision__note">{approval.note}</p> : null}
       {approval.planSha256 ? (
         <div className="small muted inline-group">
-          {setupOnly ? "Setup approval fingerprint" : "Plan SHA-256"} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
+          {fingerprintLabel(setupOnly, configure)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
         </div>
       ) : null}
       {approval.workerUpdateSha256 ? <p>Approved OS archive SHA-256 <Hash value={approval.workerUpdateSha256} /></p> : null}
@@ -43,7 +49,7 @@ function Decided({ step, setupOnly }: { step: Step; setupOnly: boolean }) {
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, workerUpdate }: Props) {
+export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
@@ -52,7 +58,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate }: Props) {
   const approval = step.approval;
   const setupOnly = plan?.hasChanges === false;
 
-  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} />;
+  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} configure={configure} />;
   if (step.status !== "awaiting-approval") return null;
 
   const planSha256 = approval?.planSha256 ?? null;
@@ -75,7 +81,9 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate }: Props) {
     <div className="approval">
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
-        {setupOnly
+        {configure
+          ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
+          : setupOnly
           ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."
           : "Approving applies exactly this saved plan and any guest setup recorded in this run; if anything changes, a new plan needs a new approval."}
       </Callout>
@@ -97,7 +105,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate }: Props) {
         </div>
       ) : null}
       <div className="inline-group">
-        <span className="muted">{setupOnly ? "Setup approval fingerprint" : "Plan SHA-256"}</span>
+        <span className="muted">{fingerprintLabel(setupOnly, configure)}</span>
         {planSha256 ? <Hash value={planSha256} label="Copy the approval fingerprint" /> : <span className="muted">not recorded</span>}
       </div>
       <div className="field">

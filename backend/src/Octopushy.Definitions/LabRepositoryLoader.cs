@@ -90,6 +90,7 @@ public sealed partial class LabRepositoryLoader
         foreach (var guest in guests)
         {
             CheckGuest(guest, settings, installations, templates, recipes);
+            CheckSetup(guest, recipes, installations);
         }
         foreach (var duplicate in guests.Where(g => g.ManagedWorker is not null)
                      .GroupBy(g => g.ManagedWorker!.Generation).Where(g => g.Count() > 1))
@@ -142,7 +143,8 @@ public sealed partial class LabRepositoryLoader
         var guest = guests.FirstOrDefault(g => g.Address == entry.Address);
         return guest is not null
             && (guest.Template is null || !_invalidTemplates.Contains(guest.Template))
-            && !_invalidRecipes.Contains(guest.Recipe);
+            && !_invalidRecipes.Contains(guest.Recipe)
+            && (guest.SetupRecipe is null || !_invalidRecipes.Contains(guest.SetupRecipe));
     }
 
     private RepositoryDefinition? LoadSettings()
@@ -307,7 +309,39 @@ public sealed partial class LabRepositoryLoader
             inputs,
             json["verify"]?.GetValue<string>() ?? "proxmox",
             json["image"]?.GetValue<string>(),
-            json["guestFilesystem"]?.GetValue<string>());
+            json["guestFilesystem"]?.GetValue<string>(),
+            ParseConfigure(json));
+    }
+
+    private static ConfigureRecipe? ParseConfigure(JsonObject json)
+    {
+        if (json["actions"] is not JsonObject actions)
+        {
+            return null;
+        }
+
+        return new ConfigureRecipe(
+            actions.ToDictionary(
+                p => p.Key,
+                p => new RecipeAction(
+                    p.Key,
+                    p.Value!["description"]?.GetValue<string>(),
+                    p.Value!["playbook"]!.GetValue<string>(),
+                    p.Value!["prepare"]?.GetValue<string>(),
+                    p.Value!["snapshot"] is not null,
+                    p.Value!["destructive"]!.GetValue<bool>(),
+                    p.Value!["onChange"]?.GetValue<bool>() ?? false,
+                    p.Value!["timeoutMinutes"]?.GetValue<int>()),
+                StringComparer.Ordinal),
+            (json["outcomes"] as JsonObject)?.ToDictionary(
+                p => p.Key,
+                p => new RecipeOutcome(
+                    p.Key,
+                    p.Value!["description"]?.GetValue<string>(),
+                    p.Value!["approve"]?["vars"]?.DeepClone().AsObject(),
+                    p.Value!["result"]?.GetValue<string>() ?? "failed"),
+                StringComparer.Ordinal) ?? [],
+            (json["secrets"] as JsonArray)?.Select(s => s!.GetValue<string>()).ToList() ?? []);
     }
 
     private void CheckRecipe(RecipeDefinition recipe)
@@ -322,6 +356,13 @@ public sealed partial class LabRepositoryLoader
         {
             Error(recipe.File, null, $"The root {recipe.Root} does not exist.", address);
             _invalidRecipes.Add(recipe.Id);
+            return;
+        }
+
+        if (recipe.Configure is { } configure)
+        {
+            CheckConfigureRecipe(recipe, configure, rootPath, address);
+            CheckInputsSchema(recipe, address);
             return;
         }
 
@@ -343,6 +384,51 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
+        CheckInputsSchema(recipe, address);
+    }
+
+    private void CheckConfigureRecipe(RecipeDefinition recipe, ConfigureRecipe configure, string rootPath, string address)
+    {
+        void Invalid(string message)
+        {
+            Error(recipe.File, null, message, address);
+            _invalidRecipes.Add(recipe.Id);
+        }
+
+        foreach (var action in configure.Actions.Values)
+        {
+            foreach (var (what, path) in new[] { ("playbook", action.Playbook), ("prepare playbook", action.Prepare) })
+            {
+                if (path is null)
+                {
+                    continue;
+                }
+
+                var full = Path.GetFullPath(Path.Combine(rootPath, path));
+                if (!full.StartsWith(Path.GetFullPath(rootPath) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    Invalid($"The {what} of {action.Id} must stay inside the root.");
+                }
+                else if (!File.Exists(full))
+                {
+                    Invalid($"The {what} {path} of {action.Id} does not exist in {recipe.Root}.");
+                }
+            }
+        }
+
+        if (configure.Actions.Values.Count(a => a.OnChange) > 1)
+        {
+            Invalid("At most one action may set onChange.");
+        }
+
+        if (configure.Actions.Values.Any(a => a.OnChange && a.UsesAppliedSnapshot))
+        {
+            Invalid("An onChange action cannot reuse a snapshot: a new machine has none.");
+        }
+    }
+
+    private void CheckInputsSchema(RecipeDefinition recipe, string address)
+    {
         if (recipe.InputsSchema is { } inputs)
         {
             _inputSchemas[recipe.Id] = null;
@@ -637,6 +723,74 @@ public sealed partial class LabRepositoryLoader
                 || !IntegerBetween(hardware?["memory"], 512, 1048576)
                 || hardware!["sockets"]!.GetValue<int>() * hardware["cores"]!.GetValue<int>() > 128)
                 Error(guest.File, null, "A managed worker requires bounded CPU sockets, cores and RAM.", guest.Address);
+        }
+    }
+
+    private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
+    {
+        if (guest.SetupRecipe is not { } id)
+        {
+            if (new[] { "inputs", "secrets", "secretFiles" }.Any(f => guest.Json["setup"]?[f] is not null))
+                Error(guest.File, LineOf(guest.File, "/setup"), "setup.inputs and setup secrets need a setup.recipe.", guest.Address);
+            return;
+        }
+
+        void Invalid(string pointer, string message) => Error(guest.File, LineOf(guest.File, pointer), message, guest.Address);
+
+        if (guest.ManagedWorker is not null)
+            Invalid("/setup/recipe", "A managed worker is configured by its image; it cannot have a setup recipe.");
+        if (!recipes.TryGetValue(id, out var recipe))
+        {
+            Invalid("/setup/recipe", $"The recipe '{id}' does not exist under recipes/.");
+            return;
+        }
+
+        if (recipe.Configure is not { } configure)
+        {
+            Invalid("/setup/recipe", $"The recipe '{id}' does not configure guests.");
+            return;
+        }
+
+        if (ConfigureInputs.AddressOf(guest) is null)
+            Invalid("/access", "A guest with a setup recipe needs access.address, or a static or reserved address.");
+        foreach (var field in new[] { "user", "sshKey", "hostKey" })
+        {
+            if (guest.Json["access"]?[field] is null)
+                Invalid("/access", $"A guest with a setup recipe needs access.{field}.");
+        }
+
+        var secrets = ConfigureInputs.Secrets(guest, "secrets");
+        var files = ConfigureInputs.Secrets(guest, "secretFiles");
+        foreach (var name in configure.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
+        {
+            Invalid("/setup", $"The recipe '{id}' needs setup.secrets.{name} or setup.secretFiles.{name}.");
+        }
+
+        var inputs = (guest.Json["setup"]?["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
+        foreach (var name in secrets.Keys.Intersect(files.Keys).Concat(secrets.Keys.Concat(files.Keys).Intersect(inputs)))
+        {
+            Invalid("/setup", $"{name} is set more than once in setup.");
+        }
+
+        // A token that can write to Proxmox is not an input to a playbook, and neither is one
+        // that can read it: an installation's credentials go to its API and nowhere else.
+        var connectionKeys = installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key })
+            .ToHashSet(StringComparer.Ordinal);
+        var delivered = secrets.Concat(files)
+            .Append(new("access.sshKey", ConfigureInputs.Reference(guest, "sshKey") ?? new StoreReference("")));
+        foreach (var (name, reference) in delivered)
+        {
+            if (connectionKeys.Contains(reference.Key))
+                Invalid("/setup", $"{name} cannot use a Proxmox API token.");
+        }
+
+        if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
+        {
+            var instance = guest.Json["setup"]?["inputs"]?.DeepClone() ?? new JsonObject();
+            foreach (var error in SchemaCatalog.Evaluate(schema, instance))
+            {
+                Invalid($"/setup/inputs{error.Pointer}", $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})");
+            }
         }
     }
 

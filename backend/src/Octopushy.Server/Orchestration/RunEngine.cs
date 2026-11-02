@@ -376,7 +376,7 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (await DecideApprovalAsync(db, run, step, context, cancellationToken))
+                    if (context.Ansible is not null ? DecideConfigureApproval(run, step, context) : await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
                         continue;
                     }
@@ -436,7 +436,8 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, context.WorkerUpdate is not null
+        Finish(run, RunStatuses.Succeeded, context.Ansible is not null ? ConfiguredDetail(run)
+            : context.WorkerUpdate is not null
             ? "Worker OS update verified with the original identity and state filesystem. The worker remains drained; resume scheduling explicitly."
             : noChanges
             ? context.DiskReporter is null ? "The plan has no changes." : "Infrastructure unchanged; disk reporter setup completed."
@@ -607,6 +608,7 @@ public sealed partial class RunEngine(
                     resource.BoundAt = now;
                 }
 
+                await ProposeConfigurationAgainAsync(db, run, cancellationToken);
                 break;
             case StepNames.Apply:
                 resource.Outputs = null;
@@ -624,6 +626,9 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
+                break;
+            case StepNames.Playbook or StepNames.PlaybookApproved:
+                await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
                 break;
         }
     }

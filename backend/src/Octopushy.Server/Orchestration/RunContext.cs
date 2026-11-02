@@ -32,6 +32,9 @@ public sealed record RunContext
 
     public OpenTofuContext? OpenTofu { get; init; }
 
+    /// <summary>What a configure run runs. It reaches the guest over SSH, so it never uses <see cref="Proxmox"/>'s credentials.</summary>
+    public AnsibleContext? Ansible { get; init; }
+
     public required ProxmoxContext Proxmox { get; init; }
 
     public DiskReporterContext? DiskReporter { get; init; }
@@ -82,6 +85,35 @@ public sealed record OpenTofuContext(
     JsonObject Variables,
     Dictionary<string, string> Env,
     Dictionary<string, string> SecretEnv);
+
+/// <summary>
+/// A configure run: one action of a recipe, against one guest. <see cref="Vars"/> holds no secret
+/// value; a secret var names its role in <see cref="RunContext.Secrets"/>.
+/// </summary>
+public sealed record AnsibleContext(
+    string Recipe,
+    string Action,
+    string Root,
+    string Playbook,
+    string? Prepare,
+    bool UsesAppliedSnapshot,
+    bool Destructive,
+    int? TimeoutMinutes,
+    string Image,
+    string GuestName,
+    string GuestDirectory,
+    string Address,
+    int Port,
+    string User,
+    JsonObject Vars,
+    IReadOnlyList<string> SecretVars,
+    IReadOnlyList<string> SecretFiles,
+    Dictionary<string, AnsibleOutcome> Outcomes,
+    /// <summary>What changed under the recipe and its project since the guest's last successful run; null when it has none.</summary>
+    IReadOnlyList<string>? ChangedFiles);
+
+/// <summary>A declared outcome, as the run was built with it.</summary>
+public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
 
 public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace)
 {
@@ -137,6 +169,13 @@ public static class StepNames
     public const string DrainWorker = "drain-worker";
     /// <summary>Server-side: remove a removed managed worker's enrollment once its VM is gone.</summary>
     public const string RevokeWorker = "revoke-worker";
+    /// <summary>Shows what a configure run will do, with no secrets and no contact with the guest.</summary>
+    public const string Preview = "preview";
+    public const string Playbook = "playbook";
+    /// <summary>A person decides what a playbook's declared outcome should lead to.</summary>
+    public const string OutcomeApproval = "outcome-approval";
+    /// <summary>The one further run a person may approve after a declared outcome.</summary>
+    public const string PlaybookApproved = "playbook-approved";
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -150,5 +189,14 @@ public static class SecretNames
     public const string ProxmoxCa = "proxmox.ca";
     public const string DiskReporterToken = "disk-reporter.token";
 
+    public const string AnsibleSshKey = "ansible.ssh-key";
+    public const string AnsibleHostKey = "ansible.host-key";
+
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
+
+    /// <summary>A guest's <c>setup.secrets</c> entry.</summary>
+    public static string AnsibleVar(string name) => $"ansible.var.{name}";
+
+    /// <summary>A guest's <c>setup.secretFiles</c> entry.</summary>
+    public static string AnsibleFile(string name) => $"ansible.file.{name}";
 }

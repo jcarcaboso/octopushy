@@ -9,6 +9,11 @@
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
     },
     "schemaVersion": { "const": 1 },
+    "extraVar": {
+      "description": "An Ansible extra var. Names starting with ansible_ or octopushy are how Octopushy pins a connection, so they are refused.",
+      "type": "string",
+      "pattern": "^(?![Aa][Nn][Ss][Ii][Bb][Ll][Ee]_|[Oo][Cc][Tt][Oo][Pp][Uu][Ss][Hh][Yy])[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])"
+    },
     "storeRef": {
       "description": "A reference to a variable-store entry, optionally at an exact version. Definitions never hold secret values.",
       "type": "object",

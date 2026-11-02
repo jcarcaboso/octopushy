@@ -1,0 +1,8 @@
+- name: Fail on purpose
+  hosts: all
+  gather_facts: false
+  tasks:
+    # A task's name is templated, so a careless one carries the secret out of no_log.
+    - name: A task that fails with {{ app_password }}
+      ansible.builtin.command: /bin/false
+      no_log: true

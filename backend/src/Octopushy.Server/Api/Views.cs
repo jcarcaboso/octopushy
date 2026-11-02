@@ -97,6 +97,33 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             outputs["toolVersion"]?.GetValue<string>());
     }
 
+    /// <summary>The typed view of a preview step's outputs.</summary>
+    public static ConfigurePreviewDto? ConfigurePreview(Step step)
+    {
+        if (step.Name != StepNames.Preview || step.Outputs is null || JsonNode.Parse(step.Outputs) is not JsonObject outputs)
+        {
+            return null;
+        }
+
+        static List<string> Strings(JsonNode? node) => (node as JsonArray)?.Select(n => n?.GetValue<string>() ?? "").ToList() ?? [];
+        var manifest = outputs["manifest"];
+        return new ConfigurePreviewDto(
+            outputs["action"]?.GetValue<string>() ?? "?",
+            outputs["playbook"]?.GetValue<string>() ?? "?",
+            manifest?["commit"]?.GetValue<string>(),
+            manifest?["image"]?.GetValue<string>(),
+            manifest?["host"]?.GetValue<string>(),
+            outputs["toolVersion"]?.GetValue<string>(),
+            manifest?["destructive"]?.GetValue<bool>() ?? true,
+            Strings(outputs["tasks"]),
+            manifest?["changedFiles"] is JsonArray ? Strings(manifest["changedFiles"]) : null,
+            manifest?["vars"]?.DeepClone(),
+            (manifest?["secrets"] as JsonObject)?.Select(p => new ConfigureSecretDto(p.Key, p.Value?.GetValue<string>() ?? "")).ToList() ?? [],
+            outputs["prepared"]?.DeepClone(),
+            Strings(outputs["hostKeyFingerprints"]),
+            outputs["planSha256"]?.GetValue<string>());
+    }
+
     public static (string Status, string? Detail) GuestStatus(Resource resource, Run? active, Run? last)
     {
         if (resource.RetiredAt is not null)
@@ -207,6 +234,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         PolicyDto? policy = null;
         ResolvedSetting<IReadOnlyList<string>>? labels = null;
         string? text = null;
+        GuestConfigurationDto? configure = null;
         if (latest is not null && resource.MissingSince is null)
         {
             var repository = await revisions.GetAsync(latest.Commit, cancellationToken);
@@ -215,6 +243,19 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 var effective = PolicyResolver.For(repository, guest);
                 policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
                 labels = PolicyResolver.AgentLabels(repository, guest);
+                if (guest.SetupRecipe is { } recipe && repository.Recipes.TryGetValue(recipe, out var definition) && definition.Configure is { } offered)
+                {
+                    var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
+                    configure = new GuestConfigurationDto(
+                        recipe,
+                        offered.Actions.Values.Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList(),
+                        state is { AppliedHash: not null } && state.AppliedHash == state.DesiredHash,
+                        state?.AppliedAction,
+                        state?.AppliedRevisionId is { } applied
+                            ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null,
+                        state?.AppliedAt,
+                        state?.Snapshot is not null);
+                }
             }
 
             text = await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken);
@@ -242,7 +283,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.RetiredAt,
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             GuestDiskUsageEndpoints.View(resource,
-                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)));
+                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
+            configure);
     }
 
     public async Task<InstallationDetailDto?> InstallationAsync(Guid id, CancellationToken cancellationToken)

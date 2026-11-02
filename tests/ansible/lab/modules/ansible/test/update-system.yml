@@ -1,0 +1,13 @@
+- name: Update with what the last run installed
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require the applied snapshot
+      ansible.builtin.assert:
+        that: [release_version == '1.2.3']
+    - name: Record it
+      ansible.builtin.file:
+        path: /var/lib/updated
+        state: touch
+        mode: "0644"

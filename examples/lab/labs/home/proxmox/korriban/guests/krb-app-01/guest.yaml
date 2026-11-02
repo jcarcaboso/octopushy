@@ -17,8 +17,17 @@ network:
   dns: [10.1.0.1]
 provision:
   recipe: proxmox-vm
+setup:
+  recipe: machine-tools           # configures the machine once it is provisioned
+  inputs:
+    machine_tools_channel: stable
+  secrets:                        # extra var -> variable store key; only the playbook gets these
+    machine_tools_token: { store: machines/krb-app-01/tools-token }
 access:
   sshAuthorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example
+  user: ops
+  sshKey: { store: access/krb-app-01/ssh-key }     # a secret: the private half of the key above
+  hostKey: { store: access/krb-app-01/host-key }   # plain: read through Proxmox, never scanned
 policy:
   destructive: manual             # deleting this VM waits for approval

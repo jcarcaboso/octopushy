@@ -142,6 +142,11 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("planGuest");
 
+        api.MapPost("/guests/{id:guid}/configure", async (Guid id, ConfigureGuestRequest request, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.ConfigureGuestAsync(id, request.Action, ct))))
+            .WithTags("Inventory")
+            .WithName("configureGuest");
+
         api.MapGet("/installations/{id:guid}", async Task<Results<Ok<InstallationDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.InstallationAsync(id, ct) is { } installation ? TypedResults.Ok(installation) : TypedResults.NotFound())
             .WithTags("Inventory")
@@ -247,7 +252,8 @@ public static partial class Endpoints
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
-                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList()))
+                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList(),
+                Views.ConfigurePreview(s)))
                 .ToList();
             var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
             var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain

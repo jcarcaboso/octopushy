@@ -1,0 +1,22 @@
+---
+# An outcome is neither success nor failure. Octopushy knows only the name, which the recipe
+# declares; what it means belongs here. The run waits for a person, who can approve running
+# the action once more with machine_tools_allow_busy.
+- name: Look for active work
+  ansible.builtin.stat:
+    path: /run/machine-tools-busy
+  register: machine_tools_busy
+  check_mode: false
+
+- name: Report that work is active
+  ansible.builtin.set_stats:
+    data:
+      octopushy_outcome: deferred
+      octopushy_detail: Work started at {{ machine_tools_busy.stat.mtime | default('an unknown time') }}.
+    aggregate: false
+    per_host: false
+  when: machine_tools_busy.stat.exists and not (machine_tools_allow_busy | default(false))
+
+- name: Stop without changing anything
+  ansible.builtin.meta: end_play
+  when: machine_tools_busy.stat.exists and not (machine_tools_allow_busy | default(false))

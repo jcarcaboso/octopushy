@@ -149,6 +149,9 @@ public sealed class ToolOptions
 {
     /// <summary>The pinned image agents run OpenTofu in, unless a recipe names another.</summary>
     public string OpenTofuImage { get; set; } = "ghcr.io/opentofu/opentofu:1.13.1";
+
+    /// <summary>Its tag names the content of agent/ansible; scripts/checks/offline.sh keeps this up to date.</summary>
+    public string AnsibleImage { get; set; } = "docker.io/skorcius/octopushy:ansible-2.21.5-7bed712c011c";
 }
 
 public sealed class SchedulingOptions

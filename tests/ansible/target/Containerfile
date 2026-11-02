@@ -1,0 +1,12 @@
+# A throwaway machine to configure: sshd, sudo and Python, and nothing Octopushy put there.
+FROM docker.io/library/debian:trixie-slim
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends openssh-server python3 sudo \
+ && useradd --create-home --shell /bin/bash ops \
+ && usermod -p '*' ops \
+ && echo 'ops ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ops \
+ && install -d -m 0700 -o ops -g ops /home/ops/.ssh \
+ && mkdir -p /run/sshd \
+ && rm -f /etc/ssh/ssh_host_*
+EXPOSE 22
+CMD ["/bin/sh", "-c", "ssh-keygen -A && cp /keys/authorized_keys /home/ops/.ssh/authorized_keys && chown ops:ops /home/ops/.ssh/authorized_keys && exec /usr/sbin/sshd -D -e -o UsePAM=no -o PasswordAuthentication=no"]
