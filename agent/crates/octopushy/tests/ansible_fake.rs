@@ -383,6 +383,7 @@ async fn the_connection_is_pinned_and_comes_last() {
     let ssh = connection["ansible_ssh_args"].as_str().unwrap();
     assert!(ssh.contains("StrictHostKeyChecking=yes"), "{ssh}");
     assert!(ssh.contains("GlobalKnownHostsFile=/dev/null"), "{ssh}");
+    assert!(ssh.contains("IdentityFile=none"), "{ssh}");
     assert!(ssh.contains("ControlMaster=no"), "{ssh}");
     let known = std::fs::read_to_string(generated.join("known_hosts")).unwrap();
     assert!(known.starts_with("10.0.0.5 ssh-ed25519 AAAA"), "{known}");
