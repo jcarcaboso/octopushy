@@ -57,7 +57,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                     && pendingRename.ManagedWorker is null)
                 {
                     // Keep an ordinary guest's identity at its old address while
-                    // displaying the invalid proposed definition. Do not create a
+                    // showing what is wrong with the proposed definition. Do not create a
                     // competing row that would block the rename after correction.
                     resource = pendingRename;
                 }
@@ -106,7 +106,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, byAddress.Values);
             if (problem is not null)
             {
-                resource.Definition = db.Entry(resource).OriginalValues.GetValue<string?>(nameof(Resource.Definition)) ?? resource.Definition;
+                KeepLastDefinition(db, resource);
                 resource.Valid = false;
                 var issues = repository.IssuesFor(resource.Address).ToList();
                 issues.Add(new DefinitionIssue(IssueSeverity.Error, repository.Guest(resource.Address)!.File, null, problem, resource.Address));
@@ -217,6 +217,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             {
                 // Controller/image compatibility is a per-guest refusal, not a
                 // reason to abandon other runs after recording this repository head.
+                KeepLastDefinition(db, resource);
                 resource.Valid = false;
                 var issues = repository.IssuesFor(resource.Address).ToList();
                 issues.Add(new DefinitionIssue(IssueSeverity.Error, guest.File, null, error.Message, resource.Address));
@@ -253,6 +254,10 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
         }
     }
+
+    /// <summary>A guest found unplannable after its definition was read has said nothing yet either.</summary>
+    private static void KeepLastDefinition(OctopushyDb db, Resource resource) =>
+        resource.Definition = db.Entry(resource).OriginalValues.GetValue<string?>(nameof(Resource.Definition)) ?? resource.Definition;
 
     /// <summary>What a formed cluster cannot change: moving the primary is a promotion, and the domain is permanent.</summary>
     private static string? ClusterProblem(Resource resource, ClusterDefinition cluster)
