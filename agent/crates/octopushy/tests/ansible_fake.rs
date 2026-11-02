@@ -806,6 +806,8 @@ async fn a_guest_that_did_not_answer_said_nothing_about_a_key() {
         // Not ssh giving up on this guest, whatever else ssh failed to report.
         "Permission denied (publickey).",
         "ops@inner: Permission denied (publickey).",
+        // A banner saying it, then a login that timed out.
+        "ops@10.0.0.5: Permission denied (publickey).\nConnection closed by 10.0.0.5 port 22",
         "Received disconnect from g: Too many authentication failures",
         "Host key verification failed.",
     ] {

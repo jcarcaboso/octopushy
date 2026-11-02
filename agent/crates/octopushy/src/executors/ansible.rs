@@ -1020,17 +1020,13 @@ fn settle_refused(
 ) -> Result<(), Failure> {
     let recap = finished(out, recap, minutes)?;
     // A session that failed after the login reads like a refusal, down to the words if a forced
-    // command runs an ssh of its own. Whether sshd took the key decides it. ssh names the login
-    // and host when it gives up, and with the bracket it is sshd listing its methods. Without
-    // them it can be a local firewall, or something the session printed.
-    let host = &prep.input.host;
-    let verdict = format!("{}@{}: Permission denied (", host.user, host.address);
+    // command runs an ssh of its own. Whether sshd took the key decides it.
     let refused = !recap.reached
         && !recap.key_taken
         && recap
             .unreachable
             .as_deref()
-            .is_some_and(|m| m.contains(&verdict));
+            .is_some_and(|m| refusal_of(m, &prep.input.host));
     if refused {
         return Ok(());
     }
@@ -1044,6 +1040,20 @@ fn settle_refused(
         ));
     }
     Err(unreachable_failure(prep, &recap, &result))
+}
+
+/// Whether ssh ended by giving up on this login. It says so last, naming the login and the host,
+/// lowercased as ssh does, with sshd's methods in the bracket. Anything before that can be a
+/// banner, and a failure without those words can be a local firewall.
+fn refusal_of(message: &str, host: &Host) -> bool {
+    let last = message.trim_end().lines().last().unwrap_or("");
+    let said = last.split_once("via ssh: ").map_or(last, |(_, said)| said);
+    let verdict = format!(
+        "{}@{}: Permission denied (",
+        host.user,
+        host.address.to_ascii_lowercase()
+    );
+    said.starts_with(&verdict) && said.ends_with(").")
 }
 
 fn failed_before_tasks(out: &ToolOutput) -> String {
@@ -1091,6 +1101,62 @@ mod tests {
             user: "ops".into(),
             host_key: key.into(),
         }
+    }
+
+    fn login(address: &str, user: &str) -> Host {
+        Host {
+            name: "g".into(),
+            address: address.into(),
+            port: 22,
+            user: user.into(),
+            host_key: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_what_ssh_says_last_about_this_login() {
+        let via = "Task failed: Failed to connect to the host via ssh: ";
+        let guest = login("10.0.0.5", "ops");
+        for message in [
+            "ops@10.0.0.5: Permission denied (publickey).",
+            "ops@10.0.0.5: Permission denied (publickey,password).\r\n",
+            "a banner\r\nmore banner\r\nops@10.0.0.5: Permission denied (publickey).\r\n",
+        ] {
+            assert!(refusal_of(message, &guest), "{message:?}");
+            assert!(refusal_of(&format!("{via}{message}"), &guest), "{message:?}");
+        }
+        for message in [
+            "",
+            "(too long to report)",
+            "Permission denied (publickey).",
+            "ops@inner: Permission denied (publickey).",
+            "other@10.0.0.5: Permission denied (publickey).",
+            "ops@10.0.0.5: Permission denied",
+            "ssh: connect to host 10.0.0.5 port 22: Permission denied",
+            // A banner can say anything, and what comes after it is what happened.
+            "ops@10.0.0.5: Permission denied (publickey).\nConnection closed by 10.0.0.5 port 22",
+            "ops@10.0.0.5: Permission denied (publickey).\nConnection timed out during banner exchange",
+        ] {
+            assert!(!refusal_of(message, &guest), "{message:?}");
+            assert!(!refusal_of(&format!("{via}{message}"), &guest), "{message:?}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_the_host_as_ssh_writes_it() {
+        for (address, printed) in [
+            ("LOCALHOST", "localhost"),
+            ("Guest.Example", "guest.example"),
+            ("fd00::1", "fd00::1"),
+            ("FD00::1", "fd00::1"),
+        ] {
+            let message = format!("ops@{printed}: Permission denied (publickey).");
+            assert!(refusal_of(&message, &login(address, "ops")), "{address}");
+        }
+        // Only the host: a login keeps its case.
+        let message = "Ops@guest: Permission denied (publickey).";
+        assert!(refusal_of(message, &login("guest", "Ops")));
+        assert!(!refusal_of(message, &login("guest", "ops")));
     }
 
     #[test]

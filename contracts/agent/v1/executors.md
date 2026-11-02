@@ -416,11 +416,10 @@ Input (the same for both actions, except as noted):
 - Outputs of a failed or uncertain run never hold a task's result.
 - `expectRefused`, on `run` only, names a secret holding keys that were removed, one after another.
   The playbook runs once with each key alone, at `LogLevel=VERBOSE`, and each time nothing may reach
-  the guest and `ssh` must report `<user>@<address>: Permission denied (…)`, and must not report that it authenticated.
-  That report comes before a session starts, so a forced command cannot take it back. Then it runs
-  with `sshKey`, which has to log in. Only then
-  does the run succeed, with the number of keys in `refusedKeys` in its outputs. Anything else is a
-  failure. From the third key on, runs are spaced so that `PerSourcePenalties` does not block the
+  the guest, the last thing `ssh` reports must be `<user>@<address>: Permission denied (…).`, and it
+  must not report that it authenticated. That report comes before a session starts, so a forced
+  command cannot take it back. Then it runs with `sshKey`, which has to log in. Only then does the
+  run succeed, with the number of keys in `refusedKeys` in its outputs. Anything else is a failure. From the third key on, runs are spaced so that `PerSourcePenalties` does not block the
   address.
 
 ### `preview`
