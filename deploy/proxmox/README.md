@@ -129,7 +129,10 @@ before enrolling with a new token (`OCTOPUSHY_AGENT_NAME=<name>` picks the name)
 
 The web interface is plain HTTP on port 8081. Put a TLS proxy in front of it; the
 frontend trusts `X-Forwarded-Proto` from private addresses, so session cookies become
-secure once the proxy sets it. With Traefik's file provider:
+secure once the proxy sets it. Without a proxy the web interface and the
+[operator CLI](../../docs/operator-access.md#plain-http) still work over plain HTTP, but
+passwords, session cookies and operator tokens are then readable by anyone on the network
+path. Guest disk reporting needs HTTPS. With Traefik's file provider:
 
 ```yaml
 http:

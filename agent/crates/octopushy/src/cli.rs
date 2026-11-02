@@ -36,10 +36,12 @@ pub enum Command {
 pub enum OperatorCommand {
     /// Save a console-created token from stdin. Never accepts a password.
     Login {
+        /// Controller origin, http:// or https://. Over http:// the token is unencrypted.
         #[arg(long)]
         server: String,
         #[arg(long, required = true)]
         token_stdin: bool,
+        /// Private CA that verifies an https:// controller. Refused with an http:// origin.
         #[arg(long)]
         ca_file: Option<PathBuf>,
         #[arg(long)]
