@@ -124,6 +124,24 @@ public sealed partial class RunEngine
     }
 
     /// <summary>
+    /// Puts a change that may not go yet back with its run, which holds it until it may. In the queue it would
+    /// take a place in each pass from the work that may be what it waits for, such as its guest's setup.
+    /// </summary>
+    private void TakeBack(Attempt attempt, Step step, Run run, string reason)
+    {
+        attempt.Status = AttemptStatuses.Cancelled;
+        attempt.Error = reason;
+        attempt.FinishedAt = clock.GetUtcNow();
+        step.Status = StepStatuses.Pending;
+        SetDetail(run, reason);
+    }
+
+    /// <summary>A pipeline's change that is still queued, or was taken back, reached no agent, so it changed nothing.</summary>
+    private static bool NeverSent(Run run, Attempt attempt) =>
+        run.Operation == Operations.Pipeline && attempt.AssignedAt is null && attempt.StartedAt is null
+        && attempt.Status is AttemptStatuses.Queued or AttemptStatuses.Cancelled;
+
+    /// <summary>
     /// Continues a failed pipeline from the stage that failed. The approval still covers it, unless what it
     /// approved is no longer what the repository asks for. A saved plan cannot be used again once the failed
     /// apply moved its state, so that takes a new run.
@@ -192,13 +210,21 @@ public sealed partial class RunEngine
         }
     }
 
-    /// <summary>The guest is gone, so its services are too. Nothing else removes them: see docs/pipelines.md.</summary>
-    private static async Task RetireServicesAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
+    /// <summary>
+    /// The guest is gone, so its services are too, and whatever their runs still meant to do. Nothing else
+    /// removes them: see docs/pipelines.md. A run left uncertain stays for a person to close.
+    /// </summary>
+    private async Task RetireServicesAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var guest = await db.Resources.Where(r => r.Id == run.ResourceId).Select(r => r.Address).FirstAsync(cancellationToken);
         foreach (var service in await db.Resources.Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == guest && r.RetiredAt == null).ToListAsync(cancellationToken))
         {
             service.RetiredAt = now;
+            foreach (var id in await db.Runs.Where(r => r.ResourceId == service.Id && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
+                    && r.Status != RunStatuses.Cancelled && r.Status != RunStatuses.Uncertain).Select(r => r.Id).ToListAsync(cancellationToken))
+            {
+                await CancelInternalAsync(db, id, "The guest was removed.", cancellationToken);
+            }
         }
     }
 }

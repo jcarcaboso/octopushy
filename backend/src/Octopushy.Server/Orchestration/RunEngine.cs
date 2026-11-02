@@ -203,7 +203,7 @@ public sealed partial class RunEngine(
     public static bool CanSupersede(Run run) =>
         !RunStatuses.IsTerminal(run.Status)
         && run.Status != RunStatuses.Uncertain
-        && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating);
+        && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && !NeverSent(run, a));
 
     internal async Task CancelInternalAsync(OctopushyDb db, Guid runId, string reason, CancellationToken cancellationToken)
     {

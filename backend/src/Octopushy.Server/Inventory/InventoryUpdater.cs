@@ -183,7 +183,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         }
 
         await UpdateConfigurationsAsync(db, activeRuns, revision, repository, guests, cancellationToken);
-        await UpdatePipelinesAsync(db, activeRuns, revision, repository, byAddress.Values.Where(r => r.Kind == ResourceKinds.Service && seen.Contains(r.Id) && r.RetiredAt is null).ToList(), cancellationToken);
+        await UpdatePipelinesAsync(db, activeRuns, revision, repository, byAddress.Values.Where(r => r.Kind == ResourceKinds.Service && seen.Contains(r.Id) && r.RetiredAt is null).ToList(), currentSourceIds, cancellationToken);
 
         foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Installation && seen.Contains(r.Id) && r.Valid))
         {

@@ -385,7 +385,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_queued_change_does_not_reach_a_guest_that_stopped_being_ready()
+    public async Task A_queued_change_goes_back_to_its_run_when_the_guest_stops_being_ready_and_goes_out_later()
     {
         var test = Repository.Repository();
         await using var server = await ServerHarness.StartAsync(postgres, test);
@@ -393,17 +393,188 @@ public class PipelineRunTests(PostgresFixture postgres)
         using var _ = http;
         await ScheduleAsync(server);
         await PlanStagesAsync(agent);
-        // No agent has the apply yet: it is queued, and only dispatch can stop it now.
-        await server.Engine.ExecuteAsync(async (db, _) =>
+        await server.WithDbAsync(async db =>
+        {
+            await db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, true));
+        });
+        await server.TickAsync();
+        Assert.Equal(StepStatuses.Queued, (await server.LatestRunAsync(Service, Operations.Pipeline)).Steps.Single(s => s.Name == StepNames.Apply).Status);
+
+        // It is queued, and only dispatch can stop it now.
+        await server.WithDbAsync(async db =>
         {
             await db.GuestConfigurations.Where(c => db.Resources.Any(r => r.Id == c.ResourceId && r.Address == Guest))
-                .ExecuteUpdateAsync(u => u.SetProperty(c => c.AppliedHash, (string?)null));
-            return 0;
-        }, CancellationToken.None);
+                .ExecuteUpdateAsync(u => u.SetProperty(c => c.AppliedHash, (string?)null).SetProperty(c => c.ProposedHash, (string?)null));
+            await db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, false));
+        });
         await server.TickAsync();
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "apply");
         var run = await server.LatestRunAsync(Service, Operations.Pipeline);
-        Assert.Contains("setup", run.Steps.Single(s => s.Name == StepNames.Apply).Attempts.Single().WaitingReason ?? run.Detail);
+        var apply = run.Steps.Single(s => s.Name == StepNames.Apply);
+        Assert.Equal(RunStatuses.Running, run.Status);
+        Assert.Equal(StepStatuses.Pending, apply.Status);
+        Assert.Contains("setup", run.Detail);
+        Assert.Equal(AttemptStatuses.Cancelled, apply.Attempts.Single().Status);
+        Assert.DoesNotContain(await server.QueryAsync(db => db.Attempts.Where(a => a.Action == "apply").Select(a => a.Status).ToListAsync()), s => s == AttemptStatuses.Queued);
+
+        await SetUpAsync(server, agent);
+        await ApplyStagesAsync(server, agent);
+        run = await server.LatestRunAsync(Service, Operations.Pipeline);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        Assert.Equal(2, run.Steps.Single(s => s.Name == StepNames.Apply).Attempts.Count);
+    }
+
+    [Fact]
+    public async Task Changes_held_for_their_guests_do_not_starve_the_setup_they_wait_for()
+    {
+        const int Count = 200;
+        const string SingleStage = "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\ninputs: { port: 8080 }\n";
+        var test = Repository.Repository(SingleStage);
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        var guestText = File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile));
+        for (var i = 1; i < Count; i++)
+        {
+            var directory = $"labs/home/proxmox/korriban/guests/many-{i:D3}";
+            test.Write(directory + "/guest.yaml", guestText.Replace("vmid: 310", $"vmid: {310 + i}").Replace("10.1.0.31/24", $"10.1.{i / 250}.{31 + i % 200}/24"));
+            test.Write(directory + "/services/web/pipeline.yaml", SingleStage);
+        }
+
+        server.Commit("Add many guests");
+        await server.SyncAsync();
+        // The ends of provisioning and setup, and of each read-only plan, are seeded: no guest exists.
+        await server.WithDbAsync(async db =>
+        {
+            foreach (var run in await db.Runs.Include(r => r.Steps).Where(r => r.Operation == Operations.Provision && r.Status != RunStatuses.Succeeded).ToListAsync())
+            {
+                run.Status = RunStatuses.Succeeded;
+                run.Steps.ForEach(s => s.Status = StepStatuses.Succeeded);
+            }
+
+            foreach (var guest in await db.Resources.Where(r => r.Kind == ResourceKinds.Guest).ToListAsync())
+            {
+                guest.BoundVmid = JsonNode.Parse(guest.Definition!)!["vmid"]!.GetValue<int>();
+                guest.BoundInstallation = guest.ParentAddress;
+                guest.SyncedInputsHash = guest.DesiredInputsHash;
+                var state = await db.GuestConfigurations.SingleAsync(c => c.ResourceId == guest.Id);
+                state.AppliedHash = state.ProposedHash = state.DesiredHash;
+            }
+
+            await db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, true));
+            await db.SaveChangesAsync();
+        });
+        await ScheduleAsync(server);
+        var artifact = FakeAgent.PlanArtifact();
+        await server.WithDbAsync(async db =>
+        {
+            var runs = await db.Runs.Include(r => r.Steps).Where(r => r.Operation == Operations.Pipeline).ToListAsync();
+            Assert.Equal(Count, runs.Count);
+            foreach (var run in runs)
+            {
+                var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
+                plan.Status = StepStatuses.Succeeded;
+                var outputs = FakeAgent.Plan(create: 1);
+                outputs["planSha256"] = artifact.Sha256;
+                plan.Outputs = outputs.ToJsonString();
+                var attempt = new Attempt
+                {
+                    Id = Guid.CreateVersion7(), RunId = run.Id, StepId = plan.Id, Number = 1, Executor = "opentofu", Action = "preview",
+                    Status = AttemptStatuses.Succeeded, StateVersion = 0, AgentId = agent.Id, CreatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Attempts.Add(attempt);
+                db.Artifacts.Add(new ArtifactRecord
+                {
+                    Id = Guid.CreateVersion7(), AttemptId = attempt.Id, Name = artifact.Name, Sha256 = artifact.Sha256,
+                    Size = artifact.Content.Length, CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+
+            await db.SaveChangesAsync();
+        });
+        await server.TickAsync();
+        Assert.Equal(Count, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.Action == "apply" && a.Status == AttemptStatuses.Queued)));
+
+        const string SetupFile = "modules/ansible/app/site.yml";
+        test.Write(SetupFile, File.ReadAllText(Path.Combine(test.Root, SetupFile)) + "\n# every guest's setup changed\n");
+        server.Commit("Change every guest's setup");
+        await server.SyncAsync();
+        await ScheduleConfigurationsAsync(server);
+        await server.WithDbAsync(db => db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, false)));
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await server.TickAsync();
+        }
+
+        Assert.Equal(Count, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.Executor == "ansible" && a.Action == "preview"
+            && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned))));
+        Assert.Equal(0, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.Action == "apply" && a.Status == AttemptStatuses.Queued)));
+        Assert.NotEmpty(agent.TakeAssignments());
+    }
+
+    [Fact]
+    public async Task Another_source_with_the_same_inputs_gives_an_unstarted_run_a_replacement()
+    {
+        var test = Repository.Repository();
+        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PlanStagesAsync(agent);
+        await server.TickAsync();
+        var stale = await server.LatestRunAsync(Service, Operations.Pipeline);
+        Assert.Equal(RunStatuses.AwaitingApproval, stale.Status);
+
+        await InstallationTrustTests.UpdateSourceAsync(http, test.Root + "/.");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+
+        await ScheduleAsync(server);
+        await server.TickAsync();
+        var current = await server.LatestRunAsync(Service, Operations.Pipeline);
+        Assert.NotEqual(stale.Id, current.Id);
+        Assert.Equal(RunStatuses.Cancelled, (await server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == stale.Id))).Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_guest_that_is_gone_ends_its_services_runs(bool firstStageApplied)
+    {
+        var test = Repository.Repository();
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PlanStagesAsync(agent);
+        if (firstStageApplied)
+            await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject(), artifacts: State(1));
+
+        // The change that is next is queued, and no agent takes it.
+        await server.WithDbAsync(db => db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, true)));
+        await server.TickAsync();
+        test.Delete("labs/home/proxmox/korriban/guests/krb-app-01");
+        server.Commit("Delete the guest");
+        await server.SyncAsync();
+        await server.WithDbAsync(db => db.Agents.ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, false)));
+
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("destroy"));
+        await server.TickAsync();
+        var removal = await server.LatestRunAsync(Guest, Operations.Retire);
+        var gate = removal.Steps.Single(s => s.Name == StepNames.Approval);
+        if (gate.Status == StepStatuses.AwaitingApproval)
+            (await http.PostAsJsonAsync($"/api/runs/{removal.Id}/steps/{gate.Id}/approve", new { planSha256 = gate.PlanSha256 })).EnsureSuccessStatusCode();
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, new JsonObject { ["previous"] = false });
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject());
+        await agent.ReportAsync(await agent.NextAsync("verify-absent"), Outcome.Succeeded);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
+        Assert.NotNull((await server.ResourceAsync(Service)).RetiredAt);
+        Assert.Equal(RunStatuses.Cancelled, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
     }
 
     [Fact]

@@ -143,7 +143,8 @@ definition, and its setup, if the recipe has an `onChange` action, has been appl
 **This is checked again at dispatch.** A run can wait a long time for its turn or for a person, and the guest can change
 meanwhile: an approval says nothing about what has happened since. So every step that changes something re-reads the guest,
 both when its attempt is created and when it is handed to an agent. Until it holds the run stays where it is, its approval
-stays good, and the run says what it waits for.
+stays good, and the run says what it waits for. A change held at dispatch goes back to its run and leaves the queue, so it
+cannot crowd out the guest's setup it is waiting for, and one that never reached an agent still gives way to new inputs.
 
 **One change at a time on a guest, with its services.** Nothing that changes a guest starts while something else is changing it.
 That covers only what changes something: a plan or preview can run beside it, and **a run waiting for approval does not hold
@@ -179,8 +180,8 @@ only when it has a setup recipe, and that rule stays as it is for this slice.
 
 **Today a deleted folder is shown as *missing*, and removes nothing.** No run starts. Whatever the service deployed stays on
 the guest, and its stages' OpenTofu state stays in Octopushy. Restoring the folder picks the service up again. Removing the
-guest does remove the service as a resource, and what was inside the guest with it. Anything a stage made outside the guest
-stays there, since nothing plans its destroy yet.
+guest does remove the service as a resource, with what was inside the guest, and ends any of its runs still going. Anything
+a stage made outside the guest stays there, since nothing plans its destroy yet.
 
 ## Later steps
 

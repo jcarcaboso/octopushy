@@ -12,7 +12,7 @@ public sealed partial class InventoryUpdater
     /// that also has to wait for the guest. A run that has not started changing anything gives way to new inputs.
     /// </summary>
     private async Task UpdatePipelinesAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, LabRepository repository,
-        List<Resource> services, CancellationToken cancellationToken)
+        List<Resource> services, List<Guid> currentSourceIds, CancellationToken cancellationToken)
     {
         var states = await db.GuestConfigurations.ToDictionaryAsync(c => c.ResourceId, cancellationToken);
         foreach (var resource in services)
@@ -30,7 +30,8 @@ public sealed partial class InventoryUpdater
             }
 
             var hash = PipelineInputs.Build(repository, repository.Service(resource.Address)!).Hash;
-            if (state.DesiredHash == hash)
+            // The same inputs from another source are not the same run: one built from the old source never goes.
+            if (state.DesiredHash == hash && currentSourceIds.Contains(state.DesiredRevisionId ?? Guid.Empty))
                 continue;
             state.DesiredHash = hash;
             state.DesiredRevisionId = revision.Id;
