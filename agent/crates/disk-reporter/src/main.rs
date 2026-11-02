@@ -32,16 +32,16 @@ impl Config {
         Ok(config)
     }
 
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<reqwest::Url> {
         let url = reqwest::Url::parse(&self.endpoint).context("invalid endpoint")?;
         ensure!(
-            url.scheme() == "https"
+            matches!(url.scheme(), "http" | "https")
                 && url.host_str().is_some()
                 && url.username().is_empty()
                 && url.password().is_none()
                 && url.query().is_none()
                 && url.fragment().is_none(),
-            "endpoint must be HTTPS, without credentials, a query, or a fragment"
+            "endpoint must be http:// or https://, without credentials, a query, or a fragment"
         );
         ensure!(
             (60..=604_800).contains(&self.interval_seconds),
@@ -52,8 +52,12 @@ impl Config {
                 path.is_absolute(),
                 "caCertificateFile must be an absolute path"
             );
+            ensure!(
+                url.scheme() == "https",
+                "caCertificateFile needs an https:// endpoint; plain HTTP has no certificate to verify"
+            );
         }
-        Ok(())
+        Ok(url)
     }
 }
 
@@ -106,10 +110,10 @@ fn read_token(path: &Path) -> Result<String> {
 }
 
 async fn upload(config: &Config, token: &str, report: &Report) -> Result<()> {
-    config.validate()?;
+    let url = config.validate()?;
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut client = reqwest::Client::builder()
-        .https_only(true)
+        .https_only(url.scheme() == "https")
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(5))
@@ -201,9 +205,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Config::read(&path).unwrap().interval_seconds, 3600);
+        fs::write(
+            &path,
+            r#"{"endpoint":"http://10.15.30.5:8081/api/guests/id/disk-usage"}"#,
+        )
+        .unwrap();
+        assert_eq!(Config::read(&path).unwrap().interval_seconds, 3600);
         for invalid in [
-            r#"{"endpoint":"http://octopushy.test"}"#,
+            r#"{"endpoint":"ftp://octopushy.test"}"#,
             r#"{"endpoint":"https://secret@octopushy.test"}"#,
+            r#"{"endpoint":"http://secret@octopushy.test"}"#,
+            r#"{"endpoint":"http://octopushy.test?token=secret"}"#,
+            r#"{"endpoint":"http://octopushy.test","caCertificateFile":"/etc/ca.pem"}"#,
             r#"{"endpoint":"https://octopushy.test?token=secret"}"#,
             r#"{"endpoint":"https://octopushy.test","intervalSeconds":0}"#,
             r#"{"endpoint":"https://octopushy.test","intervalSeconds":604801}"#,
@@ -217,6 +230,59 @@ mod tests {
         assert!(read_token(&token_path).is_err());
         fs::write(&token_path, format!("{}\n", "a".repeat(64))).unwrap();
         assert_eq!(read_token(&token_path).unwrap(), "a".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn plain_http_upload_is_authenticated_and_does_not_follow_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://127.0.0.1:{}/disk-usage",
+            listener.local_addr().unwrap().port()
+        );
+        let server = tokio::spawn(async move {
+            for status in ["204 No Content", "302 Found", "503 Service Unavailable"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.ends_with(b"{\"usedBytes\":4096}") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with("POST /disk-usage HTTP/1.1"));
+                assert!(
+                    request
+                        .to_lowercase()
+                        .contains(&format!("authorization: bearer {}", "a".repeat(64)))
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:1/never-follow\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let config = Config {
+            endpoint,
+            interval_seconds: 3600,
+            ca_certificate_file: None,
+        };
+        let report = Report { used_bytes: 4096 };
+        assert!(upload(&config, &"a".repeat(64), &report).await.is_ok());
+        let redirected = upload(&config, &"a".repeat(64), &report).await;
+        assert!(redirected.unwrap_err().to_string().contains("302"));
+        assert!(upload(&config, &"a".repeat(64), &report).await.is_err());
+        server.await.unwrap();
     }
 
     #[tokio::test]

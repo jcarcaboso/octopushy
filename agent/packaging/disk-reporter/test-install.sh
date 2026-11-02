@@ -19,10 +19,16 @@ printf '%s\n' '{"endpoint":"https://octopushy.test/api/guests/test/disk-usage","
 DESTDIR="$work/root" sh "$here/install.sh" "$binary" "$work/config.json" "$work/token"
 expected=$(printf '[Timer]\nOnUnitActiveSec=\nOnBootSec=2min\nOnUnitActiveSec=60s\nRandomizedDelaySec=6s\n')
 test "$(cat "$work/root/etc/systemd/system/octopushy-disk-reporter.timer.d/interval.conf")" = "$expected"
-printf '%s\n' '{"endpoint":"http://insecure.test"}' > "$work/config.json"
-if DESTDIR="$work/bad" sh "$here/install.sh" "$binary" "$work/config.json" "$work/token"; then
-    echo "Installer accepted an insecure endpoint." >&2
-    exit 1
-fi
-test ! -e "$work/bad"
+printf '%s\n' '{"endpoint":"http://10.1.0.50:8081/api/guests/test/disk-usage","intervalSeconds":60}' > "$work/config.json"
+DESTDIR="$work/plain" sh "$here/install.sh" "$binary" "$work/config.json" "$work/token"
+for invalid in \
+    '{"endpoint":"ftp://insecure.test"}' \
+    '{"endpoint":"http://insecure.test","caCertificateFile":"/etc/octopushy-disk-reporter/ca.pem"}'; do
+    printf '%s\n' "$invalid" > "$work/config.json"
+    if DESTDIR="$work/bad" sh "$here/install.sh" "$binary" "$work/config.json" "$work/token"; then
+        echo "Installer accepted an invalid endpoint: $invalid" >&2
+        exit 1
+    fi
+    test ! -e "$work/bad"
+done
 echo "Installer checks passed."

@@ -80,12 +80,19 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
             BinarySha256 = new string('a', 64),
         };
         config.Validate();
-        foreach (var url in new[] { "http://octopushy.test", "https://user:pass@octopushy.test", "https://octopushy.test/subpath", "https://octopushy.test?query" })
+        foreach (var url in new[] { "ftp://octopushy.test", "https://user:pass@octopushy.test", "https://octopushy.test/subpath", "https://octopushy.test?query",
+                     "http://user:pass@octopushy.test", "http://octopushy.test/subpath", "http://octopushy.test?query" })
         {
             config.PublicUrl = url;
             Assert.Throws<InvalidOperationException>(config.Validate);
         }
         config.PublicUrl = "https://octopushy.test";
+        foreach (var url in new[] { "ftp://releases.test/reporter", "http://user:pass@releases.test/reporter", "http://releases.test/reporter?query" })
+        {
+            config.BinaryUrl = url;
+            Assert.Throws<InvalidOperationException>(config.Validate);
+        }
+        config.BinaryUrl = "https://releases.test/reporter";
         config.BinarySha256 = "not-a-checksum";
         Assert.Throws<InvalidOperationException>(config.Validate);
         config.BinarySha256 = new string('a', 64);
@@ -94,6 +101,30 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         config.IntervalSeconds = 3600;
         config.CaCertificatePem = "-----BEGIN PRIVATE KEY-----";
         Assert.Throws<InvalidOperationException>(config.Validate);
+    }
+
+    [Fact]
+    public void Plain_http_needs_no_new_setting_and_a_ca_needs_an_https_reporting_origin()
+    {
+        var config = new DiskReporterOptions
+        {
+            Enabled = true,
+            PublicUrl = "http://10.15.30.5:8081",
+            BinaryUrl = "http://10.15.30.5:8082/reporter",
+            BinarySha256 = new string('a', 64),
+        };
+        config.Validate();
+        config.CaCertificatePem = ""; // What compose passes when the CA is unset.
+        config.Validate();
+        config.CaCertificatePem = "-----BEGIN CERTIFICATE-----";
+        var error = Assert.Throws<InvalidOperationException>(config.Validate);
+        Assert.Contains("https:// PublicUrl", error.Message);
+        config.BinaryUrl = "https://releases.test/reporter";
+        Assert.Throws<InvalidOperationException>(config.Validate);
+        config.PublicUrl = "https://octopushy.test";
+        config.Validate();
+        config.BinaryUrl = "http://10.15.30.5:8082/reporter";
+        config.Validate();
     }
 
     [Theory]
@@ -115,16 +146,20 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         await agent.NextAsync("preview");
     }
 
-    [Fact]
-    public async Task Provision_installs_only_after_verification_and_the_guest_can_report()
+    [Theory]
+    [InlineData("https://octopushy.test", "https://localhost:8080")]
+    [InlineData("http://10.15.30.5:8081", "http://localhost:8080")]
+    public async Task Provision_installs_only_after_verification_and_the_guest_can_report(string publicUrl, string origin)
     {
+        var settings = Settings;
+        settings["Octopushy:DiskReporter:PublicUrl"] = publicUrl;
         using var repository = TestRepository.Minimal();
         repository.Write(GuestFile, File.ReadAllText(Path.Combine(repository.Root, GuestFile))
             + "\nsetup: { diskReporter: { intervalSeconds: 1800 } }\n");
         // Even a recipe without verification must establish guest readiness for setup.
         repository.Write("recipes/test-vm/recipe.yaml",
             "schemaVersion: 1\noperation: provision\nexecutor: opentofu\nroot: ../../modules/opentofu/test-vm\nverify: none\n");
-        await using var server = await ServerHarness.StartAsync(postgres, repository, settings: Settings);
+        await using var server = await ServerHarness.StartAsync(postgres, repository, settings: settings);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         var plan = await agent.NextAsync("preview");
@@ -150,7 +185,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.Equal(64, token.Length);
         var resource = await server.ResourceAsync(Guest);
         var input = JsonNode.Parse(install.InputJson)!;
-        Assert.Equal($"https://octopushy.test/api/guests/{resource.Id}/disk-usage", input["reporter"]!["endpoint"]!.GetValue<string>());
+        Assert.Equal($"{publicUrl}/api/guests/{resource.Id}/disk-usage", input["reporter"]!["endpoint"]!.GetValue<string>());
         Assert.Equal(1800, input["reporter"]!["intervalSeconds"]!.GetValue<int>());
         Assert.Equal(new string('a', 64), input["reporter"]!["binarySha256"]!.GetValue<string>());
         Assert.DoesNotContain(token, install.InputJson);
@@ -165,7 +200,7 @@ public class DiskReporterProvisioningTests(PostgresFixture postgres)
         Assert.Empty(install.Artifacts);
 
         using var client = server.CreateClient();
-        client.BaseAddress = new Uri("https://localhost:8080");
+        client.BaseAddress = new Uri(origin);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var response = await client.PostAsJsonAsync($"/api/guests/{resource.Id}/disk-usage", new { usedBytes = 123456L });
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);

@@ -223,20 +223,8 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 }
 
 fn installation_script(reporter: &Reporter, token: &str) -> Result<String, Failure> {
-    for address in [&reporter.endpoint, &reporter.binary_url] {
-        let url = url::Url::parse(address).map_err(|_| Failure::msg("invalid reporter URL"))?;
-        if url.scheme() != "https"
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(Failure::msg(
-                "reporter URLs must use HTTPS without credentials, query, or fragment",
-            ));
-        }
-    }
+    let endpoint = reporter_url(&reporter.endpoint)?;
+    let binary = reporter_url(&reporter.binary_url)?;
     if !(60..=604800).contains(&reporter.interval_seconds)
         || !hex64(&reporter.binary_sha256)
         || !hex64(token)
@@ -252,6 +240,12 @@ fn installation_script(reporter: &Reporter, token: &str) -> Result<String, Failu
     {
         return Err(Failure::msg(
             "only a public CA certificate of at most 16 KiB is accepted",
+        ));
+    }
+    // A CA verifies TLS, so one on a plain HTTP endpoint would promise a check that never runs.
+    if reporter.ca_certificate_pem.is_some() && endpoint.scheme() != "https" {
+        return Err(Failure::msg(
+            "a reporter CA needs an https:// endpoint; plain HTTP has no certificate to verify",
         ));
     }
     let mut config = json!({
@@ -282,10 +276,12 @@ fn installation_script(reporter: &Reporter, token: &str) -> Result<String, Failu
         write_file(&mut script, "ca.pem", ca);
         script.push_str("export CURL_CA_BUNDLE=\"$stage/ca.pem\"\n");
     }
-    script.push_str(
-        "curl --disable --fail --silent --show-error --proto '=https' --connect-timeout 10 --max-time 60 \
+    // The scheme is exactly http or https here. Integrity comes from the digest check below.
+    script.push_str(&format!(
+        "curl --disable --fail --silent --show-error --proto '={}' --connect-timeout 10 --max-time 60 \
          --max-filesize 16777216 --output octopushy-disk-reporter \"$(cat binary-url)\"\n",
-    );
+        binary.scheme()
+    ));
     // Digest is validated hex; no assignment-controlled text is interpolated as shell code.
     script.push_str(&format!(
         "printf '%s\\n' '{}  octopushy-disk-reporter' | sha256sum --check --status\n",
@@ -308,6 +304,22 @@ fn installation_script(reporter: &Reporter, token: &str) -> Result<String, Failu
         ));
     }
     Ok(script)
+}
+
+fn reporter_url(address: &str) -> Result<url::Url, Failure> {
+    let url = url::Url::parse(address).map_err(|_| Failure::msg("invalid reporter URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Failure::msg(
+            "reporter URLs must use http:// or https:// without credentials, query, or fragment",
+        ));
+    }
+    Ok(url)
 }
 
 fn hex64(value: &str) -> bool {
@@ -368,15 +380,57 @@ mod tests {
     }
 
     #[test]
+    fn plain_http_urls_install_with_the_digest_check_and_https_stays_https_only() {
+        let token = "b".repeat(64);
+        let mut config = reporter();
+        assert!(
+            installation_script(&config, &token)
+                .unwrap()
+                .contains("--proto '=https'")
+        );
+        config.endpoint = "http://10.15.30.5:8081/api/guests/id/disk-usage".into();
+        config.binary_url = "http://10.15.30.5:8082/reporter".into();
+        let script = installation_script(&config, &token).unwrap();
+        assert!(script.contains("--proto '=http'"));
+        assert!(script.find("curl --disable").unwrap() < script.find("sha256sum").unwrap());
+        assert!(script.find("sha256sum").unwrap() < script.find("sh ./install.sh").unwrap());
+        assert!(!script.contains("--location"));
+        assert!(!script.contains("ca.pem"));
+    }
+
+    #[test]
+    fn a_ca_needs_an_https_endpoint_and_is_never_silently_dropped() {
+        let token = "b".repeat(64);
+        let mut config = reporter();
+        config.ca_certificate_pem = Some("public".into());
+        let script = installation_script(&config, &token).unwrap();
+        assert!(
+            script.contains("CURL_CA_BUNDLE")
+                && script.contains("/etc/octopushy-disk-reporter/ca.pem")
+        );
+        config.endpoint = "http://10.15.30.5:8081/api/guests/id/disk-usage".into();
+        let Err(Failure::Failed { message: error, .. }) = installation_script(&config, &token)
+        else {
+            panic!("a CA on a plain HTTP endpoint was accepted");
+        };
+        assert!(error.contains("https://"), "{error}");
+    }
+
+    #[test]
     fn unsafe_urls_credentials_digests_and_intervals_are_rejected() {
         let token = "b".repeat(64);
         for url in [
-            "http://releases.test/reporter",
+            "ftp://releases.test/reporter",
+            "http://user:secret@test/reporter",
+            "http://test/reporter?secret=x",
             "https://user:secret@test/reporter",
             "https://test/reporter?secret=x",
         ] {
             let mut config = reporter();
             config.binary_url = url.into();
+            assert!(installation_script(&config, &token).is_err());
+            let mut config = reporter();
+            config.endpoint = url.into();
             assert!(installation_script(&config, &token).is_err());
         }
         let mut config = reporter();
