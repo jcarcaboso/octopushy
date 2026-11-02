@@ -41,11 +41,11 @@ public static class GuestVmPlan
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c => c["type"]?.ToString() == OwnType(context)
             && Actions(c) is var actions && actions.Contains("create") && !actions.Contains("delete"));
 
-    /// <summary>The VMIDs of the Proxmox VMs and containers the plan changes in any way, as the state names them.</summary>
-    public static IEnumerable<int> ChangedVmids(JsonNode? outputs) =>
+    /// <summary>Every VMID the plan names, on any resource, before or after the change.</summary>
+    public static IEnumerable<int> NamedVmids(JsonNode? outputs) =>
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>()
-            .Where(c => c["type"]?.ToString() is VmResourceType or ContainerResourceType)
-            .Select(c => c["vmId"] is JsonValue id && id.TryGetValue<int>(out var vmid) ? vmid : (int?)null)
+            .SelectMany(c => (c["vmIds"] as JsonArray ?? []).Append(c["vmId"]))
+            .Select(id => id is JsonValue value && value.TryGetValue<int>(out var vmid) ? vmid : (int?)null)
             .OfType<int>().Distinct();
 
     /// <summary>The plan deletes or replaces some Proxmox VM or container, its disks included.</summary>

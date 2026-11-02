@@ -685,8 +685,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
     public async Task<GuestRelease?> GuestReleaseAsync(Resource resource, CancellationToken cancellationToken)
     {
-        if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || resource.MissingSince is not null || !resource.Valid
-            || await HeadRepositoryAsync(cancellationToken) is not { } head
+        if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || !resource.Valid
+            || await ReleaseRepositoryAsync(resource, cancellationToken) is not { } head
             || !head.Repository.IsValid(resource.Address) || head.Repository.Guest(resource.Address) is not { } guest)
         {
             return null;
@@ -711,6 +711,20 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             ? $"{guest.Address} gives the protected secret {bound.Value} to its state backend as {bound.Key[SecretNames.BackendPrefix.Length..]}, and that is never released, whatever was granted. Give the backend a store entry of its own."
             : null;
         return new GuestRelease(binding.Digest, binding.Execution, keys, refusal, head.Repository.ClusterOf(resource.Address)?.Address);
+    }
+
+    /// <summary>
+    /// The revision a run of this guest would be built from. A guest whose folder was deleted has a removal built from
+    /// the revision last applied, so what trusting it covers is that, or the removal could never be trusted.
+    /// </summary>
+    private async Task<HeadRepository?> ReleaseRepositoryAsync(Resource resource, CancellationToken cancellationToken)
+    {
+        if (resource.MissingSince is null)
+            return await HeadRepositoryAsync(cancellationToken);
+        var eligible = RepositoryTrust.EligibleRevisions(db);
+        var lastDefined = await eligible.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.AppliedRevisionId, cancellationToken)
+            ?? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.LastRevisionId, cancellationToken);
+        return lastDefined is null ? null : new HeadRepository(lastDefined.Commit, await revisions.GetAsync(lastDefined.Commit, cancellationToken));
     }
 
     public async Task<GuestTrustDto> GuestTrustAsync(Resource resource, GuestRelease? release, CancellationToken cancellationToken)

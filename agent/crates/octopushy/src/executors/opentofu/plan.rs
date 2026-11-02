@@ -31,6 +31,29 @@ pub struct Change {
     /// The node the state holds for a Proxmox VM or container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// Every VMID this change names, on any resource, before or after: a firewall rule of
+    /// another guest names one too. The controller refuses a plan that names a reserved one.
+    #[serde(rename = "vmIds", skip_serializing_if = "Vec::is_empty")]
+    pub vm_ids: Vec<u64>,
+}
+
+/// The numbers under `vm_id` and `container_id`, at any depth. Nothing else is read, so this
+/// takes nothing sensitive out of the plan.
+fn named_vmids(value: &Value, found: &mut Vec<u64>) {
+    match value {
+        Value::Object(fields) => {
+            for (key, field) in fields {
+                if let ("vm_id" | "container_id", Some(vmid)) = (key.as_str(), field.as_u64()) {
+                    if !found.contains(&vmid) {
+                        found.push(vmid);
+                    }
+                }
+                named_vmids(field, found);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| named_vmids(item, found)),
+        _ => {}
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -80,6 +103,12 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
         let before = rc
             .pointer("/change/before")
             .filter(|_| GUEST_RESOURCE_TYPES.contains(&kind.as_str()));
+        let mut vm_ids = Vec::new();
+        for side in ["/change/before", "/change/after"] {
+            if let Some(value) = rc.pointer(side) {
+                named_vmids(value, &mut vm_ids);
+            }
+        }
         summary.changes.push(Change {
             address: text("address"),
             name: text("name"),
@@ -93,6 +122,7 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
                 .and_then(|b| b.get("node_name"))
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            vm_ids,
             kind,
         });
     }
@@ -233,6 +263,26 @@ mod tests {
         let wire = serde_json::to_string(&s.changes).unwrap();
         assert!(wire.contains(r#""vmId":102,"node":"ziost""#));
         assert!(!wire.contains("secret key"));
+    }
+
+    #[test]
+    fn reports_every_vmid_a_change_names_whatever_the_resource() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_firewall_rules.other","type":"proxmox_virtual_environment_firewall_rules","name":"other",
+             "change":{"actions":["update"],"before":{"vm_id":100,"node_name":"ziost"},"after":{"vm_id":100}}},
+            {"address":"proxmox_virtual_environment_firewall_options.ct","type":"proxmox_virtual_environment_firewall_options","name":"ct",
+             "change":{"actions":["create"],"before":null,"after":{"container_id":102}}},
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "change":{"actions":["create"],"before":null,"after":{"vm_id":103,"clone":[{"vm_id":100}]}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        assert_eq!(s.changes[0].vm_ids, vec![100]);
+        assert_eq!(s.changes[1].vm_ids, vec![102]);
+        let mut both = s.changes[2].vm_ids.clone();
+        both.sort_unstable();
+        assert_eq!(both, vec![100, 103]);
+        // Only a guest's own resource says which guest it is.
+        assert_eq!(s.changes[0].vm_id, None);
     }
 
     #[test]

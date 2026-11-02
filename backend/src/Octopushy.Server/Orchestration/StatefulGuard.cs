@@ -41,9 +41,9 @@ public static class StatefulGuard
     public static async Task<string?> RefusalAsync(OctopushyDb db, Resource resource, JsonNode? outputs, RunContext context, CancellationToken cancellationToken)
     {
         var reserved = context.Proxmox.ReservedVmids is { Count: > 0 } vmids
-            ? GuestVmPlan.ChangedVmids(outputs).Where(vmids.Contains).ToList() : [];
+            ? GuestVmPlan.NamedVmids(outputs).Where(vmids.Contains).ToList() : [];
         if (reserved.Count > 0)
-            return $"This plan would change VMID {string.Join(", ", reserved)}, which the installation reserves: Octopushy does not manage it. Nothing changed. Find what in the root reaches it.";
+            return $"This plan names VMID {string.Join(", ", reserved)}, which the installation reserves: Octopushy does not manage it. Nothing changed. Find what in the root reaches it.";
 
         if (!await ArmedAsync(db, resource, cancellationToken))
             return null;

@@ -90,7 +90,9 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             resource.LastRevisionId = revision.Id;
             resource.MissingSince = null;
             resource.Valid = entry.Valid;
-            resource.Definition = entry.Json?.ToJsonString();
+            // A file that cannot be read says nothing, so what it last said stands: the stateful guard reads this,
+            // and a commit that breaks the file must not be how a guest loses its guard.
+            resource.Definition = entry.Json?.ToJsonString() ?? resource.Definition;
             resource.DefinitionFile = entry.File;
             resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(entry.Address).ToList(), IssueJson);
         }

@@ -125,10 +125,12 @@ inputs, so it is planned again, and from there the guest follows [rule 11](lab-r
 a plan that replaces or deletes the container waits for approval unless `destructive: automatic` is written down, and
 a failed apply puts protection back. Put the marker back once the replacement has been verified.
 
-- **`lifecycle: retired`:** the marker can go in the same commit, because that run reads the commit it was built from.
-- **Deleting the folder:** the marker has to be out first. With it still there, the removal fails at the approval step and has
-  changed nothing: restore the folder, take the marker out, commit, and delete the folder again. The removal is built from
-  the revision last applied, which may still have the marker, so the guard reads the definition last synced instead.
+The guard reads the definition last synced, not the revision a run was built from: a removal is built from the revision last
+applied, which may still have the marker. A commit that leaves `guest.yaml` unreadable says nothing, so what it said before stands.
+
+- **`lifecycle: retired`:** the marker can go in the same commit, because that commit is what is synced.
+- **Deleting the folder:** the marker has to be out first, since a deleted file cannot take it out. With it still there, the removal
+  fails at the approval step and has changed nothing: restore the folder, take the marker out, commit, and delete the folder again.
 
 **A container deleted outside Octopushy** stops the same way, although the data is gone. Decide what to do knowingly: take the
 marker out, let it be created, restore from a [backup](#backups), and put the marker back.
@@ -148,7 +150,8 @@ reservedVmids: [100]              # made by hand; Octopushy does not manage it
 ```
 
 - A guest that uses a reserved VMID is invalid.
-- A plan that would change a reserved VMID, in any way, fails at the approval step. No policy passes it.
+- A plan that names a reserved VMID, on any resource, before or after the change, fails at the approval step. No policy passes it.
+  A firewall rule of that guest names it, and so does a clone from it. A read does not change anything, so it is not refused.
 - A guest's own identity is checked too: VMIDs are unique in an installation and bound on first apply, and protection is lifted
   only for the guest's own VMID on its own host.
 

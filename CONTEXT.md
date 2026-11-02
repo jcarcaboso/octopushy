@@ -225,8 +225,8 @@ guarded, so it can be retried. It is lifted by taking the marker out, in a commi
 _Avoid_: Protection, which is Proxmox's flag on the guest, or backup
 
 **Reserved VMID**:
-A VMID an installation lists as not managed by Octopushy. No guest may use one, and a plan that would change
-one fails before approval. It is what keeps a plan off a guest nobody declared, whatever the token could reach.
+A VMID an installation lists as not managed by Octopushy. No guest may use one, and a plan that names one
+fails before approval. It is what keeps a plan off a guest nobody declared, whatever the token could reach.
 _Avoid_: Saying a token's scope protects a guest
 
 **Member binding**:
