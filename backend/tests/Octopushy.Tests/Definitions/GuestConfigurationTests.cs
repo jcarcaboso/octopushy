@@ -82,18 +82,13 @@ public class GuestConfigurationTests
         using var plain = TestRepository.Minimal();
         var unconfigured = LabRepositoryLoader.Load(plain.Root);
         var json = guest.Json.DeepClone().AsObject();
-        json["access"]!.AsObject().Remove("sshKey");
+        json["access"]!["address"] = "10.1.0.32";
+        json["access"]!["port"] = 2222;
+        // Telling Octopushy how to reach a guest must not plan it: adding this to a running guest
+        // with automatic approval would otherwise start a provision run.
         Assert.Equal(
             ProvisionInputs.Build(unconfigured, unconfigured.Guest(Address)!, "c").Hash,
-            ProvisionInputs.Build(repository, guest with { Json = StripEmptyAccess(json) }, "c").Hash);
-    }
-
-    private static System.Text.Json.Nodes.JsonObject StripEmptyAccess(System.Text.Json.Nodes.JsonObject json)
-    {
-        json["access"]!.AsObject().Remove("user");
-        json["access"]!.AsObject().Remove("hostKey");
-        json.Remove("access");
-        return json;
+            ProvisionInputs.Build(repository, guest with { Json = json }, "c").Hash);
     }
 
     [Theory]

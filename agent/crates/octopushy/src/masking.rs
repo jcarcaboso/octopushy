@@ -29,7 +29,8 @@ impl Masker {
     /// whole value it masks fragments that tools are known to print on their own:
     /// each line of a multi-line value, and the part after the first `=` (the
     /// secret of a Proxmox token `USER@REALM!TOKENID=SECRET`). Each is also masked
-    /// as JSON escapes it, which is how Ansible prints what a task returned.
+    /// as JSON escapes it, which is how Ansible prints what a task returned, and without
+    /// the space around it.
     pub fn new<'a>(secrets: impl IntoIterator<Item = &'a str>) -> Self {
         let mut patterns: Vec<String> = Vec::new();
         let mut add = |p: &str| {
@@ -46,10 +47,15 @@ impl Masker {
                 continue;
             }
             add(secret);
+            // Tools print a value without the space around it: Ansible strips a task's name.
+            if secret.trim() != secret && secret.trim().len() >= MIN_LINE_LEN {
+                add(secret.trim());
+            }
             if secret.contains('\n') {
                 for line in secret.lines().map(|l| l.trim_end_matches('\r')) {
                     if line.trim().len() >= MIN_LINE_LEN {
                         add(line);
+                        add(line.trim());
                     }
                 }
             }
@@ -149,6 +155,18 @@ mod tests {
         let m = Masker::new(["ab12\ncd34"]);
         assert_eq!(m.mask("ab12"), "***");
         assert_eq!(m.mask("cd34"), "***");
+    }
+
+    #[test]
+    fn masks_a_value_without_the_space_around_it() {
+        let m = Masker::new(["  TOPSECRET  "]);
+        assert_eq!(m.mask("TASK [TOPSECRET] ****"), "TASK [***] ****");
+        assert_eq!(m.mask("a   TOPSECRET   b"), "a *** b");
+        // What is left after trimming follows the same limit as a line of a value.
+        let m = Masker::new([" ab "]);
+        assert_eq!(m.mask("ab"), "ab");
+        let m = Masker::new(["first line\n  second line  "]);
+        assert_eq!(m.mask("[second line]"), "[***]");
     }
 
     #[test]

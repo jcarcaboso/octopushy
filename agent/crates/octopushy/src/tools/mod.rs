@@ -16,6 +16,7 @@ use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::attempts::logs::AttemptLogger;
@@ -394,6 +395,7 @@ impl ToolRuntime {
             }
             _ => format!("cannot start {}", self.container_binary.display()),
         })?;
+        let pgid = child.id().map(|pid| pid as libc::pid_t);
         if let Some(input) = inv.stdin.take() {
             let mut stdin = child.stdin.take().expect("stdin is piped");
             // On its own task: a tool that exits early must not leave this waiting on a full pipe.
@@ -404,7 +406,7 @@ impl ToolRuntime {
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
-        let out_task = {
+        let mut out_task = {
             let log = log.clone();
             let capture = inv.capture_stdout;
             tokio::spawn(async move {
@@ -421,7 +423,7 @@ impl ToolRuntime {
                 }
             })
         };
-        let err_task = {
+        let mut err_task = {
             let log = log.clone();
             let mark = inv.stderr_mark.map(str::to_owned);
             let prefix = inv.control_prefix.map(str::to_owned);
@@ -456,8 +458,32 @@ impl ToolRuntime {
                 child.wait().await?
             }
         };
-        let stdout = out_task.await.context("stdout reader")??;
-        let (stderr_tail, stderr_marked, control) = err_task.await.context("stderr reader")?;
+        // Something the tool left behind can hold its pipes open after it exits, so the limit
+        // has to keep applying until the output has ended. What was read by then decides nothing:
+        // a stopped run is uncertain.
+        let (mut out_read, mut err_read) = (None, None);
+        tokio::select! {
+            () = drain(&mut out_task, &mut err_task, &mut out_read, &mut err_read) => {}
+            _ = cancel.cancelled() => {
+                cancelled = true;
+                log.agent("stopping what the tool left running");
+                self.kill_group(&inv.name, pgid).await;
+                let rest = drain(&mut out_task, &mut err_task, &mut out_read, &mut err_read);
+                if tokio::time::timeout(self.kill_grace, rest).await.is_err() {
+                    out_task.abort();
+                    err_task.abort();
+                    log.agent("gave up waiting for the tool's output");
+                }
+            }
+        }
+        let stdout = match out_read {
+            Some(result) => result.context("stdout reader")??,
+            None => Vec::new(),
+        };
+        let (stderr_tail, stderr_marked, control) = match err_read {
+            Some(result) => result.context("stderr reader")?,
+            None => Default::default(),
+        };
         Ok(ToolOutput {
             code: status.code(),
             stdout,
@@ -483,6 +509,11 @@ impl ToolRuntime {
         {
             return;
         }
+        self.kill_group(container, Some(pgid)).await;
+    }
+
+    /// A hard kill of the container and the process group.
+    async fn kill_group(&self, container: &str, pgid: Option<libc::pid_t>) {
         if self.is_container() {
             let _ = Command::new(&self.container_binary)
                 .args(["kill", container])
@@ -492,9 +523,27 @@ impl ToolRuntime {
                 .status()
                 .await;
         }
-        // SAFETY: as above.
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
+        if let Some(pgid) = pgid {
+            // SAFETY: plain signal delivery to our own child's process group.
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// Waits for both readers, keeping what each returned: a handle cannot be awaited twice, and
+/// this can be stopped and called again.
+async fn drain<A, B>(
+    first: &mut JoinHandle<A>,
+    second: &mut JoinHandle<B>,
+    first_read: &mut Option<Result<A, JoinError>>,
+    second_read: &mut Option<Result<B, JoinError>>,
+) {
+    while first_read.is_none() || second_read.is_none() {
+        tokio::select! {
+            read = &mut *first, if first_read.is_none() => *first_read = Some(read),
+            read = &mut *second, if second_read.is_none() => *second_read = Some(read),
         }
     }
 }

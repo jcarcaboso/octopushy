@@ -21,8 +21,8 @@ public sealed record ConfigureInputs(
     IReadOnlyDictionary<string, StoreReference> SecretFiles,
     string Hash)
 {
-    /// <summary>Fields of <c>access</c> that only configure runs use.</summary>
-    public static readonly string[] AccessOnly = ["user", "port", "hostKey"];
+    /// <summary>Fields of <c>access</c> that only configure runs use. None of them reaches OpenTofu.</summary>
+    public static readonly string[] AccessOnly = ["address", "port", "user", "sshKey", "hostKey"];
 
     /// <summary>Where a configure run connects: the declared address, or the guest's own.</summary>
     public static string? AddressOf(GuestDefinition guest) =>

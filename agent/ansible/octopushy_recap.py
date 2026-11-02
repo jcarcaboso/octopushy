@@ -19,13 +19,23 @@ DOCUMENTATION = """
 """
 
 PREFIX = "octopushy-recap: "
-MAX_TEXT = 8192
+# Bytes as written, escaping included. Five of these and the counts have to fit on one line of
+# the agent's 32 KiB, or the only record of how the run ended would be dropped.
+MAX_TEXT = 5120
+
+
+def encoded(text):
+    try:
+        return text.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace")
 
 
 def bounded(value):
     """All of a text, or none: it has to fit on the agent's line."""
     text = str(value)
-    return text if len(text) <= MAX_TEXT else "(too long to report)"
+    fits = len(encoded(json.dumps(text, ensure_ascii=False))) <= MAX_TEXT
+    return text if fits else "(too long to report)"
 
 
 class CallbackModule(CallbackBase):
@@ -52,6 +62,12 @@ class CallbackModule(CallbackBase):
             self.result["failedTask"] = bounded(result.task_name)
 
     def v2_runner_on_unreachable(self, result):
+        # The first says where the run was lost. A later one, in a play that ignored it, shows
+        # that the run went on past a task nobody knows the end of, so none of them is proof
+        # that nothing happened: a login refused now can follow a task that removed the login.
+        if "unreachable" in self.result:
+            self.result["reached"] = True
+            return
         # This says how the connection failed; it comes from ssh, not from a module.
         message = result._result.get("msg") if hasattr(result, "_result") else None
         self.result["unreachable"] = bounded(message or "")
@@ -73,4 +89,4 @@ class CallbackModule(CallbackBase):
             self.result["detail"] = bounded(custom["octopushy_detail"])
         if self.enabled:
             line = PREFIX + json.dumps(self.result, ensure_ascii=False) + "\n"
-            os.write(2, line.encode("utf-8", "surrogateescape"))
+            os.write(2, encoded(line))
