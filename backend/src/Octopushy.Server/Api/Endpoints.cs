@@ -258,6 +258,35 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("trustCluster");
 
+        api.MapPost("/guests/{id:guid}/trust", async (Guid id, TrustGuestRequest request, HttpContext http,
+            RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
+            {
+                var resource = await db.Resources.FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, ct)
+                    ?? throw new RunException("There is no such guest.");
+                var actor = http.User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(actor)) throw new RunException("An authenticated operator is required.");
+                var views = services.GetRequiredService<Views>();
+                var release = await views.GuestReleaseAsync(resource, ct)
+                    ?? throw new RunException("Fix the guest's definition before trusting it.");
+                if (release.Cluster is { } cluster)
+                    throw new RunException($"{resource.Address} is a member of {cluster}: Trust cluster, on the cluster's page, covers it with the rest.");
+                if (release.Keys.Count == 0)
+                    throw new RunException("The guest binds no protected secret, so there is nothing to trust.");
+                if (release.Refusal is { } refusal)
+                    throw new RunException(refusal);
+                // Trust exactly what the operator saw: a newer commit may run something else.
+                if (release.Digest != request.CodeDigest)
+                    throw new RunException("The guest's code, or how it runs, changed since it was shown. Review it again.");
+                foreach (var key in release.Keys)
+                    await ProtectedSecrets.GrantAsync(db, key, resource.Id, release.Digest, actor, clock.GetUtcNow(), ct);
+                await db.SaveChangesAsync(ct);
+                signal.Wake();
+                return await views.GuestTrustAsync(resource, release, ct);
+            }, ct)))
+            .WithTags("Inventory")
+            .WithName("trustGuest");
+
         api.MapPost("/clusters/{id:guid}/certificates", async (Guid id, Planner planner, CancellationToken ct) =>
         {
             await planner.ReadCertificatesAsync(id, ct);

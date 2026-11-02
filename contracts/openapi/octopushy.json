@@ -956,6 +956,77 @@
         }
       }
     },
+    "/api/guests/{id}/trust": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "trustGuest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustGuestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuestTrustDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/clusters/{id}/certificates": {
       "post": {
         "tags": [
@@ -5293,7 +5364,8 @@
           "missingSince",
           "retiredAt",
           "runs",
-          "diskUsage"
+          "diskUsage",
+          "trust"
         ],
         "type": "object",
         "properties": {
@@ -5424,6 +5496,9 @@
           },
           "diskUsage": {
             "$ref": "#/components/schemas/GuestDiskUsageDto"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/GuestTrustDto"
           }
         }
       },
@@ -5562,6 +5637,71 @@
               {
                 "$ref": "#/components/schemas/RunSummaryDto"
               }
+            ]
+          }
+        }
+      },
+      "GuestTrustDto": {
+        "required": [
+          "keys",
+          "codeDigest",
+          "execution",
+          "trusted",
+          "cluster",
+          "refusal",
+          "trustedAt",
+          "trustedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codeDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "trusted": {
+            "type": "boolean"
+          },
+          "cluster": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "refusal": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "trustedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "trustedBy": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }
@@ -7202,6 +7342,20 @@
             "additionalProperties": {
               "type": "string"
             }
+          }
+        }
+      },
+      "TrustGuestRequest": {
+        "required": [
+          "codeDigest"
+        ],
+        "type": "object",
+        "properties": {
+          "codeDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

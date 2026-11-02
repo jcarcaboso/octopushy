@@ -9,9 +9,22 @@ namespace Octopushy.Server.Orchestration;
 /// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
 public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
-    /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
+    /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM or container, apply, verify) or, for a retired guest, a retire run.</summary>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason) =>
         CreateGuest(repository, guest, resource, revision, reason, null, null);
+
+    /// <summary>
+    /// What a grant of a protected secret to this guest covers, as a run for it would carry it: the
+    /// binding, which is the digest and what an operator is shown before trusting it, and the store keys
+    /// the run binds, by the name it knows each by. It is built from the run itself, so it cannot drift
+    /// from what the store checks when it releases a key.
+    /// </summary>
+    public (ReleaseBinding Binding, IReadOnlyDictionary<string, string> Secrets) Release(
+        LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision)
+    {
+        var context = RunContext.Parse(Guest(repository, guest, resource, revision, "trust").Context);
+        return (ReleaseBinding.Of(repository, guest), context.Secrets);
+    }
 
     public Run UpdateWorker(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, WorkerUpdateContext update) =>
         CreateGuest(repository, guest, resource, revision, reason, update, null);

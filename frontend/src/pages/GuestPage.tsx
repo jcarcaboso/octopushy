@@ -1,13 +1,14 @@
-import { Play } from "lucide-react";
+import { Play, ShieldCheck } from "lucide-react";
 import { isNotFound } from "../api/client";
 import { Link, useNavigate, useParams } from "react-router";
-import { usePlanGuest, useGuest } from "../api/queries";
+import { usePlanGuest, useGuest, useTrustGuest } from "../api/queries";
 import type { GuestDetail, ObservedGuest } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionView } from "../components/DefinitionView";
+import { Execution } from "../components/Execution";
 import { IssueList } from "../components/IssueList";
 import { GuestDiskUsage } from "../components/GuestDiskUsage";
 import { KeyValue } from "../components/KeyValue";
@@ -93,6 +94,67 @@ function Identity({ guest }: { guest: GuestDetail }) {
   );
 }
 
+/** Asks for trust while protected secrets would go to code nobody saw, on a guest no cluster looks after. */
+function TrustCallout({ guest }: { guest: GuestDetail }) {
+  const trust = useTrustGuest();
+  const { keys, codeDigest, execution, trusted, cluster, refusal } = guest.trust;
+  if (keys.length === 0 || trusted) return null;
+  return (
+    <div id="trust">
+      <Callout
+        kind={refusal ? "danger" : "warning"}
+        title="Waiting for trust"
+        actions={
+          cluster || refusal || !codeDigest ? undefined : (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={trust.isPending}
+              onClick={() => trust.mutate({ id: guest.guest.id, codeDigest })}
+            >
+              <ShieldCheck size={15} aria-hidden="true" />
+              {trust.isPending ? "Trusting…" : "Trust guest"}
+            </button>
+          )
+        }
+      >
+        <p>
+          This guest binds {keys.length === 1 ? "a protected secret" : "protected secrets"}, which only code an operator reviewed may
+          receive:
+        </p>
+        <ul className="small">
+          {keys.map((key) => (
+            <li key={key} className="mono">
+              {key}
+            </li>
+          ))}
+        </ul>
+        {cluster ? (
+          <p>
+            It is a member of <span className="mono">{cluster}</span>: Trust cluster, on the cluster's page, covers it with the rest.
+          </p>
+        ) : refusal ? (
+          <p>{refusal}</p>
+        ) : (
+          <>
+            <p>
+              The secrets reach this code, in a plan or an apply, before any person approves it, so trust covers it. Review the recipe and
+              its roots in the repository first; this is what you would be trusting. It holds until the code, or how the guest runs, changes.
+            </p>
+            <ul className="small">
+              <li>
+                All of it: <span className="mono break">{codeDigest}</span>
+                <Execution of={execution} />
+              </li>
+            </ul>
+          </>
+        )}
+        <ErrorMessage error={trust.error} />
+      </Callout>
+    </div>
+  );
+}
+
 export function GuestPage() {
   const { id = "" } = useParams();
   const { data, error, isPending } = useGuest(id);
@@ -146,6 +208,7 @@ export function GuestPage() {
             folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>
         ) : null}
+        <TrustCallout guest={data} />
         {data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
             The guest was removed and verified absent.

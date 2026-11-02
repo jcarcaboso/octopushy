@@ -276,6 +276,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/guests/{id}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["trustGuest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/clusters/{id}/certificates": {
         parameters: {
             query?: never;
@@ -1240,6 +1256,7 @@ export interface components {
             retiredAt: null | string;
             runs: components["schemas"]["RunSummaryDto"][];
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
+            trust: components["schemas"]["GuestTrustDto"];
         };
         GuestDiskUsageDto: {
             enabled: boolean;
@@ -1270,6 +1287,17 @@ export interface components {
             observed: null | components["schemas"]["ObservedGuestDto"];
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
+        };
+        GuestTrustDto: {
+            keys: string[];
+            codeDigest: null | string;
+            execution: null | components["schemas"]["JsonNode"];
+            trusted: boolean;
+            cluster: null | string;
+            refusal: null | string;
+            /** Format: date-time */
+            trustedAt: null | string;
+            trustedBy: null | string;
         };
         InstallationDetailDto: {
             installation: components["schemas"]["InstallationSummaryDto"];
@@ -1674,6 +1702,9 @@ export interface components {
             certificates?: null | {
                 [key: string]: string;
             };
+        };
+        TrustGuestRequest: {
+            codeDigest: null | string;
         };
         TrustInstallationRequest: {
             endpoints: string[];
@@ -2684,6 +2715,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClusterTrustDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    trustGuest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustGuestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuestTrustDto"];
                 };
             };
             /** @description Bad Request */

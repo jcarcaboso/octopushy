@@ -377,10 +377,11 @@ address that is not in the state changes nothing.
 
 A change also carries `actionReason`, OpenTofu's `action_reason`, when the plan gives
 one, such as `replace_because_tainted`. A change to a
-`proxmox_virtual_environment_vm` that exists carries `vmId` and `node`, the `vm_id` and
-`node_name` its state holds. The controller lifts a provision run's protection only for
-a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
-them out never gets that VM's protection lifted, and the apply fails on it as before.
+`proxmox_virtual_environment_vm` or a `proxmox_virtual_environment_container` that exists carries
+`vmId` and `node`, the `vm_id` and `node_name` its state holds. The controller lifts a provision run's
+protection only for a delete or replace of the resource type of the guest's own kind (a VM, or a
+container for a guest of type `container`) whose `vmId` and `node` are the guest's own, so an agent
+that leaves them out never gets that guest's protection lifted, and the apply fails on it as before.
 
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding

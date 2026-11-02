@@ -285,6 +285,25 @@ public sealed record PolicyDto(string Approval, string ApprovalSetBy, string Des
 
 public sealed record BindingDto(string Installation, int Vmid, DateTimeOffset? BoundAt);
 
+/// <summary>
+/// What trusting a guest with protected secrets would cover: the keys it binds, and the digest of its
+/// code and of how it runs, with <see cref="Execution"/> in the form a cluster's member shows it.
+/// <see cref="Cluster"/> is set for a member, whose trust is its cluster's. <see cref="Refusal"/> says why
+/// no grant can help.
+/// </summary>
+public sealed record GuestTrustDto(
+    IReadOnlyList<string> Keys,
+    string? CodeDigest,
+    JsonNode? Execution,
+    bool Trusted,
+    string? Cluster,
+    string? Refusal,
+    DateTimeOffset? TrustedAt,
+    string? TrustedBy);
+
+/// <summary>What the operator was shown; trust is refused when the guest is declared otherwise by now.</summary>
+public sealed record TrustGuestRequest(string? CodeDigest);
+
 public sealed record GuestDetailDto(
     GuestSummaryDto Guest,
     string? DefinitionFile,
@@ -305,7 +324,8 @@ public sealed record GuestDetailDto(
     DateTimeOffset? MissingSince,
     DateTimeOffset? RetiredAt,
     IReadOnlyList<RunSummaryDto> Runs,
-    GuestDiskUsageDto DiskUsage);
+    GuestDiskUsageDto DiskUsage,
+    GuestTrustDto Trust);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

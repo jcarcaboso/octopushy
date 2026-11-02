@@ -29,7 +29,7 @@ public static class GuestStatuses
 }
 
 /// <summary>Builds the read models the API returns.</summary>
-public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, AgentConnections connections)
+public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, AgentConnections connections, RunFactory factory)
 {
     private const int DefinitionTextLimit = 256 * 1024;
 
@@ -448,6 +448,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         }
 
         var commits = await CommitsAsync([resource.DesiredRevisionId, resource.CheckedRevisionId, resource.AppliedRevisionId], cancellationToken);
+        var trust = await GuestTrustAsync(resource, await GuestReleaseAsync(resource, cancellationToken), cancellationToken);
         return new GuestDetailDto(
             summary,
             resource.DefinitionFile,
@@ -469,7 +470,46 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.RetiredAt,
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             GuestDiskUsageEndpoints.View(resource,
-                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)));
+                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
+            trust);
+    }
+
+
+    /// <summary>What trusting a guest covers, as declared now, or null when the guest cannot be built from the repository.</summary>
+    public sealed record GuestRelease(string Digest, JsonObject Execution, IReadOnlyList<string> Keys, string? Refusal, string? Cluster);
+
+    public async Task<GuestRelease?> GuestReleaseAsync(Resource resource, CancellationToken cancellationToken)
+    {
+        if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || resource.MissingSince is not null || !resource.Valid
+            || await HeadRepositoryAsync(cancellationToken) is not { } head
+            || !head.Repository.IsValid(resource.Address) || head.Repository.Guest(resource.Address) is not { } guest)
+        {
+            return null;
+        }
+
+        var (binding, secrets) = factory.Release(head.Repository, guest, resource, new DefinitionRevision { Commit = head.Commit });
+        var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+        var keys = secrets.Values.Where(guarded.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        // A backend's environment reaches OpenTofu during init, before there is a plan to review: no grant fits that.
+        var refusal = secrets.FirstOrDefault(s => keys.Contains(s.Value) && s.Key.StartsWith(SecretNames.BackendPrefix, StringComparison.Ordinal)) is { Key: not null } bound
+            ? $"{guest.Address} gives the protected secret {bound.Value} to its state backend as {bound.Key[SecretNames.BackendPrefix.Length..]}, and that is never released, whatever was granted. Give the backend a store entry of its own."
+            : null;
+        return new GuestRelease(binding.Digest, binding.Execution, keys, refusal, head.Repository.ClusterOf(resource.Address)?.Address);
+    }
+
+    public async Task<GuestTrustDto> GuestTrustAsync(Resource resource, GuestRelease? release, CancellationToken cancellationToken)
+    {
+        if (release is null)
+        {
+            return new GuestTrustDto([], null, null, false, null, null, null, null);
+        }
+
+        var grants = release.Keys.Count == 0 ? [] : await db.SecretGrants.AsNoTracking()
+            .Where(g => g.ResourceId == resource.Id && release.Keys.Contains(g.Key)).ToListAsync(cancellationToken);
+        var current = grants.Where(g => g.CodeDigest == release.Digest).ToList();
+        var trusted = release.Keys.Count > 0 && release.Keys.All(k => current.Any(g => g.Key == k));
+        var latest = trusted ? current.MaxBy(g => g.GrantedAt) : null;
+        return new GuestTrustDto(release.Keys, release.Digest, release.Execution.DeepClone(), trusted, release.Cluster, release.Refusal, latest?.GrantedAt, latest?.GrantedBy);
     }
 
     public async Task<InstallationDetailDto?> InstallationAsync(Guid id, CancellationToken cancellationToken)

@@ -10,6 +10,7 @@ import type {
   RunDetail,
   TokenRequest,
   TrustClusterRequest,
+  TrustGuestRequest,
   TrustInstallationRequest,
   VariableCandidate,
   VariablePromotion,
@@ -566,6 +567,17 @@ export function useTrustCluster() {
     retry: false,
     mutationFn: ({ id, ...body }: TrustClusterRequest & { id: string }) =>
       unwrap(api.POST("/api/clusters/{id}/trust", { params: { path: { id } }, body })),
+    onSuccess: () => refreshRuns(),
+  });
+}
+
+/** Lets a guest that belongs to no cluster receive the protected secrets it binds; waiting runs continue. */
+export function useTrustGuest() {
+  const refreshRuns = useRefreshRuns();
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, ...body }: TrustGuestRequest & { id: string }) =>
+      unwrap(api.POST("/api/guests/{id}/trust", { params: { path: { id } }, body })),
     onSuccess: () => refreshRuns(),
   });
 }
