@@ -642,6 +642,67 @@
         }
       }
     },
+    "/api/guests/{id}/access/rotate": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "rotateGuestAccess",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/installations/{id}": {
       "get": {
         "tags": [
@@ -3711,6 +3772,28 @@
   },
   "components": {
     "schemas": {
+      "AccessRotationDto": {
+        "required": [
+          "current",
+          "candidate",
+          "remove"
+        ],
+        "type": "object",
+        "properties": {
+          "current": {
+            "type": "string"
+          },
+          "candidate": {
+            "type": "string"
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "AgentDto": {
         "required": [
           "id",
@@ -4190,6 +4273,16 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "accessRotation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccessRotationDto"
+              }
             ]
           }
         }
@@ -5388,7 +5481,8 @@
           "fingerprint",
           "version",
           "provisionedAt",
-          "lastUsedAt"
+          "lastUsedAt",
+          "keys"
         ],
         "type": "object",
         "properties": {
@@ -5410,6 +5504,78 @@
             "format": "date-time"
           },
           "lastUsedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedAccessKeyDto"
+            }
+          }
+        }
+      },
+      "ManagedAccessKeyDto": {
+        "required": [
+          "version",
+          "fingerprint",
+          "state",
+          "authorizedAt",
+          "verifiedAt",
+          "promotedAt",
+          "promotedBy",
+          "promotionEvidence",
+          "removedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "authorizedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "verifiedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "promotedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "promotedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "promotionEvidence": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "removedAt": {
             "type": [
               "null",
               "string"

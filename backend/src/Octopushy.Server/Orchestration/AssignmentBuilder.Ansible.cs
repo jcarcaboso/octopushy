@@ -51,7 +51,7 @@ public sealed partial class AssignmentBuilder
         {
             var key = GuestAccessCredentials.Key(run.ResourceId);
             var version = rotation is null ? context.SecretVersions[SecretNames.AnsibleSshKey]
-                : step.Name == StepNames.AuthorizeKey ? rotation.Current : rotation.Candidate;
+                : step.Name is StepNames.VerifyCurrent or StepNames.AuthorizeKey ? rotation.Current : rotation.Candidate;
             var value = await store.GetVersionInternalAsync(key, version, cancellationToken, rotation is not null);
             if (value is null)
             {
@@ -148,13 +148,13 @@ public sealed partial class AssignmentBuilder
         };
     }
 
-    /// <summary>The public keys a step of a rotation works with. Removal names a key by its blob, which is what identifies it.</summary>
+    /// <summary>The keys a step of a rotation works with. Removal names each by fingerprint, for the guest's OpenSSH to compare.</summary>
     private async Task<JsonObject> RotationVarsAsync(Run run, AccessRotationContext rotation, string stepName, CancellationToken cancellationToken)
     {
         var keys = await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToDictionaryAsync(k => k.Version, cancellationToken);
         var vars = new JsonObject { ["access_candidate_key"] = keys[rotation.Candidate].PublicKey };
         if (stepName is StepNames.RemoveKey or StepNames.VerifyRemoval)
-            vars["access_removed_keys"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)keys[v].PublicKey.Split(' ')[1]).ToArray());
+            vars["access_removed_keys"] = new JsonArray(rotation.Remove.Select(v => (JsonNode?)keys[v].Fingerprint).ToArray());
         return vars;
     }
 

@@ -39,7 +39,7 @@ public static class GuestAccessPlaybooks
     public static string For(string stepName) => stepName switch
     {
         StepNames.Preview or StepNames.AuthorizeKey => Authorize,
-        StepNames.VerifyKey or StepNames.VerifyRemoval => Verify,
+        StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval => Verify,
         StepNames.RemoveKey => Remove,
         _ => throw new InvalidOperationException($"The step '{stepName}' runs no playbook."),
     };

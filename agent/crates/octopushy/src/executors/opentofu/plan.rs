@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 /// The resource type of a Proxmox VM, whose identity a summary reports.
 const VM_RESOURCE_TYPE: &str = "proxmox_virtual_environment_vm";
+const CONTAINER_RESOURCE_TYPE: &str = "proxmox_virtual_environment_container";
 
 /// One entry of `changes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,9 +75,12 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
         }
         let text = |key: &str| rc.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
         let kind = text("type");
+        let machine = kind == VM_RESOURCE_TYPE || kind == CONTAINER_RESOURCE_TYPE;
         let before = rc
             .pointer("/change/before")
-            .filter(|_| kind == VM_RESOURCE_TYPE);
+            .filter(|b| machine && !b.is_null());
+        // A machine that does not exist yet is named by what it would be.
+        let identity = before.or_else(|| rc.pointer("/change/after").filter(|_| machine));
         summary.changes.push(Change {
             address: text("address"),
             name: text("name"),
@@ -85,8 +89,11 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
                 .get("action_reason")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            vm_id: before.and_then(|b| b.get("vm_id")).and_then(Value::as_u64),
-            node: before
+            // What exists, or for a pure create what would.
+            vm_id: identity
+                .and_then(|b| b.get("vm_id"))
+                .and_then(Value::as_u64),
+            node: identity
                 .and_then(|b| b.get("node_name"))
                 .and_then(Value::as_str)
                 .map(str::to_owned),
@@ -175,10 +182,10 @@ mod tests {
         let vm = &s.changes[0];
         assert_eq!(vm.action_reason.as_deref(), Some("replace_because_tainted"));
         assert_eq!((vm.vm_id, vm.node.as_deref()), (Some(200), Some("pve01")));
-        // A VM being created has no identity yet, and only a VM resource reports one.
+        // A VM being created is named by what it would be, and only a machine reports one.
         assert_eq!(
             (s.changes[1].vm_id, s.changes[1].action_reason.as_deref()),
-            (None, None)
+            (Some(201), None)
         );
         assert_eq!(
             (s.changes[2].vm_id, s.changes[2].node.as_deref()),

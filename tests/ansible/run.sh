@@ -379,4 +379,7 @@ if grep -q 'PRIVATE KEY' "$work/rotation.log"; then fail "a private key reached 
 run=$(start_action configure)
 wait_run "$run" succeeded
 
+log "What a rotation removes, against a real sshd"
+python3 "$root/tests/ansible/authorized_keys_sshd.py" localhost/octopushy-ansible-target:e2e
+
 log "Passed ($runtime)"

@@ -61,6 +61,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource, CancellationToken.None);
         await server.TickAsync();
         await ConfigureRunTests.PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
         return await server.LatestRunAsync(Guest, Operations.RotateAccess);
     }
 
@@ -87,7 +88,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         var run = await RotateAsync(server, agent, resource);
         Assert.Equal(new[]
         {
-            StepNames.Preview, StepNames.Approval, StepNames.AuthorizeKey, StepNames.VerifyKey,
+            StepNames.Preview, StepNames.Approval, StepNames.VerifyCurrent, StepNames.AuthorizeKey, StepNames.VerifyKey,
             StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval,
         }, run.Steps.OrderBy(s => s.Ordinal).Select(s => s.Name));
         var candidate = (await KeysAsync(server))[1];
@@ -132,7 +133,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         await DecideAsync(server, http, run, StepNames.ApproveRemoval);
         var remove = await agent.NextAsync("run");
         Assert.Equal(GuestAccessPlaybooks.Remove, Input(remove)["playbook"]!.GetValue<string>());
-        Assert.Equal(old.PublicKey.Split(' ')[1], Input(remove)["vars"]!["access_removed_keys"]!.AsArray().Single()!.GetValue<string>());
+        Assert.Equal(old.Fingerprint, Input(remove)["vars"]!["access_removed_keys"]!.AsArray().Single()!.GetValue<string>());
         Assert.DoesNotContain(oldKey, remove.Secrets.Values);
         await agent.ReportAsync(remove, Outcome.Succeeded, ConfigureRunTests.Recap());
         var verifyRemoval = await agent.NextAsync("run");
@@ -243,15 +244,26 @@ public class AccessRotationTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_rotation_needs_a_key_known_to_work()
+    public async Task A_rotation_starts_by_proving_the_key_in_use_and_stops_if_it_cannot()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Managed());
-        var (_, _, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var _ = http;
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        var response = await http.PostAsync($"/api/guests/{run.ResourceId}/access/rotate", null);
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("has not logged in", await response.Content.ReadAsStringAsync());
+        var provision = await server.LatestRunAsync(Guest, Operations.Provision);
+        var old = Assert.Single(await KeysAsync(server));
+        Assert.Null(old.VerifiedAt);
+
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync(provision.ResourceId, CancellationToken.None);
+        await server.TickAsync();
+        await ConfigureRunTests.PreviewAsync(agent);
+        var verify = await agent.NextAsync("run");
+        Assert.Equal(GuestAccessPlaybooks.Verify, Input(verify)["playbook"]!.GetValue<string>());
+        await agent.ReportAsync(verify, Outcome.Failed, error: "Permission denied (publickey).");
+        await server.TickAsync();
+
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.RotateAccess)).Status);
+        Assert.Equal(1, await InUseAsync(server, provision.ResourceId));
+        Assert.Null((await KeysAsync(server))[1].AuthorizedAt);
     }
 
     [Fact]
@@ -304,7 +316,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         Input(plan)["variables"]!["guest"]!["sshAuthorizedKeys"]!.AsArray().Select(k => k!.GetValue<string>())
             .Intersect(keys.Select(k => k.PublicKey)).ToArray();
 
-    private static JsonObject MachinePlan() => new()
+    private static JsonObject MachinePlan(int vmid = 310) => new()
     {
         ["hasChanges"] = true,
         ["changes"] = new JsonArray(new JsonObject
@@ -312,6 +324,8 @@ public class AccessRotationTests(PostgresFixture postgres)
             ["address"] = "proxmox_virtual_environment_vm.guest",
             ["type"] = GuestVmPlan.VmResourceType,
             ["actions"] = new JsonArray("create"),
+            ["vmId"] = vmid,
+            ["node"] = "korriban",
         }),
         ["counts"] = new JsonObject { ["create"] = 1, ["update"] = 0, ["delete"] = 0, ["replace"] = 0 },
         ["toolVersion"] = "1.13.1",
@@ -327,6 +341,23 @@ public class AccessRotationTests(PostgresFixture postgres)
         await server.TickAsync();
         await DecideAsync(server, http, run, StepNames.ApproveRemoval);
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+    }
+
+    [Fact]
+    public async Task A_plan_that_makes_another_machine_leaves_this_ones_key_alone()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, resource, _) = await ConfiguredAsync(server);
+        using var _ = http;
+        await RotateToTheEndAsync(server, agent, http, resource);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, MachinePlan(vmid: 999), artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        Assert.True((await KeysAsync(server))[0].Bootstrap);
     }
 
     [Fact]

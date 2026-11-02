@@ -24,14 +24,14 @@ public static class GuestVmPlan
         && change["node"]?.ToString() == context.Proxmox.Node;
 
     /// <summary>
-    /// The plan makes this guest's machine, new or as a replacement. A plan that only makes something
-    /// else does not count, and neither does a change of another guest's machine.
+    /// The plan makes this guest's machine, new or as a replacement. It has to say so: a machine it
+    /// cannot place on this VMID and host, or anything else it makes, does not count.
     /// </summary>
     public static bool MakesGuestMachine(JsonNode? outputs, RunContext context) =>
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
             c["type"]?.ToString() is VmResourceType or ContainerResourceType
             && Actions(c).Contains("create")
-            && (c["vmId"] is null || IsGuests(c, context)));
+            && IsGuests(c, context));
 
     /// <summary>The plan deletes or replaces some Proxmox VM, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();

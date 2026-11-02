@@ -27,6 +27,8 @@ It proves, against real tools:
 - A killed agent or a lost guest leaves the run uncertain, and the guest's lock stays. That lock
   then stops the next run as a known failure.
 
-`test_authorized_keys.py` tests how a rotation reads and changes `authorized_keys`.
+`test_authorized_keys.py` tests how a rotation changes `authorized_keys`, with a real `ssh-keygen`.
+`authorized_keys_sshd.py` checks that against a real `sshd`, on the shapes of file a text search
+gets wrong, and `run.sh` runs it.
 `test_runner.py` tests `octopushy-ansible` with a fake `ansible-playbook`. Both run in
 `scripts/checks/offline.sh`.

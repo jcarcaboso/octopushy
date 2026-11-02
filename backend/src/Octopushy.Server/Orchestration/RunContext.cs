@@ -188,6 +188,8 @@ public static class StepNames
     public const string OutcomeApproval = "outcome-approval";
     /// <summary>The one further run a person may approve after a declared outcome.</summary>
     public const string PlaybookApproved = "playbook-approved";
+    /// <summary>A fresh login with the key in use alone, so a rotation starts from a key shown to work.</summary>
+    public const string VerifyCurrent = "verify-current";
     /// <summary>Adds a candidate key beside the keys on a guest, with the key in use.</summary>
     public const string AuthorizeKey = "authorize-key";
     /// <summary>A fresh login with the candidate alone, and the privileges a run needs.</summary>

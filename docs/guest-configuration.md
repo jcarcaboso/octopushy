@@ -258,20 +258,23 @@ fails and `guest-file-open` for appending to `authorized_keys` is denied.
 **Rotate key** on the guest's page, or `POST /api/guests/{id}/access/rotate`, starts one run:
 
 ```text
-preview -> approval -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal
+preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal
 ```
 
 | Stage | Key used | What it does |
 |---|---|---|
 | `preview`, `approval` | none | Shows the fingerprints going on and coming off. Follows `policy.approval` |
-| `authorize-key` | In use | Adds the candidate's public key beside what is there |
+| `verify-current` | In use alone | A login that does nothing else, so a rotation starts from a key shown to work. It stops here if it cannot |
+| `authorize-key` | In use | Appends the candidate's public key. Nothing is rewritten |
 | `verify-key` | Candidate alone | A fresh login, no multiplexing, strict host key: the expected login, and root through `become` |
 | `promote-key` | none | **A person, whatever the policy.** Moves this guest's binding to the candidate and records the evidence |
 | `approve-removal` | none | **A person, separately.** The old key stays on the guest until then |
 | `remove-key` | New | Removes the old controller-owned keys, read from the key field of each line |
 | `verify-removal` | New | Logs in again and shows the old key is gone. Only then is it recorded as removed, and that version revoked in the store |
 
-- **People's keys are never touched.** A small program reads each line of `authorized_keys` the way `sshd` does, options, tabs and comments included, and compares the key itself. A person's line that quotes the old key in its comment stays, and an old key separated by tabs goes. Every other line stays byte for byte. The program and playbooks ship with the server, so a repository cannot change what is removed.
+- **People's keys are never touched.** The guest's own OpenSSH says what each line authorizes: a small program passes every physical line through `ssh-keygen -l` and compares fingerprints, so nothing here parses a key and nothing can disagree with `sshd` about one. A line that only mentions the old key stays, and every other line stays byte for byte. The program and playbooks ship with the server, so a repository cannot change what is removed.
+- **What someone else writes is kept.** Adding appends. Removing has to replace the file, so it reads the file again just before doing so and starts over if it changed. A write in the instant between that read and the replacement would still be lost: sshd has no lock to take.
+- **Anything that stops the check is not read as gone.** Without `ssh-keygen` on the guest the program fails, and the stage with it.
 - **A candidate that cannot log in changes nothing in use.** The run fails, runs keep the working key, and the next rotation uses the same candidate again, because it may already be on the guest.
 - **An interruption is uncertain.** The run holds the guest until a person closes it, and nothing is removed to tidy up.
 - **Rejecting a stage ends the run where it stands.** After a rejected removal the new key is in use and the old one stays listed as still on the guest; the next rotation takes it off.
@@ -279,7 +282,7 @@ preview -> approval -> authorize-key -> verify-key -> promote-key -> approve-rem
 - **It reuses the store's versions.** Staging, promotion and revocation are the store's own transitions, on the same columns, with `system/` staying closed to the operator endpoints. The [credential lifecycle](credential-lifecycle.md) rotates a value and proves nothing about a guest, so what a rotation adds is the guest stages and their evidence, in `GuestAccessKey`.
 - **A removal nobody could verify stays on the list.** If `verify-removal` fails, the old version is neither marked removed nor revoked, and the next rotation looks again.
 - **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes this guest's machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again. A plan that makes anything else changes nothing.
-- **It cannot carry a first key.** It logs in with a key known to work, so it refuses a guest Octopushy has not logged in to.
+- **It cannot carry a first key.** Its first step logs in with the key in use, so a guest without one stops there, with nothing changed.
 
 ### Host key trust
 

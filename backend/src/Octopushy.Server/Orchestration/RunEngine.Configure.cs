@@ -148,8 +148,8 @@ public sealed partial class RunEngine
             case StepNames.AuthorizeKey:
                 keys.Single(k => k.Version == rotation.Candidate).AuthorizedAt = now;
                 break;
-            case StepNames.VerifyKey:
-                var verified = keys.Single(k => k.Version == rotation.Candidate);
+            case StepNames.VerifyCurrent or StepNames.VerifyKey:
+                var verified = keys.Single(k => k.Version == (step.Name == StepNames.VerifyKey ? rotation.Candidate : rotation.Current));
                 verified.VerifiedAt = now;
                 verified.VerifiedRunId = run.Id;
                 break;

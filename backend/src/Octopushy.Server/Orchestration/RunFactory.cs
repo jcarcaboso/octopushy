@@ -362,7 +362,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var run = NewRun(resource, Operations.RotateAccess, revision, "manual", context);
         run.InputsHash = inputs.Hash;
         AddSteps(run, [
-            StepNames.Preview, StepNames.Approval, StepNames.AuthorizeKey, StepNames.VerifyKey,
+            StepNames.Preview, StepNames.Approval, StepNames.VerifyCurrent, StepNames.AuthorizeKey, StepNames.VerifyKey,
             StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval]);
         return run;
     }

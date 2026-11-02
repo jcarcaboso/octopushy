@@ -268,8 +268,6 @@ public sealed class GuestAccessKey
 
     /// <summary>When a login showed this version gone from the guest. Other keys there are not touched.</summary>
     public DateTimeOffset? RemovedAt { get; set; }
-
-    public Guid? LastUsedRunId { get; set; }
 }
 
 public sealed class GuestConfiguration

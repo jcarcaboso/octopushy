@@ -63,8 +63,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
         }, cancellationToken);
 
     /// <summary>
-    /// Starts a staged rotation of a guest's own key. It needs a key that is known to work, because
-    /// it logs in with that key to add the next, so it cannot be how a guest gets its first.
+    /// Starts a staged rotation of a guest's own key. Its first step proves the key in use with a
+    /// login, because it adds the next key with that one, so it cannot be how a guest gets its first.
     /// </summary>
     public Task<Guid> RotateAccessAsync(Guid resourceId, CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, services) =>
@@ -81,8 +81,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
             var inUse = current is null ? null
                 : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == resource.Id && k.Version == current, cancellationToken);
-            if (inUse?.VerifiedAt is null)
-                throw new RunException("Octopushy has not logged in with this guest's key yet, so it cannot add another with it.");
+            if (inUse is null)
+                throw new RunException("This guest has no key of Octopushy's yet, so there is nothing to log in with.");
 
             var candidate = await GuestAccessCredentials.StageAsync(
                 db, services.GetRequiredService<VariableStore>(), resource.Id, guest.Id, inUse.Version, clock.GetUtcNow(), cancellationToken);

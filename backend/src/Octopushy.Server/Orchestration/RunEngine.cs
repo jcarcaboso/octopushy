@@ -647,7 +647,7 @@ public sealed partial class RunEngine(
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
                 break;
-            case StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.VerifyRemoval:
+            case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.VerifyRemoval:
                 await ApplyRotationEffectsAsync(db, run, step, now, cancellationToken);
                 break;
         }
