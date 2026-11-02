@@ -885,3 +885,61 @@ async fn the_limit_still_applies_while_output_is_held_open() {
     );
     assert!(out.cancelled);
 }
+
+#[tokio::test]
+async fn a_container_runtime_that_stops_answering_cannot_hold_the_run_open() {
+    use octopushy::tools::{Invocation, RuntimeKind, Tool, ToolRuntime};
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let binary = fx.dir.path().join("fake-runtime");
+    // Leaves a child holding the output, then hangs when asked to kill the container.
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nif [ \"$1\" = kill ]; then exec sleep 60; fi\nsleep 60 &\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut runtime = ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None);
+    runtime.container_binary = binary;
+    runtime.kill_grace = Duration::from_millis(50);
+    let log = AttemptLogger::new(
+        Arc::new(LogBuffer::default()),
+        Arc::new(Masker::new([])),
+        Arc::new(Notify::new()),
+    );
+    let stop = CancellationToken::new();
+    let cancel = stop.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+    });
+    let started = std::time::Instant::now();
+    let invocation = Invocation {
+        tool: Tool::Ansible,
+        name: "stuck-runtime".into(),
+        image: "example/image",
+        workspace: fx.dir.path(),
+        workdir: fx.dir.path(),
+        plugin_cache: None,
+        args: vec![],
+        settings: vec![],
+        env: vec![],
+        stdin: None,
+        capture_stdout: false,
+        stderr_mark: None,
+        control_prefix: None,
+    };
+    let out = tokio::time::timeout(
+        Duration::from_secs(10),
+        runtime.run(invocation, &log, &stop),
+    )
+    .await
+    .expect("the run ended")
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(out.cancelled);
+}

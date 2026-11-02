@@ -515,13 +515,15 @@ impl ToolRuntime {
     /// A hard kill of the container and the process group.
     async fn kill_group(&self, container: &str, pgid: Option<libc::pid_t>) {
         if self.is_container() {
-            let _ = Command::new(&self.container_binary)
+            // A runtime that stops answering must not keep the run from ending.
+            let kill = Command::new(&self.container_binary)
                 .args(["kill", container])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status()
-                .await;
+                .kill_on_drop(true)
+                .status();
+            let _ = tokio::time::timeout(self.kill_grace, kill).await;
         }
         if let Some(pgid) = pgid {
             // SAFETY: plain signal delivery to our own child's process group.
