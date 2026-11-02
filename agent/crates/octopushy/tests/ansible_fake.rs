@@ -771,7 +771,9 @@ async fn a_session_that_failed_after_the_login_is_not_a_refusal() {
         // A forced command that is itself an ssh to somewhere else.
         "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\nops@inner: Permission denied (publickey).",
         // Past what a report keeps, so what ssh said first has been cut by the end.
-        &format!("Authenticated to g ([10.0.0.5]:22) using \"publickey\".\n{long}\nops@10.0.0.5: Permission denied (publickey)."),
+        &format!(
+            "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\n{long}\nops@10.0.0.5: Permission denied (publickey)."
+        ),
         // One key of two: sshd took it.
         "Authenticated using \"publickey\" with partial success.\nops@10.0.0.5: Permission denied (password).",
     ] {
