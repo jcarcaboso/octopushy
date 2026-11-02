@@ -1,7 +1,7 @@
 # Managed NixOS worker disk reporting
 
 Managed workers use the existing approved `install-disk-reporter` step and
-per-guest HTTPS reporting API. They **do not** use the FHS downloader/installer.
+per-guest reporting API. They **do not** use the FHS downloader/installer.
 The metric remains allocated usage of `/` (`statvfs` blocks minus free blocks),
 not the sum of `/` and the separate `/var/lib/octopushy` state filesystem.
 
@@ -23,7 +23,7 @@ Octopushy:WorkerDeployment:ImageUrl = <public URL of the NEW qualified qcow2>
 Octopushy:WorkerDeployment:ImageSha256 = <exact SHA-256 of that qcow2>
 Octopushy:DiskReporter:Enabled = true
 Octopushy:DiskReporter:ManagedNixosImageSha256 = <the SAME qualified qcow2 SHA-256>
-Octopushy:DiskReporter:PublicUrl = https://<guest-reachable WEB/API origin>
+Octopushy:DiskReporter:PublicUrl = <guest-reachable WEB/API origin, http:// or https://>
 Octopushy:DiskReporter:IntervalSeconds = 3600
 Octopushy:AgentChannel:PublicUrl = https://<guest-reachable agent origin>:8443
 ```
@@ -35,10 +35,15 @@ workers. Native runs freeze `installationMode=managed-nixos-v1` and the qualifie
 **image** SHA-256, plus the existing VM name/placement/address/generation. An
 optional public `DiskReporter:CaCertificatePem` travels in runtime configuration,
 not the image. Use the actual web/API CA; the agent-mTLS CA/port is not the disk
-report endpoint. Use the existing HTTPS ingress with correctly trusted forwarded
-scheme headers (`TrustForwardedHeaders` only on an isolated/private API listener),
-not the API's direct HTTP port. There is no TLS verification bypass or redirect
-following.
+report endpoint. Report through the web address, not the API's direct port, with
+`TrustForwardedHeaders` only on an isolated/private API listener. There is no TLS
+verification bypass or redirect following.
+
+`PublicUrl` may be `http://` for a controller with no TLS proxy. The reporting token
+is then readable by anyone on the network path, and a CA is refused; see
+[plain HTTP](../agent/packaging/disk-reporter/README.md#plain-http). An image built
+before plain HTTP was allowed refuses such an endpoint and setup fails closed, so
+qualify a new image first. `AgentChannel:PublicUrl` stays HTTPS: agents use mTLS.
 
 If the repository already contains the old versioned template, the wizard still
 refuses to overwrite conflicting template files. Publish the new pin/template
@@ -85,7 +90,7 @@ The root-only helper locks, stops the fixed timer/service, atomically publishes 
 private credential bundle under `/var/lib/octopushy-disk-reporter` (0700
 directories / 0600 files), then starts the fixed oneshot and timer. Systemd loads
 config/token/optional CA as runtime credentials; the reporter runs as a hardened
-dynamic user. The helper waits for the oneshot's **new authenticated HTTPS 204**
+dynamic user. The helper waits for the oneshot's **new authenticated 204**
 delivery before returning success; only then is `firstReportSent=true` emitted.
 Guest stdout/stderr are never forwarded to results/logs, and the service does not
 journal arbitrary reporter diagnostics. CA/ingress/token errors are visible as a
@@ -125,10 +130,10 @@ approval; implementing it performs no live retrofit.
 - Native scripted-QGA tests verify fixed command/stdin, ownership refusal,
   missing helper, redaction and uncertainty; helper tests verify bounded input
   and private/idempotent atomic files. Reporter tests exercise genuine local TLS
-  and require 204 (reject redirect/server failures). Backend tests use synthetic
+  and plain HTTP and require 204 (reject redirect/server failures). Backend tests use synthetic
   assignments and the authenticated report endpoint; they are not live VM proof.
 
 Qualification before setting the capability pin must additionally test a real
-configured disposable image against HTTPS ingress, invalid CA/token and
+configured disposable image against the deployment's ingress, invalid CA/token and
 unreachable ingress, and reboot with persisted credentials/hourly timer. Source
 assertions and fake assignments cannot substitute for this image acceptance.
