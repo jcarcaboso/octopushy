@@ -215,7 +215,27 @@ public sealed class GuestDiskUsage
     public DateTimeOffset? ReceivedAt { get; set; }
 }
 
-/// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
+/// <summary>Where one of a guest's schedules stands. The definition itself stays in Git.</summary>
+public sealed class GuestScheduleState
+{
+    public Guid ResourceId { get; set; }
+
+    public required string Action { get; set; }
+
+    public required string Cron { get; set; }
+
+    /// <summary>The newest time this schedule has dealt with, so each comes up once.</summary>
+    public DateTimeOffset LastSlot { get; set; }
+
+    /// <summary>The run the last firing started.</summary>
+    public Guid? LastRunId { get; set; }
+
+    /// <summary>Why the last firing started nothing; null once one has.</summary>
+    public string? Note { get; set; }
+
+    public DateTimeOffset? NoteAt { get; set; }
+}
+
 /// <summary>
 /// One version of Octopushy's key for a guest, and what is known about it on the guest. This is
 /// kept apart from the provisioning hash, so what is authorized can change without a plan. The
@@ -270,6 +290,7 @@ public sealed class GuestAccessKey
     public DateTimeOffset? RemovedAt { get; set; }
 }
 
+/// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
 public sealed class GuestConfiguration
 {
     public Guid ResourceId { get; set; }
@@ -300,6 +321,12 @@ public static class Operations
     public const string Retire = "retire";
     public const string Configure = "configure";
     public const string RotateAccess = "rotate-access";
+}
+
+/// <summary>Why a run was started, where something depends on it.</summary>
+public static class RunReasons
+{
+    public const string Schedule = "schedule";
 }
 
 public static class RunStatuses

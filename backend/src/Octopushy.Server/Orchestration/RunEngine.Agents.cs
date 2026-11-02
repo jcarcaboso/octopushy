@@ -35,6 +35,14 @@ public sealed partial class RunEngine
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken));
+            // A change that waited for an agent may have outlived its schedule since it was queued.
+            // Stopping it here keeps its secrets from being released for nothing.
+            foreach (var attempt in queued.Where(a => a is { Mutating: true, Step.Run.Reason: RunReasons.Schedule }).ToList())
+            {
+                if (await StopIfLateAsync(db, await LoadRunAsync(db, attempt.Step!.RunId, cancellationToken), clock.GetUtcNow(), cancellationToken))
+                    queued.Remove(attempt);
+            }
+
             var result = new List<(AgentSession Session, ServerMessage Message, Guid AttemptId)>();
             if (queued.Count == 0)
             {
@@ -156,7 +164,11 @@ public sealed partial class RunEngine
                     continue;
                 }
 
+                // Building an assignment takes time, so the limit is decided at the time this one records.
                 var now = clock.GetUtcNow();
+                if (attempt.Mutating && run is not null && await StopIfLateAsync(db, run, now, cancellationToken))
+                    continue;
+
                 attempt.Status = AttemptStatuses.Assigned;
                 attempt.AgentId = agent.Id;
                 attempt.AssignedAt = now;

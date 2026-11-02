@@ -4759,7 +4759,8 @@
           "appliedAction",
           "appliedCommit",
           "appliedAt",
-          "hasSnapshot"
+          "hasSnapshot",
+          "schedules"
         ],
         "type": "object",
         "properties": {
@@ -4796,6 +4797,12 @@
           },
           "hasSnapshot": {
             "type": "boolean"
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GuestScheduleDto"
+            }
           }
         }
       },
@@ -5016,6 +5023,78 @@
             "format": "date-time"
           },
           "staleAfter": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "GuestScheduleDto": {
+        "required": [
+          "action",
+          "cron",
+          "timezone",
+          "nextAt",
+          "lastRunId",
+          "lastRunNumber",
+          "lastRunStatus",
+          "lastRunDetail",
+          "note",
+          "noteAt"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "nextAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastRunId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "lastRunNumber": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "lastRunStatus": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "lastRunDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "noteAt": {
             "type": [
               "null",
               "string"

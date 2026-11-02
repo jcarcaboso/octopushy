@@ -49,7 +49,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
     private static Task ScheduleAsync(ServerHarness server) =>
         server.Services.GetRequiredService<Planner>().ScheduleConfigurationsAsync(CancellationToken.None);
 
-    private static (JsonObject Outputs, Artifact Artifact) Preview(JsonObject? prepared = null)
+    internal static (JsonObject Outputs, Artifact Artifact) Preview(JsonObject? prepared = null)
     {
         var content = Encoding.UTF8.GetBytes(new JsonObject { ["schemaVersion"] = 1, ["prepared"] = prepared?.DeepClone() }.ToJsonString());
         var outputs = new JsonObject
