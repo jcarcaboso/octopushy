@@ -194,17 +194,16 @@ and is refused when what the operator saw is no longer what is declared. A clust
 trusted with their cluster instead.
 _Avoid_: Cluster trust for a single guest, or apply approval
 
-**LXC recipe**:
-A recipe for a container that installs software in it, from the repository: a thin OpenTofu root over the
-`lxc-app` module, with a directory of files and a script uploaded over SSH. Octopushy is generic for it and has
-no executor for any application. A recipe that keeps data adds a stateful guard.
-_Avoid_: Container image, or a Docker workload
-
 **Stateful guard**:
-A resource with `prevent_destroy` in a recipe's root, tied to the container's incarnation, so that a plan which
-would replace or destroy the container fails at the plan, before approval. It is removed by a commit of its own,
-applied first, to retire the guest or to replace the container on purpose.
+Octopushy's refusal, at a plan's approval step, of a plan that would replace, delete or recreate a guest marked
+`stateful: true` that has been deployed. No policy or approval passes it. A first deployment that failed is not
+guarded, so it can be retried. It is lifted by taking the marker out, in a commit of its own.
 _Avoid_: Protection, which is Proxmox's flag on the guest, or backup
+
+**Reserved VMID**:
+A VMID an installation lists as not managed by Octopushy. No guest may use one, and a plan that would change
+one fails before approval. It is what keeps a plan off a guest nobody declared, whatever the token could reach.
+_Avoid_: Saying a token's scope protects a guest
 
 **Member binding**:
 Octopushy's record of a guest that has joined an application cluster, with what

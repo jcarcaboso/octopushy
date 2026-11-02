@@ -222,8 +222,8 @@ lab-repo/
     Extended to containers November 2, 2026, so a container that fails its first apply
     no longer gets stuck.*
 
-    A [stateful recipe](lxc-recipes.md#stateful-guests) goes further than the rule: its root
-    refuses a plan that would replace or destroy the container, so no approval can pass it.
+    A [stateful guest](lxc-recipes.md#stateful-guests) goes further than the rule: once deployed, a plan that
+    would replace, destroy or recreate it fails before approval, so no approval can pass it.
 12. **Identity is stable.** A guest's address maps to its installation and VMID.
     Changing the VMID of an existing guest is refused as a possible new
     incarnation, and a new guest cannot claim a VMID that is already bound.
@@ -364,6 +364,10 @@ datastores, bridges, and capacity limits, and is its own failure domain. A clust
 lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
 
+`reservedVmids` lists VMIDs here that Octopushy does not manage, such as a guest made by hand: no guest may
+use one, and a plan that would change one fails before approval. What keeps a plan off a guest nobody
+declared has to come from here, [not from the token](lxc-recipes.md#what-keeps-a-plan-away-from-other-guests).
+
 One `token` reference is sufficient. Alternatively, omit it and configure both
 `readOnlyToken` and `privilegedToken` with distinct store keys; mixed modes are
 invalid. Shared mode deliberately gives planning the same token as apply, so
@@ -465,10 +469,10 @@ A `worker` section is invalid on a container: a managed worker is a NixOS VM.
 
 `recipes/proxmox-lxc` creates an unprivileged container with `nesting` on and `keyctl` off,
 started at boot and protected from deletion. [`recipes/technitium-lxc`](technitium-lxc.md)
-adds a DNS server to it, and [`recipes/ha-db`](lxc-recipes.md#worked-recipe-ha-db) PostgreSQL and
-VictoriaMetrics. Both call the `lxc-app` module, which installs anything: [LXC recipes](lxc-recipes.md)
-says how to write one, and what Octopushy does and does not do for it. Proxmox reads a container's SSH keys only when it creates it, and
+adds a DNS server to it. Proxmox reads a container's SSH keys only when it creates it, and
 changing a mount point replaces the container, which Proxmox refuses while it is protected.
+[Containers](lxc-recipes.md) covers what else one gets, such as `stateful: true`, which keeps a plan
+from replacing or deleting one that holds data.
 
 **Store references for a recipe.** A key under `provision.secrets` is the name of an
 OpenTofu variable, and `TF_VAR_<name>` delivers the entry's value. Only the apply receives
