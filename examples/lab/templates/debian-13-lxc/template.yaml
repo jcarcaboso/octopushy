@@ -4,4 +4,4 @@ description: Debian 13 (trixie) standard container template from Proxmox, for am
 source:
   url: http://download.proxmox.com/images/system/debian-13-standard_13.6-1_amd64.tar.zst
   checksum: sha512:4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b
-availableOn: [home/korriban, home/moraband]
+availableOn: [home/korriban, home/moraband, home/ziost]

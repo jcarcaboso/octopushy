@@ -73,6 +73,12 @@ proxmox-e2e: dev-db
 technitium-lxc:
     tests/technitium-lxc/run.sh
 
+# The ha-db recipe: real PostgreSQL 17 and VictoriaMetrics in a disposable systemd container, run twice and
+# with a password rolled, and the stateful guard, with real OpenTofu. No Proxmox. It installs for real, so it
+# needs outbound access (Debian's mirrors, github.com, the OpenTofu registry) and stops with a clear message without it.
+ha-db:
+    tests/ha-db/run.sh
+
 # A Technitium cluster on two real servers in disposable podman containers, with the real provider.
 # Its servers have no way out; only the first run downloads the images and the provider.
 technitium-cluster:

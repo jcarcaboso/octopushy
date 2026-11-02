@@ -1,0 +1,12 @@
+schemaVersion: 1
+type: standalone                  # standalone | cluster
+connection:
+  endpoint: https://10.15.5.101:8006/
+  tls: { verify: false }          # or caCertificate: { store: <key> }
+  readOnlyToken: { store: proxmox/ziost/read-only-token }
+  privilegedToken: { store: proxmox/ziost/privileged-token }
+hosts:
+  ziost:
+    datastores: { images: local, disks: vm-ssd }
+    bridges: [apps]
+    limits: { concurrentOperations: 1 }

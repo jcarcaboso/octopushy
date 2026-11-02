@@ -10,7 +10,8 @@ public class LabRepositoryLoaderTests
         var repository = LabRepositoryLoader.Load(TestRepository.ExampleLab);
         Assert.DoesNotContain(repository.Issues, i => i.Severity == IssueSeverity.Error);
         Assert.True(repository.RepositoryValid);
-        Assert.Equal(4, repository.Guests.Count);
+        Assert.Equal(5, repository.Guests.Count);
+        Assert.Contains(repository.Guests, g => g.Address == "home/ziost/ha-db");
         Assert.All(repository.Resources, r => Assert.True(r.Valid, r.Address));
         var guest = repository.Guest("home/korriban/krb-app-01")!;
         Assert.Equal(310, guest.Vmid);

@@ -1,0 +1,10 @@
+schemaVersion: 1
+description: PostgreSQL 17 and VictoriaMetrics in an unprivileged container, for Home Assistant; see docs/lxc-recipes.md.
+operation: provision
+executor: opentofu
+root: ../../modules/opentofu/ha-db
+modules: [../../modules/opentofu/lxc-app, ../../modules/opentofu/proxmox-lxc]   # other files the root uses, so changes reach its guests
+inputs: inputs.schema.json
+secrets: [postgres_password, victoriametrics_password]   # each guest names its store keys in provision.secrets
+verify: proxmox
+guestType: container
