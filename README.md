@@ -22,6 +22,10 @@ in [`old/`](old/README.md).
 the same way, with its password kept out of saved plans. Declared as a
 [cluster](docs/technitium-lxc.md#a-cluster), Octopushy forms it, joins its members, owns
 its blocklists and shared settings, and verifies every member on every run.
+Any software can be installed in a container the same way: an [LXC recipe](docs/lxc-recipes.md)
+is a thin OpenTofu root over a shared module, with a directory of files and a script, and Octopushy has no
+executor for any application. `ha-db` (PostgreSQL and VictoriaMetrics) is the worked example, with
+its data kept by a guard that stops a plan that would replace or destroy the container.
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)
 adds separate native growth and capacity-verification steps, with targeted retry.
 This is limited to the documented ext4 base-image layout, not general guest setup

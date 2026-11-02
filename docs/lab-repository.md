@@ -194,27 +194,36 @@ lab-repo/
     actions, not from the edit. Retiring a guest retires its services first, each
     under its own setting.
 
-    **A VM is the exception, because recreating one wipes its disks.** A provision
-    plan that replaces or deletes a Proxmox VM waits for approval unless
+    **A VM or a container is the exception, because recreating one wipes its disks.** A
+    provision plan that replaces or deletes a Proxmox VM (`proxmox_virtual_environment_vm`) or
+    container (`proxmox_virtual_environment_container`) waits for approval unless
     `destructive: automatic` is written down somewhere: inheriting it from an
-    automatic approval is not enough. Two things happen without a person:
-    - With `destructive: automatic` set explicitly, the plan goes ahead, as a retire
-      would.
-    - A VM that never finished its first apply recovers on its own, even with
-      `destructive: manual`. OpenTofu must be replacing it because it is tainted,
-      that must be the only VM the plan removes, and Octopushy must never have
-      applied or verified this guest. Otherwise it waits like any other VM, and the
-      `approval` setting still applies.
+    automatic approval is not enough. The table is the same for both:
 
-    Once approved, Octopushy lifts the protection of the guest's own VM right before
-    applying that plan, as a retire does, and the apply recreates the VM protected.
-    It does so only when the plan's state names the guest's VMID on its host. A plan
-    that keeps the VM never touches protection, and a preview never does. If the
+    | The plan replaces or deletes the guest's own VM or container, and | What happens |
+    | --- | --- |
+    | `destructive: automatic` is set explicitly | It goes ahead, as a retire would. |
+    | OpenTofu replaces it because it is tainted, it is the only VM or container the plan removes, and Octopushy never applied or verified this guest | It recovers on its own, even with `destructive: manual`. |
+    | anything else | It waits for a person, and the `approval` setting still applies. |
+
+    The "guest's own" one is found by the plan's state naming the guest's VMID on its host,
+    for the kind of resource the guest is: a VM resource never lifts a container's protection,
+    nor the other way round.
+
+    Once approved, Octopushy lifts the protection of the guest's own VM or container right before
+    applying that plan, as a retire does, and the apply recreates it protected.
+    A plan that keeps it never touches protection, and a preview never does. If the
     apply does not finish, for instance a failure, a cancelled run, or a closed
-    uncertain outcome, the run puts protection back before it ends and says so, and
-    planning again retries.
+    uncertain outcome, the run puts protection back (a `reprotect` step, through the
+    guest's `guestKind`, `qemu` or `lxc`) before it ends and says so, and
+    planning again retries. The messages say *container* where the guest is one.
     *Decided November 1, 2026: before this, a replaced VM stopped at Proxmox's
-    protection flag, whatever was approved, and someone had to lift it by hand.*
+    protection flag, whatever was approved, and someone had to lift it by hand.
+    Extended to containers November 2, 2026, so a container that fails its first apply
+    no longer gets stuck.*
+
+    A [stateful recipe](lxc-recipes.md#stateful-guests) goes further than the rule: its root
+    refuses a plan that would replace or destroy the container, so no approval can pass it.
 12. **Identity is stable.** A guest's address maps to its installation and VMID.
     Changing the VMID of an existing guest is refused as a possible new
     incarnation, and a new guest cannot claim a VMID that is already bound.
@@ -443,7 +452,8 @@ provision:
 ```
 
 A container is a guest like a VM: the same runs, approval, protection, and retire flow,
-with its own recipes, which declare `guestType: container`. A guest and its recipe must
+with its own recipes, which declare `guestType: container`. The same rule as a VM's lifts
+and restores its protection ([item 11](#rules)). A guest and its recipe must
 agree on the type. Verification reads a container's addresses from Proxmox, since it has no
 guest agent. Two things need that agent, so a container has neither:
 
@@ -455,7 +465,9 @@ A `worker` section is invalid on a container: a managed worker is a NixOS VM.
 
 `recipes/proxmox-lxc` creates an unprivileged container with `nesting` on and `keyctl` off,
 started at boot and protected from deletion. [`recipes/technitium-lxc`](technitium-lxc.md)
-adds a DNS server to it. Proxmox reads a container's SSH keys only when it creates it, and
+adds a DNS server to it, and [`recipes/ha-db`](lxc-recipes.md#worked-recipe-ha-db) PostgreSQL and
+VictoriaMetrics. Both call the `lxc-app` module, which installs anything: [LXC recipes](lxc-recipes.md)
+says how to write one, and what Octopushy does and does not do for it. Proxmox reads a container's SSH keys only when it creates it, and
 changing a mount point replaces the container, which Proxmox refuses while it is protected.
 
 **Store references for a recipe.** A key under `provision.secrets` is the name of an
@@ -468,7 +480,9 @@ Changing the value in the store starts no run. A recipe lists the ones it cannot
 as `secrets: [admin_password]`, and a guest that leaves one out is invalid.
 
 A root that uses another module names it in `modules` in `recipe.yaml`, so that a change to
-that module plans the recipe's guests again.
+that module plans the recipe's guests again. A protected entry that a guest binds this way goes only
+to a grant: a cluster's members get theirs from Trust cluster, and any other guest from **Trust guest**
+on its page ([protected secrets](installation-trust.md#protected-secrets)).
 
 ### Service instance
 

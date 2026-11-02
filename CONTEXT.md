@@ -187,6 +187,25 @@ backend, variables, agents, Proxmox connection and the store entries it uses, te
 VMID, host, hardware and mounted volumes, and the SSH keys that can log in to it.
 _Avoid_: Trust when referring to one secret, or a sandbox: a digest says what the code is, not that it is safe
 
+**Trust guest**:
+An operator's decision, on the page of a guest that belongs to no cluster, to give the protected
+secrets it binds to the code it runs now and the way it runs. It records a grant for each such key,
+and is refused when what the operator saw is no longer what is declared. A cluster's members are
+trusted with their cluster instead.
+_Avoid_: Cluster trust for a single guest, or apply approval
+
+**LXC recipe**:
+A recipe for a container that installs software in it, from the repository: a thin OpenTofu root over the
+`lxc-app` module, with a directory of files and a script uploaded over SSH. Octopushy is generic for it and has
+no executor for any application. A recipe that keeps data adds a stateful guard.
+_Avoid_: Container image, or a Docker workload
+
+**Stateful guard**:
+A resource with `prevent_destroy` in a recipe's root, tied to the container's incarnation, so that a plan which
+would replace or destroy the container fails at the plan, before approval. It is removed by a commit of its own,
+applied first, to retire the guest or to replace the container on purpose.
+_Avoid_: Protection, which is Proxmox's flag on the guest, or backup
+
 **Member binding**:
 Octopushy's record of a guest that has joined an application cluster, with what
 identifies it there. It lasts until the guest is known to have left, whatever the

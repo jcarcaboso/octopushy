@@ -118,10 +118,25 @@ attempt, including retries. A run waiting for one shows *Waiting for trust*, wha
 A state backend never receives a protected entry, even with a grant: its environment reaches
 OpenTofu during init, before there is a plan, so give a backend an entry of its own.
 
-**Trust cluster** records grants for the cluster and for each member using its password. Other
-resources use `POST /api/variables/grants` with `{ "key": "...", "resourceId": "...", "codeDigest":
+**Trust cluster** records grants for the cluster and for each member using its password. A guest
+that belongs to no cluster has **Trust guest** on its own page. It waits with *Waiting for trust*, and
+the page shows why, with what Trust cluster shows for a member: the protected entries it binds, the
+digest of its code and of how it runs (its state backend, variables, agents, Proxmox connection and the
+tokens it uses, template, inputs, network, VMID, host, hardware, volumes), and every key that can log in
+to it as root, shown by its end. Trust guest records a grant for each protected key the guest's run
+binds, the Proxmox token among them, for that digest. A change to the recipe, the root, a module it
+lists, or any of that blocks the guest again until the next trust, whatever the repository's `policy`.
+Other resources use `POST /api/variables/grants` with `{ "key": "...", "resourceId": "...", "codeDigest":
 "..." }`; a null digest is for work that runs no repository code, such as observing an installation.
 A run holding a protected entry receives only the folders its digest covers, not the repository.
+
+- `GET /api/guests/{id}`: `trust` has the `keys` the guest binds that are protected, its `codeDigest`
+  and `execution`, whether it is `trusted`, the `cluster` it belongs to, if any, a `refusal` when no
+  grant can help, and `trustedAt` and `trustedBy`.
+- `POST /api/guests/{id}/trust` with `{ "codeDigest": "..." }`: records the grants when the digest is the one
+  declared now. Refused (409) for a cluster member, whose trust is its cluster's; for a guest with no
+  protected key; for a protected key given to the state backend, which is never released; and when the
+  digest the operator saw is not the current one. The actor comes from the session.
 
 An entry that is not protected behaves as it always did.
 
