@@ -127,7 +127,7 @@ a plan that replaces or deletes the container waits for approval unless `destruc
 a failed apply puts protection back. Put the marker back once the replacement has been verified.
 
 The guard reads the definition last synced, not the revision a run was built from: a removal is built from the revision last
-applied, which may still have the marker. A commit that leaves `guest.yaml` unreadable says nothing, so what it said before stands.
+applied, which may still have the marker. A commit that leaves a guest invalid says nothing, so what it said before stands.
 
 - **`lifecycle: retired`:** the marker can go in the same commit, because that commit is what is synced.
 - **Deleting the folder:** the marker has to be out first, since a deleted file cannot take it out. With it still there, the removal
