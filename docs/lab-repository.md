@@ -390,8 +390,9 @@ setup:
 access:
   address: krb-crt-01.home.arpa   # by default the static or reserved address
   user: ops
-  sshKey: { store: access/deploy/ssh-key }
   hostKey: { store: access/krb-crt-01/host-key }  # read through Proxmox, never scanned
+  # sshAuthorizedKeys are for people. Octopushy logs in with its own key for this guest. Only a
+  # machine it did not create names one: sshKey: { store: access/deploy/ssh-key }
 policy:
   approval: automatic             # changes, including recreating the VM, run on their own
   destructive: manual             # deleting this VM or its disks waits for approval

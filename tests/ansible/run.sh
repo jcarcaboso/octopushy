@@ -297,4 +297,50 @@ podman stop -t 0 "$target" >/dev/null
 wait_run "$run" uncertain
 call -X POST "$api/api/runs/$run/close" >/dev/null
 
+log "Octopushy's own key, given to a guest that has been using another"
+# The same container, so the same host key: the pin still holds.
+podman start "$target" >/dev/null
+for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 1; done
+podman exec "$target" sh -c 'rmdir /run/lock/test-workflow 2>/dev/null || true'
+first_provision=$(call "$api/api/runs?limit=50" | jq -r '[.[] | select(.operation=="provision")][0].id')
+sed -i '/sshKey:/d' "$guest_dir/guest.yaml"
+git -C "$work/lab" add -A
+git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q -m "Let Octopushy use its own key"
+previous=$(latest_configure)
+call -X POST "$api/api/repository/sync" >/dev/null
+for _ in $(seq 1 60); do
+  provision=$(call "$api/api/runs?limit=50" | jq -r '[.[] | select(.operation=="provision")][0].id')
+  [[ $provision != "${first_provision:-}" ]] && break
+  sleep 1
+done
+managed=""
+for _ in $(seq 1 120); do
+  managed=$(call "$api/api/guests/$(guest_id)" | jq -r '.managedAccess.publicKey // empty')
+  [[ -n $managed ]] && break
+  sleep 1
+done
+[[ -n $managed ]] || fail "the guest page shows no key of Octopushy's own"
+# As cloud-init would put it there. The key Octopushy used until now goes, so nothing else can log in.
+printf '%s\n' "$managed" >"$work/keys/authorized_keys"
+podman exec "$target" sh -c 'cp /keys/authorized_keys /home/ops/.ssh/authorized_keys; chown ops:ops /home/ops/.ssh/authorized_keys'
+wait_run "$provision" succeeded
+counts=$(call "$api/api/runs/$provision" | jq -c '[.steps[] | select(.name=="plan")][0].outputs.counts // {}')
+echo "plan: $counts"
+jq -e '(.replace // 0) == 0 and (.delete // 0) == 0' <<<"$counts" >/dev/null || fail "adding a key must not replace the machine: $counts"
+for _ in $(seq 1 60); do
+  run=$(latest_configure)
+  [[ -n $run && $run != "$previous" ]] && break
+  sleep 2
+done
+[[ $run != "$previous" ]] || fail "no configure run followed the key"
+wait_run "$run" succeeded
+call "$api/api/guests/$(guest_id)" | jq -e '.managedAccess.verifiedAt != null' >/dev/null || fail "the login is not recorded"
+logs_of "$provision" >"$work/own-key.log"
+logs_of "$run" >>"$work/own-key.log"
+call "$api/api/runs/$run" >>"$work/own-key.log"
+call "$api/api/guests/$(guest_id)" >>"$work/own-key.log"
+call "$api/api/variables" >>"$work/own-key.log"
+if grep -q 'PRIVATE KEY' "$work/own-key.log"; then fail "a private key reached a log or a response"; fi
+if grep -rq 'OPENSSH PRIVATE KEY' "$work/agent" 2>/dev/null; then fail "a private key stayed on the agent's disk"; fi
+
 log "Passed ($runtime)"

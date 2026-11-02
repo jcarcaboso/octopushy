@@ -159,3 +159,7 @@ svg {
     scroll-behavior: auto !important;
   }
 }
+
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+}

@@ -1101,6 +1101,7 @@ export interface components {
             runs: components["schemas"]["RunSummaryDto"][];
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
             configuration: null | components["schemas"]["GuestConfigurationDto"];
+            managedAccess: null | components["schemas"]["ManagedAccessDto"];
         };
         GuestDiskUsageDto: {
             enabled: boolean;
@@ -1211,6 +1212,16 @@ export interface components {
         LoginRequest: {
             username: string;
             password: string;
+        };
+        ManagedAccessDto: {
+            publicKey: string;
+            fingerprint: string;
+            /** Format: int32 */
+            version: number;
+            /** Format: date-time */
+            provisionedAt: null | string;
+            /** Format: date-time */
+            verifiedAt: null | string;
         };
         MissingVariableDto: {
             key: string;

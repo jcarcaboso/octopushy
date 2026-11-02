@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Orchestration;
@@ -140,6 +141,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             WorkerUpdate = update,
             DefinitionRemovedIn = removedIn,
+            ManagedAccess = ManagedAccess.Wanted(guest),
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,
@@ -249,7 +251,10 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             }
         }
 
-        Bind(SecretNames.AnsibleSshKey, inputs.SshKey);
+        if (inputs.SshKey is { } declared)
+            Bind(SecretNames.AnsibleSshKey, declared);
+        else
+            secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
         Bind(SecretNames.AnsibleHostKey, inputs.HostKey);
         foreach (var (name, reference) in inputs.SecretVars)
         {

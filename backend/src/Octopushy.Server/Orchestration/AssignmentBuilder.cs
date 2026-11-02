@@ -178,7 +178,7 @@ public sealed partial class AssignmentBuilder(
                     ["config"] = new JsonObject(tofu.Backend.Config.Select(p => KeyValuePair.Create(p.Key, p.Value?.DeepClone()))),
                     ["workspace"] = tofu.Backend.Workspace,
                 },
-                ["variables"] = tofu.Variables.DeepClone(),
+                ["variables"] = await VariablesAsync(run, context, tofu, cancellationToken),
                 ["env"] = new JsonObject(tofu.Env.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
@@ -347,5 +347,21 @@ public sealed partial class AssignmentBuilder(
         }
 
         return new Artifact { Name = PlanArtifact, Content = ByteString.CopyFrom(content), Sha256 = record.Sha256 };
+    }
+
+    /// <summary>
+    /// A provision run's variables, with Octopushy's public key among the guest's. It joins them here
+    /// and not in the definition, so it is never in Git. A plan and its apply get the same one.
+    /// </summary>
+    private async Task<JsonObject> VariablesAsync(Run run, RunContext context, OpenTofuContext tofu, CancellationToken cancellationToken)
+    {
+        var variables = tofu.Variables.DeepClone().AsObject();
+        if (context.ManagedAccess && run.Operation == Operations.Provision)
+        {
+            var key = await GuestAccessCredentials.EnsureAsync(db, store, run.ResourceId, context.Proxmox.Name ?? run.ResourceId.ToString(), clock.GetUtcNow(), cancellationToken);
+            variables["guest"]!["sshAuthorizedKeys"]!.AsArray().Add(key.PublicKey);
+        }
+
+        return variables;
     }
 }

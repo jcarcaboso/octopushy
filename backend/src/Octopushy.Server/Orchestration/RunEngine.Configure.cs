@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -114,6 +115,7 @@ public sealed partial class RunEngine
                 return;
         }
 
+        await RecordVerifiedKeyAsync(db, run, cancellationToken);
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;
@@ -124,6 +126,31 @@ public sealed partial class RunEngine
         var prepared = run.Steps.Single(s => s.Name == StepNames.Preview).Outputs is { } text ? JsonNode.Parse(text)?["prepared"] : null;
         if (prepared is JsonObject)
             configuration.Snapshot = prepared.ToJsonString();
+    }
+
+    /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>
+    private static async Task RecordProvisionedKeyAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (!RunContext.Parse(run.Context).ManagedAccess)
+            return;
+        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Bootstrap, cancellationToken);
+        if (key is not null)
+            key.ProvisionedAt = now;
+    }
+
+    /// <summary>A playbook logged in with Octopushy's key alone and finished, which is evidence the key works.</summary>
+    private async Task RecordVerifiedKeyAsync(OctopushyDb db, Run run, CancellationToken cancellationToken)
+    {
+        var context = RunContext.Parse(run.Context);
+        if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(run.ResourceId)
+            || !context.SecretVersions.TryGetValue(SecretNames.AnsibleSshKey, out var version))
+            return;
+        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken);
+        if (key is not null)
+        {
+            key.VerifiedAt = clock.GetUtcNow();
+            key.VerifiedRunId = run.Id;
+        }
     }
 
     /// <summary>A provision run that created or replaced something may have made a new machine, which has to be configured.</summary>
