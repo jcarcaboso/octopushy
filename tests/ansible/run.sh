@@ -412,16 +412,36 @@ call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") |
 [[ $(key_state "$second_version") == old ]] || fail "a key sshd still takes does not read as old"
 podman exec "$target" rm /home/ops/.ssh/authorized_keys2
 
-log "The next rotation shows sshd refusing all three old keys it has left"
+log "A login that fails after sshd took the key is not a refusal"
+run=$(start_action configure)
+wait_run "$run" succeeded
+third_key=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.publicKey)
+third_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+# As a key whose forced command runs an ssh of its own would answer.
+printf 'command="echo ops@inner: Permission denied \\(publickey\\). >&2; exit 255" %s\n' "$third_key" \
+  | podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2'
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts old key 3 of 3' \
+  || fail "a forced command that says it was refused was believed"
+[[ $(key_state "$third_version") == old ]] || fail "a key sshd took reads as anything but old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+
+log "The next rotation shows sshd refusing all four old keys it has left"
+run=$(start_action configure)
+wait_run "$run" succeeded
 run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
 for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
 decide "$run" promote-key
 decide "$run" approve-removal
 wait_run "$run" succeeded
-logs_of "$run" | grep -q 'old key 3 of 3' || fail "not every old key was tried"
+logs_of "$run" | grep -q 'old key 4 of 4' || fail "not every old key was tried"
 if logs_of "$run" | grep -q 'PRIVATE KEY'; then fail "a private key reached a log"; fi
 [[ $(key_state "$kept_version") == removed ]] || fail "the key left behind was not removed by the next rotation"
-[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 4 ]] \
+[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 5 ]] \
   || fail "not every old key reads as removed"
 
 log "What a rotation removes, against a real sshd"

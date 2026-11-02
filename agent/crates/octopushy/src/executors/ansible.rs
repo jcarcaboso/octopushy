@@ -62,6 +62,10 @@ const NEVER_CONNECTED: &[&str] = &[
     "Too many authentication failures",
 ];
 
+/// What ssh says once sshd has taken a key, as `LogLevel=VERBOSE`. It says so before a session
+/// starts, so nothing a forced command prints can take it back. The second is one key of two.
+const KEY_TAKEN: &[&str] = &["Authenticated to ", "Authenticated using "];
+
 /// Refused logins that sshd's PerSourcePenalties lets through in a row. Past that, this address
 /// would be blocked, and a blocked login says nothing about a key.
 const FREE_REFUSALS: usize = 2;
@@ -143,6 +147,9 @@ struct Recap {
     unreachable_task: Option<String>,
     outcome: Option<String>,
     detail: Option<String>,
+    /// Whether ssh said sshd took the key, read before `unreachable` is cut to size.
+    #[serde(skip)]
+    key_taken: bool,
 }
 
 pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
@@ -368,7 +375,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     let known_path = tool_path(&generated.join("known_hosts"))?;
     // Extra vars outrank a play's own, and the first `-o` of an option wins. Together these
     // keep ansible_ssh_common_args or a play's vars from undoing the host key check.
-    let ssh_args = [
+    let mut ssh_args = vec![
         "-F /dev/null".to_owned(),
         format!("-o UserKnownHostsFile={known_path}"),
         "-o GlobalKnownHostsFile=/dev/null".to_owned(),
@@ -385,8 +392,11 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         "-o ControlPath=none".to_owned(),
         "-o ServerAliveInterval=15".to_owned(),
         "-o ServerAliveCountMax=8".to_owned(),
-    ]
-    .join(" ");
+    ];
+    if input.expect_refused.is_some() {
+        ssh_args.push("-o LogLevel=VERBOSE".to_owned());
+    }
+    let ssh_args = ssh_args.join(" ");
     let mut octopushy = input.context.clone();
     octopushy.insert("repository".into(), json!(tool_path(&repo)?));
     if let Some(directory) = &input.guest_directory {
@@ -899,6 +909,10 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 /// gives its reason last, so what it said keeps its end.
 fn read_recap(out: &ToolOutput, ctx: &ExecContext) -> Option<Recap> {
     let mut recap: Recap = serde_json::from_str(out.control.as_deref()?).ok()?;
+    recap.key_taken = recap
+        .unreachable
+        .as_deref()
+        .is_some_and(|m| KEY_TAKEN.iter().any(|s| m.contains(s)));
     for value in [
         &mut recap.failed_task,
         &mut recap.unreachable_task,
@@ -1005,17 +1019,23 @@ fn settle_refused(
     which: &str,
 ) -> Result<(), Failure> {
     let recap = finished(out, recap, minutes)?;
+    // A session that failed after the login reads like a refusal, down to the words if a forced
+    // command runs an ssh of its own. Whether sshd took the key decides it. ssh names the login
+    // and host when it gives up, and with the bracket it is sshd listing its methods. Without
+    // them it can be a local firewall, or something the session printed.
+    let host = &prep.input.host;
+    let verdict = format!("{}@{}: Permission denied (", host.user, host.address);
     let refused = !recap.reached
+        && !recap.key_taken
         && recap
             .unreachable
             .as_deref()
-            // With the bracket it is sshd listing its methods. Without, it can be a local firewall.
-            .is_some_and(|m| m.contains("Permission denied ("));
+            .is_some_and(|m| m.contains(&verdict));
     if refused {
         return Ok(());
     }
     let result = outputs(out, &recap);
-    if recap.reached {
+    if recap.reached || recap.key_taken {
         return Err(Failure::with_outputs(
             format!(
                 "sshd still accepts {which}, which was removed. It is not in authorized_keys, so another file or setting authorizes it; it stays listed as authorized until sshd refuses it"

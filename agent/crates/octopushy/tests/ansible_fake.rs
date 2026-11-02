@@ -731,7 +731,7 @@ fn answers(fx: &Fixture, logins: &[(&str, i32)]) {
     }
 }
 
-const SSHD_SAYS_NO: &str = "ops@g: Permission denied (publickey).";
+const SSHD_SAYS_NO: &str = "ops@10.0.0.5: Permission denied (publickey).";
 
 fn offered(fx: &Fixture, run: usize) -> String {
     let document: Value = serde_json::from_str(&fx.read(&format!("stdin.{run}.json"))).unwrap();
@@ -763,6 +763,30 @@ async fn a_login_with_any_old_key_is_the_failure_and_says_which() {
 }
 
 #[tokio::test]
+async fn a_session_that_failed_after_the_login_is_not_a_refusal() {
+    let long = "x".repeat(2000);
+    for text in [
+        // As ssh reports a forced command that fails, in this order. It can quote a refusal.
+        "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\nPermission denied (publickey).\nTransferred: sent 1, received 1 bytes",
+        // A forced command that is itself an ssh to somewhere else.
+        "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\nops@inner: Permission denied (publickey).",
+        // Past what a report keeps, so what ssh said first has been cut by the end.
+        &format!("Authenticated to g ([10.0.0.5]:22) using \"publickey\".\n{long}\nops@10.0.0.5: Permission denied (publickey)."),
+        // One key of two: sshd took it.
+        "Authenticated using \"publickey\" with partial success.\nops@10.0.0.5: Permission denied (password).",
+    ] {
+        let fx = Fixture::new();
+        answers(&fx, &[(text, 4), ("", 0)]);
+        let done = confirming(&fx, OLD_ONE).await;
+        assert!(
+            message(&done.result).contains("still accepts old key 1 of 1"),
+            "{text}"
+        );
+        assert_eq!(fx.read("runs").trim(), "1", "{text}");
+    }
+}
+
+#[tokio::test]
 async fn a_refusal_counts_only_if_the_key_in_use_then_gets_in() {
     let fx = Fixture::new();
     // As with DenyUsers: sshd turns everyone away, so this is no answer about the key.
@@ -777,6 +801,9 @@ async fn a_guest_that_did_not_answer_said_nothing_about_a_key() {
     for text in [
         "Connection timed out",
         "ssh: connect to host g port 22: Permission denied",
+        // Not ssh giving up on this guest, whatever else ssh failed to report.
+        "Permission denied (publickey).",
+        "ops@inner: Permission denied (publickey).",
         "Received disconnect from g: Too many authentication failures",
         "Host key verification failed.",
     ] {
