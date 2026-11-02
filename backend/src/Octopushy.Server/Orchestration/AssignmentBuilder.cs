@@ -429,7 +429,7 @@ public sealed class AssignmentBuilder(
             throw new AssignmentException("Managed worker deletion/replacement is not supported, even with saved-plan approval.");
         if (stepName == StepNames.Unprotect && run.Operation == Operations.Provision
             && (runContext.ManagedWorker is not null || !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext)))
-            throw new AssignmentException("Protection is lifted only for an approved plan that replaces or deletes this guest's VM.");
+            throw new AssignmentException($"Protection is lifted only for an approved plan that replaces or deletes this guest's {GuestVmPlan.Noun(runContext)}.");
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)

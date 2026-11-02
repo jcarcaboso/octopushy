@@ -234,7 +234,7 @@ public sealed partial class RunEngine(
             attempt.LeaseExpiresAt = null;
         }
 
-        // A run that lifted protection and will not apply must not leave the VM unprotected.
+        // A run that lifted protection and will not apply must not leave the VM or container unprotected.
         var context = RunContext.Parse(run.Context);
         if (run.Steps.All(s => s.Name != StepNames.Reprotect) && LiftedProtection(run))
         {
@@ -494,16 +494,17 @@ public sealed partial class RunEngine(
         // A replacement in the plan, but it deletes what someone added to a live server.
         var prunes = run.Operation == Operations.Cluster && ClusterPlan.PrunesEntries(outputs, InspectionOf(run));
         var destructiveManual = (deletes > 0 || prunes) && policy.Destructive == "manual";
-        // Lifting protection is what lets a provision plan destroy a VM, so a VM that may hold data
-        // goes only with a person's approval, or where destructive was set to automatic on purpose.
-        // A VM that never finished its first apply holds nothing yet, and rerunning recreates it.
+        // Lifting protection is what lets a provision plan destroy a VM or a container, so one that may
+        // hold data goes only with a person's approval, or where destructive was set to automatic on purpose.
+        // A guest that never finished its first apply holds nothing yet, and rerunning recreates it.
         var removesVm = run.Operation == Operations.Provision && GuestVmPlan.RemovesVm(outputs);
         var recoversVm = removesVm && GuestVmPlan.RecreatesFailedVm(outputs, context)
             && await db.Resources.AnyAsync(r => r.Id == run.ResourceId
                 && r.AppliedAt == null && r.VerifiedAt == null && r.BoundVmid == null, cancellationToken);
         var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
-        var vmNote = recoversVm ? $" The plan recreates VM {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
-            : removesVm ? " The plan destroys a VM and its disks."
+        var noun = GuestVmPlan.Noun(context);
+        var vmNote = recoversVm ? $" The plan recreates {noun} {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
+            : removesVm ? $" The plan destroys a {noun} and its disks."
             : "";
         step.ApprovalRequired = manual || destructiveManual || vmHeld;
         if (!step.ApprovalRequired)
@@ -524,7 +525,7 @@ public sealed partial class RunEngine(
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();
         step.Detail = vmHeld && !manual
-            ? $"The plan destroys a VM and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
+            ? $"The plan destroys a {noun} and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
             : (destructiveManual && !manual
                 ? deletes > 0
                     ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
@@ -636,7 +637,7 @@ public sealed partial class RunEngine(
                     && !GuestVmPlan.RemovesGuestVm(outputs, RunContext.Parse(run.Context)))
                 {
                     unprotect.Status = StepStatuses.Skipped;
-                    unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                    unprotect.Detail = $"The plan does not replace or delete this guest's {GuestVmPlan.Noun(RunContext.Parse(run.Context))}, so its protection stays as it is.";
                 }
 
                 break;
@@ -704,8 +705,8 @@ public sealed partial class RunEngine(
     }
 
     /// <summary>
-    /// Whether this provision run took protection off a VM and did not apply. A successful apply needs
-    /// no help: the module recreates the VM with protection on. A lift that left no answer counts.
+    /// Whether this provision run took protection off a VM or container and did not apply. A successful apply needs
+    /// no help: the module recreates it with protection on. A lift that left no answer counts.
     /// </summary>
     private static bool LiftedProtection(Run run) =>
         run.Operation == Operations.Provision
@@ -717,7 +718,7 @@ public sealed partial class RunEngine(
 
     /// <summary>
     /// Keeps a run that lifted protection and did not apply open until protection is back, on whatever
-    /// VM holds the guest's VMID by then. Returns false once there is nothing left to wait for. The
+    /// guest holds the VMID by then. Returns false once there is nothing left to wait for. The
     /// run stays unfinished meanwhile, so a rerun waits and cannot race this step.
     /// </summary>
     private bool RestoringProtection(OctopushyDb db, Run run, RunContext context)
@@ -751,7 +752,7 @@ public sealed partial class RunEngine(
         if (restore.Status is not (StepStatuses.Queued or StepStatuses.Running))
             return false;
         run.Status = RunStatuses.Running;
-        run.Detail = $"Restoring the protection of VM {context.Proxmox.Vmid}: the plan was not applied in full.";
+        run.Detail = $"Restoring the protection of {GuestVmPlan.Noun(context)} {context.Proxmox.Vmid}: the plan was not applied in full.";
         return true;
     }
 
@@ -759,13 +760,14 @@ public sealed partial class RunEngine(
     private static string ProtectionOutcome(Run run, RunContext context)
     {
         var vmid = context.Proxmox.Vmid;
+        var noun = GuestVmPlan.Noun(context);
         return run.Steps.SingleOrDefault(s => s.Name == StepNames.Reprotect) switch
         {
             null => "",
             { Status: StepStatuses.Succeeded, Outputs: var outputs } when outputs is not null && JsonNode.Parse(outputs)?["absent"] is JsonValue absent
-                && absent.TryGetValue<bool>(out var gone) && gone => $" VM {vmid} no longer exists, so there was no protection to restore. Plan again to create it.",
-            { Status: StepStatuses.Succeeded } => $" Protection of VM {vmid} is back on. Plan again to retry.",
-            _ => $" Protection of VM {vmid} could not be restored and may still be off. Plan again to retry, or turn it on in Proxmox.",
+                && absent.TryGetValue<bool>(out var gone) && gone => $" {char.ToUpperInvariant(noun[0])}{noun[1..]} {vmid} no longer exists, so there was no protection to restore. Plan again to create it.",
+            { Status: StepStatuses.Succeeded } => $" Protection of {noun} {vmid} is back on. Plan again to retry.",
+            _ => $" Protection of {noun} {vmid} could not be restored and may still be off. Plan again to retry, or turn it on in Proxmox.",
         };
     }
 

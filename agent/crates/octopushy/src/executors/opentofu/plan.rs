@@ -7,8 +7,11 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// The resource type of a Proxmox VM, whose identity a summary reports.
-const VM_RESOURCE_TYPE: &str = "proxmox_virtual_environment_vm";
+/// The resource types of a Proxmox VM and container, whose identity a summary reports.
+const GUEST_RESOURCE_TYPES: [&str; 2] = [
+    "proxmox_virtual_environment_vm",
+    "proxmox_virtual_environment_container",
+];
 
 /// One entry of `changes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -21,11 +24,11 @@ pub struct Change {
     /// Why OpenTofu chose this action, such as `replace_because_tainted`.
     #[serde(rename = "actionReason", skip_serializing_if = "Option::is_none")]
     pub action_reason: Option<String>,
-    /// The VMID the state holds for a Proxmox VM. The controller lifts a VM's
+    /// The VMID the state holds for a Proxmox VM or container. The controller lifts a guest's
     /// protection only for a change that names that guest's own VMID and node.
     #[serde(rename = "vmId", skip_serializing_if = "Option::is_none")]
     pub vm_id: Option<u64>,
-    /// The node the state holds for a Proxmox VM.
+    /// The node the state holds for a Proxmox VM or container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
 }
@@ -76,7 +79,7 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
         let kind = text("type");
         let before = rc
             .pointer("/change/before")
-            .filter(|_| kind == VM_RESOURCE_TYPE);
+            .filter(|_| GUEST_RESOURCE_TYPES.contains(&kind.as_str()));
         summary.changes.push(Change {
             address: text("address"),
             name: text("name"),
@@ -192,6 +195,44 @@ mod tests {
         assert!(!wire.contains("secret user data"));
         // Absent values stay off the wire instead of appearing as nulls.
         assert!(!wire.contains("null"));
+    }
+
+    #[test]
+    fn reports_which_proxmox_container_a_change_touches_and_why() {
+        let json = br#"{"resource_changes":[
+            {"address":"module.container.proxmox_virtual_environment_container.guest","type":"proxmox_virtual_environment_container","name":"guest",
+             "action_reason":"replace_because_tainted",
+             "change":{"actions":["delete","create"],
+                       "before":{"vm_id":102,"node_name":"ziost","initialization":[{"user_account":[{"keys":["secret key"]}]}]},
+                       "after":{"vm_id":102,"node_name":"ziost"}}},
+            {"address":"proxmox_virtual_environment_container.new","type":"proxmox_virtual_environment_container","name":"new",
+             "change":{"actions":["create"],"before":null,"after":{"vm_id":103}}},
+            {"address":"proxmox_virtual_environment_firewall_rules.guest","type":"proxmox_virtual_environment_firewall_rules","name":"guest",
+             "change":{"actions":["delete","create"],"before":{"container_id":102,"node_name":"ziost"}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let container = &s.changes[0];
+        assert_eq!(
+            container.action_reason.as_deref(),
+            Some("replace_because_tainted")
+        );
+        assert_eq!(
+            (container.vm_id, container.node.as_deref()),
+            (Some(102), Some("ziost"))
+        );
+        // A container being created has no identity yet, and only a guest resource reports one.
+        assert_eq!(
+            (s.changes[1].vm_id, s.changes[1].node.as_deref()),
+            (None, None)
+        );
+        assert_eq!(
+            (s.changes[2].vm_id, s.changes[2].node.as_deref()),
+            (None, None)
+        );
+
+        let wire = serde_json::to_string(&s.changes).unwrap();
+        assert!(wire.contains(r#""vmId":102,"node":"ziost""#));
+        assert!(!wire.contains("secret key"));
     }
 
     #[test]
