@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
 using Octopushy.Server.Data;
@@ -85,9 +86,11 @@ public sealed partial class Planner
                     if (await ServiceRemoval.ProposeAsync(db, revisions, factory, head, missing, revision, clock.GetUtcNow(), force: false, cancellationToken) is { } removal)
                         removals.Add(removal);
                 }
-                catch (RunException)
+                catch (RunException error)
                 {
-                    // Said when the folder went; nothing here would add to it, every pass.
+                    // The run it waited for may be why nothing said this when the folder went.
+                    missing.Issues = JsonSerializer.Serialize(new[] { new DefinitionIssue(IssueSeverity.Error, missing.DefinitionFile ?? missing.Address,
+                        null, $"The folder was deleted, but its removal cannot be planned: {error.Message}", missing.Address) }, InventoryUpdater.IssueJson);
                 }
             }
 

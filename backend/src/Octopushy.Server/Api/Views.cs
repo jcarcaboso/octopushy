@@ -181,7 +181,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         if (resource.RetiredAt is not null)
             return (GuestStatuses.Retired, null);
         if (resource.MissingSince is not null && active is null)
-            return (GuestStatuses.Missing, "The folder was deleted. Nothing has changed on the guest. Restore the folder to keep the service, or forget it once it is gone.");
+            return (GuestStatuses.Missing, "The folder was deleted. Restore it to keep the service. Forget stops tracking it, and changes nothing on the guest.");
         if (!resource.Valid && resource.MissingSince is null)
             return (GuestStatuses.Invalid, "Its definition or its guest's has errors.");
         if (active is not null && Waiting(active) is { } queued)

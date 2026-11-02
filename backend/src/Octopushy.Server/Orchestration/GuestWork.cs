@@ -55,8 +55,8 @@ public static class GuestWork
         // newest run that did decides: an apply that failed stays the last word until one works.
         var lastProvision = await db.Runs.AsNoTracking()
             .Where(r => r.ResourceId == guest.Id && r.Operation == Operations.Provision
-                && (r.Status == RunStatuses.Succeeded || db.Attempts.Any(a => a.RunId == r.Id && a.Mutating)
-                    || r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled))
+                && (r.Status == RunStatuses.Succeeded || r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
+                    || db.Attempts.Any(a => a.RunId == r.Id && a.Mutating && a.Status != AttemptStatuses.Queued && a.Status != AttemptStatuses.Cancelled)))
             .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
         if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
             return "Waiting for the guest's provisioning to catch up with its definition.";
