@@ -35,6 +35,7 @@ const operations: Record<string, string> = {
   provision: "Provision",
   retire: "Retire",
   configure: "Configure",
+  pipeline: "Pipeline",
 };
 
 export function operationLabel(operation: string): string {
@@ -58,6 +59,8 @@ export function runResourcePath(run: { resourceKind: string; resourceId: string 
       return `/guests/${run.resourceId}`;
     case "installation":
       return `/installations/${run.resourceId}`;
+    case "service":
+      return `/services/${run.resourceId}`;
     default:
       return "/inventory";
   }

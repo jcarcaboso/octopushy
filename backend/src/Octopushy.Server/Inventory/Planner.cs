@@ -9,7 +9,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Server.Inventory;
 
 /// <summary>Starts runs and observations on request ("plan now", "observe now"), and observes installations on a schedule.</summary>
-public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, RepositoryMirror mirror, IOptions<OctopushyOptions> options, TimeProvider clock)
+public sealed partial class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, RepositoryMirror mirror, IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>
     /// Plans a guest at the latest revision, or retires it when its definition says so. A guest

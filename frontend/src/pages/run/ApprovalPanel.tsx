@@ -16,13 +16,15 @@ interface Props {
   workerUpdate?: WorkerUpdate | null;
   /** The run configures a guest, so this names a preview rather than a plan. */
   configure?: boolean;
+  /** The run is a service's pipeline, so this names one document covering every stage. */
+  pipeline?: boolean;
 }
 
-function fingerprintLabel(setupOnly: boolean, configure: boolean) {
-  return configure ? "Preview SHA-256" : setupOnly ? "Setup approval fingerprint" : "Plan SHA-256";
+function fingerprintLabel(setupOnly: boolean, configure: boolean, pipeline: boolean) {
+  return pipeline ? "Pipeline document SHA-256" : configure ? "Preview SHA-256" : setupOnly ? "Setup approval fingerprint" : "Plan SHA-256";
 }
 
-function Decided({ step, setupOnly, configure }: { step: Step; setupOnly: boolean; configure: boolean }) {
+function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOnly: boolean; configure: boolean; pipeline: boolean }) {
   const approval = step.approval!;
   const byPolicy = approval.decidedBy === "policy";
   const rejected = approval.decision === "rejected";
@@ -41,7 +43,7 @@ function Decided({ step, setupOnly, configure }: { step: Step; setupOnly: boolea
       {approval.note ? <p className="decision__note">{approval.note}</p> : null}
       {approval.planSha256 ? (
         <div className="small muted inline-group">
-          {fingerprintLabel(setupOnly, configure)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
+          {fingerprintLabel(setupOnly, configure, pipeline)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
         </div>
       ) : null}
       {approval.workerUpdateSha256 ? <p>Approved OS archive SHA-256 <Hash value={approval.workerUpdateSha256} /></p> : null}
@@ -49,7 +51,7 @@ function Decided({ step, setupOnly, configure }: { step: Step; setupOnly: boolea
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false, pipeline = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
@@ -58,7 +60,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
   const approval = step.approval;
   const setupOnly = plan?.hasChanges === false;
 
-  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} configure={configure} />;
+  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} configure={configure} pipeline={pipeline} />;
   if (step.status !== "awaiting-approval") return null;
 
   const planSha256 = approval?.planSha256 ?? null;
@@ -81,7 +83,9 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
     <div className="approval">
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
-        {configure
+        {pipeline
+          ? "Approving covers every stage above, as planned and previewed, and applies them in order. Nothing has changed yet. If a stage fails, the ones before it stay applied."
+          : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
           : setupOnly
           ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."
@@ -105,7 +109,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
         </div>
       ) : null}
       <div className="inline-group">
-        <span className="muted">{fingerprintLabel(setupOnly, configure)}</span>
+        <span className="muted">{fingerprintLabel(setupOnly, configure, pipeline)}</span>
         {planSha256 ? <Hash value={planSha256} label="Copy the approval fingerprint" /> : <span className="muted">not recorded</span>}
       </div>
       <div className="field">

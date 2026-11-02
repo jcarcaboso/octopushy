@@ -25,7 +25,9 @@ public sealed partial class AssignmentBuilder
         var ansible = context.Ansible ?? throw new AssignmentException("Missing configure context.");
         // Check authority and artifact integrity BEFORE resolving any plaintext.
         var outcome = step.Name == StepNames.PlaybookApproved ? await ApprovedOutcomeAsync(run, cancellationToken) : null;
-        var preview = step.Name == StepNames.Preview ? null : await ApprovedPreviewAsync(run, step, cancellationToken);
+        var preview = step.Name == StepNames.Preview ? null
+            : step.Stage is null ? await ApprovedPreviewAsync(run, step, cancellationToken)
+            : await ApprovedStageArtifactAsync(run, step, PreviewArtifact, cancellationToken);
         if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
             throw new AssignmentException("The guest is missing or retired.");
         var snapshot = ansible.UsesAppliedSnapshot && step.Name == StepNames.Preview
@@ -34,11 +36,13 @@ public sealed partial class AssignmentBuilder
             : null;
 
         var names = SecretsFor(step.Name, context);
-        var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
+        // A stage's are checked with the whole run, which is what pins them.
+        var problems = step.Stage is null ? await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names) : [];
         if (problems.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
         // Only this server-owned key may leave system/, and the general resolver keeps refusing it.
-        var ownKey = names.Contains(SecretNames.AnsibleSshKey) && context.Secrets[SecretNames.AnsibleSshKey] == GuestAccessCredentials.Key(run.ResourceId);
+        var ownKey = names.Contains(SecretNames.AnsibleSshKey)
+            && context.Secrets[SecretNames.AnsibleSshKey] == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId);
         var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
             stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),

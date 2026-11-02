@@ -182,14 +182,15 @@ public sealed partial class RunEngine
     /// <summary>A run holding this key finished having done something. That is use, not proof of a login.</summary>
     private async Task RecordKeyUseAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {
-        var context = RunContext.Parse(run.Context);
-        if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(run.ResourceId)
+        var context = RunContext.Parse(run.Context).ForStep(step);
+        var guest = context.GuestResourceId ?? run.ResourceId;
+        if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(guest)
             || !context.SecretVersions.TryGetValue(SecretNames.AnsibleSshKey, out var version))
             return;
         var recap = step.Outputs is { } outputs ? JsonNode.Parse(outputs)?["recap"] : null;
         if ((recap?["ok"]?.GetValue<int>() ?? 0) + (recap?["changed"]?.GetValue<int>() ?? 0) == 0)
             return;
-        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken);
+        var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == guest && k.Version == version, cancellationToken);
         if (key is not null)
         {
             key.LastUsedAt = clock.GetUtcNow();

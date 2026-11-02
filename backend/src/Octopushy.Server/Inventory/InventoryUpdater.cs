@@ -13,7 +13,7 @@ namespace Octopushy.Server.Inventory;
 /// retired, and a retire run for each guest whose folder was deleted. Each installation whose
 /// definition changed is observed again.
 /// </summary>
-public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
+public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
@@ -34,6 +34,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 byAddress.Remove(previous);
                 renamed.Address = guest.Address;
                 byAddress[guest.Address] = renamed;
+                MoveServices(byAddress, previous, guest.Address);
             }
         }
 
@@ -52,7 +53,13 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                     // competing row that would block the rename after correction.
                     resource = pendingRename;
                 }
-                if (resource is null && entry.Kind == ResourceKind.Guest && repository.Guest(entry.Address)?.Retired == true)
+                // A service waits for its guest's row: one that a rename has not reached yet keeps its own.
+                if (resource is null && entry.Kind == ResourceKind.Service && !byAddress.ContainsKey(entry.ParentAddress!))
+                {
+                    continue;
+                }
+
+                if (resource is null && repository.Guest(entry.Kind == ResourceKind.Service ? entry.ParentAddress! : entry.Address)?.Retired == true)
                 {
                     // A retired guest whose removal is done keeps pointing at its old resource.
                     resource = await db.Resources
@@ -176,6 +183,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         }
 
         await UpdateConfigurationsAsync(db, activeRuns, revision, repository, guests, cancellationToken);
+        await UpdatePipelinesAsync(db, activeRuns, revision, repository, byAddress.Values.Where(r => r.Kind == ResourceKinds.Service && seen.Contains(r.Id) && r.RetiredAt is null).ToList(), cancellationToken);
 
         foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Installation && seen.Contains(r.Id) && r.Valid))
         {
@@ -275,7 +283,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
                 await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken);
                 activeRuns.Remove(run);
                 // It never ran, so the inputs it was made for are still to be configured.
-                if (run.Operation == Operations.Configure
+                if (run.Operation is Operations.Configure or Operations.Pipeline
                     && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
                     configuration.ProposedHash = null;
             }
@@ -286,6 +294,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
     {
         ResourceKind.Lab => ResourceKinds.Lab,
         ResourceKind.Installation => ResourceKinds.Installation,
+        ResourceKind.Service => ResourceKinds.Service,
         _ => ResourceKinds.Guest,
     };
 

@@ -147,6 +147,16 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("configureGuest");
 
+        api.MapGet("/services/{id:guid}", async Task<Results<Ok<ServiceDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
+            await views.ServiceAsync(id, ct) is { } service ? TypedResults.Ok(service) : TypedResults.NotFound())
+            .WithTags("Inventory")
+            .WithName("getService");
+
+        api.MapPost("/services/{id:guid}/deploy", async (Guid id, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.DeployServiceAsync(id, ct))))
+            .WithTags("Inventory")
+            .WithName("deployService");
+
         api.MapGet("/installations/{id:guid}", async Task<Results<Ok<InstallationDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.InstallationAsync(id, ct) is { } installation ? TypedResults.Ok(installation) : TypedResults.NotFound())
             .WithTags("Inventory")
@@ -247,13 +257,15 @@ public static partial class Endpoints
                 s.Outputs is null ? null : JsonNode.Parse(s.Outputs),
                 Views.Plan(s),
                 s.Kind == StepKinds.Approval
-                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256, s.WorkerUpdateSha256)
+                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256, s.WorkerUpdateSha256,
+                        s.Document is null ? null : JsonNode.Parse(s.Document))
                     : null,
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
                     a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList(),
-                Views.ConfigurePreview(s)))
+                Views.ConfigurePreview(s),
+                s.Stage))
                 .ToList();
             var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
             var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain
@@ -297,6 +309,13 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("retryFilesystem");
+
+        group.MapPost("/{id:guid}/retry-stage", async (Guid id, RunEngine engine, CancellationToken ct) =>
+        {
+            await engine.RetryStageAsync(id, ct);
+            return TypedResults.NoContent();
+        })
+        .WithName("retryStage");
 
         group.MapPost("/{id:guid}/close", async (Guid id, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {

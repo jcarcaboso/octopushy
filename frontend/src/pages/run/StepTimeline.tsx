@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import type { RunDetail, Step } from "../../api/types";
-import { useRetryFilesystem } from "../../api/queries";
+import { useRetryFilesystem, useRetryStage } from "../../api/queries";
 import { ErrorMessage } from "../../components/States";
 import { StatusBadge } from "../../components/Badge";
 import { JsonBlock } from "../../components/CodeBlock";
@@ -46,7 +46,9 @@ function describe(step: Step, operation: string): string | null {
         ? "OpenTofu plans destroying the VM; the saved plan is what gets applied."
         : "OpenTofu plans the change; the saved plan is what gets applied.";
     case "approval":
-      return operation === "configure"
+      return operation === "pipeline"
+        ? "One approval, by policy or by you, of every stage's plan and preview at once."
+        : operation === "configure"
         ? "The preview is approved by policy or by you."
         : "The saved plan is approved by policy or by you.";
     case "preview":
@@ -88,9 +90,13 @@ function describe(step: Step, operation: string): string | null {
 
 function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const retry = useRetryFilesystem();
+  const retryStage = useRetryStage();
+  const lostChange = detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
+  const canRetryStage = detail.run.operation === "pipeline" && detail.run.status === "failed" && step.status === "failed"
+    && Boolean(step.stage) && ["apply", "playbook"].includes(step.name) && !lostChange;
   const canRetry = detail.run.status === "failed" && step.status === "failed"
     && ["verify", "grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
-    && !detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
+    && !lostChange;
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {
     const planStep = detail.steps.find((s) => s.name === "plan");
@@ -98,9 +104,10 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
       <ApprovalPanel
         runId={detail.run.id}
         step={step}
-        plan={planStep?.plan ? summarizePlan(planStep.plan) : null}
+        plan={planStep?.plan && detail.run.operation !== "pipeline" ? summarizePlan(planStep.plan) : null}
         workerUpdate={detail.workerUpdate}
         configure={detail.run.operation === "configure"}
+        pipeline={detail.run.operation === "pipeline"}
       />
     );
   }
@@ -124,6 +131,15 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
           </button>
         </div>
       ) : null}
+      {canRetryStage ? (
+        <div className="stack stack--small">
+          <p className="muted small">Continue from this stage under the same approval. The stages before it are not repeated, and nothing is rolled back. It is refused if the inputs changed.</p>
+          <ErrorMessage error={retryStage.error} />
+          <button type="button" className="button" onClick={() => retryStage.mutate(detail.run.id)} disabled={retryStage.isPending}>
+            {retryStage.isPending ? "Retrying…" : "Retry this stage"}
+          </button>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -139,7 +155,10 @@ function StepItem({ step, detail }: { step: Step; detail: RunDetail }) {
       <span className="timeline__marker" aria-hidden="true" />
       <div className="timeline__content">
         <div className="timeline__header">
-          <h3 className="timeline__title">{stepNames[step.name] ?? humanize(step.name)}</h3>
+          <h3 className="timeline__title">
+            {step.stage ? <span className="mono timeline__stage">{step.stage}</span> : null}
+            {stepNames[step.name] ?? humanize(step.name)}
+          </h3>
           <StatusBadge status={step.status} />
           <span className="muted small timeline__times">
             {step.startedAt ? (

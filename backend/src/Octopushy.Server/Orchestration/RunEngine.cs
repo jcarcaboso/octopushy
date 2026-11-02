@@ -44,6 +44,7 @@ public sealed partial class RunEngine(
     AttemptLogStore logs,
     ArtifactStore artifacts,
     OrchestratorSignal signal,
+    RevisionCache revisions,
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RunEngine> logger)
@@ -377,7 +378,9 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (context.Ansible is not null ? DecideConfigureApproval(run, step, context) : await DecideApprovalAsync(db, run, step, context, cancellationToken))
+                    if (context.Stages is not null ? DecidePipelineApproval(run, step, context)
+                        : context.Ansible is not null ? DecideConfigureApproval(run, step, context)
+                        : await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
                         continue;
                     }
@@ -389,13 +392,22 @@ public sealed partial class RunEngine(
                     }
                     break;
                 case StepStatuses.Pending or StepStatuses.Blocked:
-                    var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
+                    var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step, context));
                     if (missing.Count > 0)
                     {
                         step.Status = StepStatuses.Blocked;
                         step.Detail = $"Blocked credentials: {string.Join(", ", missing)}. Review Variables.";
                         run.Status = RunStatuses.Blocked;
                         run.Detail = step.Detail;
+                        break;
+                    }
+
+                    // One change to a guest at a time, its services included. What only looks, and what
+                    // waits for a person, holds nobody back.
+                    if (AssignmentBuilder.ActionFor(step.Name).Mutating && await ChangeHeldAsync(db, run, context, dispatching: false, cancellationToken) is { } held)
+                    {
+                        run.Status = RunStatuses.Running;
+                        SetDetail(run, held);
                         break;
                     }
 
@@ -410,7 +422,7 @@ public sealed partial class RunEngine(
                     signal.Wake();
                     break;
                 case StepStatuses.Queued:
-                    var unavailable = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
+                    var unavailable = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step, context));
                     run.Status = unavailable.Count == 0 ? RunStatuses.Running : RunStatuses.Blocked;
                     run.Detail = unavailable.Count == 0 ? null : $"Blocked credentials: {string.Join(", ", unavailable)}.";
                     break;
@@ -422,7 +434,9 @@ public sealed partial class RunEngine(
                     run.Detail = step.Detail;
                     break;
                 case StepStatuses.Failed:
-                    if (!RestoringProtection(db, run, context))
+                    if (step.Stage is not null)
+                        Finish(run, RunStatuses.Failed, $"Stage {step.Stage} failed at {step.Name}: {step.Detail}");
+                    else if (!RestoringProtection(db, run, context))
                         Finish(run, RunStatuses.Failed, $"The {step.Name} step failed: {step.Detail}" + ProtectionOutcome(run, context));
                     break;
                 case StepStatuses.Uncertain:
@@ -435,6 +449,13 @@ public sealed partial class RunEngine(
                     break;
             }
 
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        if (context.Stages is not null)
+        {
+            await FinishPipelineAsync(db, run, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
@@ -535,7 +556,7 @@ public sealed partial class RunEngine(
         if (preferredAgent is null && step.Name == StepNames.Apply)
         {
             // Keep the apply where the plan was prepared when that agent is available.
-            preferredAgent = run.Steps.Single(s => s.Name == StepNames.Plan).Attempts
+            preferredAgent = run.Steps.Single(s => s.Name == StepNames.Plan && s.Stage == step.Stage).Attempts
                 .Where(a => a.Status == AttemptStatuses.Succeeded)
                 .MaxBy(a => a.Number)?.AgentId;
         }
@@ -562,6 +583,12 @@ public sealed partial class RunEngine(
     /// <summary>Records what a finished step established about its resource.</summary>
     private async Task ApplyEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
     {
+        if (step.Stage is not null)
+        {
+            await ApplyStageEffectsAsync(db, run, step, outputs, cancellationToken);
+            return;
+        }
+
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
         switch (step.Name)
@@ -613,6 +640,7 @@ public sealed partial class RunEngine(
                 }
 
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
+                await ProposeServicesAgainAsync(db, run, cancellationToken);
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Apply:
@@ -632,6 +660,7 @@ public sealed partial class RunEngine(
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+                await RetireServicesAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);

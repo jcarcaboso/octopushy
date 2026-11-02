@@ -24,6 +24,7 @@ export const keys = {
   overview: ["overview"] as const,
   inventory: ["inventory"] as const,
   guest: (id: string) => ["guest", id] as const,
+  service: (id: string) => ["service", id] as const,
   installation: (id: string) => ["installation", id] as const,
   runs: (status: string | null) => ["runs", status ?? "all"] as const,
   run: (id: string) => ["run", id] as const,
@@ -86,6 +87,14 @@ export function useGuest(id: string) {
     queryKey: keys.guest(id),
     queryFn: () => unwrap(api.GET("/api/guests/{id}", { params: { path: { id } } })),
     refetchInterval: (query) => (query.state.data?.guest.activeRun ? 4_000 : 15_000),
+  });
+}
+
+export function useService(id: string) {
+  return useQuery({
+    queryKey: keys.service(id),
+    queryFn: () => unwrap(api.GET("/api/services/{id}", { params: { path: { id } } })),
+    refetchInterval: (query) => (query.state.data?.service.activeRun ? 4_000 : 15_000),
   });
 }
 
@@ -253,7 +262,7 @@ function useRefreshRuns() {
   const client = useQueryClient();
   return () =>
     Promise.all(
-      ["overview", "inventory", "guest", "installation", "runs", "run"].map((key) =>
+      ["overview", "inventory", "guest", "service", "installation", "runs", "run"].map((key) =>
         client.invalidateQueries({ queryKey: [key] }),
       ),
     );
@@ -272,6 +281,14 @@ export function useConfigureGuest(id: string) {
   return useMutation({
     mutationFn: (action: string) =>
       unwrap(api.POST("/api/guests/{id}/configure", { params: { path: { id } }, body: { action } })),
+    onSuccess: () => refresh(),
+  });
+}
+
+export function useDeployService(id: string) {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/services/{id}/deploy", { params: { path: { id } } })),
     onSuccess: () => refresh(),
   });
 }
@@ -343,6 +360,14 @@ export function useRetryFilesystem() {
   const refresh = useRefreshRuns();
   return useMutation({
     mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/retry-filesystem", { params: { path: { id } } })),
+    onSettled: () => refresh(),
+  });
+}
+
+export function useRetryStage() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/retry-stage", { params: { path: { id } } })),
     onSettled: () => refresh(),
   });
 }

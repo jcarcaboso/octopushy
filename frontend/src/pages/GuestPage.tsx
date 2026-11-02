@@ -19,6 +19,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
+import { ServicesCard } from "../components/ServicesCard";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { formatBytes } from "../lib/format";
@@ -160,6 +161,7 @@ export function GuestPage() {
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>
+            {data.services.length > 0 ? <ServicesCard services={data.services} /> : null}
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${guest.name}`} showAddress={false} />
             </Card>

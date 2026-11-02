@@ -5,8 +5,8 @@ public static class ManagedAccess
 {
     /// <summary>
     /// A guest Octopushy configures, unless it names a key for a machine Octopushy did not create.
-    /// Anything else that logs in to a guest, such as services, belongs here too, so that one
-    /// rule decides who gets a key.
+    /// A pipeline stage logs in with the same key and does not widen this: a guest with stages
+    /// but no setup recipe has to name one, which the repository checks.
     /// </summary>
     public static bool Wanted(GuestDefinition guest) =>
         guest.SetupRecipe is not null && guest.Json["access"]?["sshKey"] is null;

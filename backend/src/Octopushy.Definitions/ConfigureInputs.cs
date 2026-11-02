@@ -57,7 +57,8 @@ public sealed record ConfigureInputs(
             ["recipe"] = recipe.Json.DeepClone(),
             ["recipeFiles"] = ProvisionInputs.TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
             ["rootFiles"] = ProvisionInputs.TreeHash(repository.Root, recipe.Root),
-            ["guestFiles"] = ProvisionInputs.TreeHash(repository.Root, guest.Directory, "guest.yaml"),
+            // A service has its own runs: a change to one does not configure its guest again.
+            ["guestFiles"] = ProvisionInputs.TreeHash(repository.Root, guest.Directory, "guest.yaml", "services"),
         };
         return new ConfigureInputs(
             guest,

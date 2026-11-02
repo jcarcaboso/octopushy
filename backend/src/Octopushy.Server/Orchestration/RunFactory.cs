@@ -8,7 +8,7 @@ using Octopushy.Server.Options;
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
-public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
+public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason) =>

@@ -14,10 +14,11 @@ namespace Octopushy.Server.Store;
 public sealed class StateBusyException(string message) : Exception(message);
 
 /// <summary>
-/// The OpenTofu state Octopushy keeps for guests without an external backend. State leaves only in
-/// the assignment of an attempt on that guest, after the gates that release its credentials. It
-/// comes back only from the apply holding the lock, which it gets after its plan was approved, so
-/// a plan cannot change state. Calls run under the engine's gate.
+/// The OpenTofu state Octopushy keeps for guests without an external backend, and for pipeline
+/// stages, which have one each: <see cref="TofuState.Stage"/> is empty for a guest's own. State
+/// leaves only in the assignment of an attempt on that resource, after the gates that release its
+/// credentials. It comes back only from the apply holding the lock, which it gets after its plan
+/// was approved, so a plan cannot change state. Calls run under the engine's gate.
 /// </summary>
 public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvider clock, ILogger<TofuStateStore> logger)
 {
@@ -37,9 +38,10 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     /// </summary>
     public async Task<Artifact?> CheckOutAsync(Attempt attempt, Run run, RunContext context, bool apply, CancellationToken cancellationToken)
     {
-        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == run.ResourceId, cancellationToken);
+        var stage = context.Stage ?? "";
+        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == run.ResourceId && s.Stage == stage, cancellationToken);
         var head = await HeadAsync(state, cancellationToken);
-        var last = await LastApplyAsync(run.ResourceId, cancellationToken);
+        var last = await LastApplyAsync(run.ResourceId, stage, cancellationToken);
         if (!context.OpenTofu!.Backend.IsBuiltIn)
         {
             // An uncertain built-in apply can have created what no stored state records.
@@ -65,7 +67,8 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         if (apply)
         {
             var planned = await db.Attempts.AsNoTracking()
-                .Where(a => a.StepId != null && a.Step!.RunId == run.Id && a.Step.Name == StepNames.Plan && a.Status == AttemptStatuses.Succeeded)
+                .Where(a => a.StepId != null && a.Step!.RunId == run.Id && a.Step.Name == StepNames.Plan && a.Step.Stage == context.Stage
+                    && a.Status == AttemptStatuses.Succeeded)
                 .OrderByDescending(a => a.Number)
                 .Select(a => a.StateVersion)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -76,7 +79,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
 
             if (state is null)
             {
-                state = new TofuState { ResourceId = run.ResourceId };
+                state = new TofuState { ResourceId = run.ResourceId, Stage = stage };
                 db.TofuStates.Add(state);
             }
             if (state.LockAttemptId is { } stale && stale != attempt.Id)
@@ -89,7 +92,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         }
 
         attempt.StateVersion = head?.Version ?? 0;
-        var content = head is null ? Seed(run.ResourceId) : Open(head);
+        var content = head is null ? Seed(run.ResourceId, stage) : Open(head);
         return new Artifact
         {
             Name = ArtifactName,
@@ -102,12 +105,12 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     /// Stores the state of the apply holding the lock, replacing its own earlier snapshot, and
     /// returns why it was refused. The caller saves the changes.
     /// </summary>
-    public async Task<string?> WriteAsync(Guid attemptId, Guid resourceId, byte[] content, CancellationToken cancellationToken)
+    public async Task<string?> WriteAsync(Guid attemptId, Guid resourceId, byte[] content, CancellationToken cancellationToken, string stage = "")
     {
-        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId, cancellationToken);
+        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId && s.Stage == stage, cancellationToken);
         var head = await HeadAsync(state, cancellationToken);
         var sha256 = ArtifactStore.Sha256(content);
-        if (sha256 == (head?.Sha256 ?? ArtifactStore.Sha256(Seed(resourceId))))
+        if (sha256 == (head?.Sha256 ?? ArtifactStore.Sha256(Seed(resourceId, stage))))
         {
             return null;
         }
@@ -143,7 +146,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             return null;
         }
 
-        var version = NewVersion(resourceId, state.HeadVersion + 1, parsed.Lineage, sha256);
+        var version = NewVersion(resourceId, stage, state.HeadVersion + 1, parsed.Lineage, sha256);
         version.AttemptId = attemptId;
         Fill(version, content, sha256, parsed);
         await AddAsync(state, version, cancellationToken);
@@ -151,13 +154,13 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     }
 
     /// <summary>Records what an apply left behind and frees its lock; returns why its state was refused.</summary>
-    public async Task<string?> SettleAsync(Attempt attempt, Guid resourceId, byte[]? content, CancellationToken cancellationToken)
+    public async Task<string?> SettleAsync(Attempt attempt, Guid resourceId, byte[]? content, CancellationToken cancellationToken, string stage = "")
     {
-        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId, cancellationToken);
+        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId && s.Stage == stage, cancellationToken);
         // An apply that started may have changed something, whatever it reports, and only its
         // state would say what. One that never started has nothing to lose.
         var refused = content is not null
-            ? await WriteAsync(attempt.Id, resourceId, content, cancellationToken)
+            ? await WriteAsync(attempt.Id, resourceId, content, cancellationToken, stage)
             : attempt.Status == AttemptStatuses.Succeeded || attempt.StartedAt is not null ? "The agent returned no state." : null;
         if (state?.LockAttemptId == attempt.Id)
         {
@@ -169,11 +172,11 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     }
 
     /// <summary>What the API may show about a guest's state: everything but its content.</summary>
-    public async Task<(TofuState? State, bool LockHeld, List<TofuStateVersion> Versions)> DescribeAsync(Guid resourceId, CancellationToken cancellationToken)
+    public async Task<(TofuState? State, bool LockHeld, List<TofuStateVersion> Versions)> DescribeAsync(Guid resourceId, CancellationToken cancellationToken, string stage = "")
     {
-        var state = await db.TofuStates.AsNoTracking().FirstOrDefaultAsync(s => s.ResourceId == resourceId, cancellationToken);
+        var state = await db.TofuStates.AsNoTracking().FirstOrDefaultAsync(s => s.ResourceId == resourceId && s.Stage == stage, cancellationToken);
         var versions = await db.TofuStateVersions.AsNoTracking()
-            .Where(v => v.ResourceId == resourceId)
+            .Where(v => v.ResourceId == resourceId && v.Stage == stage)
             .OrderByDescending(v => v.Version)
             .Select(v => new TofuStateVersion
             {
@@ -191,9 +194,9 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     /// Makes an earlier version current again, as a new version with the next serial so OpenTofu
     /// and later writes take it as newer. Saved plans of the state it replaces become stale.
     /// </summary>
-    public async Task RollBackAsync(Guid resourceId, int version, int expectedHead, string user, CancellationToken cancellationToken)
+    public async Task RollBackAsync(Guid resourceId, int version, int expectedHead, string user, CancellationToken cancellationToken, string stage = "")
     {
-        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId, cancellationToken);
+        var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == resourceId && s.Stage == stage, cancellationToken);
         var head = await HeadAsync(state, cancellationToken) ?? throw new RunException("This guest has no built-in state.");
         if (head.Version != expectedHead)
         {
@@ -211,7 +214,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             throw new RunException("Finish or close this guest's runs before restoring its state.");
         }
 
-        var source = await db.TofuStateVersions.FirstOrDefaultAsync(v => v.ResourceId == resourceId && v.Version == version, cancellationToken)
+        var source = await db.TofuStateVersions.FirstOrDefaultAsync(v => v.ResourceId == resourceId && v.Stage == stage && v.Version == version, cancellationToken)
             ?? throw new RunException("There is no such state version.");
         byte[] original;
         try
@@ -227,7 +230,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         document["serial"] = head.Serial + 1;
         var content = JsonSerializer.SerializeToUtf8Bytes(document);
         var sha256 = ArtifactStore.Sha256(content);
-        var restored = NewVersion(resourceId, state!.HeadVersion + 1, source.Lineage, sha256);
+        var restored = NewVersion(resourceId, stage, state!.HeadVersion + 1, source.Lineage, sha256);
         restored.RestoredFrom = version;
         restored.RestoredBy = user;
         Fill(restored, content, sha256, Parse(content)!.Value);
@@ -244,22 +247,23 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     /// and those are what survives a crash. The lineage is the guest's, so a plan and its apply
     /// agree on it. It is never stored.
     /// </summary>
-    private static byte[] Seed(Guid resourceId) => JsonSerializer.SerializeToUtf8Bytes(new
+    private static byte[] Seed(Guid resourceId, string stage) => JsonSerializer.SerializeToUtf8Bytes(new
     {
         version = 4,
         serial = 0,
-        lineage = resourceId.ToString(),
+        lineage = stage.Length == 0 ? resourceId.ToString() : $"{resourceId}.{stage}",
         outputs = new { },
         resources = Array.Empty<object>(),
     });
 
-    private TofuStateVersion NewVersion(Guid resourceId, int version, string lineage, string sha256)
+    private TofuStateVersion NewVersion(Guid resourceId, string stage, int version, string lineage, string sha256)
     {
         var now = clock.GetUtcNow();
         return new TofuStateVersion
         {
             Id = Guid.CreateVersion7(),
             ResourceId = resourceId,
+            Stage = stage,
             Version = version,
             Lineage = lineage,
             Sha256 = sha256,
@@ -285,7 +289,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         db.TofuStateVersions.Add(version);
         state.HeadVersion = version.Version;
         await db.TofuStateVersions
-            .Where(v => v.ResourceId == state.ResourceId && v.Version <= version.Version - RetainedVersions)
+            .Where(v => v.ResourceId == state.ResourceId && v.Stage == state.Stage && v.Version <= version.Version - RetainedVersions)
             .ExecuteDeleteAsync(cancellationToken);
     }
 
@@ -306,7 +310,7 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
 
     private async Task<TofuStateVersion?> HeadAsync(TofuState? state, CancellationToken cancellationToken) =>
         state is null || state.HeadVersion == 0 ? null
-            : await db.TofuStateVersions.SingleAsync(v => v.ResourceId == state.ResourceId && v.Version == state.HeadVersion, cancellationToken);
+            : await db.TofuStateVersions.SingleAsync(v => v.ResourceId == state.ResourceId && v.Stage == state.Stage && v.Version == state.HeadVersion, cancellationToken);
 
     private Task<bool> IsRunningAsync(Guid attemptId, CancellationToken cancellationToken) =>
         db.Attempts.AnyAsync(a => a.Id == attemptId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), cancellationToken);
@@ -316,10 +320,11 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     /// resources before it stopped, so its backend may hold them. A failed one returned its
     /// state, or it would be uncertain, so what the built-in state knows about it is complete.
     /// </summary>
-    private async Task<(bool BuiltIn, bool StateKnown, bool Retired)?> LastApplyAsync(Guid resourceId, CancellationToken cancellationToken)
+    private async Task<(bool BuiltIn, bool StateKnown, bool Retired)?> LastApplyAsync(Guid resourceId, string stage, CancellationToken cancellationToken)
     {
         var last = await db.Attempts.AsNoTracking()
-            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.StartedAt != null && a.Step!.Run!.ResourceId == resourceId)
+            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.StartedAt != null && a.Step!.Run!.ResourceId == resourceId
+                && (a.Step.Stage ?? "") == stage)
             .OrderByDescending(a => a.StartedAt)
             .Select(a => new { a.Status, a.Step!.Run!.Operation, a.Step.Run.Context })
             .FirstOrDefaultAsync(cancellationToken);
@@ -328,7 +333,8 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             return null;
         }
 
-        return (RunContext.Parse(last.Context).OpenTofu?.Backend.IsBuiltIn == true,
+        var context = RunContext.Parse(last.Context);
+        return ((stage.Length == 0 ? context : context.ForStage(stage)).OpenTofu?.Backend.IsBuiltIn == true,
             last.Status is AttemptStatuses.Succeeded or AttemptStatuses.Failed,
             last.Status == AttemptStatuses.Succeeded && last.Operation == Operations.Retire);
     }

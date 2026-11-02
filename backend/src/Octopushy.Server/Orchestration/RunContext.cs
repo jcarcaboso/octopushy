@@ -66,16 +66,62 @@ public sealed record RunContext
     /// <summary>Whether Octopushy's own key goes to this guest with the keys it declares.</summary>
     public bool ManagedAccess { get; init; }
 
+    /// <summary>
+    /// A pipeline run's stages, in order. Each names one <see cref="OpenTofu"/> or <see cref="Ansible"/>,
+    /// and a step of the stage sees the context <see cref="ForStage"/> makes. In <see cref="Secrets"/> and
+    /// its version maps, the roles of a stage are written <c>stage/role</c>, so two stages can bind the
+    /// same extra var to different keys and the run still pins them all at once.
+    /// </summary>
+    public IReadOnlyList<StageContext>? Stages { get; init; }
+
+    /// <summary>The stage this is the view of, from <see cref="ForStage"/>.</summary>
+    public string? Stage { get; init; }
+
+    /// <summary>The guest a pipeline run's service is on, whose SSH key its stages log in with.</summary>
+    public Guid? GuestResourceId { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
     public DateTimeOffset? ScheduledFor { get; init; }
+
+    /// <summary>A role as a pipeline run records it.</summary>
+    public static string StageRole(string stage, string role) => $"{stage}/{role}";
+
+    /// <summary>A stage's role, or any other, without its stage.</summary>
+    public static string BareRole(string role) => role[(role.IndexOf('/') + 1)..];
+
+    /// <summary>What a step of the stage sees: its own tool and only its own secrets, under their usual names.</summary>
+    public RunContext ForStage(string name)
+    {
+        var stage = Stages?.SingleOrDefault(s => s.Name == name)
+            ?? throw new InvalidOperationException($"The run has no stage {name}.");
+        var prefix = StageRole(name, "");
+        Dictionary<string, T> Own<T>(Dictionary<string, T> all) where T : notnull =>
+            all.Where(p => p.Key.StartsWith(prefix, StringComparison.Ordinal)).ToDictionary(p => p.Key[prefix.Length..], p => p.Value, StringComparer.Ordinal);
+        return this with
+        {
+            Stages = null,
+            Stage = name,
+            OpenTofu = stage.OpenTofu,
+            Ansible = stage.Ansible,
+            Secrets = Own(Secrets),
+            RequestedSecretVersions = Own(RequestedSecretVersions),
+            SecretVersions = Own(SecretVersions),
+        };
+    }
+
+    /// <summary>What a step's work sees: <see cref="ForStage"/> of a stage's step, and otherwise the whole run.</summary>
+    public RunContext ForStep(Data.Step? step) => step?.Stage is { } stage ? ForStage(stage) : this;
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
 
     public static RunContext Parse(string json) =>
         JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
 }
+
+/// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools.</summary>
+public sealed record StageContext(string Name, string Recipe, OpenTofuContext? OpenTofu, AnsibleContext? Ansible);
 
 public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
 
