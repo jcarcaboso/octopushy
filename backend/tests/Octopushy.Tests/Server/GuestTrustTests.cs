@@ -151,6 +151,34 @@ public class GuestTrustTests(PostgresFixture postgres)
         Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
     }
 
+    [Fact]
+    public async Task A_removal_can_be_trusted_after_the_definition_was_broken_before_the_folder_went()
+    {
+        var (server, agent, client) = await StartAsync(postgres, Repository(AutomaticEverything), Key, Token);
+        await using var _ = server;
+        using var __ = client;
+        (await TrustAsync(server, client, await ShownDigestAsync(server, client))).EnsureSuccessStatusCode();
+        await FinishAsync(server, agent);
+        var applied = await ShownDigestAsync(server, client);
+
+        File.AppendAllText(Path.Combine(server.Repository.Root, "modules/opentofu/test-vm/main.tf"), "\n# changed\n");
+        server.Commit("Change the code");
+        await server.SyncAsync();
+        (await TrustAsync(server, client, await ShownDigestAsync(server, client))).EnsureSuccessStatusCode();
+
+        server.Repository.Write(GuestFile, "notAField: true\n" + File.ReadAllText(Path.Combine(server.Repository.Root, GuestFile)).TrimEnd('\n'));
+        server.Commit("Break it");
+        await server.SyncAsync();
+        server.Repository.Delete("labs/home/proxmox/korriban/guests/krb-ct-01");
+        server.Commit("Remove the guest");
+        await server.SyncAsync();
+        await DriveAsync(server, agent);
+        Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
+
+        Assert.Equal(applied, await ShownDigestAsync(server, client));
+        (await TrustAsync(server, client, applied)).EnsureSuccessStatusCode();
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(AutomaticEverything)]

@@ -82,9 +82,10 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             resource.LastRevisionId = revision.Id;
             resource.MissingSince = null;
             resource.Valid = entry.Valid;
-            // A file that cannot be read says nothing, so what it last said stands: the stateful guard reads this,
-            // and a commit that breaks the file must not be how a guest loses its guard.
-            resource.Definition = entry.Json?.ToJsonString() ?? resource.Definition;
+            // A guest that cannot be planned says nothing yet, so what it last said stands: the stateful guard reads
+            // this, and a commit that breaks a guest must not be how it loses its guard.
+            if (entry.Kind != ResourceKind.Guest || entry.Valid || resource.Definition is null)
+                resource.Definition = entry.Json?.ToJsonString() ?? resource.Definition;
             resource.DefinitionFile = entry.File;
             resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(entry.Address).ToList(), IssueJson);
         }
@@ -97,6 +98,7 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, byAddress.Values);
             if (problem is not null)
             {
+                resource.Definition = db.Entry(resource).OriginalValues.GetValue<string?>(nameof(Resource.Definition)) ?? resource.Definition;
                 resource.Valid = false;
                 var issues = repository.IssuesFor(resource.Address).ToList();
                 issues.Add(new DefinitionIssue(IssueSeverity.Error, repository.Guest(resource.Address)!.File, null, problem, resource.Address));

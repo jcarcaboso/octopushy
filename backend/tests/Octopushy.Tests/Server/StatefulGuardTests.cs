@@ -243,6 +243,26 @@ public class StatefulGuardTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_commit_that_takes_the_marker_out_and_breaks_the_guest_does_not_lift_the_guard()
+    {
+        await using var server = await StartAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await DeployAsync(server, agent);
+
+        server.Repository.Write(GuestFile, Text(server).Replace("stateful: true\n", "").Replace("recipe: test-ct", "recipe: nothing").TrimEnd('\n'));
+        server.Commit("Both at once");
+        await server.SyncAsync();
+        Assert.False((await server.ResourceAsync(Guest)).Valid);
+        Assert.True(StatefulGuard.Declared(await server.ResourceAsync(Guest)));
+
+        server.Repository.Write(GuestFile, Text(server).Replace("recipe: nothing", "recipe: test-ct").Replace("vmid: 311", "vmid: 399").TrimEnd('\n'));
+        server.Commit("Another guest's identity");
+        await server.SyncAsync();
+        Assert.False((await server.ResourceAsync(Guest)).Valid);
+        Assert.True(StatefulGuard.Declared(await server.ResourceAsync(Guest)));
+    }
+
+    [Fact]
     public async Task A_commit_that_breaks_the_definition_does_not_lift_the_guard()
     {
         await using var server = await StartAsync("policy: { destructive: automatic }");

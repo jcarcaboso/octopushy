@@ -482,7 +482,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
     public async Task<GuestRelease?> GuestReleaseAsync(Resource resource, CancellationToken cancellationToken)
     {
-        if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || !resource.Valid
+        // A deleted guest's Valid says how it last stood, and its removal is built from a revision that was valid.
+        if (resource.Kind != ResourceKinds.Guest || resource.RetiredAt is not null || !resource.Valid && resource.MissingSince is null
             || await ReleaseRepositoryAsync(resource, cancellationToken) is not { } head
             || !head.Repository.IsValid(resource.Address) || head.Repository.Guest(resource.Address) is not { } guest)
         {
