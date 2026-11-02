@@ -487,7 +487,18 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             return null;
         }
 
-        var (binding, secrets) = factory.Release(head.Repository, guest, resource, new DefinitionRevision { Commit = head.Commit });
+        ReleaseBinding binding;
+        IReadOnlyDictionary<string, string> secrets;
+        try
+        {
+            (binding, secrets) = factory.Release(head.Repository, guest, resource, new DefinitionRevision { Commit = head.Commit });
+        }
+        catch (RunException)
+        {
+            // A guest no run can be built for has nothing to trust; its page must still load.
+            return null;
+        }
+
         var guarded = (await db.StoreEntries.AsNoTracking().Where(e => e.Protected).Select(e => e.Key).ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
         var keys = secrets.Values.Where(guarded.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         // A backend's environment reaches OpenTofu during init, before there is a plan to review: no grant fits that.
