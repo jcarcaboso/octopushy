@@ -30,8 +30,8 @@ export function GuestDiskUsage({ id, usage, inactive }: { id: string; usage: Dis
   let serverUrl: URL | null = null;
   try {
     const url = new URL(server);
-    if (url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/") serverUrl = url;
-  } catch { /* The field explains the expected HTTPS origin. */ }
+    if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/") serverUrl = url;
+  } catch { /* The field's placeholder shows the expected origin. */ }
 
   function close() {
     setConfiguring(false);
@@ -105,16 +105,22 @@ export function GuestDiskUsage({ id, usage, inactive }: { id: string; usage: Dis
               if (serverUrl && validMinutes) create.mutate(Number(minutes) * 60);
             }}>
               <p>
-                A one-shot Linux reporter measures the root filesystem and pushes used bytes over HTTPS.
+                A one-shot Linux reporter measures the root filesystem and pushes used bytes to this address.
                 This is the manual installation option; automatic provisioning does not need this form.
               </p>
               {usage.enabled ? <Callout kind="warning" title="This replaces the current token">Reinstall the configuration on the VM after generating a new token.</Callout> : null}
               <div className="field">
-                <label htmlFor="disk-server">Octopushy HTTPS address</label>
+                <label htmlFor="disk-server">Octopushy address</label>
                 <input id="disk-server" type="url" value={server} onChange={(event) => setServer(event.target.value)}
                   placeholder="https://octopushy.example" aria-invalid={!serverUrl || undefined} disabled={create.isPending} required />
                 <span className="field__hint">The VM must be able to reach this address. Use the web/API address, not the execution-agent port.</span>
               </div>
+              {serverUrl?.protocol === "http:" ? (
+                <Callout kind="warning" title="This address uses plain HTTP">
+                  The reporting token travels unencrypted on every report. Anyone on the network path can read it
+                  and submit false disk usage for this VM until it is revoked.
+                </Callout>
+              ) : null}
               <div className="field">
                 <label htmlFor="disk-interval">Reporting interval (minutes)</label>
                 <input id="disk-interval" type="number" min={1} max={10080} step={1} value={minutes}

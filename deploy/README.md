@@ -51,10 +51,13 @@ OCTOPUSHY_DISK_REPORTER_BINARY_SHA256=<sha256sum of the published binary>
 OCTOPUSHY_DISK_REPORTER_INTERVAL_SECONDS=3600
 ```
 
-The web/API origin and direct binary URL must be reachable over HTTPS **from the
-VM**. No redirect-following or insecure TLS fallback is allowed. For a private CA,
-set `OCTOPUSHY_DISK_REPORTER_CA_PEM` to its public PEM (never the private key);
-it becomes the trust bundle for **both** endpoints.
+The web/API origin and direct binary URL must be reachable **from the VM**. Either
+may use `http://` or `https://`. Over `http://` anyone on the network path can read
+the reporting token, which can only submit that VM's disk usage; see
+[plain HTTP](../agent/packaging/disk-reporter/README.md#plain-http). No
+redirect-following or insecure TLS fallback is allowed. For a private CA with an
+`https://` web/API origin, set `OCTOPUSHY_DISK_REPORTER_CA_PEM` to its public PEM
+(never the private key); it becomes the trust bundle for **both** endpoints.
 
 Upgrade the execution agents too: they must advertise the new `guest` executor.
 The VM needs Linux/systemd and a running QEMU guest agent with guest execution

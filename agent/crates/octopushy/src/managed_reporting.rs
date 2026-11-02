@@ -41,7 +41,7 @@ impl Configuration {
                 && self.token.len() == 64
                 && self.token.bytes().all(|b| b.is_ascii_hexdigit())
                 && self.endpoint.len() <= 2048
-                && url.scheme() == "https"
+                && matches!(url.scheme(), "http" | "https")
                 && url.host_str().is_some()
                 && url.username().is_empty()
                 && url.password().is_none()
@@ -58,6 +58,10 @@ impl Configuration {
             ensure!(
                 ca.len() <= 16384 && !ca.contains("PRIVATE KEY"),
                 "invalid reporting CA"
+            );
+            ensure!(
+                url.scheme() == "https",
+                "a reporting CA needs an https:// endpoint"
             );
             reqwest::Certificate::from_pem(ca.as_bytes())
                 .map_err(|_| anyhow::anyhow!("invalid reporting CA"))?;
@@ -223,7 +227,7 @@ pub fn configure_stdin() -> Result<()> {
     publish(root, &config)?;
     systemctl(&["reset-failed", "octopushy-disk-reporter.service"])?;
     // The oneshot is not RemainAfterExit. A successful start waits for a new
-    // authenticated HTTPS upload and the reporter requires exactly HTTP 204.
+    // authenticated upload and the reporter requires exactly HTTP 204.
     systemctl(&["start", "octopushy-disk-reporter.service"])?;
     systemctl(&["start", "octopushy-disk-reporter.timer"])?;
     Ok(())
@@ -260,8 +264,15 @@ mod tests {
                 !error.contains("PRIVATE-TOKEN-ENCODING") && !error.contains("not-json-secret")
             );
         }
+        let mut config = configuration();
+        config.endpoint =
+            "http://10.15.30.5:8081/api/guests/884d09b4-0934-43a4-bffb-d2f7977bc01c/disk-usage"
+                .into();
+        assert!(config.validate().is_ok());
         for endpoint in [
             "http://web.test",
+            "ftp://web.test/api/guests/884d09b4-0934-43a4-bffb-d2f7977bc01c/disk-usage",
+            "http://user:password@web.test/api/guests/884d09b4-0934-43a4-bffb-d2f7977bc01c/disk-usage",
             "https://user:password@web.test/api/guests/id/disk-usage",
             "https://web.test/api/guests/not-a-uuid/disk-usage",
         ] {
@@ -275,6 +286,17 @@ mod tests {
         config = configuration();
         config.ca_certificate_pem = Some("PRIVATE KEY".into());
         assert!(config.validate().is_err());
+        config = configuration();
+        config.endpoint =
+            "http://web.test/api/guests/884d09b4-0934-43a4-bffb-d2f7977bc01c/disk-usage".into();
+        config.ca_certificate_pem = Some("public".into());
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("https://")
+        );
         config = configuration();
         config.generation = "wrong".into();
         assert!(config.validate().is_err());

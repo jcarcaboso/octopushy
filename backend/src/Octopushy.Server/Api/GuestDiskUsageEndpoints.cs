@@ -74,10 +74,6 @@ public static class GuestDiskUsageEndpoints
     private static async Task<IResult> ReceiveAsync(
         Guid id, HttpRequest request, OctopushyDb db, TimeProvider clock, CancellationToken ct)
     {
-        if (!request.IsHttps)
-        {
-            return Results.Problem("Disk reports require HTTPS.", statusCode: 400);
-        }
         var authorization = request.Headers.Authorization.ToString();
         if (authorization.Length != 71 || !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
             || authorization.AsSpan(7).IndexOfAnyExcept("0123456789abcdefABCDEF") >= 0)
