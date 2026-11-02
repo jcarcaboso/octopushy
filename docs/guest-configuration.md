@@ -85,7 +85,7 @@ connection, and they are refused in `setup.inputs`, `setup.secrets`, `setup.secr
 | A change to `setup`, `access`, the recipe, its `root`, or the guest's folder | the `onChange` action | Implemented |
 | A provision run that creates or replaces something, such as a new VM | the `onChange` action | Implemented |
 | **Configure** on the guest page, or `POST /api/guests/{id}/configure` | the one chosen | Implemented |
-| A schedule declared on the guest | the one it names | In the [stacked PR](#schedules) |
+| A schedule declared on the guest | the one it names | Implemented, [below](#schedules) |
 
 Each input hash gets one automatic run. A failure is not retried by itself: it waits for a
 new commit or a person. A guest that is not in sync with its provisioning waits for that
@@ -96,12 +96,45 @@ provisioning has not caught up either.
 
 ### Schedules
 
-**Decided November 2, 2026.** Schedules are declared in Git, on the guest, and added by a PR
-stacked on this one: `setup.schedules`, each naming an action and a cron expression in the
-lab's `timezone`. A scheduled run calls the same `Planner.ConfigureGuestAsync` with the
-reason `schedule`, which `Run.Reason` already documents. The maintenance Jenkins runs at
-06:00 therefore moves into the guest's definition once that lands, for a guest Octopushy
-configures. Jenkins keeps maintaining the machines it maintains today.
+**Decided November 2, 2026.** A schedule is declared in Git, on the guest, and runs one action:
+
+```yaml
+setup:
+  recipe: ai-server
+  schedules:
+    - { action: update-tools, cron: "0 6 * * *" }
+    - { action: update-system, cron: "30 6 * * sun" }
+```
+
+It belongs on the guest because one recipe serves machines with different maintenance times,
+and a field on a recipe action would force one time on all of them. The expression has five
+fields and is read in the lab's `timezone`, or UTC if the lab names none. A schedule that names
+an action the recipe lacks, an expression that does not parse, or a time zone that does not
+exist is a validation error. Changing a schedule starts no run: it says when an action runs,
+not what it does, so it is outside the configure hash.
+
+A firing calls the same `Planner.ConfigureGuestAsync` as a person, with the reason `schedule`,
+and gets the same checks. Octopushy looks for what has fallen due once a minute, and a guest's
+page shows its next time and what the last firing did.
+
+| Case | What happens |
+|---|---|
+| **Missed.** Octopushy was down at that time | **At most one catch-up, within an hour.** Back within the hour, it runs once. Later, the time is skipped and noted on the guest, because a schedule says when, and an action that reboots should not run at whatever hour a server came back. Only the newest time counts, so there is never a backlog |
+| **Missed.** No agent took the run | The run waits for an agent for the same hour, then is cancelled with that reason. It has released nothing and touched nothing |
+| **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
+| **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
+| **Approval.** `policy.approval: manual`, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run |
+| **Declared outcome**, such as `deferred`, on a recipe that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval |
+| **Failure** | Each time comes up once, whatever happens to it, so a failed run is not repeated until the next time. It stays on the guest's page and in **Runs**, with a link from the schedule |
+
+**A schedule is not a window.** A schedule says when an action starts. `policy.windows`, which
+is documented in the lab repository format and not built, would limit when any automatic
+change may start. When windows arrive, a scheduled run is an automatic change: a firing
+outside a window would be skipped with a note like any other, and nothing here needs to
+change. Until then a guest's schedule is the only limit on when its scheduled actions start.
+
+The maintenance Jenkins runs at 06:00 therefore moves into the guest's definition. Jenkins
+keeps maintaining the machines it maintains today.
 
 ## A run
 
@@ -131,8 +164,7 @@ All of this goes into one document, `preview.json`, whose SHA-256 the approval n
 `playbook` step receives that exact artifact and refuses anything else, as an apply refuses
 another plan.
 
-- **`policy.approval: manual`** waits for approval on every run, automatic or manual,
-  including a scheduled one later.
+- **`policy.approval: manual`** waits for approval on every run, automatic, scheduled or manual.
 - **`policy.destructive: manual`** waits only for an action declared `destructive: true`.
   Rule 11 says Octopushy decides from the preview, but a playbook has no preview that shows
   deletes. So the recipe states it, and `destructive` is required on every action: a
@@ -435,4 +467,4 @@ never lifts protection, so none of that logic applies to it.
 - No drift detection. A run shows what happened when it ran, not what is true now.
 - A deferred run waiting for approval holds the guest until someone decides. There is no
   timeout, because a run that is holding a real outcome should not disappear by itself. A
-  scheduled run does not wait: see the stacked PR.
+  [scheduled run](#schedules) does not wait.

@@ -90,7 +90,7 @@ public sealed partial class LabRepositoryLoader
         foreach (var guest in guests)
         {
             CheckGuest(guest, settings, installations, templates, recipes);
-            CheckSetup(guest, recipes, installations);
+            CheckSetup(guest, recipes, installations, labs.Find(l => l.Id == guest.Lab)?.Timezone);
         }
         foreach (var duplicate in guests.Where(g => g.ManagedWorker is not null)
                      .GroupBy(g => g.ManagedWorker!.Generation).Where(g => g.Count() > 1))
@@ -726,12 +726,12 @@ public sealed partial class LabRepositoryLoader
         }
     }
 
-    private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
+    private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations, string? timezone)
     {
         if (guest.SetupRecipe is not { } id)
         {
-            if (new[] { "inputs", "secrets", "secretFiles" }.Any(f => guest.Json["setup"]?[f] is not null))
-                Error(guest.File, LineOf(guest.File, "/setup"), "setup.inputs and setup secrets need a setup.recipe.", guest.Address);
+            if (new[] { "inputs", "secrets", "secretFiles", "schedules" }.Any(f => guest.Json["setup"]?[f] is not null))
+                Error(guest.File, LineOf(guest.File, "/setup"), "setup.inputs, setup secrets and setup.schedules need a setup.recipe.", guest.Address);
             return;
         }
 
@@ -783,6 +783,21 @@ public sealed partial class LabRepositoryLoader
             if (connectionKeys.Contains(reference.Key))
                 Invalid("/setup", $"{name} cannot use a Proxmox API token.");
         }
+
+        var schedules = GuestSchedules.Of(guest);
+        for (var index = 0; index < schedules.Count; index++)
+        {
+            var schedule = schedules[index];
+            if (!configure.Actions.ContainsKey(schedule.Action))
+                Invalid($"/setup/schedules/{index}/action", $"The schedule runs '{schedule.Action}', and the recipe '{id}' has no such action.");
+            if (!GuestSchedules.IsCron(schedule.Cron))
+                Invalid($"/setup/schedules/{index}/cron", $"'{schedule.Cron}' is not a cron expression: five fields, minute to day of the week.");
+        }
+
+        if (schedules.Distinct().Count() != schedules.Count)
+            Invalid("/setup/schedules", "The same schedule is listed twice.");
+        if (schedules.Count > 0 && timezone is not null && !GuestSchedules.IsZone(timezone))
+            Invalid("/setup/schedules", $"The lab's timezone '{timezone}' is not an IANA time zone, and a schedule needs one.");
 
         if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
         {

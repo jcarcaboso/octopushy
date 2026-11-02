@@ -84,12 +84,16 @@ public sealed partial class RunEngine
     /// <summary>
     /// Settles a finished playbook. Success promotes what was prepared. A declared outcome waits
     /// for a person if the recipe lets one approve it, once, and otherwise ends as it declares.
+    /// A scheduled run never waits on one: holding the guest for a person would block every
+    /// later run, so it ends here, promotes nothing, and the next time tries again.
     /// </summary>
     private async Task ApplyConfigureEffectsAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {
         var context = RunContext.Parse(run.Context).Ansible!;
         var reported = OutcomeOf(run);
-        var waits = reported?.Declared.ApproveVars is not null && step.Name == StepNames.Playbook;
+        var approvable = reported?.Declared.ApproveVars is not null;
+        var scheduled = approvable && run.Reason == RunReasons.Schedule;
+        var waits = approvable && step.Name == StepNames.Playbook && !scheduled;
         if (!waits)
         {
             foreach (var later in run.Steps.Where(s => s.Ordinal > step.Ordinal))
@@ -101,7 +105,13 @@ public sealed partial class RunEngine
 
         if (reported is not null)
         {
-            var approvedOnce = reported.Declared.ApproveVars is not null && step.Name == StepNames.PlaybookApproved;
+            if (scheduled)
+            {
+                step.Detail = $"It reported {reported.Name}. A scheduled run does not wait for a person, so the next time tries again.";
+                return;
+            }
+
+            var approvedOnce = approvable && step.Name == StepNames.PlaybookApproved;
             if (approvedOnce || !waits && reported.Declared.Result == "failed")
             {
                 step.Status = StepStatuses.Failed;

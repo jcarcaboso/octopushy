@@ -21,7 +21,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
     private const string SshKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\n";
     private const string HostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
 
-    private static async Task<(ServerHarness Server, FakeAgent Agent, HttpClient Http)> ProvisionedAsync(
+    internal static async Task<(ServerHarness Server, FakeAgent Agent, HttpClient Http)> ProvisionedAsync(
         ServerHarness server, bool setKeys = true)
     {
         if (setKeys)
@@ -65,7 +65,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         return (outputs, new Artifact { Name = AssignmentBuilder.PreviewArtifact, Content = ByteString.CopyFrom(content), Sha256 = ArtifactStore.Sha256(content) });
     }
 
-    private static async Task<Assignment> PreviewAsync(FakeAgent agent, JsonObject? prepared = null)
+    internal static async Task<Assignment> PreviewAsync(FakeAgent agent, JsonObject? prepared = null)
     {
         var (outputs, artifact) = Preview(prepared);
         var assignment = await agent.NextAsync("preview");
@@ -74,7 +74,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         return assignment;
     }
 
-    private static JsonObject Recap(string? outcome = null, string? detail = null) => new()
+    internal static JsonObject Recap(string? outcome = null, string? detail = null) => new()
     {
         ["exitCode"] = 0,
         ["tasks"] = 3,

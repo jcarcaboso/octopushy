@@ -58,6 +58,19 @@
           "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
           "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
         },
+        "schedules": {
+          "description": "Actions of the recipe to run on their own, at times in the lab's timezone.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "description": "An action of the recipe.", "$ref": "common.schema.json#/$defs/id" },
+              "cron": { "description": "Five fields: minute, hour, day of the month, month, day of the week.", "type": "string", "minLength": 9 }
+            },
+            "required": ["action", "cron"],
+            "additionalProperties": false
+          }
+        },
         "secretFiles": {
           "description": "Extra vars holding the path of a private file with the store value, for tasks that copy a file.",
           "type": "object",

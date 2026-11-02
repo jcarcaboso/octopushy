@@ -37,14 +37,23 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             return run.Id;
         }, cancellationToken);
 
-    /// <summary>Runs one action of a guest's setup recipe at the latest revision; by default the one that follows changes.</summary>
-    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken) =>
+    /// <summary>
+    /// Runs one action of a guest's setup recipe at the latest revision; by default the one that
+    /// follows changes. A person's run queues behind what is running. A schedule's does not: it
+    /// is refused, so nothing piles up behind a run that is waiting or uncertain.
+    /// </summary>
+    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual") =>
         engine.ExecuteAsync(async (db, _) =>
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
             if (guest.SetupRecipe is null)
                 throw new RunException("This guest has no setup recipe.");
+            if (reason == RunReasons.Schedule
+                && await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
+                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                    .OrderBy(r => r.CreatedAt).FirstOrDefaultAsync(cancellationToken) is { } active)
+                throw new RunException($"Run #{active.Number} is {active.Status}.");
             var lastProvision = await db.Runs.AsNoTracking()
                 .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
                 .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
@@ -53,7 +62,7 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var inputs = ConfigureInputs.Build(repository, guest);
             var chosen = action ?? inputs.Configure.OnChange?.Id
                 ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
-            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, "manual", cancellationToken);
+            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken);
             if (chosen == inputs.Configure.OnChange?.Id
                 && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
                 configuration.ProposedHash = inputs.Hash;
@@ -103,6 +112,115 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             await engine.AddRunsAsync(db, runs, cancellationToken);
             return runs.Count;
         }, cancellationToken);
+
+    /// <summary>
+    /// How long after its time a schedule may still start. A schedule says when an action
+    /// should run, so a time well past is skipped rather than run at some other hour.
+    /// </summary>
+    public static readonly TimeSpan ScheduleLateLimit = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Fires what has fallen due. There is no backlog: only the newest time counts, and each
+    /// comes up once whatever happens to it, so a failure waits for the next one.
+    /// </summary>
+    public async Task FireSchedulesAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var due = await engine.ExecuteAsync(async (db, _) =>
+        {
+            var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().Where(r => r.RepositoryValid)
+                .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+            if (revision is null) return [];
+            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var states = await db.GuestSchedules.ToListAsync(cancellationToken);
+            var resources = await db.Resources.AsNoTracking()
+                .Where(r => r.Kind == ResourceKinds.Guest && r.Valid && r.RetiredAt == null && r.MissingSince == null)
+                .ToListAsync(cancellationToken);
+            var fire = new List<GuestScheduleState>();
+            var declared = new HashSet<GuestScheduleState>();
+            foreach (var resource in resources)
+            {
+                if (repository.Guest(resource.Address) is not { } guest || !repository.IsValid(resource.Address))
+                    continue;
+                var zone = GuestSchedules.ZoneOf(repository.Lab(guest.Lab)?.Timezone);
+                foreach (var schedule in GuestSchedules.Of(guest))
+                {
+                    var state = states.Find(s => s.ResourceId == resource.Id && s.Action == schedule.Action && s.Cron == schedule.Cron);
+                    if (state is null)
+                    {
+                        // A new schedule starts from now: a time it only just missed is not owed.
+                        state = new GuestScheduleState { ResourceId = resource.Id, Action = schedule.Action, Cron = schedule.Cron, LastSlot = now };
+                        db.GuestSchedules.Add(state);
+                        declared.Add(state);
+                        continue;
+                    }
+
+                    declared.Add(state);
+                    if (GuestSchedules.Next(schedule.Cron, zone, state.LastSlot) is not { } next || next > now)
+                        continue;
+                    // Recorded before the run starts: a crash between the two loses a firing, not doubles one.
+                    if (GuestSchedules.Latest(schedule.Cron, zone, now - ScheduleLateLimit, now) is { } slot)
+                    {
+                        state.LastSlot = slot;
+                        fire.Add(state);
+                    }
+                    else
+                    {
+                        state.LastSlot = now;
+                        state.Note = $"Missed {next:u}: nothing was running to start it. The next time will.";
+                        state.NoteAt = now;
+                    }
+                }
+            }
+
+            // Only guests this revision still knows: an invalid one keeps its place.
+            var known = resources.Select(r => r.Id).ToHashSet();
+            db.GuestSchedules.RemoveRange(states.Where(s => known.Contains(s.ResourceId) && !declared.Contains(s)));
+            await db.SaveChangesAsync(cancellationToken);
+            return fire;
+        }, cancellationToken);
+
+        foreach (var state in due)
+        {
+            var (run, note) = await StartScheduledAsync(state, cancellationToken);
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                var current = await db.GuestSchedules.FirstOrDefaultAsync(
+                    s => s.ResourceId == state.ResourceId && s.Action == state.Action && s.Cron == state.Cron, cancellationToken);
+                if (current is null) return 0;
+                current.LastRunId = run ?? current.LastRunId;
+                current.Note = note;
+                current.NoteAt = note is null ? null : now;
+                return await db.SaveChangesAsync(cancellationToken);
+            }, cancellationToken);
+        }
+    }
+
+    private async Task<(Guid? Run, string? Note)> StartScheduledAsync(GuestScheduleState state, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await ConfigureGuestAsync(state.ResourceId, state.Action, cancellationToken, RunReasons.Schedule), null);
+        }
+        catch (RunException e)
+        {
+            return (null, $"Skipped: {e.Message}");
+        }
+    }
+
+    /// <summary>A scheduled run no agent picked up by its limit stops waiting: one starting hours late would run at a time nobody chose.</summary>
+    public async Task ExpireScheduledAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var cutoff = now - ScheduleLateLimit;
+        var stale = await engine.ExecuteAsync((db, _) => db.Runs.AsNoTracking()
+            .Where(r => r.Reason == RunReasons.Schedule && r.CreatedAt < cutoff
+                && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running || r.Status == RunStatuses.Blocked)
+                && r.Steps.All(s => s.Attempts.All(a => a.Status == AttemptStatuses.Queued)))
+            .Select(r => r.Id).ToListAsync(cancellationToken), cancellationToken);
+        foreach (var id in stale)
+        {
+            await engine.CancelAsync(id, "Nothing picked this up within an hour of its time. The next time tries again.", cancellationToken);
+        }
+    }
 
     private async Task<Run> ConfigureRunAsync(OctopushyDb db, LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
         string action, string reason, CancellationToken cancellationToken)

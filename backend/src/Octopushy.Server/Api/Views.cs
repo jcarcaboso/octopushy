@@ -27,7 +27,7 @@ public static class GuestStatuses
 }
 
 /// <summary>Builds the read models the API returns.</summary>
-public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, AgentConnections connections)
+public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, AgentConnections connections, TimeProvider clock)
 {
     private const int DefinitionTextLimit = 256 * 1024;
 
@@ -246,6 +246,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 if (guest.SetupRecipe is { } recipe && repository.Recipes.TryGetValue(recipe, out var definition) && definition.Configure is { } offered)
                 {
                     var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
+                    var schedules = await SchedulesAsync(repository, guest, id, cancellationToken);
                     configure = new GuestConfigurationDto(
                         recipe,
                         offered.Actions.Values.Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList(),
@@ -254,7 +255,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                         state?.AppliedRevisionId is { } applied
                             ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null,
                         state?.AppliedAt,
-                        state?.Snapshot is not null);
+                        state?.Snapshot is not null,
+                        schedules);
                 }
             }
 
@@ -285,6 +287,34 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             GuestDiskUsageEndpoints.View(resource,
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
             configure);
+    }
+
+    private async Task<IReadOnlyList<GuestScheduleDto>> SchedulesAsync(LabRepository repository, GuestDefinition guest, Guid id, CancellationToken cancellationToken)
+    {
+        var declared = GuestSchedules.Of(guest);
+        if (declared.Count == 0)
+            return [];
+        var timezone = repository.Lab(guest.Lab)?.Timezone ?? "UTC";
+        var zone = GuestSchedules.ZoneOf(timezone);
+        var states = await db.GuestSchedules.AsNoTracking().Where(s => s.ResourceId == id).ToListAsync(cancellationToken);
+        var runIds = states.Where(s => s.LastRunId is not null).Select(s => s.LastRunId!.Value).ToList();
+        var runs = await db.Runs.AsNoTracking().Where(r => runIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, cancellationToken);
+        return declared.Select(schedule =>
+        {
+            var state = states.Find(s => s.Action == schedule.Action && s.Cron == schedule.Cron);
+            var run = state?.LastRunId is { } last ? runs.GetValueOrDefault(last) : null;
+            return new GuestScheduleDto(
+                schedule.Action,
+                schedule.Cron,
+                timezone,
+                GuestSchedules.Next(schedule.Cron, zone, clock.GetUtcNow()),
+                run?.Id,
+                run?.Number,
+                run?.Status,
+                run?.Detail,
+                state?.Note,
+                state?.NoteAt);
+        }).ToList();
     }
 
     public async Task<InstallationDetailDto?> InstallationAsync(Guid id, CancellationToken cancellationToken)

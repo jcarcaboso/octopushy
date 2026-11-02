@@ -12,6 +12,7 @@ export type InstallationDetail = Schemas["InstallationDetailDto"];
 export type GuestSummary = Schemas["GuestSummaryDto"];
 export type GuestDetail = Schemas["GuestDetailDto"];
 export type GuestConfiguration = Schemas["GuestConfigurationDto"];
+export type GuestSchedule = Schemas["GuestScheduleDto"];
 export type ConfigurePreview = Schemas["ConfigurePreviewDto"];
 export type GuestDiskUsage = Schemas["GuestDiskUsageDto"];
 export type ObservedHost = Schemas["ObservedHostDto"];

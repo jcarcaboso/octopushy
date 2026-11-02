@@ -186,4 +186,76 @@ public class GuestConfigurationTests
         Assert.Contains("access/app/ssh-key", uses);
         Assert.Contains("access/app/host-key", uses);
     }
+
+    private static TestRepository WithSchedules(string schedules)
+    {
+        var test = Repository();
+        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile))
+            .Replace("access:\n  user: ops", $"  schedules:\n{schedules}access:\n  user: ops"));
+        return test;
+    }
+
+    [Fact]
+    public void A_schedule_names_an_action_of_the_recipe_and_a_time()
+    {
+        using var test = WithSchedules("    - { action: update-system, cron: \"0 6 * * *\" }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        Assert.Equal(
+            new GuestScheduleDefinition("update-system", "0 6 * * *"),
+            Assert.Single(GuestSchedules.Of(repository.Guest(Address)!)));
+    }
+
+    [Theory]
+    [InlineData("    - { action: reinstall, cron: \"0 6 * * *\" }\n", "has no such action")]
+    [InlineData("    - { action: configure, cron: \"not a cron\" }\n", "is not a cron expression")]
+    [InlineData("    - { action: configure, cron: \"0 6 * * * *\" }\n", "is not a cron expression")]
+    [InlineData("    - { action: configure, cron: \"0 6 * * *\" }\n    - { action: configure, cron: \"0 6 * * *\" }\n", "listed twice")]
+    public void A_schedule_that_cannot_run_is_refused(string schedules, string message)
+    {
+        using var test = WithSchedules(schedules);
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains(message));
+        Assert.False(repository.IsValid(Address));
+    }
+
+    [Fact]
+    public void A_schedule_needs_a_recipe()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + "setup:\n  schedules:\n    - { action: configure, cron: \"0 6 * * *\" }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("setup.schedules need a setup.recipe"));
+    }
+
+    [Fact]
+    public void A_schedule_needs_a_real_time_zone()
+    {
+        using var test = WithSchedules("    - { action: configure, cron: \"0 6 * * *\" }\n");
+        test.Write("labs/home/lab.yaml", File.ReadAllText(Path.Combine(test.Root, "labs/home/lab.yaml")) + "timezone: Mars/Olympus\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("Mars/Olympus"));
+    }
+
+    [Fact]
+    public void Changing_a_schedule_configures_nothing()
+    {
+        using var without = Repository();
+        using var with = WithSchedules("    - { action: configure, cron: \"0 6 * * *\" }\n");
+        var before = LabRepositoryLoader.Load(without.Root);
+        var after = LabRepositoryLoader.Load(with.Root);
+        Assert.Equal(
+            ConfigureInputs.Build(before, before.Guest(Address)!).Hash,
+            ConfigureInputs.Build(after, after.Guest(Address)!).Hash);
+    }
+
+    [Theory]
+    [InlineData("UTC", "2026-03-29T06:00:00+00:00")]
+    // The clocks go forward that morning, and 06:00 is still 06:00 where the lab is.
+    [InlineData("Europe/Madrid", "2026-03-29T04:00:00+00:00")]
+    public void A_time_is_read_in_the_labs_zone(string zone, string expected)
+    {
+        var next = GuestSchedules.Next("0 6 * * *", GuestSchedules.ZoneOf(zone), DateTimeOffset.Parse("2026-03-28T23:00:00Z"));
+        Assert.Equal(DateTimeOffset.Parse(expected), next);
+    }
 }

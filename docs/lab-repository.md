@@ -305,7 +305,7 @@ state backend format, the provisioning recipe file, and template images are the 
 # labs/home/lab.yaml
 schemaVersion: 1
 name: Home
-timezone: UTC                     # for maintenance windows
+timezone: UTC                     # for guest schedules and maintenance windows
 execution:
   agentLabels: [home]             # agents that may act on this lab's resources
 integrations:                     # systems this lab uses; type selects the adapter
@@ -387,6 +387,8 @@ setup:
   inputs: { machine_tools_channel: stable }
   secrets:
     machine_tools_token: { store: machines/krb-crt-01/tools-token }
+  schedules:                      # actions of the recipe, in cron, in the lab's timezone
+    - { action: update-tools, cron: "0 6 * * *" }
 access:
   address: krb-crt-01.home.arpa   # by default the static or reserved address
   user: ops
