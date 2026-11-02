@@ -125,8 +125,12 @@ each with attempts; a retry is a new attempt.
 
 | Run | Steps |
 |---|---|
-| Provision a guest | plan → approval → apply → verify |
+| Provision a guest | plan → approval → unprotect → apply → verify |
 | Retire a guest | plan (destroy) → approval → unprotect → apply → verify absent |
+
+A provision run skips `unprotect` unless its plan replaces or deletes the guest's own VM.
+If such a run lifted protection and its apply did not finish, it ends with an added
+`reprotect` step. Managed workers have no `unprotect` step in provision runs.
 
 Observing an installation is not a run: it changes nothing, so an agent does it in the
 background every few minutes, after a revision changes the installation, or on
@@ -143,8 +147,9 @@ secret is reported the same way and nothing is sent.
   checked.
 - **Approval.** Automatic guests are approved by policy, and the record says so.
   Manual guests wait. A plan with deletes, outside a recreate, follows the
-  destructive setting. Approval names the plan's SHA-256, and apply refuses any
-  other plan.
+  destructive setting. A plan that replaces or deletes a VM has
+  [its own rule](lab-repository.md). Approval names the plan's SHA-256, and apply
+  refuses any other plan.
 - **Locks and limits.** One run per guest at a time; a newer revision cancels a run
   that has not started applying. `limits.concurrentOperations` on a host caps the
   attempts running against its guests. Each agent runs at most its server-side
@@ -202,7 +207,7 @@ only the attempt's workspace mounted):
 
 | Action | Input | Output |
 |---|---|---|
-| `preview` | `stack`, `root`, `backend`, `variables`, `env`, `secretEnv`, `destroy`, `image` | `hasChanges`, `changes[]` (address, type, actions), `counts`; artifact `plan.tar.gz` |
+| `preview` | `stack`, `root`, `backend`, `variables`, `env`, `secretEnv`, `destroy`, `image` | `hasChanges`, `changes[]` (address, type, actions, actionReason, and for a Proxmox VM its vmId and node before the change), `counts`; artifact `plan.tar.gz` |
 | `apply` | the same, plus the artifact `plan.tar.gz` | `outputs` (sensitive values withheld) |
 
 `secretEnv` maps an environment variable to a secret name. The files of the root

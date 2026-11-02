@@ -44,7 +44,10 @@ or completed service orchestration.
 2. A guest whose inputs changed gets a provision run: **plan** (OpenTofu, on an agent),
    **approval** (automatic or manual, per the guest's policy; deletes follow the
    destructive setting), **apply** of exactly the approved plan, and **verify** through
-   the Proxmox API, followed by **install-disk-reporter** when configured. A retired guest gets a destroy plan, protection lifted, apply, and a
+   the Proxmox API, followed by **install-disk-reporter** when configured. A plan that
+   replaces the guest's VM [waits for approval](docs/lab-repository.md) unless the VM
+   never finished its first apply, then has its protection lifted right before the
+   apply. A retired guest gets a destroy plan, protection lifted, apply, and a
    check that the VM is gone.
 3. Agents connect outbound, enroll with a one-time token, and run each attempt with only
    the secrets that attempt needs. OpenTofu runs in a rootless container on the agent.

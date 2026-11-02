@@ -170,8 +170,11 @@ or execution status is **uncertain**, not automatically retried. See the
 - Runs `version -json`, `init -input=false -no-color -backend-config=k=v…`,
   `workspace select -or-create=true` (when a workspace is set), then
   `plan -detailed-exitcode -out=…/out/plan.bin [-destroy]` and `show -json` (parsed,
-  never logged). With changes, the result carries `plan.tar.gz` (`plan.bin` and the
-  root's `.terraform.lock.hcl`, packed deterministically).
+  never logged). Each change reports its address, type, name, actions and OpenTofu's
+  `action_reason`, plus, for a `proxmox_virtual_environment_vm`, the `vm_id` and
+  `node_name` its state holds; no other plan value leaves the agent. With changes,
+  the result carries `plan.tar.gz` (`plan.bin` and the root's `.terraform.lock.hcl`,
+  packed deterministically).
 - `apply` checks the artifact's SHA-256, restores the lock file, runs
   `init -lockfile=readonly`, `apply -input=false <plan.bin>`, and `output -json`
   (sensitive values withheld, names listed in `sensitiveOutputs`).

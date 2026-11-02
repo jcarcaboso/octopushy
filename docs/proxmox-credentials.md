@@ -72,7 +72,7 @@ in this milestone is a tested, universally sufficient role, including in shared 
 | --- | --- | --- |
 | `plan` / OpenTofu `preview`, including retire preview | Shared | Read-only |
 | `observe`, `verify`, `verify-absent` | Shared | Read-only |
-| `apply`, `unprotect` | Shared, after approval | Privileged, after approval |
+| `apply`, `unprotect`, `reprotect` | Shared, after approval | Privileged, after approval |
 | `grow-root`, `verify-root` | Shared, after approval | Privileged, after approval |
 | `install-disk-reporter` | Shared, after approval | Privileged, after approval |
 

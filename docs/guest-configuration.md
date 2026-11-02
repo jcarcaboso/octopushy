@@ -137,7 +137,7 @@ another plan.
   forgotten declaration fails validation rather than running unattended. This is a claim
   by the repository, not something Octopushy verifies.
 - **A rebuilt machine** is a provision run. It follows that run's rules, including those of
-  [PR 19](https://github.com/jcarcaboso/octopushy/pull/19) when it lands.
+  [replacing a VM](lab-repository.md#rules).
 
 ### Prepare
 
@@ -407,10 +407,10 @@ before that stacked work starts.
   conflicts in `RunContext`, `AssignmentBuilder.ActionFor`, `CredentialBindings.Validate`,
   the schemas, and the EF model snapshot, whose migration must be regenerated.
 
-**PR 19** changes how a provision run replaces a protected VM. It meets this at one point:
-a replacement resets the guest's proposed configuration, so a new VM is configured, and the
-new host key fails closed until the pin is updated. Both add to `RunContext` and
-`ActionFor`; neither order is harder than the other.
+**Replacing a protected VM** (PR 19, merged) meets this at one point: a provision run that
+replaces a VM resets the guest's proposed configuration, so the new VM is configured, and
+its new host key fails closed until the pin is updated. A configure run has no plan and
+never lifts protection, so none of that logic applies to it.
 
 ## What this does not do
 

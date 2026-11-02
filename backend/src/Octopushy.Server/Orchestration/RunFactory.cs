@@ -9,7 +9,7 @@ namespace Octopushy.Server.Orchestration;
 /// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
 public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
-    /// <summary>A provision run (plan, approval, apply, verify) or, for a retired guest, a retire run.</summary>
+    /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason) =>
         CreateGuest(repository, guest, resource, revision, reason, null, null);
 
@@ -135,7 +135,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             HostKey = $"{inputs.Installation.Address}/{inputs.Host.Id}",
             HostLimit = inputs.Host.ConcurrentOperations,
             Policy = new PolicyContext(guest.ManagedWorker is null ? policy.Approval.Value : "manual",
-                guest.ManagedWorker is null ? policy.Approval.SetBy : "managed-worker safety", policy.Destructive.Value, policy.Destructive.SetBy),
+                guest.ManagedWorker is null ? policy.Approval.SetBy : "managed-worker safety", policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             ManagedWorker = guest.ManagedWorker is { } worker ? new ManagedWorkerContext(worker.Generation, worker.Labels,
                 worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             WorkerUpdate = update,
@@ -169,15 +169,16 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         var steps = retire
             ? new[] { StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.VerifyAbsent }
             : context.RootDiskBytes is not null
-                ? [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
-                : [StepNames.Plan, StepNames.Approval, StepNames.Apply, StepNames.Verify];
+                ? [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
+                : [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify];
         if (context.ManagedWorker is not null && retire)
             // Another worker destroys the VM; this one stops taking work first and loses its
             // enrollment only once the VM is verified absent.
             steps = [StepNames.Plan, StepNames.Approval, StepNames.DrainWorker, StepNames.Unprotect, StepNames.Apply,
                 StepNames.VerifyAbsent, StepNames.RevokeWorker];
         else if (context.ManagedWorker is not null)
-            steps = [.. steps, StepNames.PrepareWorker, StepNames.InstallWorker, StepNames.WaitWorker];
+            // A worker's VM is never replaced, so its provision runs never touch protection.
+            steps = [.. steps.Where(s => s != StepNames.Unprotect), StepNames.PrepareWorker, StepNames.InstallWorker, StepNames.WaitWorker];
         if (update is not null)
         {
             var beforeRoot = Array.IndexOf(steps, StepNames.GrowRoot);
