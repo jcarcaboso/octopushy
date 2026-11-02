@@ -383,6 +383,11 @@ protection only for a delete or replace of the resource type of the guest's own 
 container for a guest of type `container`) whose `vmId` and `node` are the guest's own, so an agent
 that leaves them out never gets that guest's protection lifted, and the apply fails on it as before.
 
+Any change can carry `vmIds`: every number under `vm_id` or `container_id` in what the plan holds before and
+after, at any depth, whatever the resource. A firewall rule names its guest this way. The controller
+refuses a plan that names a VMID its installation reserves, so an agent that leaves this out
+weakens that check to the `vmId` of the guest's own resources.
+
 When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
 false), the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers

@@ -213,7 +213,57 @@ public class StatefulGuardTests(PostgresFixture postgres)
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, run.Status);
-        Assert.Contains("would change VMID 100, which the installation reserves", run.Detail);
+        Assert.Contains("names VMID 100, which the installation reserves", run.Detail);
+    }
+
+    [Fact]
+    public async Task A_reserved_vmid_is_found_on_any_resource_of_a_plan()
+    {
+        var repository = Repository(stateful: false);
+        repository.Write(InstallationFile, "reservedVmids: [100]\n" + File.ReadAllText(Path.Combine(repository.Root, InstallationFile)).TrimEnd('\n'));
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+
+        var plan = FakeAgent.Plan(create: 1);
+        plan["changes"] = new JsonArray(new JsonObject
+        {
+            ["address"] = "proxmox_virtual_environment_firewall_rules.other",
+            ["type"] = "proxmox_virtual_environment_firewall_rules",
+            ["name"] = "other",
+            ["actions"] = new JsonArray("update"),
+            ["vmIds"] = new JsonArray(100),
+        });
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, plan, artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("names VMID 100", run.Detail);
+    }
+
+    [Fact]
+    public async Task A_commit_that_breaks_the_definition_does_not_lift_the_guard()
+    {
+        await using var server = await StartAsync("policy: { destructive: automatic }");
+        var agent = await server.ConnectAgentAsync("home");
+        await DeployAsync(server, agent);
+
+        server.Repository.Write(GuestFile, ("notAField: true\n" + Text(server)).TrimEnd('\n'));
+        server.Commit("Break it");
+        await server.SyncAsync();
+        Assert.False((await server.ResourceAsync(Guest)).Valid);
+        Assert.True(StatefulGuard.Declared(await server.ResourceAsync(Guest)));
+
+        server.Repository.Delete(Folder);
+        server.Commit("Remove the guest");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["delete"]), artifacts: FakeAgent.PlanArtifact("destroy"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("is stateful", run.Detail);
+        Assert.Equal(0, await SetProtectionAttemptsAsync(server));
     }
 
     [Fact]

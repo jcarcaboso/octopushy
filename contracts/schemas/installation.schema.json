@@ -9,7 +9,7 @@
     "description": { "type": "string" },
     "type": { "enum": ["standalone", "cluster"] },
     "reservedVmids": {
-      "description": "VMIDs on this installation that Octopushy does not manage, such as a guest made by hand. No guest may use one, and a plan that would change one fails before approval.",
+      "description": "VMIDs on this installation that Octopushy does not manage, such as a guest made by hand. No guest may use one, and a plan that names one fails before approval.",
       "type": "array",
       "items": { "type": "integer", "minimum": 100, "maximum": 999999999 },
       "uniqueItems": true

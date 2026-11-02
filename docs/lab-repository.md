@@ -365,7 +365,7 @@ lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
 
 `reservedVmids` lists VMIDs here that Octopushy does not manage, such as a guest made by hand: no guest may
-use one, and a plan that would change one fails before approval. What keeps a plan off a guest nobody
+use one, and a plan that names one fails before approval. What keeps a plan off a guest nobody
 declared has to come from here, [not from the token](lxc-recipes.md#what-keeps-a-plan-away-from-other-guests).
 
 One `token` reference is sufficient. Alternatively, omit it and configure both

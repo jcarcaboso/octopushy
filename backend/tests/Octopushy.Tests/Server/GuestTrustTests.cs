@@ -121,6 +121,36 @@ public class GuestTrustTests(PostgresFixture postgres)
         Assert.Fail("the run did not finish");
     }
 
+    [Fact]
+    public async Task A_removal_built_from_an_older_revision_can_still_be_trusted()
+    {
+        var (server, agent, client) = await StartAsync(postgres, Repository(AutomaticEverything), Key, Token);
+        await using var _ = server;
+        using var __ = client;
+        (await TrustAsync(server, client, await ShownDigestAsync(server, client))).EnsureSuccessStatusCode();
+        await FinishAsync(server, agent);
+        var applied = await ShownDigestAsync(server, client);
+
+        // A newer digest takes the grant's place, and that change never gets applied.
+        File.AppendAllText(Path.Combine(server.Repository.Root, "modules/opentofu/test-vm/main.tf"), "\n# changed\n");
+        server.Commit("Change the code");
+        await server.SyncAsync();
+        (await TrustAsync(server, client, await ShownDigestAsync(server, client))).EnsureSuccessStatusCode();
+
+        server.Repository.Delete("labs/home/proxmox/korriban/guests/krb-ct-01");
+        server.Commit("Remove the guest");
+        await server.SyncAsync();
+        await DriveAsync(server, agent);
+        var removal = await server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(RunStatuses.Blocked, removal.Status);
+        Assert.Contains("Waiting for trust", removal.Detail);
+
+        Assert.Equal(applied, await ShownDigestAsync(server, client));
+        (await TrustAsync(server, client, applied)).EnsureSuccessStatusCode();
+        await DriveAsync(server, agent);
+        Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(AutomaticEverything)]
