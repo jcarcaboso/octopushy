@@ -183,7 +183,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         if (resource.MissingSince is not null && active is null)
             return (GuestStatuses.Missing, "The folder was deleted. Nothing has changed on the guest. Restore the folder to keep the service, or forget it once it is gone.");
         if (!resource.Valid)
-            return (GuestStatuses.Invalid, "The definition has errors.");
+            return (GuestStatuses.Invalid, "Its definition or its guest's has errors.");
         if (active is not null && Waiting(active) is { } queued)
             return (GuestStatuses.Queued, queued);
         if (active is not null)
@@ -198,12 +198,12 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             }, active.Detail);
         }
 
-        if (configuration is { AppliedHash: not null } && configuration.AppliedHash == configuration.DesiredHash)
-            return (GuestStatuses.InSync, null);
         if (waiting is not null)
             return (GuestStatuses.Waiting, waiting);
-        return last is { Status: RunStatuses.Failed }
-            ? (GuestStatuses.Failed, last.Detail)
+        if (last is { Status: RunStatuses.Failed })
+            return (GuestStatuses.Failed, last.Detail);
+        return configuration is { AppliedHash: not null } && configuration.AppliedHash == configuration.DesiredHash
+            ? (GuestStatuses.InSync, null)
             : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not deployed from the current definition yet.");
     }
 
@@ -278,7 +278,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 removal = offered.Removal is not null;
             }
         }
-        else if (resource.MissingSince is not null && configuration?.AppliedRevisionId is not null)
+        else if (resource.MissingSince is not null)
         {
             // Its definition is gone from the head, and what removes it is in the one last applied.
             removal = await ServiceRemoval.DefinedAsync(db, revisions, resource, configuration, cancellationToken) is { Action: not null };
@@ -663,11 +663,22 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     /// </summary>
     public async Task<GuestRelease?> ConfigureReleaseAsync(Resource resource, CancellationToken cancellationToken)
     {
-        if (resource.RetiredAt is not null || resource.MissingSince is not null || !resource.Valid
-            || await HeadRepositoryAsync(cancellationToken) is not { } head || !head.Repository.IsValid(resource.Address))
+        if (resource.RetiredAt is not null || !resource.Valid)
             return null;
         ConfigureInputs inputs;
-        if (head.Repository.Service(resource.Address) is { } service)
+        if (resource.MissingSince is not null)
+        {
+            // A removal is built from the revision last applied, so that is what it would have to be trusted for.
+            if (resource.Kind != ResourceKinds.Service)
+                return null;
+            var configuration = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
+            if (await ServiceRemoval.DefinedAsync(db, revisions, resource, configuration, cancellationToken) is not { } defined)
+                return null;
+            inputs = ConfigureInputs.Build(defined.Repository, defined.Service);
+        }
+        else if (await HeadRepositoryAsync(cancellationToken) is not { } head || !head.Repository.IsValid(resource.Address))
+            return null;
+        else if (head.Repository.Service(resource.Address) is { } service)
             inputs = ConfigureInputs.Build(head.Repository, service);
         else if (head.Repository.Guest(resource.Address) is { SetupRecipe: not null } guest)
             inputs = ConfigureInputs.Build(head.Repository, guest);

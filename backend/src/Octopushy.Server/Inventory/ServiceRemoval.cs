@@ -18,7 +18,8 @@ public static class ServiceRemoval
         OctopushyDb db, RevisionCache revisions, Resource resource, GuestConfiguration? configuration, CancellationToken ct)
     {
         var eligible = RepositoryTrust.EligibleRevisions(db);
-        var lastDefined = await eligible.AsNoTracking().FirstOrDefaultAsync(r => r.Id == configuration!.AppliedRevisionId, ct)
+        var applied = configuration?.AppliedRevisionId;
+        var lastDefined = await eligible.AsNoTracking().FirstOrDefaultAsync(r => r.Id == applied, ct)
             ?? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.LastRevisionId, ct);
         if (lastDefined is null)
             return null;
@@ -29,8 +30,8 @@ public static class ServiceRemoval
     }
 
     /// <summary>
-    /// The removal run for a service, or null when there is nothing to run. A service never deployed has nothing on
-    /// the guest, so it is retired here. One whose recipe declares no removal stays missing, and keeps running. A
+    /// The removal run for a service, or null when there is nothing to run. A service no run ever reached the guest for
+    /// has nothing there, so it is retired here. One whose recipe declares no removal stays missing, and keeps running. A
     /// guest that is going takes it along, and its retire run says so. Unless <paramref name="force"/>, a removal is
     /// proposed once, so that a rejected one does not come back with every commit.
     /// </summary>
@@ -42,23 +43,26 @@ public static class ServiceRemoval
             configuration.DesiredHash = null;
         if (current.Guest(resource.ParentAddress ?? "") is not { Retired: false })
             return null;
-        if (configuration?.AppliedRevisionId is null)
+        // A run still going may yet change the guest, so what it leaves is decided once it ends.
+        if (await db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, ct))
+            return null;
+        // A run that failed partway has left things on the guest too, so only what never got that far has nothing to remove.
+        if (!await db.Attempts.AnyAsync(a => a.Mutating && a.Status != AttemptStatuses.Queued && a.Status != AttemptStatuses.Cancelled
+                && db.Runs.Any(r => r.Id == a.RunId && r.ResourceId == resource.Id), ct))
         {
             resource.RetiredAt = now;
             return null;
         }
 
-        if (await db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, ct))
-            return null;
         var defined = await DefinedAsync(db, revisions, resource, configuration, ct)
             ?? throw new RunException("The service's last definition is not valid, so its removal cannot be planned; restore its folder instead.");
         if (defined.Action is not { } action)
             return null;
         var run = factory.Configure(defined.Repository, defined.Repository.Guest(defined.Service.Guest)!, resource, defined.Revision, action.Id,
             $"definition removed in {removal.Commit[..10]}", configuration, null, defined.Service, removal.Commit);
-        if (!force && configuration.ProposedHash == run.InputsHash)
+        if (!force && configuration?.ProposedHash == run.InputsHash)
             return null;
-        configuration.ProposedHash = run.InputsHash;
+        configuration?.ProposedHash = run.InputsHash;
         return run;
     }
 }

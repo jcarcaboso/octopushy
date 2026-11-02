@@ -53,6 +53,7 @@ public sealed partial class RunEngine
                 .ToListAsync(cancellationToken);
             var managed = await db.ManagedWorkers.AsNoTracking().Where(w => w.AgentId != null).ToListAsync(cancellationToken);
             var builder = services.GetRequiredService<AssignmentBuilder>();
+            var changing = new HashSet<Guid>();
 
             foreach (var attempt in queued)
             {
@@ -79,6 +80,14 @@ public sealed partial class RunEngine
                     run.Detail = lockReason;
                     continue;
                 }
+                // One change to a guest at a time, its services included, whatever was queued when.
+                var family = run is not null && attempt.Mutating ? await GuestWork.FamilyAsync(db, run.ResourceId, cancellationToken) : [];
+                if (family.Count > 1 && (family.Any(changing.Contains) || await GuestWork.HolderAsync(db, run!, cancellationToken, dispatching: true) is not null))
+                {
+                    attempt.WaitingReason = "Waiting for another run that is changing the same guest.";
+                    continue;
+                }
+
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
                 var needsBuiltInState = attempt.Executor == "opentofu" && context.OpenTofu?.Backend.IsBuiltIn == true;
                 var needsReviewed = attempt.Executor == "opentofu" && await ProtectedSecrets.AnyAsync(db, context.Secrets.Values, cancellationToken);
@@ -180,6 +189,7 @@ public sealed partial class RunEngine
                     step.StartedAt ??= now;
                 }
 
+                changing.UnionWith(family);
                 perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
                 if (attempt.HostKey is { } key)
                 {

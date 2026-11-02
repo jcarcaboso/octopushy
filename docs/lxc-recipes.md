@@ -98,7 +98,8 @@ The run ends *failed* at its approval step, with the reason. `policy` does not e
 automatic` included: **no approval can pass it, so nobody is asked.** Proxmox's protection is not touched, and
 nothing changes.
 
-**The guard arms when the guest has been deployed:** once a run has verified it. Until then there is nothing to keep,
+**The guard arms when the guest has been deployed:** once a run has verified it and, on a guest with [setup or services](services.md),
+once one of those has succeeded. Until then there is nothing to keep,
 so a first deployment that failed can be retried, and the [table of rule 11](lab-repository.md#rules) decides as it
 does for any guest: a tainted container that never finished recovers on its own, and anything else waits for a person.
 What follows verification is a playbook, and a playbook that fails is run again, not replaced. A change in place

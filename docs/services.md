@@ -144,11 +144,14 @@ actions:
     removal: true                 # at most one action; it runs when the folder is deleted
 ```
 
-- **With a removal action,** Octopushy proposes it, built from the revision last applied, as a guest's removal is.
+- **With a removal action,** Octopushy proposes it, once, built from the revision last applied, as a guest's removal is. **Run
+  removal** on the service's page proposes it again, and **Trust** there covers what it would run.
   It **always waits for a person unless `destructive: automatic` is written down somewhere**: following an automatic approval
   is not enough, the same rule as replacing a VM (rule 11). When it succeeds the service is retired, and its history stays.
-- **With none,** nothing runs. The service keeps running on the guest, shown as *missing*, until a person chooses **Forget**,
-  which changes nothing on the guest.
+- **With none,** nothing runs. The service keeps running on the guest, shown as *missing*.
+- **Forget** stops tracking a missing service and changes nothing on the guest. It is the way out of a removal that cannot succeed.
+- **If no run ever reached the guest,** there is nothing to remove, so it is retired at once. A deployment that failed partway did reach
+  it, and one still going is waited for.
 - **Restoring the folder** cancels a removal that has not started.
 - **What the action deletes is the recipe's choice.** `ha-db`'s stop their services and leave the data on disk.
 - **Retiring the guest takes its services with it.** **New, and narrower than rule 11:** the guest's own destroy

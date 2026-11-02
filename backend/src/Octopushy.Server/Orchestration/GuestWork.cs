@@ -21,19 +21,20 @@ public static class GuestWork
     }
 
     /// <summary>
-    /// Another run that is changing this run's guest, or may be: one with mutating work under way, or
-    /// with an outcome nobody has closed. A run waiting for approval is not one, so a service
-    /// nobody has approved holds back no other.
+    /// Another run that is changing this run's guest, or may be: one with mutating work handed out or about to
+    /// be, or with an outcome nobody has closed. A run waiting for approval is not one, so a service nobody has
+    /// approved holds back no other, and neither is a blocked one, whose queued work <see cref="RunEngine"/>
+    /// checks again here when it is handed out.
     /// </summary>
-    public static async Task<Run?> HolderAsync(OctopushyDb db, Run run, CancellationToken cancellationToken)
+    public static async Task<Run?> HolderAsync(OctopushyDb db, Run run, CancellationToken cancellationToken, bool dispatching = false)
     {
         var family = await FamilyAsync(db, run.ResourceId, cancellationToken);
-        return await db.Runs.AsNoTracking()
+        return family.Count < 2 ? null : await db.Runs.AsNoTracking()
             .Where(r => family.Contains(r.ResourceId) && r.Id != run.Id
                 && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
                 && (r.Status == RunStatuses.Uncertain || db.Attempts.Any(a => a.RunId == r.Id && a.Mutating
-                    && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned
-                        || a.Status == AttemptStatuses.Running || a.Status == AttemptStatuses.Uncertain))))
+                    && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Status == AttemptStatuses.Uncertain
+                        || !dispatching && a.Status == AttemptStatuses.Queued && r.Status != RunStatuses.Blocked))))
             .OrderBy(r => r.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -50,10 +51,14 @@ public static class GuestWork
             return "The guest is retired.";
         if (guest.MissingSince is not null || guest.RetiredAt is not null || !guest.Valid)
             return "The guest's definition is missing or invalid.";
+        // A plan that was rejected, cancelled or refused changed nothing, so it holds nothing back. One that may have changed something does.
         var lastProvision = await db.Runs.AsNoTracking()
             .Where(r => r.ResourceId == guest.Id && r.Operation == Operations.Provision)
-            .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
-        if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+            .OrderByDescending(r => r.CreatedAt)
+            .Select(r => new { r.Status, Changed = db.Attempts.Any(a => a.RunId == r.Id && a.Mutating) })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision is null
+            || lastProvision.Status != RunStatuses.Succeeded && (!RunStatuses.IsTerminal(lastProvision.Status) || lastProvision.Changed))
             return "Waiting for the guest's provisioning to catch up with its definition.";
         if (definition.SetupRecipe is { } recipe && repository.Recipes.GetValueOrDefault(recipe)?.Configure?.OnChange is not null)
         {

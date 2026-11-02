@@ -42,6 +42,15 @@
         cache_valid_time: 3600
         lock_timeout: 120
 
+    # A removal turns this off, and a folder can come back.
+    - name: Start at boot
+      ansible.builtin.copy:
+        content: "auto\n"
+        dest: "{{ postgresql_conf }}/start.conf"
+        owner: postgres
+        group: postgres
+        mode: "0644"
+
     - name: Write the settings
       ansible.builtin.template:
         src: settings.conf.j2

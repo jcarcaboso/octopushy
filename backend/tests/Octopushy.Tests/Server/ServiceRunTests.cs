@@ -540,6 +540,174 @@ public class ServiceRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_folder_deleted_during_a_first_deployment_waits_for_it_and_can_still_be_removed()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab(actions: Removal));
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await PreviewAsync(agent);
+        await server.TickAsync();
+        var playbook = await agent.NextAsync("run");
+        var address = JsonNode.Parse(playbook.InputJson)!["context"]!["address"]!.GetValue<string>();
+        var folder = address.Split('/')[^1];
+
+        server.Repository.Delete($"{ServicesFolder}/{folder}");
+        server.Commit("Remove it");
+        await server.SyncAsync();
+        var resource = await server.ResourceAsync(address);
+        Assert.Null(resource.RetiredAt);
+        Assert.NotNull(resource.MissingSince);
+
+        // It fails partway, so something is on the guest and a person can have it removed.
+        await agent.ReportAsync(playbook, Outcome.Failed, error: "failed partway");
+        await server.TickAsync();
+        (await http.PostAsJsonAsync($"/api/services/{resource.Id}/run", new { action = (string?)null })).EnsureSuccessStatusCode();
+        var removal = await server.LatestRunAsync(address, Operations.Configure);
+        Assert.StartsWith("removal:", removal.InputsHash);
+    }
+
+    [Fact]
+    public async Task A_removal_can_be_trusted_after_a_newer_digest_was()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab(actions: Removal));
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await server.WithDbAsync(async db =>
+        {
+            (await db.StoreEntries.FirstAsync(e => e.Key == "svc/password")).Protected = true;
+            await db.SaveChangesAsync();
+        });
+        await ScheduleAsync(server);
+        await server.TickAsync();
+        var alpha = (await server.ResourceAsync(Alpha)).Id;
+        var beta = (await server.ResourceAsync(Beta)).Id;
+        foreach (var id in new[] { alpha, beta })
+            await TrustAsync(http, id);
+        await PreviewAsync(agent);
+        await PreviewAsync(agent);
+        await server.TickAsync();
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+
+        server.Repository.Write(Repository.AlphaPath, Repository.Service().Replace("greeting: hello", "greeting: newer"));
+        server.Commit("Change alpha");
+        await server.SyncAndTrustAsync(http);
+        await TrustAsync(http, alpha);
+
+        server.Repository.Delete($"{ServicesFolder}/alpha");
+        server.Commit("Remove alpha");
+        await server.SyncAsync();
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Alpha, Operations.Configure)).Status);
+        await TrustAsync(http, alpha);
+        await PreviewAsync(agent);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.AwaitingApproval, (await server.LatestRunAsync(Alpha, Operations.Configure)).Status);
+    }
+
+    private static async Task TrustAsync(HttpClient http, Guid id)
+    {
+        var detail = await http.GetFromJsonAsync<JsonObject>($"/api/services/{id}");
+        (await http.PostAsJsonAsync($"/api/resources/{id}/trust-configure", new { codeDigest = detail!["trust"]!["codeDigest"]!.GetValue<string>() })).EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task A_run_blocked_with_work_queued_holds_back_no_sibling()
+    {
+        var lab = Lab();
+        lab.Write(Repository.AlphaPath, Repository.Service("policy: { approval: manual }"));
+        lab.Write(Repository.BetaPath, Repository.Service("policy: { approval: manual }").Replace("5432", "8428"));
+        await using var server = await ServerHarness.StartAsync(postgres, lab);
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        var runs = new[] { await server.LatestRunAsync(Alpha, Operations.Configure), await server.LatestRunAsync(Beta, Operations.Configure) };
+        await PreviewAsync(agent);
+        await PreviewAsync(agent);
+        await server.WithDbAsync(async db =>
+        {
+            // As a run stands when a credential goes away between creating its attempt and handing it out.
+            var run = await db.Runs.Include(r => r.Steps).FirstAsync(r => r.Id == runs[0].Id);
+            var step = run.Steps.Single(s => s.Name == StepNames.Playbook);
+            step.Status = StepStatuses.Queued;
+            db.Attempts.Add(new Attempt
+            {
+                Id = Guid.CreateVersion7(), StepId = step.Id, RunId = run.Id, Number = 1, Executor = "ansible", Action = "run",
+                Mutating = true, RequiredLabels = ["never"], CreatedAt = DateTimeOffset.UtcNow,
+            });
+            run.Steps.Single(s => s.Name == StepNames.Approval).Status = StepStatuses.Succeeded;
+            run.Status = RunStatuses.Blocked;
+            await db.SaveChangesAsync();
+        });
+        var held = await server.QueryAsync(db => GuestWork.HolderAsync(db, runs[1], CancellationToken.None));
+        Assert.Null(held);
+    }
+
+    [Fact]
+    public async Task A_rejected_plan_holds_back_no_service()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab(labPolicy: "policy: { destructive: manual }"));
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        var resource = await server.ResourceAsync(Guest);
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextKeepingOthersAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("drift"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        var step = run.Steps.Single(s => s.Name == StepNames.Approval);
+        (await http.PostAsJsonAsync($"/api/runs/{run.Id}/steps/{step.Id}/reject", new { note = "no" })).EnsureSuccessStatusCode();
+        await server.TickAsync();
+
+        await ScheduleAsync(server);
+        Assert.Equal(1, await ConfigureRunsAsync(server, Alpha));
+    }
+
+    [Fact]
+    public async Task A_broken_guest_definition_does_not_call_its_services_missing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab());
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await DeployAllAsync(server, agent);
+
+        var text = await File.ReadAllTextAsync(Path.Combine(server.Repository.Root, Repository.GuestPath));
+        server.Repository.Write(Repository.GuestPath, ("notAField: true\n" + text).TrimEnd('\n'));
+        server.Commit("Break it");
+        await server.SyncAsync();
+        var resource = await server.ResourceAsync(Alpha);
+        Assert.Null(resource.MissingSince);
+        Assert.False(resource.Valid);
+
+        server.Repository.Write(Repository.GuestPath, text.TrimEnd('\n'));
+        server.Commit("Fix it");
+        await server.SyncAndTrustAsync(http);
+        resource = await server.ResourceAsync(Alpha);
+        Assert.Null(resource.MissingSince);
+        Assert.True(resource.Valid);
+    }
+
+    [Fact]
+    public async Task A_failed_action_shows_even_when_the_hash_was_applied()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Lab());
+        var (agent, http) = await ProvisionAsync(server);
+        using var _ = http;
+        await DeployAllAsync(server, agent);
+
+        var id = (await server.ResourceAsync(Alpha)).Id;
+        (await http.PostAsJsonAsync($"/api/services/{id}/run", new { action = "deploy" })).EnsureSuccessStatusCode();
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Failed, error: "failed");
+        await server.TickAsync();
+        Assert.Equal("failed", await StatusAsync(http, Alpha));
+    }
+
+    [Fact]
     public async Task Retiring_a_guest_waits_for_a_person_and_takes_its_services_with_it()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Lab(labPolicy: "policy: { destructive: automatic }"));

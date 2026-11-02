@@ -1,11 +1,13 @@
 ---
-# Stops the service and leaves the data for a person to keep or delete.
+# Stops the service and leaves the data for a person to keep or delete. A machine replaced since the
+# last deployment never had it, and that is not a failure.
 - name: Remove VictoriaMetrics
   hosts: all
   gather_facts: false
   tasks:
     - name: Stop VictoriaMetrics
-      ansible.builtin.systemd_service:
-        name: victoria-metrics
-        enabled: false
-        state: stopped
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, victoria-metrics]
+      register: victoriametrics_stopped
+      failed_when: victoriametrics_stopped.rc != 0 and 'does not exist' not in victoriametrics_stopped.stderr
+      changed_when: victoriametrics_stopped.rc == 0

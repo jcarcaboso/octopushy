@@ -1,16 +1,33 @@
 ---
 # Stops the service and leaves the data: the databases and the dumps stay on disk, for a person to
-# keep or delete. Deleting a service's folder never deletes them.
+# keep or delete. Deleting a service's folder never deletes them. A machine replaced since the last
+# deployment never had it, and that is not a failure.
 - name: Remove PostgreSQL
   hosts: all
   gather_facts: false
+  vars:
+    postgresql_conf: "/etc/postgresql/{{ postgresql_version }}/main"
   tasks:
     - name: Stop the dump
       ansible.builtin.file:
         path: /etc/cron.d/postgresql-dump
         state: absent
+    - name: See whether the cluster is here
+      ansible.builtin.stat:
+        path: "{{ postgresql_conf }}"
+      register: postgresql_cluster
+    # Debian starts every cluster at boot from this file, whatever the unit says.
+    - name: Keep it from starting at boot
+      ansible.builtin.copy:
+        content: "manual\n"
+        dest: "{{ postgresql_conf }}/start.conf"
+        owner: postgres
+        group: postgres
+        mode: "0644"
+      when: postgresql_cluster.stat.exists
     - name: Stop PostgreSQL
-      ansible.builtin.systemd_service:
-        name: "postgresql@{{ postgresql_version }}-main"
-        enabled: false
-        state: stopped
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, "postgresql@{{ postgresql_version }}-main"]
+      register: postgresql_stopped
+      failed_when: postgresql_stopped.rc != 0 and 'does not exist' not in postgresql_stopped.stderr
+      changed_when: postgresql_stopped.rc == 0

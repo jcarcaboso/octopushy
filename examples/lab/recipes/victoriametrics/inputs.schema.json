@@ -5,7 +5,7 @@
   "properties": {
     "victoriametrics_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?![\\s\\S])" },
     "victoriametrics_sha256": { "description": "Of the linux-amd64 release archive.", "type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])" },
-    "victoriametrics_retention": { "description": "A number of days, weeks, months or years.", "type": "string", "pattern": "^[1-9][0-9]*[dwMy](?![\\s\\S])" },
+    "victoriametrics_retention": { "description": "A number of days, weeks or years. VictoriaMetrics reads a bare number as months and refuses m.", "type": "string", "pattern": "^[1-9][0-9]*[dwy](?![\\s\\S])" },
     "victoriametrics_username": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?![\\s\\S])" },
     "victoriametrics_keep": { "description": "A regular expression: only metrics whose name matches are stored.", "type": "string", "pattern": "^[A-Za-z0-9_:.*|()]+(?![\\s\\S])" },
     "victoriametrics_memory": { "type": "string", "pattern": "^[0-9]+[KMG]iB(?![\\s\\S])" },
