@@ -61,7 +61,7 @@ log "Disposable resources"
 cleanup
 mkdir -p "$work"
 rm -rf "${work:?}/lab" "${work:?}/server" "${work:?}/agent" "${work:?}/keys" "${work:?}/bin"
-rm -f "${work:?}"/*.log "${work:?}"/*.json "${work:?}/service-logs" "${work:?}/service-evidence" "${work:?}/agent-samples"
+rm -f "${work:?}"/*.log "${work:?}"/*.json "${work:?}/service-logs" "${work:?}/service-evidence" "${work:?}/agent-samples" "${work:?}/stop-sampling"
 mkdir -p "$work/keys" "$work/bin" "$work/share/ssh"
 chmod 0700 "$work/share/ssh"
 template=$work/$(basename "$template_url")
@@ -349,14 +349,17 @@ sums='sha256sum /etc/postgresql/17/main/pg_hba.conf /etc/postgresql/17/main/conf
 before=$(in_target "$sums")
 pids_before=$(in_target 'pidof victoria-metrics-prod; systemctl show -p MainPID --value postgresql@17-main')
 # The password stays out of everything while it is used: sampled on the guest, and here.
-podman exec -d "$name-target" sh -c 'for i in $(seq 1 1200); do ps -eww -o args >>/root/samples; sleep 0.05; done'
-(for _ in $(seq 1 1200); do ps -eww -o args; sleep 0.05; done >"$work/agent-samples") &
+podman exec -d "$name-target" sh -c 'while [ ! -e /root/stop-sampling ]; do ps -eww -o args >>/root/samples; sleep 0.05; done' >/dev/null
+(while [[ ! -e $work/stop-sampling ]]; do ps -eww -o args; sleep 0.05; done >"$work/agent-samples") &
 sampler=$!
 run=$(call -X POST "$api/api/services/$pg_id/run" -d '{"action":"deploy"}' | jq -r .runId)
 wait_run "$run" succeeded
 run=$(call -X POST "$api/api/services/$vm_id/run" -d '{"action":"deploy"}' | jq -r .runId)
 wait_run "$run" succeeded
-kill "$sampler" 2>/dev/null || true
+# Stopped before anything searches for the passwords, whose command lines hold what they look for.
+touch "$work/stop-sampling"
+in_target 'touch /root/stop-sampling; sleep 1'
+wait "$sampler"
 [[ $(in_target "$sums") == "$before" ]] || fail "a second run changed a file"
 [[ $(in_target 'pidof victoria-metrics-prod; systemctl show -p MainPID --value postgresql@17-main') == "$pids_before" ]] || fail "a second run restarted something"
 [[ $(pg_from allowed "$pg_password" -c 'select note from readings') == kept ]] || fail "the data did not survive a second run"
@@ -440,7 +443,9 @@ grep -qF -- -retentionPeriod=1y <<<"$(vm_args)" || fail "the retention did not c
 
 log "A password rolls with a new store version and a commit"
 pg_runs=$(run_count "$postgresql" configure)
-set_variable ha-db/postgres-password "$pg_rolled" secret
+version=$(jq -n --arg value "$pg_rolled" '{key: "ha-db/postgres-password", value: $value}' | call -X POST "$api/api/variables/candidates" --data-binary @- | jq -r .version)
+jq -n --argjson version "$version" '{key: "ha-db/postgres-password", version: $version, expectedCurrentVersion: ($version - 1), verificationNote: "End to end."}' |
+  call -X POST "$api/api/variables/promote" --data-binary @- >/dev/null
 sleep 5
 [[ $(run_count "$postgresql" configure) == "$pg_runs" ]] || fail "a store change alone should start nothing"
 sed -i 's/credentials_revision: 1/credentials_revision: 2/' "$guest_dir/services/postgresql/service.yaml"

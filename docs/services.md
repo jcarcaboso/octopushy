@@ -251,7 +251,7 @@ are what it backs up.
 | VictoriaMetrics version and checksum | `victoriametrics`, `deploy` | Restart of VictoriaMetrics only; the data stays |
 | Retention raised | `victoriametrics`, `deploy` | Restart; nothing is lost |
 | **Retention lowered** | `victoriametrics`, `deploy` **fails**, and says to run `shrink-retention` | Nothing changes until a person runs that action, which is `destructive: true`, so it waits under `destructive: manual` |
-| A password | Set a new store version, then raise `credentialsRevision` in `service.yaml` | That service only. The store alone starts nothing, since a commit is what can be reviewed |
+| A password | Update the entry under Variables and **Promote** the candidate, then raise `credentials_revision` in `service.yaml` | That service only. The store alone starts nothing, since a commit is what can be reviewed |
 | The template, or anything that replaces the container | Provision **fails before approval**: the guest is `stateful` | See [stateful guests](lxc-recipes.md#stateful-guests) |
 
 ### Passwords
