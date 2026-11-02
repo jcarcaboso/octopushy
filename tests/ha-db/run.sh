@@ -22,8 +22,8 @@ image=$name:template
 tofu_image=ghcr.io/opentofu/opentofu:1.13.1
 module=modules/opentofu/ha-db
 token='root@pam!fake=00000000-0000-4000-8000-000000000000'
-address=10.199.1.40
-client=10.199.1.50
+address=10.199.2.40
+client=10.199.2.50
 postgres_password='pg-Pass_word.0123+/=:@456'
 victoriametrics_password='vm-Pass_word.0123+/=:@456'
 template_url=$(sed -n 's/^  url: //p' "$root/examples/lab/templates/debian-13-lxc/template.yaml")
@@ -51,7 +51,7 @@ tofu() {
   podman run --rm --name "$name-tofu" --log-driver=none --cap-drop=all --security-opt=no-new-privileges \
     --read-only --tmpfs /tmp:rw,mode=1777 --userns=keep-id --network "$name" \
     -v "$work/run:/w:Z" -w "/w/repo/${dir:-$module}" -e HOME=/w/home -e TF_IN_AUTOMATION=1 -e TF_INPUT=0 \
-    -e TF_PLUGIN_CACHE_DIR=/w/cache -e PROXMOX_VE_ENDPOINT=https://10.199.1.10:8006/ -e PROXMOX_VE_INSECURE=true \
+    -e TF_PLUGIN_CACHE_DIR=/w/cache -e PROXMOX_VE_ENDPOINT=https://10.199.2.10:8006/ -e PROXMOX_VE_INSECURE=true \
     -e PROXMOX_VE_API_TOKEN="$token" ${tofu_env:-} "$tofu_image" "$@"
 }
 plan() { tofu plan -input=false -no-color -detailed-exitcode -out=/w/out/plan.bin "$@" || [[ $? == 2 ]]; }
@@ -121,11 +121,11 @@ template=$work/$(basename "$template_url")
 [[ -f $template ]] || curl -fsS -o "$template" "$template_url"
 sha512sum -c --quiet - <<<"$template_sha512  $template"
 podman import -q --change 'CMD ["/sbin/init"]' "$template" "$image" >/dev/null
-podman network create --subnet 10.199.1.0/24 "$name" >/dev/null
+podman network create --subnet 10.199.2.0/24 "$name" >/dev/null
 reachable
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/share/tls.key" -out "$work/share/tls.crt" -days 1 \
-  -subj /CN=fake-proxmox -addext subjectAltName=IP:10.199.1.10 2>/dev/null
-podman run -d --name "$name-proxmox" --network "$name" --ip 10.199.1.10 -v "$work/share:/share:Z" \
+  -subj /CN=fake-proxmox -addext subjectAltName=IP:10.199.2.10 2>/dev/null
+podman run -d --name "$name-proxmox" --network "$name" --ip 10.199.2.10 -v "$work/share:/share:Z" \
   -v "$root/tests/lxc-app/fake_proxmox.py:/fake_proxmox.py:ro,Z" docker.io/library/python:3-alpine \
   python3 -I /fake_proxmox.py /share /share/tls.crt /share/tls.key ziost >/dev/null
 start_container
@@ -144,7 +144,7 @@ write_vars() { # revision, cores, memory, retention, version, sha256, vmid
     "installation": "ziost", "revision": "test" },
   "guest": { "id": "ha-db", "vmid": ${7:-102}, "host": "ziost",
     "hardware": { "cores": ${2:-2}, "memory": ${3:-1024}, "swap": 256, "disks": [{ "size": 32, "datastore": "vm-ssd" }] },
-    "network": { "bridge": "apps", "mode": "static", "address": "$address/24", "gateway": "10.199.1.1" },
+    "network": { "bridge": "apps", "mode": "static", "address": "$address/24", "gateway": "10.199.2.1" },
     "inputs": { "startup": { "order": 1, "upDelay": 30 }, "postgresql": { "clients": ["$client"] },
       "victoriametrics": { "version": "${5:-1.155.0}", "sha256": "${6:-$vm_sha256}", "retention": "${4:-2y}" },
       "credentialsRevision": ${1:-1} } },
@@ -178,7 +178,7 @@ refuse 'variables["guest"]["inputs"]["postgresql"]["clients"] = []' 'inputs.post
 refuse 'variables["guest"]["inputs"]["victoriametrics"]["retention"] = "2y; touch /pwned"' 'inputs.victoriametrics'
 refuse 'variables["guest"]["inputs"]["victoriametrics"]["sha256"] = "$(touch /pwned)"' 'inputs.victoriametrics'
 refuse 'variables["guest"]["inputs"]["victoriametrics"]["version"] = "1.155.0/../../x"' 'inputs.victoriametrics'
-refuse 'variables["guest"]["network"]["address"] = "10.199.1.40/24; touch /pwned"' 'network.address'
+refuse 'variables["guest"]["network"]["address"] = "10.199.2.40/24; touch /pwned"' 'network.address'
 refuse 'variables["guest"]["network"]["mode"] = "dhcp"' 'static'
 refuse 'variables["guest"]["hardware"]["mountPoints"] = [{"path": "/data", "size": 8}]' 'no mount points'
 refuse 'variables["guest"]["inputs"]["credentialsRevision"] = 0' 'credentialsRevision'
@@ -234,7 +234,7 @@ settings=$(for setting in shared_buffers max_connections wal_compression listen_
 [[ $settings == '192MB 20 pglz * ' ]] || fail "the settings of postgresql-ha.conf are not in force: $settings"
 in_ct 'cat /etc/postgresql/17/main/pg_hba.conf'
 [[ $(in_ct 'grep -vc "^#" /etc/postgresql/17/main/pg_hba.conf') == 3 ]] || fail "pg_hba.conf lists more than postgres, the role by socket, and one client"
-grep -q "10.199.1.50/32" <(in_ct 'cat /etc/postgresql/17/main/pg_hba.conf') || fail "the client is not in pg_hba.conf"
+grep -q "10.199.2.50/32" <(in_ct 'cat /etc/postgresql/17/main/pg_hba.conf') || fail "the client is not in pg_hba.conf"
 [[ $(pg_as "$postgres_password" -h "$address" -U homeassistant -d homeassistant -c 'select current_user') == homeassistant ]] || fail "Home Assistant's address cannot log in"
 if pg_as 'another-password-0123456789' -h "$address" -U homeassistant -d homeassistant -c 'select 1' >/dev/null 2>&1; then fail "a wrong password was accepted"; fi
 if out=$(printf '%s' "$postgres_password" | podman exec -i "$name-ct" sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; psql -X -q -At -w -h '"$address"' -U homeassistant -d homeassistant -c "select 1"' 2>&1); then
@@ -480,7 +480,8 @@ plan | tee "$work/inplace.plan" | summary
 action_reason "$container" | grep -qx 'update -' || fail "the container should be updated in place"
 grep -Eq '^ +# terraform_data\.keep_data ' "$work/inplace.plan" && fail "the guard was touched by a change in place"
 apply >/dev/null
-tail -n +"$((before_requests + 1))" "$requests" | grep 'PUT' | grep -q '"cores": "4"' || fail "Proxmox was not told about the cores"
+puts=$(tail -n +"$((before_requests + 1))" "$requests" | grep 'PUT' || true)
+grep -q '"cores": "4"' <<<"$puts" || fail "Proxmox was not told about the cores"
 [[ $(in_ct 'systemctl show -p MainPID --value postgresql@17-main') == "$pg_pid" ]] || fail "PostgreSQL restarted for a hardware change"
 echo "cores and memory change in place, with the guard and the install untouched"
 
@@ -554,7 +555,8 @@ plan | summary
 if apply >"$work/failed-install.log" 2>&1; then fail "the install should have failed"; fi
 grep -q 'failing on purpose' "$work/failed-install.log" || { tail -8 "$work/failed-install.log"; fail "the install failed for another reason"; }
 [[ $(resources) == *proxmox_virtual_environment_container.guest* && $(resources) != *keep_data* ]] || fail "after a failed install the container exists and the guard does not: $(resources)"
-tofu state show module.app.terraform_data.install | head -1 | grep -q tainted || fail "the failed install is not tainted"
+shown=$(tofu state show module.app.terraform_data.install)
+[[ ${shown%%$'\n'*} == *tainted* ]] || fail "the failed install is not tainted"
 in_ct 'touch /root/allow-install'
 plan | tee "$work/retry.plan" | summary
 grep -q 'module.app.terraform_data.install is tainted, so it must be replaced' "$work/retry.plan" || fail "the retry should replace the tainted install"
