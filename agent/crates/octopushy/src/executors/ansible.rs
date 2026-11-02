@@ -1123,7 +1123,10 @@ mod tests {
             "a banner\r\nmore banner\r\nops@10.0.0.5: Permission denied (publickey).\r\n",
         ] {
             assert!(refusal_of(message, &guest), "{message:?}");
-            assert!(refusal_of(&format!("{via}{message}"), &guest), "{message:?}");
+            assert!(
+                refusal_of(&format!("{via}{message}"), &guest),
+                "{message:?}"
+            );
         }
         for message in [
             "",
@@ -1138,7 +1141,10 @@ mod tests {
             "ops@10.0.0.5: Permission denied (publickey).\nConnection timed out during banner exchange",
         ] {
             assert!(!refusal_of(message, &guest), "{message:?}");
-            assert!(!refusal_of(&format!("{via}{message}"), &guest), "{message:?}");
+            assert!(
+                !refusal_of(&format!("{via}{message}"), &guest),
+                "{message:?}"
+            );
         }
     }
 
