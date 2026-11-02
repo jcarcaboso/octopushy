@@ -78,16 +78,17 @@ public sealed class DiskReporterOptions
     public bool SupportsManagedNixosImage(string? hash) => hash is { Length: 64 }
         && hash.All(char.IsAsciiHexDigit) && string.Equals(hash, ManagedNixosImageSha256, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>HTTPS web/API origin reachable from the VM, not the execution-agent endpoint.</summary>
+    /// <summary>Web/API origin reachable from the VM, not the execution-agent endpoint. Over http:// the reporting token is unencrypted.</summary>
     public string PublicUrl { get; set; } = "";
 
+    /// <summary>Direct download. http:// is safe for integrity because the guest checks BinarySha256 before running it.</summary>
     public string BinaryUrl { get; set; } = "";
 
     public string BinarySha256 { get; set; } = "";
 
     public int IntervalSeconds { get; set; } = 3600;
 
-    /// <summary>Optional private CA PEM for the reporting and download endpoints; never a private key.</summary>
+    /// <summary>Optional private CA PEM for the reporting and download endpoints; never a private key. Needs an https:// PublicUrl.</summary>
     public string? CaCertificatePem { get; set; }
 
     public void Validate()
@@ -97,21 +98,23 @@ public sealed class DiskReporterOptions
             return;
         }
 
-        if (!HttpsUrl(PublicUrl) || new Uri(PublicUrl).AbsolutePath != "/" || !HttpsUrl(BinaryUrl)
+        if (!WebUrl(PublicUrl) || new Uri(PublicUrl).AbsolutePath != "/" || !WebUrl(BinaryUrl)
             || BinarySha256.Length != 64 || BinarySha256.AsSpan().IndexOfAnyExcept("0123456789abcdefABCDEF") >= 0
             || ManagedNixosImageSha256 is not null && (ManagedNixosImageSha256.Length != 64 || !ManagedNixosImageSha256.All(char.IsAsciiHexDigit))
             || IntervalSeconds is < 60 or > 604800 || CaCertificatePem?.Length > 16384
-            || CaCertificatePem?.Contains("PRIVATE KEY", StringComparison.Ordinal) == true)
+            || CaCertificatePem?.Contains("PRIVATE KEY", StringComparison.Ordinal) == true
+            // A CA verifies TLS, so one on a plain HTTP origin would promise a check that never runs.
+            || !string.IsNullOrWhiteSpace(CaCertificatePem) && new Uri(PublicUrl).Scheme != Uri.UriSchemeHttps)
         {
             throw new InvalidOperationException(
-                "DiskReporter requires an HTTPS PublicUrl origin, an HTTPS BinaryUrl without credentials/query/fragment, "
+                "DiskReporter requires an http:// or https:// PublicUrl origin, an http:// or https:// BinaryUrl without credentials/query/fragment, "
                 + "a 64-character BinarySha256, and IntervalSeconds between 60 and 604800. "
-                + "CaCertificatePem may contain only a public CA certificate (at most 16 KiB).");
+                + "CaCertificatePem may contain only a public CA certificate (at most 16 KiB), and needs an https:// PublicUrl.");
         }
     }
 
-    private static bool HttpsUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri)
-        && uri.Scheme == "https" && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0;
+    private static bool WebUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0;
 }
 
 public sealed class AgentChannelOptions

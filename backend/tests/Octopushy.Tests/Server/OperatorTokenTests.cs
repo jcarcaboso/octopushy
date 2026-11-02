@@ -11,13 +11,15 @@ public class OperatorTokenTests(PostgresFixture postgres)
 {
     private const string Path = "/api/auth/operator-tokens";
 
-    [Fact]
-    public async Task A_console_grant_authenticates_the_cli_until_revoked_without_exposing_its_secret_again()
+    [Theory]
+    [InlineData("https://localhost:8080")]
+    [InlineData("http://localhost:8080")]
+    public async Task A_console_grant_authenticates_the_cli_until_revoked_without_exposing_its_secret_again(string origin)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         await server.SyncAsync();
         using var console = server.CreateClient();
-        console.BaseAddress = new Uri("https://localhost:8080");
+        console.BaseAddress = new Uri(origin);
         var setupCode = (await File.ReadAllTextAsync(System.IO.Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await console.PostAsJsonAsync("/api/auth/setup",
             new { setupCode, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
@@ -38,11 +40,12 @@ public class OperatorTokenTests(PostgresFixture postgres)
         var auth = (await cli.GetFromJsonAsync<JsonObject>("/api/auth/state"))!;
         Assert.True(auth["authenticated"]!.GetValue<bool>());
         Assert.Contains("assistant", auth["username"]!.GetValue<string>());
-        using (var cleartext = server.CreateClient())
+        using (var otherScheme = server.CreateClient())
         {
-            cleartext.BaseAddress = new Uri("http://localhost:8080");
-            cleartext.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            Assert.Equal(HttpStatusCode.Unauthorized, (await cleartext.GetAsync("/api/inventory")).StatusCode);
+            // The scheme is the deployment's choice; a grant from either works on both.
+            otherScheme.BaseAddress = new Uri(origin.StartsWith("https:", StringComparison.Ordinal) ? "http://localhost:8080" : "https://localhost:8080");
+            otherScheme.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            Assert.Equal(HttpStatusCode.OK, (await otherScheme.GetAsync("/api/inventory")).StatusCode);
         }
         // A stolen automation grant cannot mint replacement grants or manage other grants.
         Assert.Equal(HttpStatusCode.Unauthorized,
@@ -72,14 +75,17 @@ public class OperatorTokenTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData("disk-reporting-token")]
-    [InlineData("agent-enrollment-token")]
-    [InlineData("opy_op_00000000000000000000000000000000_invalid")]
-    public async Task Other_credentials_are_not_operator_authority(string token)
+    [InlineData("https://localhost:8080", "disk-reporting-token")]
+    [InlineData("https://localhost:8080", "agent-enrollment-token")]
+    [InlineData("https://localhost:8080", "opy_op_00000000000000000000000000000000_invalid")]
+    [InlineData("http://localhost:8080", "disk-reporting-token")]
+    [InlineData("http://localhost:8080", "agent-enrollment-token")]
+    [InlineData("http://localhost:8080", "opy_op_00000000000000000000000000000000_invalid")]
+    public async Task Other_credentials_are_not_operator_authority(string origin, string token)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         using var cli = server.CreateClient();
-        cli.BaseAddress = new Uri("https://localhost:8080");
+        cli.BaseAddress = new Uri(origin);
         cli.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         Assert.Equal(HttpStatusCode.Unauthorized, (await cli.GetAsync("/api/inventory")).StatusCode);
     }

@@ -753,7 +753,7 @@ public sealed partial class LabRepositoryLoader
 
         if (ConfigureInputs.AddressOf(guest) is null)
             Invalid("/access", "A guest with a setup recipe needs access.address, or a static or reserved address.");
-        foreach (var field in new[] { "user", "sshKey", "hostKey" })
+        foreach (var field in new[] { "user", "hostKey" })
         {
             if (guest.Json["access"]?[field] is null)
                 Invalid("/access", $"A guest with a setup recipe needs access.{field}.");

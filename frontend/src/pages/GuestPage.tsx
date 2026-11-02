@@ -10,6 +10,7 @@ import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionView } from "../components/DefinitionView";
 import { IssueList } from "../components/IssueList";
 import { GuestConfigurationCard } from "../components/GuestConfiguration";
+import { ManagedAccessCard } from "../components/ManagedAccess";
 import { GuestDiskUsage } from "../components/GuestDiskUsage";
 import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
@@ -174,6 +175,7 @@ export function GuestPage() {
               </div>
             </Card>
             {data.configuration ? <GuestConfigurationCard id={guest.id} configuration={data.configuration} /> : null}
+            {data.managedAccess ? <ManagedAccessCard access={data.managedAccess} /> : null}
             <Card title="Identity">
               <Identity guest={data} />
             </Card>

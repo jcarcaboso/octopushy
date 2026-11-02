@@ -94,7 +94,7 @@
         "address": { "description": "Where a configure run connects; by default the guest's static or reserved address.", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.:-]*(?![\\s\\S])" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "user": { "description": "The login of a configure run.", "type": "string", "pattern": "^[a-z_][a-z0-9_.-]*(?![\\s\\S])" },
-        "sshKey": { "description": "An unencrypted OpenSSH private key, stored as a secret.", "$ref": "common.schema.json#/$defs/storeRef" },
+        "sshKey": { "description": "For a machine Octopushy did not create: an unencrypted OpenSSH private key, stored as a secret. Without it, Octopushy generates and uses its own key for this guest.", "$ref": "common.schema.json#/$defs/storeRef" },
         "hostKey": { "description": "The guest's public SSH host key, read through a trusted channel and stored by an operator. Octopushy never scans for it.", "$ref": "common.schema.json#/$defs/storeRef" },
         "sshAuthorizedKeys": { "type": "array", "items": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)" } }
       },

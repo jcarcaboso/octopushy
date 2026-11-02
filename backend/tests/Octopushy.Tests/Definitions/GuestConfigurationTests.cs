@@ -74,7 +74,7 @@ public class GuestConfigurationTests
         var inputs = ConfigureInputs.Build(repository, guest);
         Assert.Equal("10.1.0.31", inputs.Address);
         Assert.Equal(22, inputs.Port);
-        Assert.Equal("access/app/ssh-key", inputs.SshKey.Key);
+        Assert.Equal("access/app/ssh-key", inputs.SshKey!.Key);
         Assert.Equal("access/app/host-key", inputs.HostKey.Key);
         Assert.Equal("configure", inputs.Configure.OnChange!.Id);
         Assert.True(inputs.Configure.Actions["update-system"].UsesAppliedSnapshot);
@@ -129,7 +129,6 @@ public class GuestConfigurationTests
     [InlineData(GuestFile, "access/app/ssh-key", "proxmox/korriban/privileged-token")]
     [InlineData(GuestFile, "app/tailscale", "system/agents/key")]
     [InlineData(GuestFile, "  user: ops\n", "")]
-    [InlineData(GuestFile, "  sshKey: { store: access/app/ssh-key }\n", "")]
     [InlineData(GuestFile, "  hostKey: { store: access/app/host-key }\n", "")]
     [InlineData(GuestFile, "recipe: app", "recipe: test-vm")]
     [InlineData(GuestFile, "recipe: app", "recipe: nothing")]
@@ -192,6 +191,15 @@ public class GuestConfigurationTests
         var test = Repository();
         test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile))
             .Replace("access:\n  user: ops", $"  schedules:\n{schedules}access:\n  user: ops"));
+        return test;
+    }
+
+    private const string DeclaredKey = "  sshKey: { store: access/app/ssh-key }\n";
+
+    private static TestRepository WithManagedKey()
+    {
+        var test = Repository();
+        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)).Replace(DeclaredKey, ""));
         return test;
     }
 
@@ -314,5 +322,41 @@ public class GuestConfigurationTests
         var first = DateTimeOffset.Parse("2026-10-25T00:30:00Z");
 
         Assert.Equal(first.AddHours(1), GuestSchedules.Next("30 * * * *", madrid, first));
+    }
+
+    [Fact]
+    public void A_guest_with_a_recipe_needs_no_key_of_its_own()
+    {
+        using var test = WithManagedKey();
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        var guest = repository.Guest(Address)!;
+        Assert.True(ManagedAccess.Wanted(guest));
+        Assert.Null(ConfigureInputs.Build(repository, guest).SshKey);
+    }
+
+    [Fact]
+    public void Only_a_guest_octopushy_configures_with_its_own_key_changes_its_provisioning_hash()
+    {
+        using var plain = TestRepository.Minimal();
+        using var declared = Repository();
+        using var managed = WithManagedKey();
+        string Hash(TestRepository test)
+        {
+            var repository = LabRepositoryLoader.Load(test.Root);
+            return ProvisionInputs.Build(repository, repository.Guest(Address)!, "c").Hash;
+        }
+
+        Assert.Equal(Hash(plain), Hash(declared));
+        Assert.NotEqual(Hash(plain), Hash(managed));
+    }
+
+    [Fact]
+    public void Octopushys_key_is_not_in_the_definitions_variables()
+    {
+        using var test = WithManagedKey();
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var variables = ProvisionInputs.Build(repository, repository.Guest(Address)!, "c").Variables;
+        Assert.DoesNotContain(variables["guest"]!["sshAuthorizedKeys"]!.AsArray(), k => k!.GetValue<string>().Contains("octopushy"));
     }
 }

@@ -12,6 +12,7 @@ use std::{
     io::Read,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
+    sync::Once,
     time::Duration,
 };
 
@@ -26,16 +27,25 @@ struct Credential {
 fn origin(value: &str) -> Result<url::Url> {
     let url = url::Url::parse(value).context("invalid controller URL")?;
     ensure!(
-        url.scheme() == "https"
+        matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()
             && url.username().is_empty()
             && url.password().is_none()
             && url.path() == "/"
             && url.query().is_none()
             && url.fragment().is_none(),
-        "controller must be an HTTPS origin without credentials, path, query or fragment"
+        "controller must be an http:// or https:// origin without credentials, path, query or fragment"
     );
     Ok(url)
+}
+
+/// A CA only verifies TLS, so accepting one over plain HTTP would promise a check that never runs.
+fn ca_matches(base: &url::Url, has_ca: bool) -> Result<()> {
+    ensure!(
+        !has_ca || base.scheme() == "https",
+        "a controller CA (--ca-file) needs an https:// origin; plain HTTP has no certificate to verify"
+    );
+    Ok(())
 }
 
 fn private(path: &Path, directory: bool) -> Result<()> {
@@ -65,7 +75,8 @@ fn load(path: &Path) -> Result<Credential> {
 }
 
 fn client(credential: &Credential) -> Result<Client> {
-    origin(&credential.server)?;
+    let base = origin(&credential.server)?;
+    ca_matches(&base, credential.ca_certificate_pem.is_some())?;
     let _ = rustls::crypto::ring::default_provider().install_default();
     ensure!(
         credential.token.len() == 104
@@ -77,7 +88,7 @@ fn client(credential: &Credential) -> Result<Client> {
         .map_err(|_| anyhow::anyhow!("invalid operator credential"))?;
     auth.set_sensitive(true);
     let mut builder = Client::builder()
-        .https_only(true)
+        .https_only(base.scheme() == "https")
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(5))
@@ -93,7 +104,7 @@ fn client(credential: &Credential) -> Result<Client> {
                 .map_err(|_| anyhow::anyhow!("invalid controller public CA"))?,
         );
     }
-    builder.build().context("create HTTPS operator client")
+    builder.build().context("create operator client")
 }
 
 async fn request(
@@ -112,7 +123,17 @@ async fn request(
         url.origin() == base.origin() && url.path().starts_with("/api/"),
         "refusing an API request outside the configured controller"
     );
-    let mut call = client(credential)?
+    let client = client(credential)?;
+    if base.scheme() == "http" {
+        static WARNED: Once = Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "warning: the operator token travels unencrypted to {}; anyone on the network path can read it",
+                base.origin().ascii_serialization()
+            );
+        });
+    }
+    let mut call = client
         .request(Method::from_bytes(method.as_bytes())?, url)
         .header("Origin", base.origin().ascii_serialization());
     if let Some(body) = body {
@@ -184,6 +205,7 @@ pub async fn run(path: Option<PathBuf>, command: OperatorCommand) -> Result<()> 
             replace,
         } => {
             let base = origin(&server)?;
+            ca_matches(&base, ca_file.is_some())?;
             ensure!(
                 replace || !path.exists(),
                 "an operator credential already exists; logout first or explicitly use --replace"

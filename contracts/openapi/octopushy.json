@@ -4735,7 +4735,8 @@
           "retiredAt",
           "runs",
           "diskUsage",
-          "configuration"
+          "configuration",
+          "managedAccess"
         ],
         "type": "object",
         "properties": {
@@ -4874,6 +4875,16 @@
               },
               {
                 "$ref": "#/components/schemas/GuestConfigurationDto"
+              }
+            ]
+          },
+          "managedAccess": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedAccessDto"
               }
             ]
           }
@@ -5447,6 +5458,42 @@
           },
           "password": {
             "type": "string"
+          }
+        }
+      },
+      "ManagedAccessDto": {
+        "required": [
+          "publicKey",
+          "fingerprint",
+          "version",
+          "provisionedAt",
+          "lastUsedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "provisionedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastUsedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },

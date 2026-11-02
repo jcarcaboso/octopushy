@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 using Octopushy.Server.Git;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
@@ -286,7 +287,18 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             GuestDiskUsageEndpoints.View(resource,
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
-            configure);
+            configure,
+            await ManagedAccessAsync(id, cancellationToken));
+    }
+
+    /// <summary>The version runs use: public, and all there is to show. The private half never reaches this layer.</summary>
+    private async Task<ManagedAccessDto?> ManagedAccessAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var entry = GuestAccessCredentials.Key(id);
+        var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == entry).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
+        var key = current is null ? null
+            : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == id && k.Version == current, cancellationToken);
+        return key is null ? null : new ManagedAccessDto(key.PublicKey, key.Fingerprint, key.Version, key.ProvisionedAt, key.LastUsedAt);
     }
 
     private async Task<IReadOnlyList<GuestScheduleDto>> SchedulesAsync(LabRepository repository, GuestDefinition guest, Guid id, CancellationToken cancellationToken)

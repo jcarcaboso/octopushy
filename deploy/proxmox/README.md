@@ -41,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `0.2.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `0.3.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
@@ -129,7 +129,11 @@ before enrolling with a new token (`OCTOPUSHY_AGENT_NAME=<name>` picks the name)
 
 The web interface is plain HTTP on port 8081. Put a TLS proxy in front of it; the
 frontend trusts `X-Forwarded-Proto` from private addresses, so session cookies become
-secure once the proxy sets it. With Traefik's file provider:
+secure once the proxy sets it. Without a proxy the web interface, the
+[operator CLI](../../docs/operator-access.md#plain-http) and
+[guest disk reporting](../../agent/packaging/disk-reporter/README.md#plain-http) still work
+over plain HTTP, but passwords, session cookies and tokens are then readable by anyone on
+the network path. With Traefik's file provider:
 
 ```yaml
 http:

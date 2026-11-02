@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -36,12 +37,32 @@ public sealed partial class AssignmentBuilder
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
         if (problems.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
+        // Only this server-owned key may leave system/, and the general resolver keeps refusing it.
+        var ownKey = names.Contains(SecretNames.AnsibleSshKey) && context.Secrets[SecretNames.AnsibleSshKey] == GuestAccessCredentials.Key(run.ResourceId);
+        var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
-            names.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
-            names.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
+            stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
+            stored.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
             attempt.Id,
             agentId,
             cancellationToken);
+        if (ownKey)
+        {
+            var key = context.Secrets[SecretNames.AnsibleSshKey];
+            var version = context.SecretVersions[SecretNames.AnsibleSshKey];
+            var value = await store.GetVersionInternalAsync(key, version, cancellationToken);
+            if (value is null)
+            {
+                missing.Add($"{key} v{version}");
+            }
+            else
+            {
+                db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+                await db.SaveChangesAsync(cancellationToken);
+                values[SecretNames.AnsibleSshKey] = value;
+            }
+        }
+
         if (missing.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         values.Remove(SecretNames.AnsibleHostKey, out var hostKey);
