@@ -41,17 +41,17 @@ public static class GuestSchedules
         }
     }
 
-    /// <summary>The first time after <paramref name="after"/> the schedule falls due.</summary>
+    /// <summary>The first time after <paramref name="after"/> the schedule falls due, in UTC, as everything stored is.</summary>
     public static DateTimeOffset? Next(string cron, TimeZoneInfo zone, DateTimeOffset after) =>
-        CronExpression.Parse(cron, CronFormat.Standard).GetNextOccurrence(after, zone);
+        CronExpression.Parse(cron, CronFormat.Standard).GetNextOccurrence(after, zone)?.ToUniversalTime();
 
-    /// <summary>The newest time in the range the schedule fell due, if any.</summary>
+    /// <summary>The newest time in the range the schedule fell due, if any, in UTC.</summary>
     public static DateTimeOffset? Latest(string cron, TimeZoneInfo zone, DateTimeOffset from, DateTimeOffset to)
     {
         DateTimeOffset? latest = null;
         foreach (var occurrence in CronExpression.Parse(cron, CronFormat.Standard).GetOccurrences(from, to, zone, fromInclusive: false, toInclusive: true))
         {
-            latest = occurrence;
+            latest = occurrence.ToUniversalTime();
         }
 
         return latest;
