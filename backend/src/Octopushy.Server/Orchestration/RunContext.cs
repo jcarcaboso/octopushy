@@ -32,6 +32,9 @@ public sealed record RunContext
 
     public OpenTofuContext? OpenTofu { get; init; }
 
+    /// <summary>What a configure run runs. It reaches the guest over SSH, so it never uses <see cref="Proxmox"/>'s credentials.</summary>
+    public AnsibleContext? Ansible { get; init; }
+
     /// <summary>The installation the work acts on. A cluster's run has none, so this stays <see cref="ProxmoxContext.None"/>.</summary>
     public ProxmoxContext Proxmox { get; init; } = ProxmoxContext.None;
 
@@ -95,6 +98,35 @@ public sealed record OpenTofuContext(
     JsonObject Variables,
     Dictionary<string, string> Env,
     Dictionary<string, string> SecretEnv);
+
+/// <summary>
+/// A configure run: one action of a recipe, against one guest. <see cref="Vars"/> holds no secret
+/// value; a secret var names its role in <see cref="RunContext.Secrets"/>.
+/// </summary>
+public sealed record AnsibleContext(
+    string Recipe,
+    string Action,
+    string Root,
+    string Playbook,
+    string? Prepare,
+    bool UsesAppliedSnapshot,
+    bool Destructive,
+    int? TimeoutMinutes,
+    string Image,
+    string GuestName,
+    string GuestDirectory,
+    string Address,
+    int Port,
+    string User,
+    JsonObject Vars,
+    IReadOnlyList<string> SecretVars,
+    IReadOnlyList<string> SecretFiles,
+    Dictionary<string, AnsibleOutcome> Outcomes,
+    /// <summary>What changed under the recipe and its project since the guest's last successful run; null when it has none.</summary>
+    IReadOnlyList<string>? ChangedFiles);
+
+/// <summary>A declared outcome, as the run was built with it.</summary>
+public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
 
 public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace)
 {
@@ -190,6 +222,13 @@ public static class StepNames
     public const string ObserveCluster = "observe-cluster";
     /// <summary>Not a step: reading what certificates a cluster's members present, with no credentials.</summary>
     public const string ProbeCluster = "probe-cluster";
+    /// <summary>Shows what a configure run will do, with no secrets and no contact with the guest.</summary>
+    public const string Preview = "preview";
+    public const string Playbook = "playbook";
+    /// <summary>A person decides what a playbook's declared outcome should lead to.</summary>
+    public const string OutcomeApproval = "outcome-approval";
+    /// <summary>The one further run a person may approve after a declared outcome.</summary>
+    public const string PlaybookApproved = "playbook-approved";
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -216,4 +255,13 @@ public static class SecretNames
 
     /// <summary>Whether the apply is the only step that receives this secret.</summary>
     public static bool ApplyOnly(string name) => name.StartsWith(RecipePrefix, StringComparison.Ordinal);
+
+    public const string AnsibleSshKey = "ansible.ssh-key";
+    public const string AnsibleHostKey = "ansible.host-key";
+
+    /// <summary>A guest's <c>setup.secrets</c> entry.</summary>
+    public static string AnsibleVar(string name) => $"ansible.var.{name}";
+
+    /// <summary>A guest's <c>setup.secretFiles</c> entry.</summary>
+    public static string AnsibleFile(string name) => $"ansible.file.{name}";
 }

@@ -571,6 +571,77 @@
         }
       }
     },
+    "/api/guests/{id}/configure": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "configureGuest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureGuestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/installations/{id}": {
       "get": {
         "tags": [
@@ -4894,6 +4965,168 @@
           }
         }
       },
+      "ConfigureActionDto": {
+        "required": [
+          "id",
+          "description",
+          "destructive",
+          "onChange"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "destructive": {
+            "type": "boolean"
+          },
+          "onChange": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigureGuestRequest": {
+        "required": [
+          "action"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ConfigurePreviewDto": {
+        "required": [
+          "action",
+          "playbook",
+          "commit",
+          "image",
+          "host",
+          "toolVersion",
+          "destructive",
+          "tasks",
+          "changedFiles",
+          "vars",
+          "secrets",
+          "prepared",
+          "hostKeyFingerprints",
+          "previewSha256"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "playbook": {
+            "type": "string"
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "image": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "host": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "toolVersion": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "destructive": {
+            "type": "boolean"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changedFiles": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "vars": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigureSecretDto"
+            }
+          },
+          "prepared": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "hostKeyFingerprints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "previewSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ConfigureSecretDto": {
+        "required": [
+          "name",
+          "reference"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          }
+        }
+      },
       "CreatedOperatorToken": {
         "required": [
           "id",
@@ -5343,6 +5576,54 @@
           }
         }
       },
+      "GuestConfigurationDto": {
+        "required": [
+          "recipe",
+          "actions",
+          "inSync",
+          "appliedAction",
+          "appliedCommit",
+          "appliedAt",
+          "hasSnapshot"
+        ],
+        "type": "object",
+        "properties": {
+          "recipe": {
+            "type": "string"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigureActionDto"
+            }
+          },
+          "inSync": {
+            "type": "boolean"
+          },
+          "appliedAction": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "hasSnapshot": {
+            "type": "boolean"
+          }
+        }
+      },
       "GuestDetailDto": {
         "required": [
           "guest",
@@ -5367,7 +5648,8 @@
           "diskUsage",
           "trust",
           "stateful",
-          "dataGuarded"
+          "dataGuarded",
+          "configuration"
         ],
         "type": "object",
         "properties": {
@@ -5507,6 +5789,16 @@
           },
           "dataGuarded": {
             "type": "boolean"
+          },
+          "configuration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GuestConfigurationDto"
+              }
+            ]
           }
         }
       },
@@ -7090,6 +7382,16 @@
             "items": {
               "$ref": "#/components/schemas/AttemptDto"
             }
+          },
+          "configurePreview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ConfigurePreviewDto"
+              }
+            ]
           }
         }
       },

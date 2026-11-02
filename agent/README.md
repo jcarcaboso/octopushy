@@ -58,7 +58,7 @@ An existing enrollment is only replaced with `--force`.
 
 ```sh
 octopushy agent run [--state-dir DIR] [--tool-runtime podman|docker|local]
-                    [--tofu-binary PATH] [--container-binary PATH]
+                    [--tofu-binary PATH] [--ansible-binary PATH] [--container-binary PATH]
                     [--container-network NAME] [--work-dir DIR]
 octopushy agent status [--state-dir DIR]
 octopushy version
@@ -67,8 +67,9 @@ octopushy version
 | Flag | Default | Meaning |
 |---|---|---|
 | `--state-dir` | see below | enrollment, outbox, workspaces, provider cache |
-| `--tool-runtime` | `podman` | how OpenTofu runs |
+| `--tool-runtime` | `podman` | how OpenTofu and Ansible run |
 | `--tofu-binary` | `tofu` | the binary for `--tool-runtime local` |
+| `--ansible-binary` | `octopushy-ansible` | the program for `--tool-runtime local` |
 | `--container-binary` | `podman`/`docker` on PATH | the container CLI |
 | `--container-network` | runtime default | `--network` for tool containers |
 | `--work-dir` | `<state>/work` | attempt workspaces |
@@ -209,6 +210,12 @@ container runtime use (`HOME`, `PATH`, `TF_CLI_ARGS*`, `CONTAINERS_*`, …) are 
 
 Cancel sends SIGTERM to the tool's process group (podman forwards it to OpenTofu),
 then after 10 s kills the container (`podman kill`) and the group.
+
+Ansible runs the same way, without the provider cache, through `octopushy-ansible`
+from [`ansible/`](ansible/): its secrets arrive on stdin and stay in memory, so with
+the `local` runtime `/tmp` has to be a tmpfs, or it refuses to run. The agent
+announces `ansible` only if the program works. See
+[configuring a guest](../docs/guest-configuration.md).
 
 ## Security notes
 

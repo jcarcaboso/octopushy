@@ -7,6 +7,9 @@ pub const MASK: &str = "***";
 
 /// Values shorter than this are not masked as fragments (only whole values are).
 const MIN_FRAGMENT_LEN: usize = 6;
+/// A line of a multi-line value. Output is masked a line at a time, so a value printed over
+/// several lines is only ever seen as these; what is shorter would match ordinary text.
+const MIN_LINE_LEN: usize = 4;
 
 /// Masks a fixed set of secret values.
 #[derive(Clone, Default)]
@@ -25,12 +28,17 @@ impl Masker {
     /// Builds a masker for `secrets`. Empty values are skipped. Besides each
     /// whole value it masks fragments that tools are known to print on their own:
     /// each line of a multi-line value, and the part after the first `=` (the
-    /// secret of a Proxmox token `USER@REALM!TOKENID=SECRET`).
+    /// secret of a Proxmox token `USER@REALM!TOKENID=SECRET`). Each is also masked
+    /// as JSON escapes it, which is how Ansible prints what a task returned.
     pub fn new<'a>(secrets: impl IntoIterator<Item = &'a str>) -> Self {
         let mut patterns: Vec<String> = Vec::new();
         let mut add = |p: &str| {
-            if !p.is_empty() && p != MASK && !patterns.iter().any(|q| q == p) {
-                patterns.push(p.to_owned());
+            let escaped = serde_json::to_string(p).unwrap_or_default();
+            let escaped = escaped.trim_matches('"');
+            for p in [p, escaped] {
+                if !p.is_empty() && p != MASK && !patterns.iter().any(|q| q == p) {
+                    patterns.push(p.to_owned());
+                }
             }
         };
         for secret in secrets {
@@ -40,7 +48,7 @@ impl Masker {
             add(secret);
             if secret.contains('\n') {
                 for line in secret.lines().map(|l| l.trim_end_matches('\r')) {
-                    if line.trim().len() >= MIN_FRAGMENT_LEN {
+                    if line.trim().len() >= MIN_LINE_LEN {
                         add(line);
                     }
                 }
@@ -175,6 +183,30 @@ mod tests {
             m.mask("line MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8"),
             "line ***"
         );
+    }
+
+    #[test]
+    fn masks_a_value_as_json_escapes_it() {
+        let m = Masker::new([r#"pa"ss\word"#]);
+        assert_eq!(m.mask(r#"{"msg": "pa\"ss\\word"}"#), r#"{"msg": "***"}"#);
+    }
+
+    #[test]
+    fn masks_a_whole_private_key_printed_on_one_json_line() {
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nab=\n-----END OPENSSH PRIVATE KEY-----\n";
+        let m = Masker::new([key]);
+        let printed = serde_json::to_string(key).unwrap();
+        assert_eq!(m.mask(&printed), "\"***\"");
+        // Line by line, a fragment under four characters stays: this is the documented limit.
+        let text = m.mask("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nab=");
+        assert_eq!(text, "***\n***\nab=");
+    }
+
+    #[test]
+    fn a_short_multi_line_value_is_masked_line_by_line() {
+        let m = Masker::new(["ab12\ncd34"]);
+        assert_eq!(m.mask("ab12"), "***");
+        assert_eq!(m.mask("cd34"), "***");
     }
 
     #[test]

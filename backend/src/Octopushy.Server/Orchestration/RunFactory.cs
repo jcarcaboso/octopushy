@@ -369,6 +369,90 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
         };
     }
 
+    /// <summary>
+    /// A configure run: one action of the guest's setup recipe. It reaches the guest over SSH, so
+    /// it holds no Proxmox credentials. The installation's endpoint stays in its context because
+    /// trust in that installation still decides whether its guests are worked on.
+    /// </summary>
+    public Run Configure(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
+        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles)
+    {
+        if (guest.Retired)
+            throw new RunException("A retired guest is not configured.");
+        var inputs = ConfigureInputs.Build(repository, guest);
+        if (!inputs.Configure.Actions.TryGetValue(actionId, out var action))
+            throw new RunException($"The recipe {inputs.Recipe.Id} has no action {actionId}.");
+        if (action.UsesAppliedSnapshot && configuration?.Snapshot is null)
+            throw new RunException($"{actionId} reuses what the last successful run prepared, and this guest has none yet. Run an action that prepares one first.");
+
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
+        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
+        void Bind(string role, StoreReference reference)
+        {
+            secrets[role] = reference.Key;
+            if (reference.Version is { } version)
+            {
+                requestedVersions[role] = version;
+            }
+        }
+
+        Bind(SecretNames.AnsibleSshKey, inputs.SshKey);
+        Bind(SecretNames.AnsibleHostKey, inputs.HostKey);
+        foreach (var (name, reference) in inputs.SecretVars)
+        {
+            Bind(SecretNames.AnsibleVar(name), reference);
+        }
+
+        foreach (var (name, reference) in inputs.SecretFiles)
+        {
+            Bind(SecretNames.AnsibleFile(name), reference);
+        }
+
+        var installation = repository.Installation(guest.InstallationAddress)!;
+        var policy = PolicyResolver.For(repository, guest);
+        var labels = PolicyResolver.AgentLabels(repository, guest);
+        var context = new RunContext
+        {
+            Address = guest.Address,
+            Commit = revision.Commit,
+            AgentLabels = labels.Value,
+            AgentLabelsSetBy = labels.SetBy,
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
+            Proxmox = new ProxmoxContext(ProvisionInputs.EndpointFor(installation, installation.Hosts[guest.Host]), installation.Connection.VerifyTls, null,
+                guest.Host, guest.Vmid, guest.Id, null),
+            Secrets = secrets,
+            RequestedSecretVersions = requestedVersions,
+            Ansible = new AnsibleContext(
+                inputs.Recipe.Id,
+                action.Id,
+                inputs.Recipe.Root,
+                action.Playbook,
+                action.Prepare,
+                action.UsesAppliedSnapshot,
+                action.Destructive,
+                action.TimeoutMinutes,
+                inputs.Recipe.Image ?? options.Value.Tools.AnsibleImage,
+                guest.Id,
+                guest.Directory,
+                inputs.Address,
+                inputs.Port,
+                inputs.User,
+                inputs.Vars,
+                inputs.SecretVars.Keys.ToList(),
+                inputs.SecretFiles.Keys.ToList(),
+                inputs.Configure.Outcomes.ToDictionary(
+                    o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result), StringComparer.Ordinal),
+                changedFiles),
+        };
+
+        var run = NewRun(resource, Operations.Configure, revision, reason, context);
+        run.InputsHash = inputs.Hash;
+        AddSteps(run, inputs.Configure.Outcomes.Values.Any(o => o.ApproveVars is not null)
+            ? [StepNames.Preview, StepNames.Approval, StepNames.Playbook, StepNames.OutcomeApproval, StepNames.PlaybookApproved]
+            : [StepNames.Preview, StepNames.Approval, StepNames.Playbook]);
+        return run;
+    }
+
     /// <summary>What an observation of the installation's hosts and VMs through its Proxmox API is built from.</summary>
     public static RunContext Observation(LabRepository repository, InstallationDefinition installation, DefinitionRevision revision)
     {
@@ -457,7 +541,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 RunId = run.Id,
                 Ordinal = i,
                 Name = names[i],
-                Kind = names[i] == StepNames.Approval ? StepKinds.Approval : StepKinds.Agent,
+                Kind = names[i] is StepNames.Approval or StepNames.OutcomeApproval ? StepKinds.Approval : StepKinds.Agent,
             });
         }
     }

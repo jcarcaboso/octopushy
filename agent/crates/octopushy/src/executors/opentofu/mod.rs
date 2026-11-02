@@ -31,7 +31,7 @@ use serde_json::{Map, Value, json};
 
 use super::{ExecContext, ExecResult, ExecutorConfig, Failure, Success};
 use crate::tls::sha256_hex;
-use crate::tools::{Invocation, ToolOutput};
+use crate::tools::{Invocation, Tool, ToolOutput};
 
 pub const PLAN_ARTIFACT: &str = "plan.tar.gz";
 const LOCK_FILE: &str = ".terraform.lock.hcl";
@@ -526,17 +526,20 @@ impl Tofu<'_> {
             .runtime
             .run(
                 Invocation {
+                    tool: Tool::OpenTofu,
                     name,
                     image: &self.prep.input.image,
                     workspace: &self.ctx.workspace,
                     workdir: &self.prep.root,
-                    plugin_cache: &self.cfg.provider_cache,
+                    plugin_cache: Some(&self.cfg.provider_cache),
                     args,
                     settings: self.prep.settings.clone(),
                     env: self.prep.env.clone(),
+                    stdin: None,
                     capture_stdout: capture,
                     stderr_mark: (self.prep.built_in && step == "apply")
                         .then_some(state::NOT_SAVED),
+                    control_prefix: None,
                 },
                 &self.ctx.log,
                 &self.ctx.cancel,

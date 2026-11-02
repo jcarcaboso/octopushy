@@ -5,7 +5,7 @@
 //! - A `queued` marker without a result never started: failed.
 //! - A `running` marker without a result died mid-attempt: uncertain for
 //!   mutations (`opentofu/apply`, `proxmox/set-protection`,
-//!   `nixos-rootfs/grow`, `guest/install-disk-reporter`), failed otherwise.
+//!   `nixos-rootfs/grow`, `guest/install-disk-reporter`, `ansible/run`), failed otherwise.
 //! - A workspace without a marker never got past setup and is removed.
 //! - A marker that exists but cannot be read says nothing about what the
 //!   attempt was doing: uncertain, never failed.
@@ -20,7 +20,7 @@ use anyhow::Result;
 use octopushy_proto::v1::{AttemptResult, Outcome};
 
 use super::workspace::{self, Marker, Phase};
-use crate::executors::{self, opentofu::state};
+use crate::executors::{self, ansible, opentofu::state};
 use crate::identity::now_ms;
 use crate::outbox::{Outbox, OutboxRecord};
 use crate::paths::is_safe_id;
@@ -73,6 +73,7 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
             if outbox.contains(&id) {
                 continue; // reported already; cleaned up on acknowledgement
             }
+            ansible::remove_secret_dir(&id);
             let mut applying = false;
             let (outcome, error) = match workspace::read(&ws) {
                 Ok(Some(marker)) => {
@@ -145,6 +146,9 @@ mod tests {
                 Uncertain,
             ),
             ("technitium", "verify", Phase::Running, Failed),
+            ("ansible", "run", Phase::Running, Uncertain),
+            ("ansible", "run", Phase::Queued, Failed),
+            ("ansible", "preview", Phase::Running, Failed),
             ("opentofu", "preview", Phase::Running, Failed),
             ("proxmox", "observe", Phase::Running, Failed),
             ("proxmox", "verify-guest", Phase::Running, Failed),

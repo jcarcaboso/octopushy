@@ -18,7 +18,7 @@ use octopushy::attempts::logs::{AttemptLogger, LogBuffer};
 use octopushy::executors::opentofu::archive;
 use octopushy::executors::{self, ExecContext, ExecutorConfig, Secrets};
 use octopushy::masking::Masker;
-use octopushy::tools::{Invocation, RuntimeKind, ToolRuntime};
+use octopushy::tools::{Invocation, RuntimeKind, Tool, ToolRuntime};
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -55,11 +55,12 @@ async fn podman_tofu_version() {
     let out = rt
         .run(
             Invocation {
+                tool: Tool::OpenTofu,
                 name: format!("octopushy-smoke-{}", fastrand::u32(..)),
                 image: IMAGE,
                 workspace: &ws,
                 workdir: &ws,
-                plugin_cache: &cache,
+                plugin_cache: Some(&cache),
                 args: vec!["version".into(), "-json".into()],
                 settings: vec![
                     ("HOME".into(), "/work/home".into()),
@@ -69,7 +70,9 @@ async fn podman_tofu_version() {
                     ),
                 ],
                 env: vec![("SOME_SECRET".into(), "not-a-real-secret-value".into())],
+                stdin: None,
                 capture_stdout: true,
+                control_prefix: None,
                 stderr_mark: None,
             },
             &log,

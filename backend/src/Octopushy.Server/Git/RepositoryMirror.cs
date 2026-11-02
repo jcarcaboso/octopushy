@@ -138,6 +138,21 @@ public sealed partial class RepositoryMirror
         }
     }
 
+    /// <summary>What changed between two commits under some paths, as <c>M path</c>, at most 200 lines. Empty when either commit is gone.</summary>
+    public async Task<IReadOnlyList<string>> ChangedFilesAsync(string from, string to, IEnumerable<string> paths, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var output = await _git.RunAsync(["-C", _mirror, "diff", "--name-status", "--no-renames", from, to, "--", .. paths],
+                cancellationToken: cancellationToken);
+            return output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Replace('\t', ' ')).Take(200).ToList();
+        }
+        catch (GitException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>
     /// The snapshot as a gzip tar for agents, without symbolic links or anything outside it.
     /// Cached per commit.

@@ -2,6 +2,7 @@
 //!
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
+pub mod ansible;
 pub mod guest;
 mod managed_update;
 pub mod managed_worker;
@@ -30,6 +31,7 @@ pub const EXECUTORS: &[&str] = &[
     "guest",
     "managed-worker",
     "technitium",
+    "ansible",
 ];
 
 /// Actions that change infrastructure. They are never cancelled, and an
@@ -43,6 +45,7 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
             | ("guest", "install-disk-reporter")
             | ("managed-worker", "prepare" | "install" | "update-os")
             | ("technitium", "detach" | "reconcile" | "refresh-block-lists")
+            | ("ansible", "run")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -208,6 +211,7 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
         "managed-worker" => managed_worker::run(cfg, ctx).await,
         "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         "technitium" => technitium::run(cfg, ctx).await,
+        "ansible" => ansible::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,
         other => Err(Failure::msg(format!(

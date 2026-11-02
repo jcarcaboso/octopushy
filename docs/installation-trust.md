@@ -152,7 +152,10 @@ revision's trust be checked again. Any other installation waits for trust once.
 A trust decision is operator authorization, **not a sandbox or a code review**.
 Every commit's tool-native code, such as OpenTofu modules, runs with the
 installation's credentials without being reviewed in Octopushy; review changes
-before merging them into the lab repository's branch. Deleting a guest's folder
+before merging them into the lab repository's branch. A playbook in the repository
+runs as root on its guest in the same way: a configure run waits for this trust, and
+reaches only a host whose key an operator pinned. See
+[ADR 0004](adr/0004-guest-configuration-trust.md). Deleting a guest's folder
 proposes its removal immediately; set `destructive: manual` to approve each
 removal. Signed commits, purpose and destination restrictions and least-privilege
 Proxmox credentials remain separate work.

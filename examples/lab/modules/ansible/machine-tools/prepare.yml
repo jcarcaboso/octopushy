@@ -1,0 +1,17 @@
+---
+# Runs on the agent before approval, with no secrets and no access to the guest. What it writes
+# to OCTOPUSHY_PREPARED_FILE is shown in the preview and becomes extra vars of the run, so a
+# person approves these versions, and a retry installs them and not whatever is newest by then.
+- name: Resolve what to install
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Pick the version of each tool
+      ansible.builtin.set_fact:
+        machine_tools_prepared:
+          machine_tools_release: "{{ '2.0.0' if machine_tools_channel == 'stable' else '2.1.0-nightly.1' }}"
+    - name: Hand the result to the run
+      ansible.builtin.copy:
+        content: "{{ machine_tools_prepared | to_json }}"
+        dest: "{{ lookup('ansible.builtin.env', 'OCTOPUSHY_PREPARED_FILE') }}"
+        mode: "0600"

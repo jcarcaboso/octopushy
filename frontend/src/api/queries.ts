@@ -285,6 +285,15 @@ export function usePlanCluster() {
   });
 }
 
+export function useConfigureGuest(id: string) {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (action: string) =>
+      unwrap(api.POST("/api/guests/{id}/configure", { params: { path: { id } }, body: { action } })),
+    onSuccess: () => refresh(),
+  });
+}
+
 /** Observes an installation in the background; it is not a run, so only the installation views refresh. */
 export function useObserveInstallation() {
   const client = useQueryClient();

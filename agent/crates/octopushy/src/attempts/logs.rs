@@ -111,7 +111,9 @@ impl AttemptLogger {
     pub fn line(&self, stream: LogStream, text: &str) -> String {
         let mut last = String::new();
         for raw in text.split('\n') {
-            let clean = sanitize(raw);
+            // Before cleaning, which cuts long lines and changes control characters, either of
+            // which would stop a value matching; and after, in case removing them exposed one.
+            let clean = sanitize(&self.masker.mask(raw));
             let masked = self.masker.mask(&clean).into_owned();
             let line = LogLine {
                 unix_ms: unix_ms(),
@@ -221,6 +223,25 @@ mod tests {
         assert_eq!(first, 10);
         assert_eq!(lines[0].text, "line 10");
         assert_eq!(buf.next_seq(), (MAX_RETAINED_LINES + 10) as u64);
+    }
+
+    #[test]
+    fn a_secret_across_the_line_limit_is_masked_before_the_line_is_cut() {
+        let secret = "s3cret-value-that-must-not-be-partly-logged";
+        let (log, buf) = logger(&[secret]);
+        let line = format!("{}{secret}", "x".repeat(MAX_LINE_BYTES - 10));
+        log.stdout(&line);
+        let (_, lines) = buf.batch_from(0, 1).unwrap();
+        assert!(!lines[0].text.contains("s3cret"), "{}", lines[0].text);
+    }
+
+    #[test]
+    fn a_secret_holding_a_control_character_is_masked_before_it_is_cleaned() {
+        let secret = "pass\tword\u{7}!";
+        let (log, buf) = logger(&[secret]);
+        log.stdout(&format!("value {secret} end"));
+        let (_, lines) = buf.batch_from(0, 1).unwrap();
+        assert_eq!(lines[0].text, "value *** end");
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub struct RunOptions {
     pub work_dir: Option<PathBuf>,
     pub tool_runtime: RuntimeKind,
     pub tofu_binary: PathBuf,
+    pub ansible_binary: PathBuf,
     pub container_binary: Option<PathBuf>,
     pub container_network: Option<String>,
     pub poll_interval: Duration,
@@ -37,6 +38,7 @@ impl RunOptions {
             work_dir: None,
             tool_runtime: RuntimeKind::Podman,
             tofu_binary: PathBuf::from("tofu"),
+            ansible_binary: PathBuf::from("octopushy-ansible"),
             container_binary: None,
             container_network: None,
             poll_interval: Duration::from_secs(5),
@@ -55,12 +57,13 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
 
     let outbox = Outbox::open(paths.outbox())?;
 
-    let runtime = ToolRuntime::new(
+    let mut runtime = ToolRuntime::new(
         opts.tool_runtime,
         opts.container_binary.clone(),
         opts.tofu_binary.clone(),
         opts.container_network.clone(),
     );
+    runtime.ansible_binary = opts.ansible_binary.clone();
     let tools_available = match runtime.probe().await {
         Ok(v) => {
             tracing::info!("tool runtime {}: {v}", opts.tool_runtime.as_str());
@@ -74,9 +77,23 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
             false
         }
     };
+    let ansible_available = match runtime.probe_ansible().await {
+        Ok(v) => {
+            tracing::info!("ansible: {v}");
+            true
+        }
+        Err(e) => {
+            tracing::info!("ansible is not usable ({e:#}); not advertising it");
+            false
+        }
+    };
     let executors = EXECUTORS
         .iter()
-        .filter(|&&name| tools_available || name != "opentofu")
+        .filter(|&&name| match name {
+            "opentofu" => tools_available,
+            "ansible" => tools_available && ansible_available,
+            _ => true,
+        })
         .map(|&name| name.to_owned())
         .collect();
     let capabilities = tools_available

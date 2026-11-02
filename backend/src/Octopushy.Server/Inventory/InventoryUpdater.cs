@@ -207,6 +207,8 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             runs.Add(proposed);
         }
 
+        await UpdateConfigurationsAsync(db, activeRuns, revision, repository, guests, cancellationToken);
+
         foreach (var resource in byAddress.Values.Where(r => r.Kind == ResourceKinds.Installation && seen.Contains(r.Id) && r.Valid))
         {
             var installation = repository.Installation(resource.Address)!;
@@ -235,6 +237,45 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
         if (resource.BoundPrimary is { } primary && primary != cluster.Primary?.Guest)
             return $"The primary of this cluster is {primary}. Changing it is a promotion, which this version does not do: put it back, and see docs/technitium-lxc.md for promoting by hand.";
         return null;
+    }
+
+    /// <summary>
+    /// Records what each guest's configure recipe wants in this revision. The orchestrator proposes
+    /// the run, because that also has to wait for the guest's provisioning. A configure run that
+    /// has not started changing anything gives way to the new inputs.
+    /// </summary>
+    private async Task UpdateConfigurationsAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, LabRepository repository,
+        List<Resource> guests, CancellationToken cancellationToken)
+    {
+        var configurations = await db.GuestConfigurations.ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        foreach (var resource in guests.Where(r => r.Valid))
+        {
+            var guest = repository.Guest(resource.Address)!;
+            configurations.TryGetValue(resource.Id, out var configuration);
+            if (guest.SetupRecipe is null || guest.Retired)
+            {
+                configuration?.DesiredHash = null;
+                continue;
+            }
+
+            if (configuration is null)
+            {
+                configuration = new GuestConfiguration { ResourceId = resource.Id };
+                db.GuestConfigurations.Add(configuration);
+            }
+
+            var hash = ConfigureInputs.Build(repository, guest).Hash;
+            if (configuration.DesiredHash == hash)
+                continue;
+            configuration.DesiredHash = hash;
+            configuration.DesiredRevisionId = revision.Id;
+            foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Configure
+                && r.RevisionId != revision.Id && RunEngine.CanSupersede(r)).ToList())
+            {
+                await engine.CancelInternalAsync(db, run.Id, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+                activeRuns.Remove(run);
+            }
+        }
     }
 
     /// <summary>
@@ -277,6 +318,10 @@ public sealed class InventoryUpdater(RunFactory factory, RunEngine engine, Revis
             {
                 await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken);
                 activeRuns.Remove(run);
+                // It never ran, so the inputs it was made for are still to be configured.
+                if (run.Operation == Operations.Configure
+                    && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
+                    configuration.ProposedHash = null;
                 cancelled = true;
             }
         }

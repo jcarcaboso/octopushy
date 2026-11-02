@@ -95,10 +95,30 @@ public sealed record StepDto(
     JsonNode? Outputs,
     PlanDto? Plan,
     ApprovalDto? Approval,
-    IReadOnlyList<AttemptDto> Attempts);
+    IReadOnlyList<AttemptDto> Attempts,
+    ConfigurePreviewDto? ConfigurePreview = null);
 
 /// <summary>What a plan step found: the resource changes OpenTofu proposes.</summary>
 public sealed record PlanDto(bool HasChanges, IReadOnlyList<PlanChangeDto> Changes, PlanCountsDto Counts, string? PlanSha256, string? ToolVersion);
+
+/// <summary>What a configure run will do. It says what will run, not what will change: no tool can show that.</summary>
+public sealed record ConfigurePreviewDto(
+    string Action,
+    string Playbook,
+    string? Commit,
+    string? Image,
+    string? Host,
+    string? ToolVersion,
+    bool Destructive,
+    IReadOnlyList<string> Tasks,
+    IReadOnlyList<string>? ChangedFiles,
+    JsonNode? Vars,
+    IReadOnlyList<ConfigureSecretDto> Secrets,
+    JsonNode? Prepared,
+    IReadOnlyList<string> HostKeyFingerprints,
+    string? PreviewSha256);
+
+public sealed record ConfigureSecretDto(string Name, string Reference);
 
 public sealed record PlanChangeDto(string Address, string? Type, string? Name, IReadOnlyList<string> Actions);
 
@@ -304,6 +324,20 @@ public sealed record GuestTrustDto(
 /// <summary>What the operator was shown; trust is refused when the guest is declared otherwise by now.</summary>
 public sealed record TrustGuestRequest(string? CodeDigest);
 
+/// <summary>A guest's configure recipe and where it stands.</summary>
+public sealed record GuestConfigurationDto(
+    string Recipe,
+    IReadOnlyList<ConfigureActionDto> Actions,
+    bool InSync,
+    string? AppliedAction,
+    string? AppliedCommit,
+    DateTimeOffset? AppliedAt,
+    bool HasSnapshot);
+
+public sealed record ConfigureActionDto(string Id, string? Description, bool Destructive, bool OnChange);
+
+public sealed record ConfigureGuestRequest(string? Action);
+
 public sealed record GuestDetailDto(
     GuestSummaryDto Guest,
     string? DefinitionFile,
@@ -327,7 +361,8 @@ public sealed record GuestDetailDto(
     GuestDiskUsageDto DiskUsage,
     GuestTrustDto Trust,
     bool Stateful,
-    bool DataGuarded);
+    bool DataGuarded,
+    GuestConfigurationDto? Configuration);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

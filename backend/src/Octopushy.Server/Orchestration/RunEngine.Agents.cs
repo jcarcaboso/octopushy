@@ -344,7 +344,7 @@ public sealed partial class RunEngine
                     });
                 }
 
-                if (artifact.Name == AssignmentBuilder.PlanArtifact && outputs is JsonObject planOutputs)
+                if (artifact.Name is AssignmentBuilder.PlanArtifact or AssignmentBuilder.PreviewArtifact && outputs is JsonObject planOutputs)
                 {
                     planOutputs["planSha256"] = artifact.Sha256.ToLowerInvariant();
                 }

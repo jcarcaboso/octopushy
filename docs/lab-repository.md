@@ -401,11 +401,15 @@ provision:
   recipe: proxmox-vm
   # state: { backend: gitlab }    # optional: an external backend from octopushy.yaml
 setup:
-  recipe: nixos                   # or ansible
-  files: nixos/
+  recipe: machine-tools           # a recipe with operation: configure
+  inputs: { machine_tools_channel: stable }
+  secrets:
+    machine_tools_token: { store: machines/krb-crt-01/tools-token }
 access:
-  address: krb-crt-01.home.arpa
+  address: krb-crt-01.home.arpa   # by default the static or reserved address
+  user: ops
   sshKey: { store: access/deploy/ssh-key }
+  hostKey: { store: access/krb-crt-01/host-key }  # read through Proxmox, never scanned
 policy:
   approval: automatic             # changes, including recreating the VM, run on their own
   destructive: manual             # deleting this VM or its disks waits for approval
@@ -423,6 +427,9 @@ and applied independently. Octopushy keeps it unless `provision.state` names an 
 backend, where it is named by the guest's address. `nodes` does the same today by
 having each guest's OpenTofu root read `node.json`; here the executor passes the
 values instead.
+
+`setup.recipe` names a recipe with `operation: configure`, which runs Ansible on the
+guest over SSH once it is provisioned; see [configuring a guest](guest-configuration.md).
 
 #### Containers
 
@@ -709,8 +716,8 @@ New VM → configured guest → working service:
 
 1. Add `guests/<id>/guest.yaml` under an installation. Octopushy proposes
    provisioning: the `proxmox-vm` recipe's OpenTofu plan for that guest.
-2. Once the guest is provisioned and verified, setup applies its profiles with the
-   `nixos` or `ansible` recipe.
+2. Once the guest is provisioned and verified, Octopushy runs its `setup.recipe`, if
+   it has one. Only Ansible does this today; profiles are not applied yet.
 3. Add `services/<name>/` under the guest. When the secrets resolve and are
    delivered, Octopushy proposes deploying that instance: it opens the instance's
    ports on the guest, deploys it, creates its DNS records, then verifies it.

@@ -94,6 +94,7 @@ async fn agent(command: AgentCommand) -> anyhow::Result<()> {
             opts.work_dir = args.work_dir;
             opts.tool_runtime = args.tool_runtime;
             opts.tofu_binary = args.tofu_binary;
+            opts.ansible_binary = args.ansible_binary;
             opts.container_binary = args.container_binary;
             opts.container_network = args.container_network;
             let shutdown = CancellationToken::new();

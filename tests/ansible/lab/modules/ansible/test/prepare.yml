@@ -1,0 +1,9 @@
+- name: Resolve what to install
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Write the version
+      ansible.builtin.copy:
+        content: '{"release_version": "1.2.3"}'
+        dest: "{{ lookup('ansible.builtin.env', 'OCTOPUSHY_PREPARED_FILE') }}"
+        mode: "0600"

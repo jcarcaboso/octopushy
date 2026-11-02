@@ -93,6 +93,14 @@ public sealed record ProvisionInputs(
         {
             guestJson.Remove(field);
         }
+        // How a configure run reaches the guest has no effect on the machine.
+        if (guestJson["access"] is JsonObject access)
+        {
+            foreach (var field in ConfigureInputs.AccessOnly)
+            {
+                access.Remove(field);
+            }
+        }
 
         var hashed = new JsonObject
         {
@@ -146,8 +154,8 @@ public sealed record ProvisionInputs(
             : null;
     }
 
-    /// <summary>A hash of every file below a repository directory, by relative path and content.</summary>
-    public static string TreeHash(string repositoryRoot, string relativeDirectory)
+    /// <summary>A hash of every file below a repository directory, by relative path and content, except <paramref name="except"/>.</summary>
+    public static string TreeHash(string repositoryRoot, string relativeDirectory, string? except = null)
     {
         var directory = Path.Combine(repositoryRoot, relativeDirectory);
         if (!Directory.Exists(directory))
@@ -158,7 +166,7 @@ public sealed record ProvisionInputs(
         var builder = new StringBuilder();
         foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
                      .Select(f => (Path: Path.GetRelativePath(directory, f).Replace('\\', '/'), Full: f))
-                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform"))
+                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform") && f.Path != except)
                      .OrderBy(f => f.Path, StringComparer.Ordinal))
         {
             using var stream = File.OpenRead(file.Full);
