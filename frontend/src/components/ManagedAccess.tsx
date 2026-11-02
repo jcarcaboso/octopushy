@@ -12,7 +12,7 @@ export function ManagedAccessCard({ access }: { access: ManagedAccess }) {
           { term: "Fingerprint", value: <span className="mono">{access.fingerprint}</span> },
           { term: "Public key", value: <code className="mono wrap-anywhere">{access.publicKey}</code> },
           { term: "On the machine", value: access.provisionedAt ? <RelativeTime value={access.provisionedAt} /> : "Not yet" },
-          { term: "Last logged in", value: access.verifiedAt ? <RelativeTime value={access.verifiedAt} /> : "Never" },
+          { term: "Last used by a run", value: access.lastUsedAt ? <RelativeTime value={access.lastUsedAt} /> : "Never" },
         ]}
       />
     </Card>

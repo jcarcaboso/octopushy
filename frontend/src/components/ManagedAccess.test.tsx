@@ -8,7 +8,7 @@ const access = {
   fingerprint: "SHA256:abc",
   version: 1,
   provisionedAt: null,
-  verifiedAt: null,
+  lastUsedAt: null,
 };
 
 it("shows the public key, and that it has not been used yet", () => {

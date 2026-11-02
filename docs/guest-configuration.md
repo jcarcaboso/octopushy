@@ -219,8 +219,8 @@ needed. A leaked key reaches one machine. Nobody copies a private key anywhere.
   an `ssh-agent` there, never in a file. Each release is recorded in `SecretResolution`, and it is
   masked like any other secret.
 - **The public half** joins `sshAuthorizedKeys` when a provision run's variables are built, so it
-  is never in Git. It is on the guest's page, with when an apply carried it and when a run last
-  logged in with it.
+  is never in Git. It is on the guest's page, with when an apply carried it and when a run
+  holding it last finished. That is use, not proof of a login: a playbook can finish without connecting.
 - **`GuestAccessKey` records where each version stands**, apart from the provisioning hash. That
   hash only says that the guest has a managed key, so a change of key plans nothing.
 - **A rebuild keeps the key**, and retiring the guest removes it. The record of who received it stays.

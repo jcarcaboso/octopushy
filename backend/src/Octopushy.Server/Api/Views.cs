@@ -296,7 +296,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == entry).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
         var key = current is null ? null
             : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == id && k.Version == current, cancellationToken);
-        return key is null ? null : new ManagedAccessDto(key.PublicKey, key.Fingerprint, key.Version, key.ProvisionedAt, key.VerifiedAt);
+        return key is null ? null : new ManagedAccessDto(key.PublicKey, key.Fingerprint, key.Version, key.ProvisionedAt, key.LastUsedAt);
     }
 
     public async Task<InstallationDetailDto?> InstallationAsync(Guid id, CancellationToken cancellationToken)

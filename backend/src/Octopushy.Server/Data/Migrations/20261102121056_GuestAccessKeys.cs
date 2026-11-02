@@ -22,8 +22,8 @@ namespace Octopushy.Server.Data.Migrations
                     bootstrap = table.Column<bool>(type: "boolean", nullable: false),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     provisioned_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    verified_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    verified_run_id = table.Column<Guid>(type: "uuid", nullable: true)
+                    last_used_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    last_used_run_id = table.Column<Guid>(type: "uuid", nullable: true)
                 },
                 constraints: table =>
                 {

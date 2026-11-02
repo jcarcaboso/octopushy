@@ -334,7 +334,7 @@ for _ in $(seq 1 60); do
 done
 [[ $run != "$previous" ]] || fail "no configure run followed the key"
 wait_run "$run" succeeded
-call "$api/api/guests/$(guest_id)" | jq -e '.managedAccess.verifiedAt != null' >/dev/null || fail "the login is not recorded"
+call "$api/api/guests/$(guest_id)" | jq -e '.managedAccess.lastUsedAt != null' >/dev/null || fail "the use of the key is not recorded"
 logs_of "$provision" >"$work/own-key.log"
 logs_of "$run" >>"$work/own-key.log"
 call "$api/api/runs/$run" >>"$work/own-key.log"

@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261102105855_GuestAccessKeys")]
+    [Migration("20261102121056_GuestAccessKeys")]
     partial class GuestAccessKeys
     {
         /// <inheritdoc />
@@ -419,6 +419,14 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("fingerprint");
 
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_used_at");
+
+                    b.Property<Guid?>("LastUsedRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_used_run_id");
+
                     b.Property<DateTimeOffset?>("ProvisionedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("provisioned_at");
@@ -427,14 +435,6 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("public_key");
-
-                    b.Property<DateTimeOffset?>("VerifiedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("verified_at");
-
-                    b.Property<Guid?>("VerifiedRunId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("verified_run_id");
 
                     b.HasKey("ResourceId", "Version")
                         .HasName("pk_guest_access_keys");

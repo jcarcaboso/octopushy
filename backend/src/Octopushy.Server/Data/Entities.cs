@@ -243,10 +243,13 @@ public sealed class GuestAccessKey
     /// <summary>When an apply carrying this version finished. Cloud-init may still have to run.</summary>
     public DateTimeOffset? ProvisionedAt { get; set; }
 
-    /// <summary>When a run last logged in with this key and nothing else, and finished.</summary>
-    public DateTimeOffset? VerifiedAt { get; set; }
+    /// <summary>
+    /// When a run holding this key last finished with a task done. A playbook can do that without
+    /// connecting, so this says the key was in use. It is not proof of a login.
+    /// </summary>
+    public DateTimeOffset? LastUsedAt { get; set; }
 
-    public Guid? VerifiedRunId { get; set; }
+    public Guid? LastUsedRunId { get; set; }
 }
 
 public sealed class GuestConfiguration

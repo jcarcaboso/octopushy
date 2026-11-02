@@ -115,7 +115,7 @@ public sealed partial class RunEngine
                 return;
         }
 
-        await RecordVerifiedKeyAsync(db, run, step, cancellationToken);
+        await RecordKeyUseAsync(db, run, step, cancellationToken);
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;
@@ -138,11 +138,8 @@ public sealed partial class RunEngine
             key.ProvisionedAt = now;
     }
 
-    /// <summary>
-    /// A playbook logged in with Octopushy's key alone, which is evidence the key works. It takes a
-    /// task that ran on the guest: a playbook can finish without ever connecting.
-    /// </summary>
-    private async Task RecordVerifiedKeyAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
+    /// <summary>A run holding this key finished having done something. That is use, not proof of a login.</summary>
+    private async Task RecordKeyUseAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {
         var context = RunContext.Parse(run.Context);
         if (context.Secrets.GetValueOrDefault(SecretNames.AnsibleSshKey) != GuestAccessCredentials.Key(run.ResourceId)
@@ -154,8 +151,8 @@ public sealed partial class RunEngine
         var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken);
         if (key is not null)
         {
-            key.VerifiedAt = clock.GetUtcNow();
-            key.VerifiedRunId = run.Id;
+            key.LastUsedAt = clock.GetUtcNow();
+            key.LastUsedRunId = run.Id;
         }
     }
 

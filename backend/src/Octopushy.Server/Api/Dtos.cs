@@ -242,7 +242,7 @@ public sealed record ConfigureActionDto(string Id, string? Description, bool Des
 public sealed record ConfigureGuestRequest(string? Action);
 
 /// <summary>The key Octopushy logs in to a guest with. Only its public half exists here.</summary>
-public sealed record ManagedAccessDto(string PublicKey, string Fingerprint, int Version, DateTimeOffset? ProvisionedAt, DateTimeOffset? VerifiedAt);
+public sealed record ManagedAccessDto(string PublicKey, string Fingerprint, int Version, DateTimeOffset? ProvisionedAt, DateTimeOffset? LastUsedAt);
 
 public sealed record GuestDetailDto(
     GuestSummaryDto Guest,

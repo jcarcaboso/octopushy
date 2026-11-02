@@ -91,7 +91,7 @@ public class ManagedAccessTests(PostgresFixture postgres)
         Assert.Equal(1, key.Version);
         Assert.True(key.Bootstrap);
         Assert.NotNull(key.ProvisionedAt);
-        Assert.Null(key.VerifiedAt);
+        Assert.Null(key.LastUsedAt);
 
         await ConfigureAsync(server);
         var preview = await ConfigureRunTests.PreviewAsync(agent);
@@ -106,8 +106,8 @@ public class ManagedAccessTests(PostgresFixture postgres)
 
         var run = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal(RunStatuses.Succeeded, run.Status);
-        var verified = await KeyAsync(server);
-        Assert.Equal(run.Id, verified.VerifiedRunId);
+        var used = await KeyAsync(server);
+        Assert.Equal(run.Id, used.LastUsedRunId);
 
         var resolution = await WithDbAsync(server, db => db.SecretResolutions.AsNoTracking()
             .SingleAsync(r => r.Key == GuestAccessCredentials.Key(run.ResourceId)));
@@ -172,7 +172,7 @@ public class ManagedAccessTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_playbook_that_ran_nothing_on_the_guest_proves_nothing_about_the_key()
+    public async Task A_playbook_that_did_nothing_is_not_use_of_the_key()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Managed());
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
@@ -187,7 +187,7 @@ public class ManagedAccessTests(PostgresFixture postgres)
         });
         await server.TickAsync();
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
-        Assert.Null((await KeyAsync(server)).VerifiedAt);
+        Assert.Null((await KeyAsync(server)).LastUsedAt);
     }
 
     [Fact]

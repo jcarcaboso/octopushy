@@ -1221,7 +1221,7 @@ export interface components {
             /** Format: date-time */
             provisionedAt: null | string;
             /** Format: date-time */
-            verifiedAt: null | string;
+            lastUsedAt: null | string;
         };
         MissingVariableDto: {
             key: string;

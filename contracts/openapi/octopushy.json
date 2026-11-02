@@ -5388,7 +5388,7 @@
           "fingerprint",
           "version",
           "provisionedAt",
-          "verifiedAt"
+          "lastUsedAt"
         ],
         "type": "object",
         "properties": {
@@ -5409,7 +5409,7 @@
             ],
             "format": "date-time"
           },
-          "verifiedAt": {
+          "lastUsedAt": {
             "type": [
               "null",
               "string"
