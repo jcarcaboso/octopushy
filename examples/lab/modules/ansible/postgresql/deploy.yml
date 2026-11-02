@@ -14,6 +14,8 @@
     postgresql_socket: /var/run/postgresql
     postgresql_dumps: /var/backups/postgresql
     postgresql_private: /run/octopushy-postgresql
+    # Ansible rewrites backslashes in a template's literals, so one is written here and never there.
+    postgresql_backslash: "\\"
     postgresql_port_declared: "{{ octopushy.ports | selectattr('port', 'equalto', postgresql_port) | list }}"
     postgresql_clients: "{{ postgresql_port_declared | map(attribute='sources') | flatten }}"
   handlers:
@@ -99,7 +101,7 @@
           ansible.builtin.copy:
             content: >-
               *:*:{{ postgresql_database }}:{{ postgresql_role }}:{{
-              postgresql_password | replace('\', '\\') | replace(':', '\:') }}
+              postgresql_password | replace(postgresql_backslash, postgresql_backslash ~ postgresql_backslash) | replace(':', postgresql_backslash ~ ':') }}
             dest: "{{ postgresql_private }}/pgpass"
             mode: "0600"
           no_log: true

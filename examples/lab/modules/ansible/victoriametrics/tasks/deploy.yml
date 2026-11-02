@@ -10,10 +10,14 @@
 
 # systemd takes a quoted value as it is, as long as the quote does not appear in it.
 - name: Check that the password can be written down
+  vars:
+    victoriametrics_backslash: "\\"
   ansible.builtin.assert:
     that:
       - victoriametrics_password | length >= 16
-      - "\"'\" not in victoriametrics_password and '\\' not in victoriametrics_password and '\n' not in victoriametrics_password"
+      - >-
+        "'" not in victoriametrics_password and victoriametrics_backslash not in victoriametrics_password
+        and '\n' not in victoriametrics_password
     fail_msg: The password needs 16 characters or more, with no quote, backslash or newline.
   no_log: true
 

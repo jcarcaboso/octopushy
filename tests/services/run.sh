@@ -266,7 +266,7 @@ vm_url=http://$target_ip:8428
 log "Provisioning with real OpenTofu; setup waits for its pin, and services wait for setup"
 sync
 trust_fixture_installations "$lab" "$(git -C "$lab" rev-parse HEAD)"
-wait_for "the guest is in sync" '[[ $(guest_status) == in-sync ]]'
+wait_for "the machine is provisioned" '[[ $(runs_of $guest provision | jq -r ".[0].status") == succeeded ]]'
 grep -qF "$(cut -d' ' -f2 "$work/keys/deploy.pub")" "$work/share/ssh/authorized_keys" || fail "Proxmox was not given the login key"
 grep -q 'order=1,up=30' "$work/share/requests.log" || fail "the create request has no startup order"
 grep -q 'nesting=1' "$work/share/requests.log" || fail "the create request has no nesting"
