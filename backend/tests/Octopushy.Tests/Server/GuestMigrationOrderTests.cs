@@ -6,17 +6,17 @@ using Octopushy.Server.Data;
 namespace Octopushy.Tests.Server;
 
 /// <summary>
-/// The last migration of 0.3.0 is the guest configuration. After it, schedules landed on main
-/// with an id later than the rotation's, which landed afterwards, so a database can reach this
-/// version straight from 0.3.0 or through a main that already has the schedules.
+/// The last migration of 0.3.0 is the guest configuration. After it the keys, the schedules and
+/// the rotation run in that order, so a database reaches this version straight from 0.3.0, or
+/// through a main that stopped at the schedules.
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public class GuestMigrationOrderTests(PostgresFixture postgres)
 {
     private const string Release = "20261101205430_GuestConfiguration";
     private const string AccessKeys = "20261102121056_GuestAccessKeys";
-    private const string Rotation = "20261102121520_GuestAccessRotation";
     private const string Schedules = "20261102164720_GuestSchedules";
+    private const string Rotation = "20261102173935_GuestAccessRotation";
 
     private static async Task<Guid> ReleasedGuestAsync(OctopushyDb db)
     {
@@ -68,10 +68,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var guest = await ReleasedGuestAsync(db);
         var migrator = db.GetService<IMigrator>();
 
-        // What main has: the keys, then the schedules, and no rotation between them. A migrator
-        // only moves in id order, so the schedules go in as the script it would run.
-        await migrator.MigrateAsync(AccessKeys);
-        await db.Database.ExecuteSqlRawAsync(migrator.GenerateScript(Rotation, Schedules));
+        await migrator.MigrateAsync(Schedules);
         Assert.Equal([Rotation], await db.Database.GetPendingMigrationsAsync());
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO guest_access_keys (resource_id, version, public_key, fingerprint, bootstrap, created_at)
