@@ -1,0 +1,31 @@
+---
+# Run with one key and nothing else, on a new connection: this login is the evidence.
+- name: Verify access with this key alone
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read who this logged in as
+      ansible.builtin.command:
+        argv: [id, -un]
+      register: access_login
+      changed_when: false
+
+    - name: Require the expected login
+      ansible.builtin.assert:
+        that: access_login.stdout == ansible_user
+        fail_msg: This key logged in as {{ access_login.stdout }}, not {{ ansible_user }}.
+
+    - name: Require the privileges a run needs
+      become: true
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: access_root
+      changed_when: false
+      failed_when: access_root.stdout != "0"
+
+    - name: Require that the keys removed are gone
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/authorized_keys.py absent {{ access_kept_key | quote }} {{ access_removed_keys | map('quote') | join(' ') }}"
+        executable: /usr/bin/python3
+      changed_when: false
+      when: access_removed_keys is defined

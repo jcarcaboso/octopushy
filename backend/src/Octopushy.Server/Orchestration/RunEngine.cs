@@ -112,6 +112,8 @@ public sealed partial class RunEngine(
             step.DecisionNote = note;
             step.Status = StepStatuses.Succeeded;
             step.FinishedAt = clock.GetUtcNow();
+            if (step.Name == StepNames.PromoteKey)
+                await PromoteRotatedKeyAsync(db, runId, user, note, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await AdvanceAsync(db, runId, cancellationToken);
         }, cancellationToken);
@@ -493,6 +495,28 @@ public sealed partial class RunEngine(
         var recoversVm = removesVm && GuestVmPlan.RecreatesFailedVm(outputs, context)
             && await db.Resources.AnyAsync(r => r.Id == run.ResourceId
                 && r.AppliedAt == null && r.VerifiedAt == null && r.BoundVmid == null, cancellationToken);
+        // OpenTofu holds the key a machine was created with, which a rotation may have taken off it. A
+        // replacement is a new machine, so it has to start with the key in use, and this plan does not.
+        if (context.ManagedAccess && run.Operation == Operations.Provision
+            && GuestVmPlan.MakesGuestMachine(outputs, context)
+            && await GuestAccessCredentials.RebaseBootstrapAsync(db, run.ResourceId, cancellationToken))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "This plan makes a new machine, and it carried a key that has since been rotated. Plan again: the new plan carries the key in use.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
+
+        // A plan that cannot say which machine it makes might make this one, with a key nobody holds.
+        if (context.ManagedAccess && run.Operation == Operations.Provision
+            && GuestVmPlan.MakesUnnamedMachine(outputs) && await GuestAccessCredentials.BootstrapIsBehindAsync(db, run.ResourceId, cancellationToken))
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = "This plan makes a machine without saying its VMID and host, and this guest's key has been rotated. A new machine might not be reachable. Inspect it before going on.";
+            Finish(run, RunStatuses.Failed, step.Detail);
+            return false;
+        }
+
         var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
         var vmNote = recoversVm ? $" The plan recreates VM {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
             : removesVm ? " The plan destroys a VM and its disks."
@@ -635,6 +659,9 @@ public sealed partial class RunEngine(
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
+                break;
+            case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.ConfirmRefused:
+                await ApplyRotationEffectsAsync(db, run, step, outputs, now, cancellationToken);
                 break;
         }
     }

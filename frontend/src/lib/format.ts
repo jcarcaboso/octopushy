@@ -35,6 +35,7 @@ const operations: Record<string, string> = {
   provision: "Provision",
   retire: "Retire",
   configure: "Configure",
+  "rotate-access": "Rotate key",
 };
 
 export function operationLabel(operation: string): string {

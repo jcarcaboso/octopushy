@@ -48,7 +48,8 @@ public sealed partial class AssignmentBuilder(
         StepNames.UpdateWorkerOs => new StepAction("managed-worker", "update-os", true),
         StepNames.VerifyWorkerOs => new StepAction("managed-worker", "verify-os", false),
         StepNames.Preview => new StepAction("ansible", "preview", false),
-        StepNames.Playbook or StepNames.PlaybookApproved => new StepAction("ansible", "run", true),
+        StepNames.Playbook or StepNames.PlaybookApproved or StepNames.AuthorizeKey or StepNames.RemoveKey => new StepAction("ansible", "run", true),
+        StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval or StepNames.ConfirmRefused => new StepAction("ansible", "run", false),
         _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
     };
 
@@ -359,6 +360,11 @@ public sealed partial class AssignmentBuilder(
         if (context.ManagedAccess && run.Operation == Operations.Provision)
         {
             var key = await GuestAccessCredentials.EnsureAsync(db, store, run.ResourceId, context.Proxmox.Name ?? run.ResourceId.ToString(), clock.GetUtcNow(), cancellationToken);
+            // A machine that does not exist yet starts with the key in use. One that does keeps what it
+            // was created with: a changed key here would reboot a VM and replace a container.
+            if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.BoundVmid != null, cancellationToken)
+                && await GuestAccessCredentials.RebaseBootstrapAsync(db, run.ResourceId, cancellationToken))
+                key = await GuestAccessCredentials.EnsureAsync(db, store, run.ResourceId, context.Proxmox.Name ?? run.ResourceId.ToString(), clock.GetUtcNow(), cancellationToken);
             variables["guest"]!["sshAuthorizedKeys"]!.AsArray().Add(key.PublicKey);
         }
 

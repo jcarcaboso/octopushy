@@ -121,7 +121,7 @@ page shows its next time and what the last firing did.
 | Case | What happens |
 |---|---|
 | **Missed.** Octopushy was down at that time | **At most one catch-up, within an hour.** Back within the hour, it runs once. Later, the time is skipped and noted on the guest, because a schedule says when, and an action that reboots should not run at whatever hour a server came back. Only the newest time counts, so there is never a backlog |
-| **Missed.** No agent took the run | A step that can change the guest may go out until an hour after the run's time, not an hour after a catch-up started it. That is checked at each moment one would go out, so a preview that reports late or an agent that connects late cannot release it, and the run is cancelled with that reason. A finished preview does not change that, because nothing has reached the guest. Once such a step has gone out, it ends the usual way |
+| **Missed.** No agent took the run | A step that can change the guest may go out until an hour after the run's time, not an hour after a catch-up started it. That is checked at each moment one would go out, so a preview that reports late or an agent that connects late cannot release it, and the run is cancelled with that reason. A finished preview does not change that, because nothing has reached the guest. Once such a step has gone out, it ends the usual way. The limit is on going out: an agent starts the step moments later, and one that has not started it within its 60-second lease leaves the run uncertain |
 | **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
 | **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
 | **Approval.** `policy.approval: manual`, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run. The hour does not apply to a run waiting for a person or approved by one: the time is then theirs, however late, and an approved run waits for an agent as any other does |
@@ -289,6 +289,39 @@ nothing further.
 
 The guest agent cannot carry a key: on Fedora, with SELinux enforcing, `guest-ssh-add-authorized-keys`
 fails and `guest-file-open` for appending to `authorized_keys` is denied.
+
+### Rotating the key
+
+**Rotate key** on the guest's page, or `POST /api/guests/{id}/access/rotate`, starts one run:
+
+```text
+preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-key -> approve-removal -> remove-key -> verify-removal -> confirm-refused
+```
+
+| Stage | Key used | What it does |
+|---|---|---|
+| `preview`, `approval` | none | Shows the fingerprints going on and coming off. Follows `policy.approval` |
+| `verify-current` | In use alone | A login that does nothing else, so a rotation starts from a key shown to work. It stops here if it cannot |
+| `authorize-key` | In use | Appends the candidate's public key. Nothing is rewritten |
+| `verify-key` | Candidate alone | A fresh login, no multiplexing, strict host key: the expected login, and root through `become` |
+| `promote-key` | none | **A person, whatever the policy.** Moves this guest's binding to the candidate and records the evidence |
+| `approve-removal` | none | **A person, separately.** The old key stays on the guest until then |
+| `remove-key` | New | Takes off every line that authorizes an old controller-owned key, as the guest's OpenSSH reads it |
+| `verify-removal` | New | Logs in again and reads the file: no line holds the old key, and the key in use is still found |
+| `confirm-refused` | Each old key alone, then new | Each old key has to be refused by `sshd`, and then the key in use has to get in. Only then are they recorded as removed, and those versions revoked in the store |
+
+- **A rotation chooses only Octopushy's own keys.** The guest's own OpenSSH says what each line holds: a small program passes every physical line through `ssh-keygen -l` and compares fingerprints, so nothing here parses a key. A line whose key is an old one goes, whatever else it says, and that includes a line `sshd` would have refused. A line that only mentions the old key stays, and every other line it read stays byte for byte. The one way a person's key can go is the limit under "What someone else writes" below. The program and playbooks ship with the server, so a repository cannot change what is removed.
+- **Only `sshd` can say a key is gone.** The file is one place a key can be: `AuthorizedKeysFile` can name others, and a login's `HOME` can be somewhere else. So the last stage logs in with each old key alone. If `sshd` lets one in, the run fails and says which, and if the guest did not answer, nothing is concluded. A login that got in and then failed is not a refusal, even if a forced command prints the same words, as an inner `ssh` would: `ssh` itself reports having authenticated before any session starts, and that decides it, including for a key that is one factor of two. The login with the key in use comes straight after, from the same agent, because a refusal means nothing if `sshd` is turning everyone away, as `DenyUsers` would.
+- **What someone else writes can be lost in one instant, and that is an accepted limit.** Adding appends. Removing has to replace the file, so it reads the file again just before doing so and starts over if it changed. A write to the file in the instant between that last read and the replacement is lost, and that can be a person's key: sshd has no lock to take. The replacement keeps the mode, label and, as far as the login may, the owner. A hard link to the file stays on the old copy.
+- **Anything that stops the check is not read as gone.** The program has to find the key Octopushy logged in with, in the same pass. If it cannot, because `ssh-keygen` failed or this is not the file `sshd` read, it stops, and writes nothing. So a removal can never take the key in use.
+- **A candidate that cannot log in changes nothing in use.** The run fails, runs keep the working key, and the next rotation uses the same candidate again, because it may already be on the guest.
+- **An interruption is uncertain.** The run holds the guest until a person closes it, and nothing is removed to tidy up.
+- **Rejecting a stage ends the run where it stands.** After a rejected removal the new key is in use and the old one stays listed as still on the guest; the next rotation takes it off.
+- **One guest at a time.** Each guest has its own entry, so promoting one rotates no other.
+- **It reuses the store's versions.** Staging, promotion and revocation are the store's own transitions, on the same columns, with `system/` staying closed to the operator endpoints. The [credential lifecycle](credential-lifecycle.md) rotates a value and proves nothing about a guest, so what a rotation adds is the guest stages and their evidence, in `GuestAccessKey`.
+- **A removal nobody could verify stays on the list.** If `verify-removal` or `confirm-refused` fails, the old version is neither marked removed nor revoked, and the next rotation looks again.
+- **No provision plan comes of it.** OpenTofu keeps carrying the version the machine was created with. A plan that makes this guest's machine carries the key in use: for a machine that is gone it just does, and for one being replaced the plan stops once and asks to plan again. A plan that makes anything else changes nothing. A plan that makes a machine without saying its VMID and host stops, once this guest's key has been rotated, because it might be this guest's.
+- **It cannot carry a first key.** Its first step logs in with the key in use, so a guest without one stops there, with nothing changed.
 
 ### Host key trust
 

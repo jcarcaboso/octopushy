@@ -175,7 +175,7 @@ export function GuestPage() {
               </div>
             </Card>
             {data.configuration ? <GuestConfigurationCard id={guest.id} configuration={data.configuration} /> : null}
-            {data.managedAccess ? <ManagedAccessCard access={data.managedAccess} /> : null}
+            {data.managedAccess ? <ManagedAccessCard id={guest.id} access={data.managedAccess} /> : null}
             <Card title="Identity">
               <Identity guest={data} />
             </Card>

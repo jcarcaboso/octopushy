@@ -116,7 +116,11 @@ public sealed record ConfigurePreviewDto(
     IReadOnlyList<ConfigureSecretDto> Secrets,
     JsonNode? Prepared,
     IReadOnlyList<string> HostKeyFingerprints,
-    string? PreviewSha256);
+    string? PreviewSha256,
+    AccessRotationDto? AccessRotation = null);
+
+/// <summary>Which key goes on and which come off, by fingerprint. An approval names this with the rest.</summary>
+public sealed record AccessRotationDto(string Current, string Candidate, IReadOnlyList<string> Remove);
 
 public sealed record ConfigureSecretDto(string Name, string Reference);
 
@@ -256,7 +260,25 @@ public sealed record ConfigureActionDto(string Id, string? Description, bool Des
 public sealed record ConfigureGuestRequest(string? Action);
 
 /// <summary>The key Octopushy logs in to a guest with. Only its public half exists here.</summary>
-public sealed record ManagedAccessDto(string PublicKey, string Fingerprint, int Version, DateTimeOffset? ProvisionedAt, DateTimeOffset? LastUsedAt);
+public sealed record ManagedAccessDto(
+    string PublicKey,
+    string Fingerprint,
+    int Version,
+    DateTimeOffset? ProvisionedAt,
+    DateTimeOffset? LastUsedAt,
+    IReadOnlyList<ManagedAccessKeyDto> Keys);
+
+/// <summary>Where one version of the key stands on the guest. <c>State</c> is in-use, candidate, old or removed.</summary>
+public sealed record ManagedAccessKeyDto(
+    int Version,
+    string Fingerprint,
+    string State,
+    DateTimeOffset? AuthorizedAt,
+    DateTimeOffset? VerifiedAt,
+    DateTimeOffset? PromotedAt,
+    string? PromotedBy,
+    string? PromotionEvidence,
+    DateTimeOffset? RemovedAt);
 
 public sealed record GuestDetailDto(
     GuestSummaryDto Guest,

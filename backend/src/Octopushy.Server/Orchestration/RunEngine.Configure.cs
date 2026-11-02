@@ -43,6 +43,16 @@ public sealed partial class RunEngine
             return false;
         }
 
+        if (StepNames.IsAccessDecision(step.Name))
+        {
+            step.ApprovalRequired = true;
+            step.Status = StepStatuses.AwaitingApproval;
+            step.Detail = step.Name == StepNames.PromoteKey
+                ? "A fresh login with the candidate key alone worked, with the privileges a run needs. Promoting makes it the key runs use on this guest, and no other."
+                : "Octopushy now uses the new key. Approving removes the old one from the guest. Other keys there are not touched.";
+            return false;
+        }
+
         var manual = policy.Approval == "manual";
         var destructiveManual = ansible.Destructive && policy.Destructive == "manual";
         step.ApprovalRequired = manual || destructiveManual;
@@ -167,6 +177,57 @@ public sealed partial class RunEngine
         var prepared = run.Steps.Single(s => s.Name == StepNames.Preview).Outputs is { } text ? JsonNode.Parse(text)?["prepared"] : null;
         if (prepared is JsonObject)
             configuration.Snapshot = prepared.ToJsonString();
+    }
+
+    /// <summary>What each finished step of a rotation shows. A change is recorded when a login has shown it, not when it was asked for.</summary>
+    private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var rotation = RunContext.Parse(run.Context).AccessRotation!;
+        var keys = await db.GuestAccessKeys.Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
+        switch (step.Name)
+        {
+            case StepNames.AuthorizeKey:
+                keys.Single(k => k.Version == rotation.Candidate).AuthorizedAt = now;
+                break;
+            case StepNames.VerifyCurrent or StepNames.VerifyKey:
+                var verified = keys.Single(k => k.Version == (step.Name == StepNames.VerifyKey ? rotation.Candidate : rotation.Current));
+                verified.VerifiedAt = now;
+                verified.VerifiedRunId = run.Id;
+                break;
+            case StepNames.ConfirmRefused:
+                // Only sshd refusing them counts. Until then they stay on the list, so a later
+                // rotation looks again, and takes off whatever is still there.
+                if (outputs?["refusedKeys"]?.GetValue<int>() != rotation.Remove.Count)
+                {
+                    step.Status = StepStatuses.Failed;
+                    step.Detail = "Nothing showed sshd refusing every old key.";
+                    if (step.Attempts.MaxBy(a => a.Number) is { } attempt)
+                    {
+                        attempt.Status = AttemptStatuses.Failed;
+                        attempt.Error = step.Detail;
+                    }
+
+                    return;
+                }
+
+                foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
+                {
+                    removed.RemovedAt = now;
+                }
+
+                await GuestAccessCredentials.RevokeRemovedAsync(db, run.ResourceId, rotation, now, cancellationToken);
+                break;
+        }
+    }
+
+    /// <summary>A person's decision, on the record with what it rested on.</summary>
+    private async Task PromoteRotatedKeyAsync(OctopushyDb db, Guid runId, string user, string? note, CancellationToken cancellationToken)
+    {
+        var run = await LoadRunAsync(db, runId, cancellationToken);
+        var verification = run.Steps.Single(s => s.Name == StepNames.VerifyKey).Attempts.MaxBy(a => a.Number)!;
+        var evidence = $"Run #{run.Number}, attempt {verification.Id}: a fresh login with this key alone, finished {verification.FinishedAt:u}."
+            + (string.IsNullOrWhiteSpace(note) ? "" : $" {note.Trim()}");
+        await GuestAccessCredentials.PromoteAsync(db, run.ResourceId, RunContext.Parse(run.Context).AccessRotation!, user, evidence, clock.GetUtcNow(), cancellationToken);
     }
 
     /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>

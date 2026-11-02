@@ -276,6 +276,15 @@ export function useConfigureGuest(id: string) {
   });
 }
 
+/** Starts a staged rotation of the key Octopushy logs in to a guest with. */
+export function useRotateGuestAccess(id: string) {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/guests/{id}/access/rotate", { params: { path: { id } } })),
+    onSuccess: () => refresh(),
+  });
+}
+
 /** Observes an installation in the background; it is not a run, so only the installation views refresh. */
 export function useObserveInstallation() {
   const client = useQueryClient();
