@@ -378,7 +378,7 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
 
 ## How this fits other work
 
-**The Technitium branch** (`t3/deploy-technitium-proxmox-lxc`) adds `guestType`, a recipe
+**The Technitium work** ([PR 21](https://github.com/jcarcaboso/octopushy/pull/21)) adds `guestType`, a recipe
 `secrets` list, `provision.inputs` and `provision.secrets`. This design uses the same
 shapes, `setup.inputs`, `setup.secrets` and a recipe `secrets` list, so one recipe format
 covers both. Its `technitium` executor stays what it is: a product API, not a guest
@@ -399,13 +399,16 @@ before that stacked work starts.
 - **Host keys on a container.** Proxmox generates them when it creates the container, and
   the create task's log shows the fingerprint, which is a Proxmox-authenticated source
   with no console step. Check this before relying on it.
-- **Protected secrets.** That branch binds a grant to a digest of the code a secret may run
+- **Protected secrets.** That work binds a grant to a digest of the code a secret may run
   with. `ConfigureInputs` produces such a digest, and a grant could bind to it. Its
   `ReviewedPaths` would need the project root, or the run receives no playbooks.
-- **Landing order.** This first. It adds one operation and touches the run engine in a few
-  lines, while that branch is on hold and much larger. Rebasing that branch means small
-  conflicts in `RunContext`, `AssignmentBuilder.ActionFor`, `CredentialBindings.Validate`,
-  the schemas, and the EF model snapshot, whose migration must be regenerated.
+- **Landing order.** This first, because `pve01-ai` waits on it and that work does not wait on
+  this. Neither depends on the other, and a trial merge conflicts in 21 files, almost all of
+  them lists both sides add to: `ActionFor`, the executor list, schema enums, and generated
+  files. Whichever lands second regenerates the OpenAPI document, the frontend client and
+  the EF model snapshot. One thing needs thought rather than a merge: a secret protected
+  by that branch's grants reaches a configure run only once `BuildAnsibleAsync` passes it a
+  code digest. Until then it fails closed.
 
 **Replacing a protected VM** (PR 19, merged) meets this at one point: a provision run that
 replaces a VM resets the guest's proposed configuration, so the new VM is configured, and
