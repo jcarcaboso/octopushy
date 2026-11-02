@@ -96,9 +96,10 @@ public sealed record ProvisionInputs(
         // How a configure run reaches the guest has no effect on the machine.
         if (guestJson["access"] is JsonObject access)
         {
-            foreach (var field in ConfigureInputs.AccessOnly)
+            var configureOnly = ConfigureInputs.AccessOnly.Count(access.Remove);
+            if (configureOnly > 0 && access.Count == 0)
             {
-                access.Remove(field);
+                guestJson.Remove("access");
             }
         }
 

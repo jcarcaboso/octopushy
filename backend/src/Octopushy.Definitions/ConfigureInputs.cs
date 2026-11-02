@@ -30,8 +30,8 @@ public sealed record ConfigureInputs(
     /// <summary>The folders that digest covers: all a run holding a protected secret receives.</summary>
     IReadOnlyList<string> ReviewedPaths)
 {
-    /// <summary>Fields of <c>access</c> that only configure runs use.</summary>
-    public static readonly string[] AccessOnly = ["user", "port", "hostKey"];
+    /// <summary>Fields of <c>access</c> that only configure runs use. None of them reaches OpenTofu.</summary>
+    public static readonly string[] AccessOnly = ["address", "port", "user", "sshKey", "hostKey"];
 
     /// <summary>Where a configure run connects: the declared address, or the guest's own.</summary>
     public static string? AddressOf(GuestDefinition guest) =>

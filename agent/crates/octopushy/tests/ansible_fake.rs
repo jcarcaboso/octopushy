@@ -23,6 +23,7 @@ const PASSWORD: &str = "tail\"scale\\secret";
 /// JSON escapes differently from how it was given.
 const FIELD_NAMES: [&str; 2] = ["unreachable", "tasks"];
 const UNICODE: &str = "pässwörd";
+const PADDED: &str = "   padded-secret  ";
 const HOST_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
 
@@ -158,7 +159,7 @@ async fn exec(
     let log = AttemptLogger::new(
         buffer.clone(),
         Arc::new(Masker::new(
-            [SSH_KEY, PASSWORD, UNICODE, LONG.as_str()]
+            [SSH_KEY, PASSWORD, UNICODE, PADDED, LONG.as_str()]
                 .into_iter()
                 .chain(FIELD_NAMES),
         )),
@@ -798,4 +799,89 @@ async fn reserved_names_and_bad_pins_are_refused_before_anything_runs() {
         assert!(done.result.is_err(), "{pointer}");
     }
     assert!(fx.read("args.log").is_empty(), "nothing ran");
+}
+
+/// Recaps as a real run wrote them. This one comes from a play that ignored an unreachable
+/// host: a task removed the login and lost its connection, and the next login was refused.
+#[tokio::test]
+async fn a_refused_login_after_a_lost_connection_stays_uncertain() {
+    let fx = Fixture::new();
+    fx.set(
+        "recap.json",
+        r#"{"reached": true, "tasks": 2, "unreachable": "Shared connection to 10.1.0.31 closed.", "unreachableTask": "Remove the login", "stats": {"unreachable": 2}}"#,
+    );
+    let done = run(&fx).await;
+    assert!(
+        matches!(&done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn a_task_failure_with_a_name_too_long_to_report_stays_a_failure() {
+    let fx = Fixture::new();
+    fx.set(
+        "recap.json",
+        r#"{"reached": true, "tasks": 1, "failedTask": "(too long to report)", "stats": {"failures": 1}}"#,
+    );
+    fx.set("exit", "2");
+    let done = run(&fx).await;
+    assert!(
+        matches!(&done.result, Err(Failure::Failed { .. })),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn a_secret_stripped_for_a_task_banner_is_masked() {
+    let fx = Fixture::new();
+    fx.set("echo", "TASK [padded-secret] ****");
+    let done = run(&fx).await;
+    assert!(!done.log.contains("padded-secret"), "{}", done.log);
+    assert!(done.log.contains("TASK [***]"), "{}", done.log);
+}
+
+#[tokio::test]
+async fn the_limit_still_applies_while_output_is_held_open() {
+    use octopushy::tools::{Invocation, Tool};
+    let fx = Fixture::new();
+    let program = fx.cfg.runtime.ansible_binary.clone();
+    // Exits at once, leaving a child with its output: nothing but the limit ends this.
+    std::fs::write(&program, "#!/bin/sh\nsleep 60 &\nexit 0\n").unwrap();
+    let log = AttemptLogger::new(
+        Arc::new(LogBuffer::default()),
+        Arc::new(Masker::new([])),
+        Arc::new(Notify::new()),
+    );
+    let stop = CancellationToken::new();
+    let cancel = stop.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+    });
+    let started = std::time::Instant::now();
+    let invocation = Invocation {
+        tool: Tool::Ansible,
+        name: "held-open".into(),
+        image: "",
+        workspace: fx.dir.path(),
+        workdir: fx.dir.path(),
+        plugin_cache: None,
+        args: vec![],
+        settings: vec![],
+        env: vec![],
+        stdin: None,
+        capture_stdout: false,
+        stderr_mark: None,
+        control_prefix: None,
+    };
+    let out = fx.cfg.runtime.run(invocation, &log, &stop).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(out.cancelled);
 }

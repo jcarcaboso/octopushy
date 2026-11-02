@@ -85,7 +85,7 @@ connection, and they are refused in `setup.inputs`, `setup.secrets`, `setup.secr
 | A change to `setup`, `access`, the recipe, its `root`, or the guest's folder | the `onChange` action | Implemented |
 | A provision run that creates or replaces something, such as a new VM | the `onChange` action | Implemented |
 | **Configure** on the guest page, or `POST /api/guests/{id}/configure` | the one chosen | Implemented |
-| A schedule | the one chosen | Later slice |
+| A schedule declared on the guest | the one it names | In the [stacked PR](#schedules) |
 
 Each input hash gets one automatic run. A failure is not retried by itself: it waits for a
 new commit or a person. A guest that is not in sync with its provisioning waits for that
@@ -94,12 +94,14 @@ first, so one commit that changes both runs them in order. A guest whose recipe 
 rollback configures the commit it returned to. A person cannot start a run on a guest whose
 provisioning has not caught up either.
 
-A schedule is a later slice because it needs a cron evaluator, missed-run rules and a
-maintenance-window decision, none of which the first consumer needs on day one. Nothing
-closes it off: a schedule would call the same `Planner.ConfigureGuestAsync` with the reason
-`schedule`, which `Run.Reason` already documents, and a field on a recipe action is a
-compatible addition. Until then the daily 06:00 `update-tools` stays in Jenkins or is
-pressed by hand.
+### Schedules
+
+**Decided November 2, 2026.** Schedules are declared in Git, on the guest, and added by a PR
+stacked on this one: `setup.schedules`, each naming an action and a cron expression in the
+lab's `timezone`. A scheduled run calls the same `Planner.ConfigureGuestAsync` with the
+reason `schedule`, which `Run.Reason` already documents. The maintenance Jenkins runs at
+06:00 therefore moves into the guest's definition once that lands, for a guest Octopushy
+configures. Jenkins keeps maintaining the machines it maintains today.
 
 ## A run
 
@@ -161,6 +163,7 @@ promotes nothing.
 | A task failed (exit 2, recap present) | `failed` | `failed`. The change is partial and known; run again |
 | The tool never started a task: pull failure, syntax error, host key or login refused on the first connection | `failed` | `failed`. Nothing happened on the guest |
 | Unreachable after a task started, even if an outcome was reported first or the play ignored it | `uncertain` | `uncertain` |
+| Unreachable more than once, in a play that ignored it, even if the last was a refused login | `uncertain` | `uncertain` |
 | Killed, timed out, or ended without a recap, unless the tool provably never started | `uncertain` | `uncertain` |
 | Agent lost or restarted while it ran | `uncertain` | `uncertain` |
 | A declared outcome | `succeeded` | Waits on `outcome-approval`, or ends as declared |
@@ -195,7 +198,8 @@ Exit 75 from the `nodes` wrapper does not carry over: that wrapper invents the c
 searching the log. A port replaces it with the `set_stats` task above.
 
 **Long runs and reboots.** `timeoutMinutes` defaults to 120 and allows up to 1440. A timeout
-stops the run and is uncertain. `ansible.builtin.reboot` works: the host key is unchanged
+stops the run and is uncertain, and it keeps applying after the tool exits, to whatever it left
+running with its output open. `ansible.builtin.reboot` works: the host key is unchanged
 and nothing needs the connection to persist. The attempt keeps its lease through the agent's
 heartbeat however long it runs. The agent's 30-minute stop grace period is shorter than
 many runs, so updating the agent during one makes it uncertain. Configure attempts do not
@@ -231,7 +235,10 @@ fails closed until someone sets the new one. That is the point, not a defect to 
 first boot, and the channels that could read it automatically are closed: on Fedora the
 guest agent runs as `virt_qemu_ga_t`, which cannot read `sshd_key_t`, cannot run `ssh`, and
 cannot connect to the SSH port even on loopback. That was observed in `nodes`, and the rules
-are confirmed against the policy in `selinux-policy-targeted-44.11`. So:
+are confirmed against the policy in `selinux-policy-targeted-44.11`. On November 2, 2026 the
+first of these was also confirmed on a real Fedora 44 cloud image with SELinux enforcing, at
+`pve01-ai`'s size, through the guest agent's own protocol: `guest-exec` of `cat` on the host key
+is refused, and the same call on a copy labelled `etc_t` works. So:
 
 1. **Read it through the Proxmox console.** Use the guest agent to set a short-lived
    password, which it is allowed to do, log in on the console, and read the key:
@@ -246,16 +253,17 @@ are confirmed against the policy in `selinux-policy-targeted-44.11`. So:
    Put the line in Variables as a **plain** value. This is the route for a VM that already
    exists, such as `pve01-ai`. The chain of authentication is your Proxmox login, then the
    VM's console, with no network path to the guest involved. It costs a person a minute per
-   VM, and again after a rebuild. It writes to the guest, briefly. The policy allows the
-   password change (`virt_qemu_ga_t` can enter `passwd_t`), but this has not been tried on a VM.
+   VM, and again after a rebuild. It writes to the guest, briefly. The password change worked on
+   that test VM through `guest-set-user-password`, which is what `qm guest passwd` sends; `qm`
+   itself and the console login were not part of the test.
 2. **For new VMs, have cloud-init leave a copy the guest agent may read.** A cloud-config
    with `runcmd: [[install, -Dm0644, /etc/ssh/ssh_host_ed25519_key.pub, /etc/octopushy/ssh-host-ed25519.pub]]`
    creates a file labelled `etc_t`, which `virt_qemu_ga_t` can read with no policy change.
    Then `qm guest exec <vmid> -- cat /etc/octopushy/ssh-host-ed25519.pub` gives the key with
    no console password. This needs a cloud-config snippet, which the current `proxmox-vm`
-   module does not use, and the read is by hand for now. That the guest agent may read such
-   a file comes from the policy's rules, not a test on a VM. An agent step could make it
-   automatic later and write to the same pin; nothing here would change.
+   module does not use, and the read is by hand for now. The read worked on that test VM, with
+   the copy made by `sudo` rather than by cloud-init. An agent step could make it automatic
+   later and write to the same pin; nothing here would change.
 
 **The trade-off, plainly.** The pin is exactly as trustworthy as the channel it was read
 through. Route 1 and 2 both anchor it in Proxmox: anyone who controls the hypervisor can lie
@@ -294,7 +302,8 @@ the agent as one control line on stderr when the playbook ends. A run that dies 
 which makes it uncertain, and there is no file to go stale or to outlive the run. A recap
 decides an attempt's outcome, so it is not a log line: it is never logged, it is parsed as
 written so masking cannot rename a field, and its text is masked and only then cut to
-size. An undeclared outcome's text is never repeated at all.
+size. An undeclared outcome's text is never repeated at all. Its size is bounded in bytes as
+written, so a long name in any alphabet leaves a shorter note and never loses the recap.
 
 **Masking.** Every line of tool output and every error is masked with the attempt's secrets.
 The check of multi-line values for this design found three gaps, all fixed here:
@@ -307,6 +316,8 @@ The check of multi-line values for this design found three gaps, all fixed here:
 - Ansible's default output is JSON, which shows a newline as `\n` and a quote as `\"`. A whole
   private key is still masked, line by line. A password holding a quote or backslash was
   not. The masker now also matches each value as JSON escapes it.
+- A value padded with spaces reached the log through a task's name, because Ansible strips the
+  name for its banner. The masker now also matches a value without the space around it.
 
 The first line of defence stays with the playbook: **tasks that handle secrets need
 `no_log: true`.** Masking recognizes literal text. It cannot recognize a value that a
@@ -395,8 +406,8 @@ leave two ways to declare what runs on a guest, and the second has no pin, no pr
 of tasks, no declared outcomes, and secrets that pass through OpenTofu. **The recommendation
 is to build `ha-db` as a configure recipe instead.** It reuses `setup.secrets`, the pin and
 the approval flow. What it needs from that branch is `type: container` and a root SSH key in
-the container, and neither depends on the install module. This is the decision to settle
-before that stacked work starts.
+the container, and neither depends on the install module. The services layer being built on
+this executor settles that question in the same direction.
 
 - **Host keys on a container.** Proxmox generates them when it creates the container, and
   the create task's log shows the fingerprint, which is a Proxmox-authenticated source
@@ -422,9 +433,9 @@ run, and `BuildAnsibleAsync` now passes a code digest, so a protected secret rea
 
 ## What this does not do
 
-- No schedule, as above.
 - No host key read by the agent. Route 2 above is by hand.
 - No container guests until `type: container` lands.
 - No drift detection. A run shows what happened when it ran, not what is true now.
 - A deferred run waiting for approval holds the guest until someone decides. There is no
-  timeout, because a run that is holding a real outcome should not disappear by itself.
+  timeout, because a run that is holding a real outcome should not disappear by itself. A
+  scheduled run does not wait: see the stacked PR.

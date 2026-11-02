@@ -71,6 +71,47 @@ class Recap(unittest.TestCase):
         recap = self.finish(self.callback(), {"_run": {"octopushy_outcome": "deferred", "octopushy_detail": "busy"}})
         self.assertEqual((recap["outcome"], recap["detail"]), ("deferred", "busy"))
 
+    def unreachable(self, callback, task, message):
+        callback.v2_runner_on_unreachable(types.SimpleNamespace(task_name=task, _result={"msg": message}))
+
+    def test_one_refused_login_stays_a_login_that_was_refused(self):
+        callback = self.callback()
+        self.unreachable(callback, "Connect", "Permission denied (publickey).")
+        recap = self.finish(callback)
+        self.assertFalse(recap["reached"])
+        self.assertEqual(recap["unreachableTask"], "Connect")
+
+    def test_a_refused_login_cannot_vouch_for_the_task_lost_before_it(self):
+        callback = self.callback()
+        self.unreachable(callback, "Remove the key", "Shared connection closed.")
+        self.unreachable(callback, "Try again", "Permission denied (publickey).")
+        recap = self.finish(callback)
+        self.assertTrue(recap["reached"])
+        self.assertEqual(recap["unreachableTask"], "Remove the key")
+
+    def test_the_worst_recap_fits_on_the_agents_line(self):
+        # Every text at the limit, in the characters that cost the most as written.
+        for character in ("\U0001f600", "\x01", '"'):
+            for size in (1000, 1279, 1280, 5000):
+                callback = self.callback()
+                text = character * size
+                callback.v2_runner_on_failed(types.SimpleNamespace(task_name=text))
+                self.unreachable(callback, text, text)
+                stats = types.SimpleNamespace(
+                    processed={"g": 1}, summarize=lambda host: {"ok": 2},
+                    custom={"_run": {"octopushy_outcome": text, "octopushy_detail": text}},
+                )
+                with mock.patch("os.write") as write:
+                    callback.v2_playbook_on_stats(stats)
+                line = write.call_args.args[1]
+                self.assertLess(len(line), 32 * 1024, (character, size))
+                json.loads(line.decode().removeprefix("octopushy-recap: "))
+
+    def test_a_text_too_long_to_fit_is_named_not_cut(self):
+        callback = self.callback()
+        callback.v2_runner_on_failed(types.SimpleNamespace(task_name="\U0001f600" * 8192))
+        self.assertEqual(self.finish(callback)["failedTask"], "(too long to report)")
+
     def test_a_long_ssh_failure_is_kept_whole_for_the_agent_to_mask(self):
         callback = self.callback()
         message = "@" * 5000 + "\nHost key verification failed."
