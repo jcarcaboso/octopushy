@@ -68,6 +68,9 @@ public sealed record RunContext
 
     public long? RootDiskBytes { get; init; }
 
+    /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
+    public DateTimeOffset? ScheduledFor { get; init; }
+
     public string Serialize() => JsonSerializer.Serialize(this, Json);
 
     public static RunContext Parse(string json) =>

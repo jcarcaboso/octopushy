@@ -1073,6 +1073,7 @@ export interface components {
             /** Format: date-time */
             appliedAt: null | string;
             hasSnapshot: boolean;
+            schedules: components["schemas"]["GuestScheduleDto"][];
         };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];
@@ -1115,6 +1116,22 @@ export interface components {
             receivedAt: null | string;
             /** Format: date-time */
             staleAfter: null | string;
+        };
+        GuestScheduleDto: {
+            action: string;
+            cron: string;
+            timezone: string;
+            /** Format: date-time */
+            nextAt: null | string;
+            /** Format: uuid */
+            lastRunId: null | string;
+            /** Format: int64 */
+            lastRunNumber: null | number;
+            lastRunStatus: null | string;
+            lastRunDetail: null | string;
+            note: null | string;
+            /** Format: date-time */
+            noteAt: null | string;
         };
         GuestSummaryDto: {
             /** Format: uuid */

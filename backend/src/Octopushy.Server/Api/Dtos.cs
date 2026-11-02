@@ -235,7 +235,21 @@ public sealed record GuestConfigurationDto(
     string? AppliedAction,
     string? AppliedCommit,
     DateTimeOffset? AppliedAt,
-    bool HasSnapshot);
+    bool HasSnapshot,
+    IReadOnlyList<GuestScheduleDto> Schedules);
+
+/// <summary>A schedule in Git, when it next falls due, and what its last firing did.</summary>
+public sealed record GuestScheduleDto(
+    string Action,
+    string Cron,
+    string Timezone,
+    DateTimeOffset? NextAt,
+    Guid? LastRunId,
+    long? LastRunNumber,
+    string? LastRunStatus,
+    string? LastRunDetail,
+    string? Note,
+    DateTimeOffset? NoteAt);
 
 public sealed record ConfigureActionDto(string Id, string? Description, bool Destructive, bool OnChange);
 

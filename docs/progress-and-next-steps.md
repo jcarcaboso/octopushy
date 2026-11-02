@@ -458,6 +458,15 @@ worker, the user can understand and recover failures from controller status,
 and cleanup succeeds without affecting other machines. A second disposable
 target can then validate concurrency/isolation under configured limits.
 
+## Next iteration: Fleet enrollment
+
+**Recorded November 2, 2026. A note, not built.** Configuring a machine leaves Fleet out for now.
+Fleet is ours too, so the next iteration has the Fleet Server generate the enrollment link
+and wires it straight into the run, with no operator copying it. A link is bound to an alias,
+is secret, and expires, so it cannot be a stored variable. That points to a value generated
+per run, which `setup.secrets` does not cover today: those are read from the store. Add
+nothing generic for it until that work needs it.
+
 ## Later work and open limits
 
 Do not turn the first remote lifecycle into a new general-purpose CI platform.

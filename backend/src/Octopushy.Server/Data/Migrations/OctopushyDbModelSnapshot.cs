@@ -512,6 +512,42 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("guest_disk_usages", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("Action")
+                        .HasColumnType("text")
+                        .HasColumnName("action");
+
+                    b.Property<string>("Cron")
+                        .HasColumnType("text")
+                        .HasColumnName("cron");
+
+                    b.Property<Guid?>("LastRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_run_id");
+
+                    b.Property<DateTimeOffset>("LastSlot")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_slot");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<DateTimeOffset?>("NoteAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("note_at");
+
+                    b.HasKey("ResourceId", "Action", "Cron")
+                        .HasName("pk_guest_schedules");
+
+                    b.ToTable("guest_schedules", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.InstallationTrust", b =>
                 {
                     b.Property<string>("Address")
@@ -1446,6 +1482,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_guest_disk_usages_resources_resource_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_guest_schedules_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>
