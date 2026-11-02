@@ -291,7 +291,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
 
     private async Task<IReadOnlyList<GuestScheduleDto>> SchedulesAsync(LabRepository repository, GuestDefinition guest, Guid id, CancellationToken cancellationToken)
     {
-        var declared = GuestSchedules.Of(guest);
+        // An invalid guest can hold a time or a time zone that cannot be read, and its page still has to open.
+        var declared = repository.IsValid(guest.Address) ? GuestSchedules.Of(guest) : [];
         if (declared.Count == 0)
             return [];
         var timezone = repository.Lab(guest.Lab)?.Timezone ?? "UTC";

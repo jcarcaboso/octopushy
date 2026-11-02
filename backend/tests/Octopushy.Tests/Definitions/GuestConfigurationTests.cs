@@ -219,6 +219,19 @@ public class GuestConfigurationTests
         Assert.False(repository.IsValid(Address));
     }
 
+    [Theory]
+    [InlineData("    - { action: configure }\n")]
+    [InlineData("    - { cron: \"0 6 * * *\" }\n")]
+    [InlineData("    - { action: 5, cron: 6 }\n")]
+    [InlineData("    - just text\n")]
+    public void A_malformed_schedule_is_an_error_on_the_guest_and_not_a_failed_load(string schedules)
+    {
+        using var test = WithSchedules(schedules);
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.False(repository.IsValid(Address));
+        Assert.True(repository.RepositoryValid);
+    }
+
     [Fact]
     public void A_schedule_needs_a_recipe()
     {

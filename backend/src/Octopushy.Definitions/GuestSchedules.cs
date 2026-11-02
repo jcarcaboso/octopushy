@@ -9,10 +9,15 @@ public sealed record GuestScheduleDefinition(string Action, string Cron);
 /// <summary>Reads a guest's schedules, and finds when they fall in the lab's time zone.</summary>
 public static class GuestSchedules
 {
+    /// <summary>What a guest declares. This also reads definitions that failed their schema, which report their own error, so what is malformed is left out.</summary>
     public static IReadOnlyList<GuestScheduleDefinition> Of(GuestDefinition guest) =>
         (guest.Json["setup"]?["schedules"] as JsonArray)?
-            .Select(s => new GuestScheduleDefinition(s!["action"]!.GetValue<string>(), s["cron"]!.GetValue<string>()))
+            .OfType<JsonObject>()
+            .Where(s => IsText(s["action"]) && IsText(s["cron"]))
+            .Select(s => new GuestScheduleDefinition(s["action"]!.GetValue<string>(), s["cron"]!.GetValue<string>()))
             .ToList() ?? [];
+
+    private static bool IsText(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out _);
 
     public static bool IsCron(string text) => CronExpression.TryParse(text, CronFormat.Standard, out _);
 

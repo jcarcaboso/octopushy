@@ -205,6 +205,11 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
         {
             return (null, $"Skipped: {e.Message}");
         }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // One guest's trouble is not another's: their times are already recorded as dealt with.
+            return (null, $"Could not start: {e.GetType().Name}. The next time tries again.");
+        }
     }
 
     /// <summary>A scheduled run no agent picked up by its limit stops waiting: one starting hours late would run at a time nobody chose.</summary>

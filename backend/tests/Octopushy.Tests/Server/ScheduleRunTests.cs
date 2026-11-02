@@ -243,6 +243,27 @@ public class ScheduleRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task The_page_of_a_guest_with_a_time_that_cannot_be_read_still_opens()
+    {
+        var test = Repository.Repository();
+        var file = Path.Combine(test.Root, GuestFile);
+        test.Write(GuestFile, File.ReadAllText(file).Replace(
+            "access:\n  user: ops",
+            "  schedules:\n    - { action: configure, cron: \"not a cron\" }\naccess:\n  user: ops"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        using var http = server.CreateClient();
+        var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
+        (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
+        await server.SyncAndTrustAsync(http);
+
+        await using var scope = server.Services.CreateAsyncScope();
+        var guest = await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Resources.AsNoTracking().SingleAsync(r => r.Address == Guest);
+        Assert.False(guest.Valid);
+        (await http.GetAsync($"/api/guests/{guest.Id}")).EnsureSuccessStatusCode();
+        await FireAsync(server, At(6, 1));
+    }
+
+    [Fact]
     public async Task A_scheduled_run_no_agent_picked_up_stops_waiting_after_the_limit()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Scheduled());
