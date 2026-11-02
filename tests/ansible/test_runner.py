@@ -28,62 +28,78 @@ def load():
 
 
 class Recap(unittest.TestCase):
-    def callback(self, path):
+    def callback(self, enabled=True):
         """The callback, with just enough of Ansible for it to import."""
         ansible = types.ModuleType("ansible")
         plugins = types.ModuleType("ansible.plugins")
         callback = types.ModuleType("ansible.plugins.callback")
         callback.CallbackBase = type("CallbackBase", (), {"__init__": lambda self: None})
         modules = {"ansible": ansible, "ansible.plugins": plugins, "ansible.plugins.callback": callback}
-        with mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, {"OCTOPUSHY_RESULT_FILE": str(path)}):
+        environment = {"OCTOPUSHY_RECAP": "1"} if enabled else {}
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, environment):
             spec = importlib.util.spec_from_file_location("octopushy_recap", RUNNER.with_name("octopushy_recap.py"))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module.CallbackModule()
 
-    def test_the_end_of_an_ssh_failure_is_kept_however_long_its_banner(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "recap.json"
-            callback = self.callback(path)
-            message = "@" * 5000 + "\nHost key verification failed."
-            callback.v2_runner_on_unreachable(types.SimpleNamespace(_result={"msg": message}, task_name="Gathering Facts"))
-            recap = json.loads(path.read_text())
-            self.assertTrue(recap["unreachable"].endswith("Host key verification failed."))
-            self.assertLessEqual(len(recap["unreachable"]), 1024)
-            self.assertFalse(recap["reached"])
+    def finish(self, callback, custom=None):
+        stats = types.SimpleNamespace(processed={"g": 1}, summarize=lambda host: {"ok": 2}, custom=custom or {})
+        with mock.patch("os.write") as write:
+            callback.v2_playbook_on_stats(stats)
+        if not write.called:
+            return None
+        fd, line = write.call_args.args
+        self.assertEqual(fd, 2)
+        text = line.decode()
+        self.assertTrue(text.startswith("octopushy-recap: ") and text.endswith("\n"), text)
+        self.assertEqual(text.count("\n"), 1)
+        return json.loads(text.removeprefix("octopushy-recap: "))
 
-    def test_a_recap_that_cannot_be_kept_up_is_withdrawn(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "recap.json"
-            callback = self.callback(path)
-            callback.write()
-            self.assertTrue(path.exists())
-            real = json.dump
-            with mock.patch("json.dump", side_effect=OSError("no space")):
-                callback.v2_playbook_on_task_start(None, False)
-            self.assertIs(json.dump, real)
-            self.assertFalse(path.exists(), "a stale recap says less happened than did")
+    def test_nothing_is_reported_until_the_playbook_ends(self):
+        callback = self.callback()
+        with mock.patch("os.write") as write:
             callback.v2_playbook_on_task_start(None, False)
-            self.assertFalse(path.exists(), "nothing comes back")
+            callback.v2_runner_on_ok(None)
+        write.assert_not_called()
+        recap = self.finish(callback)
+        self.assertEqual((recap["tasks"], recap["reached"], recap["stats"]["ok"]), (1, True, 2))
 
-    def test_a_long_name_is_kept_whole_or_not_at_all(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "recap.json"
-            callback = self.callback(path)
-            whole = "x" * 4000
-            callback.v2_runner_on_failed(types.SimpleNamespace(task_name=whole))
-            self.assertEqual(json.loads(path.read_text())["failedTask"], whole)
-            callback.v2_runner_on_failed(types.SimpleNamespace(task_name="x" * 9000))
-            self.assertNotIn("x", json.loads(path.read_text())["failedTask"].replace("(too long to report)", ""))
+    def test_a_preview_reports_nothing(self):
+        self.assertIsNone(self.finish(self.callback(enabled=False)))
+
+    def test_an_outcome_of_any_scope_is_reported(self):
+        recap = self.finish(self.callback(), {"_run": {"octopushy_outcome": "deferred", "octopushy_detail": "busy"}})
+        self.assertEqual((recap["outcome"], recap["detail"]), ("deferred", "busy"))
+
+    def test_a_long_ssh_failure_is_kept_whole_for_the_agent_to_mask(self):
+        callback = self.callback()
+        message = "@" * 5000 + "\nHost key verification failed."
+        callback.v2_runner_on_unreachable(types.SimpleNamespace(_result={"msg": message}, task_name="Facts"))
+        recap = self.finish(callback)
+        self.assertEqual(recap["unreachable"], message)
+        self.assertFalse(recap["reached"])
 
     def test_a_task_result_is_never_recorded(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "recap.json"
-            callback = self.callback(path)
-            callback.v2_runner_on_failed(types.SimpleNamespace(_result={"msg": "s3cret"}, task_name="Install"))
-            text = path.read_text()
-            self.assertIn("Install", text)
-            self.assertNotIn("s3cret", text)
+        callback = self.callback()
+        callback.v2_runner_on_failed(types.SimpleNamespace(_result={"msg": "s3cret"}, task_name="Install"))
+        recap = self.finish(callback)
+        self.assertEqual(recap["failedTask"], "Install")
+        self.assertNotIn("s3cret", json.dumps(recap))
+
+    def test_a_long_name_is_kept_whole_or_not_at_all(self):
+        callback = self.callback()
+        whole = "x" * 4000
+        callback.v2_runner_on_failed(types.SimpleNamespace(task_name=whole))
+        self.assertEqual(self.finish(callback)["failedTask"], whole)
+        callback.v2_runner_on_failed(types.SimpleNamespace(task_name="x" * 9000))
+        self.assertEqual(self.finish(callback)["failedTask"], "(too long to report)")
+
+    def test_a_non_ascii_name_stays_as_it_is(self):
+        callback = self.callback()
+        callback.v2_runner_on_failed(types.SimpleNamespace(task_name="pässwörd"))
+        with mock.patch("os.write") as write:
+            callback.v2_playbook_on_stats(types.SimpleNamespace(processed={}, summarize=None, custom={}))
+        self.assertIn("pässwörd".encode(), write.call_args.args[1])
 
 
 class Mounts(unittest.TestCase):
@@ -192,25 +208,11 @@ class Runs(unittest.TestCase):
         self.assertIn("SSH_AUTH_SOCK=", env)
         self.assertFalse(Path((self.record / "path").read_text().strip()).exists())
 
-    def test_the_recap_leaves_on_the_last_line_of_stderr(self):
-        self.script("ansible-playbook", """
-            #!/bin/sh
-            echo '{"reached": true, "finished": true, "tasks": 2}' > "$OCTOPUSHY_RESULT_FILE"
-            case "$OCTOPUSHY_RESULT_FILE" in /tmp/*) ;; *) exit 9 ;; esac
-        """)
-        done = self.run_it("site.yml", secrets={"sshKey": KEY})
-        self.assertEqual(done.returncode, 0, done.stderr)
-        last = done.stderr.decode().strip().splitlines()[-1]
-        self.assertEqual(json.loads(last.removeprefix("octopushy-recap: "))["tasks"], 2)
-
-    def test_a_run_that_recorded_nothing_claims_nothing(self):
-        done = self.run_it("site.yml", secrets={"sshKey": KEY}, env={"FAKE_EXIT": "4"})
-        self.assertEqual(done.returncode, 4)
-        self.assertNotIn(b"octopushy-recap", done.stderr)
-
-    def test_a_preview_reports_no_recap(self):
-        done = self.run_it("--list-tasks", "site.yml")
-        self.assertNotIn(b"octopushy-recap", done.stderr)
+    def test_the_callback_reports_only_for_a_real_run(self):
+        self.run_it("--list-tasks", "site.yml")
+        self.assertNotIn("OCTOPUSHY_RECAP=", (self.record / "env").read_text())
+        self.run_it("site.yml", secrets={"sshKey": KEY})
+        self.assertIn("OCTOPUSHY_RECAP=1", (self.record / "env").read_text())
 
     def test_a_private_directory_the_agent_chose_is_removed(self):
         private = Path(tempfile.gettempdir()) / f"octopushy-attempt-test-{os.getpid()}"

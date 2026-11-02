@@ -113,8 +113,8 @@ pub struct Invocation<'a> {
     pub control_prefix: Option<&'a str>,
 }
 
-/// What a tool run produced.
-#[derive(Debug, Default)]
+/// What a tool run produced. `Debug` leaves out what was not masked.
+#[derive(Default)]
 pub struct ToolOutput {
     /// Exit code, or `None` if killed by a signal.
     pub code: Option<i32>,
@@ -129,6 +129,17 @@ pub struct ToolOutput {
     pub control: Option<String>,
     /// Whether the run was cancelled.
     pub cancelled: bool,
+}
+
+impl std::fmt::Debug for ToolOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolOutput")
+            .field("code", &self.code)
+            .field("stderr_tail", &self.stderr_tail)
+            .field("stderr_marked", &self.stderr_marked)
+            .field("cancelled", &self.cancelled)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ToolOutput {
@@ -507,6 +518,16 @@ mod tests {
             local.path(ws, &ws.join("out/plan.bin")).unwrap(),
             "/var/lib/a/work/att-1/out/plan.bin"
         );
+    }
+
+    #[test]
+    fn debug_leaves_out_what_was_not_masked() {
+        let out = ToolOutput {
+            control: Some("a raw secret".into()),
+            stdout: b"another raw secret".to_vec(),
+            ..ToolOutput::default()
+        };
+        assert!(!format!("{out:?}").contains("secret"));
     }
 
     #[tokio::test]

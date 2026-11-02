@@ -204,9 +204,9 @@ async fn run(fx: &Fixture) -> Finished {
     .await
 }
 
-fn recap(reached: bool, finished: bool) -> Value {
+fn recap(reached: bool) -> Value {
     json!({
-        "reached": reached, "finished": finished, "tasks": 3,
+        "reached": reached, "tasks": 3,
         "stats": { "ok": 2, "changed": 1, "unreachable": 0, "failures": 0, "skipped": 0, "rescued": 0, "ignored": 0 },
     })
 }
@@ -317,7 +317,7 @@ async fn a_broken_playbook_fails_the_preview() {
 #[tokio::test]
 async fn secrets_reach_the_tool_on_stdin_and_nowhere_else() {
     let fx = Fixture::new();
-    fx.set("recap.json", &recap(true, true).to_string());
+    fx.set("recap.json", &recap(true).to_string());
     fx.set("echo", PASSWORD);
     let done = run(&fx).await;
     let success = done.result.unwrap();
@@ -357,7 +357,7 @@ async fn secrets_reach_the_tool_on_stdin_and_nowhere_else() {
 #[tokio::test]
 async fn the_connection_is_pinned_and_comes_last() {
     let fx = Fixture::new();
-    fx.set("recap.json", &recap(true, true).to_string());
+    fx.set("recap.json", &recap(true).to_string());
     let done = run(&fx).await;
     done.result.unwrap();
     let args = fx.read("args.log");
@@ -396,7 +396,7 @@ async fn the_connection_is_pinned_and_comes_last() {
 #[tokio::test]
 async fn the_approved_values_are_what_the_run_receives() {
     let fx = Fixture::new();
-    fx.set("recap.json", &recap(true, true).to_string());
+    fx.set("recap.json", &recap(true).to_string());
     let mut approved = input();
     approved["approvedVars"] = json!({ "allow_busy": true });
     let done = exec(
@@ -442,7 +442,7 @@ async fn a_run_without_a_preview_is_refused() {
 #[tokio::test]
 async fn a_failed_task_is_a_known_failure() {
     let fx = Fixture::new();
-    let mut failed = recap(true, true);
+    let mut failed = recap(true);
     failed["failedTask"] = json!("Install tools");
     fx.set("recap.json", &failed.to_string());
     fx.set("exit", "2");
@@ -467,18 +467,6 @@ async fn a_tool_that_never_started_is_a_known_failure() {
 }
 
 #[tokio::test]
-async fn a_recap_that_says_no_task_started_is_a_known_failure() {
-    let fx = Fixture::new();
-    fx.set(
-        "recap.json",
-        r#"{"reached":false,"finished":false,"tasks":0}"#,
-    );
-    fx.set("exit", "4");
-    let done = run(&fx).await;
-    assert!(matches!(done.result, Err(Failure::Failed { .. })));
-}
-
-#[tokio::test]
 async fn a_run_that_left_no_recap_is_uncertain() {
     let fx = Fixture::new();
     fx.set("exit", "1");
@@ -498,24 +486,9 @@ async fn a_run_that_exits_zero_with_no_recap_is_uncertain() {
 }
 
 #[tokio::test]
-async fn an_unfinished_recap_that_exits_zero_is_uncertain() {
-    let fx = Fixture::new();
-    fx.set(
-        "recap.json",
-        r#"{"reached":false,"finished":false,"tasks":0}"#,
-    );
-    let done = run(&fx).await;
-    assert!(
-        matches!(done.result, Err(Failure::Uncertain(_))),
-        "{:?}",
-        done.result
-    );
-}
-
-#[tokio::test]
 async fn a_secret_named_like_a_field_cannot_change_what_a_recap_says() {
     let fx = Fixture::new();
-    let mut lost = recap(true, true);
+    let mut lost = recap(true);
     lost["outcome"] = json!("deferred");
     lost["unreachable"] = json!("Shared connection closed");
     fx.set("recap.json", &lost.to_string());
@@ -532,7 +505,7 @@ async fn a_secret_named_like_a_field_cannot_change_what_a_recap_says() {
 #[tokio::test]
 async fn a_long_secret_in_a_task_name_is_masked_whole_before_it_is_cut() {
     let fx = Fixture::new();
-    let mut failed = recap(true, true);
+    let mut failed = recap(true);
     failed["failedTask"] = json!(format!("Connect with {}", *LONG));
     fx.set("recap.json", &failed.to_string());
     fx.set("exit", "2");
@@ -552,7 +525,7 @@ async fn a_secret_json_escaped_in_a_recap_is_masked_as_itself() {
     let fx = Fixture::new();
     fx.set(
         "recap.json",
-        r#"{"reached":true,"finished":true,"tasks":1,"failedTask":"Install p\u00e4ssw\u00f6rd"}"#,
+        r#"{"reached":true,"tasks":1,"failedTask":"Install p\u00e4ssw\u00f6rd"}"#,
     );
     fx.set("exit", "2");
     let done = run(&fx).await;
@@ -568,7 +541,7 @@ async fn a_secret_json_escaped_in_a_recap_is_masked_as_itself() {
 #[tokio::test]
 async fn a_guest_lost_in_a_task_the_play_ignored_leaves_an_outcome_uncertain() {
     let fx = Fixture::new();
-    let mut lost = recap(true, true);
+    let mut lost = recap(true);
     lost["outcome"] = json!("deferred");
     lost["unreachable"] = json!("Shared connection closed");
     fx.set("recap.json", &lost.to_string());
@@ -581,9 +554,56 @@ async fn a_guest_lost_in_a_task_the_play_ignored_leaves_an_outcome_uncertain() {
 }
 
 #[tokio::test]
+async fn a_guest_lost_in_a_task_the_play_ignored_is_uncertain_with_no_outcome_either() {
+    let fx = Fixture::new();
+    let mut lost = recap(true);
+    lost["unreachable"] = json!("Shared connection closed");
+    fx.set("recap.json", &lost.to_string());
+    let done = run(&fx).await;
+    assert!(
+        matches!(done.result, Err(Failure::Uncertain(_))),
+        "{:?}",
+        done.result
+    );
+}
+
+#[tokio::test]
+async fn an_undeclared_outcome_is_never_repeated() {
+    let fx = Fixture::new();
+    let mut surprise = recap(true);
+    surprise["outcome"] = json!("hidden\u{200b}password");
+    fx.set("recap.json", &surprise.to_string());
+    let done = run(&fx).await;
+    let text = format!("{:?} {}", done.result, done.log);
+    assert!(!text.contains("hidden"), "{text}");
+    assert!(!text.contains("200b"), "{text}");
+    assert!(message(&done.result).contains("does not declare"));
+}
+
+#[tokio::test]
+async fn ssh_text_is_masked_before_it_is_cut() {
+    let fx = Fixture::new();
+    let mut refused = recap(false);
+    refused["unreachable"] = json!(format!("{} Permission denied (publickey).", *LONG));
+    fx.set("recap.json", &refused.to_string());
+    fx.set("exit", "4");
+    let done = run(&fx).await;
+    match done.result {
+        Err(Failure::Failed { message, .. }) => {
+            assert!(!message.contains("L0ng"), "{message}");
+            assert!(
+                message.ends_with("*** Permission denied (publickey)."),
+                "{message}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_guest_lost_after_an_outcome_was_reported_is_uncertain() {
     let fx = Fixture::new();
-    let mut lost = recap(true, true);
+    let mut lost = recap(true);
     lost["outcome"] = json!("deferred");
     lost["unreachable"] = json!("Shared connection to 10.0.0.5 closed.");
     lost["unreachableTask"] = json!("Later task");
@@ -600,7 +620,7 @@ async fn a_guest_lost_after_an_outcome_was_reported_is_uncertain() {
 #[tokio::test]
 async fn a_secret_in_a_task_name_is_masked_in_what_is_kept() {
     let fx = Fixture::new();
-    let mut failed = recap(true, true);
+    let mut failed = recap(true);
     failed["failedTask"] = json!(format!("Connect with {PASSWORD}"));
     fx.set("recap.json", &failed.to_string());
     fx.set("exit", "2");
@@ -629,7 +649,7 @@ async fn a_secret_in_a_task_name_is_masked_in_what_is_kept() {
 #[tokio::test]
 async fn a_secret_in_the_task_a_guest_was_lost_on_is_masked() {
     let fx = Fixture::new();
-    let mut lost = recap(false, true);
+    let mut lost = recap(false);
     lost["unreachable"] = json!("Connection refused");
     lost["unreachableTask"] = json!(format!("Connect with {PASSWORD}"));
     fx.set("recap.json", &lost.to_string());
@@ -645,9 +665,9 @@ async fn a_secret_in_the_task_a_guest_was_lost_on_is_masked() {
 }
 
 #[tokio::test]
-async fn a_killed_run_after_a_task_started_is_uncertain() {
+async fn a_killed_run_is_uncertain() {
     let fx = Fixture::new();
-    fx.set("recap.json", &recap(true, false).to_string());
+    fx.set("recap.json", &recap(true).to_string());
     fx.set("kill", "");
     let done = run(&fx).await;
     match done.result {
@@ -659,7 +679,7 @@ async fn a_killed_run_after_a_task_started_is_uncertain() {
 #[tokio::test]
 async fn a_guest_lost_during_a_task_is_uncertain() {
     let fx = Fixture::new();
-    let mut lost = recap(true, true);
+    let mut lost = recap(true);
     lost["unreachable"] = json!("Shared connection to 10.0.0.5 closed.");
     lost["unreachableTask"] = json!("Install tools");
     fx.set("recap.json", &lost.to_string());
@@ -671,7 +691,7 @@ async fn a_guest_lost_during_a_task_is_uncertain() {
 #[tokio::test]
 async fn a_refused_host_key_is_a_failure_that_says_so() {
     let fx = Fixture::new();
-    let mut refused = recap(false, true);
+    let mut refused = recap(false);
     refused["unreachable"] = json!("Host key verification failed.");
     fx.set("recap.json", &refused.to_string());
     fx.set("exit", "4");
@@ -688,7 +708,7 @@ async fn a_refused_host_key_is_a_failure_that_says_so() {
 #[tokio::test]
 async fn a_failed_login_gives_ssh_s_reason() {
     let fx = Fixture::new();
-    let mut refused = recap(false, true);
+    let mut refused = recap(false);
     refused["unreachable"] =
         json!("a banner\r\nmore banner\r\nops@g: Permission denied (publickey).\r\n");
     fx.set("recap.json", &refused.to_string());
@@ -709,7 +729,7 @@ async fn a_failed_login_gives_ssh_s_reason() {
 #[tokio::test]
 async fn a_declared_outcome_is_not_a_failure() {
     let fx = Fixture::new();
-    let mut deferred = recap(true, true);
+    let mut deferred = recap(true);
     deferred["outcome"] = json!("deferred");
     deferred["detail"] = json!(format!("Three threads, {PASSWORD}"));
     fx.set("recap.json", &deferred.to_string());
@@ -723,7 +743,7 @@ async fn a_declared_outcome_is_not_a_failure() {
 #[tokio::test]
 async fn an_undeclared_outcome_is_a_failure() {
     let fx = Fixture::new();
-    let mut surprise = recap(true, true);
+    let mut surprise = recap(true);
     surprise["outcome"] = json!("surprise");
     fx.set("recap.json", &surprise.to_string());
     let done = run(&fx).await;

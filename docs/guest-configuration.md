@@ -289,17 +289,19 @@ rather than through temporary files on either side, and with `ANSIBLE_NO_TARGET_
 so they do not reach the guest's journal. `ANSIBLE_LOG_PATH`, keeping remote files and
 verbosity are fixed too. A recap callback records counts, the failed task's name and the
 declared outcome, and **never a task's result**. A task's name is templated, so it can hold a
-secret even with `no_log`. The recap therefore stays in the private directory, and
-`octopushy-ansible` hands it to the agent as a control line on stderr. It never reaches the
-workspace, which can outlive a run for as long as an agent is disconnected. A recap decides
-an attempt's outcome, so it is not a log line: it is never logged, it is parsed as written so
-masking cannot rename a field, and its text is masked and only then cut to size.
+secret even with `no_log`. The recap therefore stays in memory, and the callback hands it to
+the agent as one control line on stderr when the playbook ends. A run that dies leaves none,
+which makes it uncertain, and there is no file to go stale or to outlive the run. A recap
+decides an attempt's outcome, so it is not a log line: it is never logged, it is parsed as
+written so masking cannot rename a field, and its text is masked and only then cut to
+size. An undeclared outcome's text is never repeated at all.
 
 **Masking.** Every line of tool output and every error is masked with the attempt's secrets.
 The check of multi-line values for this design found three gaps, all fixed here:
 
 - A long line was cut at 16 KiB **before** masking, so a secret across the cut stayed in
-  the log. It now masks before cutting and again after.
+  the log. It now masks before cutting and again after. A line over 32 KiB is dropped with a
+  note, because the masker cannot see a secret that runs past what was read.
 - Control characters were removed before masking, so a value holding a tab no longer
   matched. The same reordering fixes that.
 - Ansible's default output is JSON, which shows a newline as `\n` and a quote as `\"`. A whole

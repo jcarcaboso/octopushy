@@ -14,8 +14,9 @@
 //!
 //! Secrets never enter the workspace. They reach `octopushy-ansible` on stdin, which keeps
 //! them in memory; see `agent/ansible/octopushy-ansible`. The recap, which can hold a templated
-//! task name, comes back as a control line on stderr. It decides the attempt's outcome, so it is
-//! parsed as it was written and is never logged; only then is what it says masked and cut.
+//! task name, comes back as a control line on stderr when the playbook ends. It decides the
+//! attempt's outcome, so it is parsed as it was written and is never logged; only then is what
+//! it says masked and cut. A run with no recap did not end normally, so it is uncertain.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -125,7 +126,6 @@ fn default_port() -> u16 {
 #[serde(rename_all = "camelCase", default)]
 struct Recap {
     reached: bool,
-    finished: bool,
     tasks: u64,
     stats: Option<Value>,
     failed_task: Option<String>,
@@ -785,12 +785,12 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 }
 
 /// The recap, with what is free text masked and then cut to size. Masking comes after parsing
-/// so it cannot rename a field, and a value is matched as it is, not as JSON escaped it.
+/// so it cannot rename a field, and a value is matched as it is, not as JSON escaped it. ssh
+/// gives its reason last, so what it said keeps its end.
 fn read_recap(out: &ToolOutput, ctx: &ExecContext) -> Option<Recap> {
     let mut recap: Recap = serde_json::from_str(out.control.as_deref()?).ok()?;
     for value in [
         &mut recap.failed_task,
-        &mut recap.unreachable,
         &mut recap.unreachable_task,
         &mut recap.detail,
     ]
@@ -798,6 +798,11 @@ fn read_recap(out: &ToolOutput, ctx: &ExecContext) -> Option<Recap> {
     .flatten()
     {
         *value = ctx.log.mask(value).chars().take(MAX_REPORTED).collect();
+    }
+    if let Some(value) = &mut recap.unreachable {
+        let masked = ctx.log.mask(value);
+        let skip = masked.chars().count().saturating_sub(MAX_REPORTED);
+        *value = masked.chars().skip(skip).collect();
     }
     Some(recap)
 }
@@ -837,20 +842,9 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
             "unreachableTask": recap.unreachable_task,
         })
     };
-    if !recap.finished {
-        if recap.tasks == 0 && out.code != Some(0) {
-            return Err(Failure::msg(failed_before_tasks(out)));
-        }
-        if never_connected(&recap) {
-            return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
-        }
-        return Err(Failure::Uncertain(format!(
-            "ansible-playbook ended (exit status {code}) without finishing; whether a change was made is unknown. Inspect the guest, and any lock it holds, before running it again"
-        )));
-    }
-    // Before any outcome: one reported earlier says nothing of a task the guest then lost,
-    // and a play that ignores unreachable hosts has not found out how that task ended.
-    if recap.unreachable.is_some() && (out.code != Some(0) || recap.outcome.is_some()) {
+    // Before any outcome, and even at exit 0: a play that ignores an unreachable host has not
+    // found out how that task ended, and an earlier outcome says nothing about it.
+    if recap.unreachable.is_some() {
         if never_connected(&recap) {
             return Err(unreachable_failure(prep, &recap, &outputs(&recap)));
         }
@@ -861,10 +855,9 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
     }
     if let Some(outcome) = &recap.outcome {
         if !prep.input.outcomes.iter().any(|o| o == outcome) {
+            // Not repeated: only a declared name is known not to be a secret.
             return Err(Failure::with_outputs(
-                format!(
-                    "the playbook reported the outcome {outcome:?}, which the recipe does not declare"
-                ),
+                "the playbook reported an outcome the recipe does not declare",
                 outputs(&recap),
             ));
         }

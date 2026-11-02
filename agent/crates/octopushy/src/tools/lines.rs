@@ -5,12 +5,15 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use crate::attempts::logs::MAX_LINE_BYTES;
 
 /// Longest line read. It is more than a log line keeps, so that a secret across
-/// [`MAX_LINE_BYTES`] reaches the masker whole: whatever is cut here was never going to be kept.
+/// [`MAX_LINE_BYTES`] reaches the masker whole.
 pub const MAX_READ_BYTES: usize = 2 * MAX_LINE_BYTES;
 
-/// Calls `f` for each line of `reader` (lossy UTF-8, without the newline).
-/// Lines longer than [`MAX_READ_BYTES`] are cut; the rest of such a line is
-/// skipped.
+/// What is logged for a longer line. None of it is kept, because the masker could not see a
+/// secret that runs past the end of what was read, and part of one would stay.
+const DROPPED: &str = "[line dropped: too long to mask]";
+
+/// Calls `f` for each line of `reader` (lossy UTF-8, without the newline). A line longer than
+/// [`MAX_READ_BYTES`] is replaced by a note.
 pub async fn for_each_line<R: AsyncRead + Unpin>(
     reader: R,
     mut f: impl FnMut(String),
@@ -47,12 +50,12 @@ pub async fn for_each_line<R: AsyncRead + Unpin>(
 }
 
 fn finish(line: &[u8], truncated: bool) -> String {
+    if truncated {
+        return DROPPED.to_owned();
+    }
     let mut s = String::from_utf8_lossy(line).into_owned();
     if s.ends_with('\r') {
         s.pop();
-    }
-    if truncated {
-        s.push_str(" [line truncated]");
     }
     s
 }
@@ -72,7 +75,7 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], "one");
         assert_eq!(lines[1], "two");
-        assert!(lines[2].ends_with("[line truncated]"));
+        assert_eq!(lines[2], DROPPED);
         assert_eq!(lines[3], "last");
     }
 }
