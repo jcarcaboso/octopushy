@@ -173,10 +173,14 @@ public class GuestTrustTests(PostgresFixture postgres)
         server.Commit("Remove the guest");
         await server.SyncAsync();
         await DriveAsync(server, agent);
-        Assert.Equal(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
+        var removal = await server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(RunStatuses.Blocked, removal.Status);
+        Assert.Contains("Waiting for trust", removal.Detail);
 
         Assert.Equal(applied, await ShownDigestAsync(server, client));
         (await TrustAsync(server, client, applied)).EnsureSuccessStatusCode();
+        await DriveAsync(server, agent);
+        Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
     }
 
     [Theory]
