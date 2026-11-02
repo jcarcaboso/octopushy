@@ -22,10 +22,43 @@ octopushy operator login \
 octopushy operator whoami
 ```
 
+For a controller with no TLS proxy in front, use its `http://` address and leave
+out `--ca-file`:
+
+```sh
+octopushy operator login \
+  --server http://10.1.0.50:8081 \
+  --token-stdin < /path/to/private-one-time-grant-file
+```
+
 Remove the one-time handoff file after successful login. For an assistant,
 provide it through the application's private secret entry, not ordinary chat.
 The public CA option is unnecessary when the controller uses a publicly
 trusted certificate. There is no TLS-verification bypass.
+
+## Plain HTTP
+
+Over `http://` nothing is encrypted. **Anyone on the network path can read the
+token**, along with the requests and replies, and use it with the account's API
+authority, including plan approvals, until it expires or is revoked. That covers
+the token when the console creates it, and every CLI request afterwards. It also
+covers any proxy set through `http_proxy` in the CLI's environment, which the CLI
+honours as usual. The controller keeps only a hash, but that does not protect the
+token in transit.
+
+This is accepted for a homelab on a network you control, where the web interface
+already has no TLS proxy in front of it. Use HTTPS on any network you do not
+trust, and choose the shortest expiry that works over HTTP.
+
+No server setting is needed: the controller accepts operator grants on either
+scheme, and a grant works on both. The checks are the same: format, hash,
+revocation, expiry, and only a console session can create or manage grants. The
+CLI prints one warning on stderr per command when the origin is `http://`, and
+never prints the token. Its JSON output on stdout is unaffected.
+
+`--ca-file` is refused with an `http://` origin, because a CA verifies TLS and
+plain HTTP has no certificate to verify. A saved credential that combines the two
+is refused too.
 
 The CLI saves a mode-0600 credential under the current user's private directory:
 
@@ -36,7 +69,8 @@ $XDG_CONFIG_HOME/octopushy/operator/credential.json
 It uses `$HOME/.config` when `XDG_CONFIG_HOME` is absent. `--config` selects a
 different private file. Shared-readable files, symlinks and hardlinks are
 refused. The saved origin cannot be overridden per request. Redirects and
-automatic HTTP retries are disabled.
+automatic HTTP retries are disabled on both schemes, so an `https://` login never
+falls back to plain HTTP.
 
 ## Use the existing API
 

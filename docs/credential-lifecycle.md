@@ -122,8 +122,10 @@ changes; reconcile those before dispatch resumes.
   environment authorization boundaries; repository code and workers receiving
   credentials remain trusted. No tenant/RBAC boundary is claimed.
 - Worker mTLS renewal is separate and unchanged.
-- No guest SSH private-key delivery, host-trust registry, staged guest key
-  rotation, or application-password update is implemented here.
+- A guest's own SSH key uses this store under `system/`, so it has versions and pinning, and
+  stays out of these operator endpoints. See [SSH identity](guest-configuration.md#ssh-identity).
+  This lifecycle changes a stored value: it neither touches a guest nor tests a login. No
+  host-trust registry or application-password update is implemented here.
 - No automatic provider-token creation/revocation, secret-manager integration,
   KEK keyring/rewrap, or complete immutable promotion-event ledger.
 - This change does not fix custom-CA transport into OpenTofu or turn insecure

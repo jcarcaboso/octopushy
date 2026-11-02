@@ -118,6 +118,12 @@ public sealed record ProvisionInputs(
         {
             hashed["backend"] = backend.Json.DeepClone();
         }
+        // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
+        // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
+        if (ManagedAccess.Wanted(guest))
+        {
+            hashed["managedAccess"] = true;
+        }
         // Reporter setup changes need a new run, but never become OpenTofu inputs.
         // Omit the key entirely for existing definitions to preserve their hashes.
         if (guest.Json["setup"]?["diskReporter"] is { } diskReporter)

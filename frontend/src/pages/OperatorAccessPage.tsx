@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, unwrap } from "../api/client";
+import { Callout } from "../components/Callout";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorMessage } from "../components/States";
 import { useDocumentTitle } from "../components/useDocumentTitle";
@@ -18,6 +19,8 @@ export function OperatorAccessPage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [revoke, setRevoke] = useState<{ id: string; name: string } | null>(null);
+  const { origin, protocol } = window.location;
+  const plainHttp = protocol === "http:";
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -53,6 +56,10 @@ export function OperatorAccessPage() {
       <p>Create a named operator grant for the CLI. It has your account's API access, including explicit approvals.
         It cannot create or manage other grants. Infrastructure credentials remain in Octopushy.</p>
       <p>Grant creation does not approve a plan, trust an installation, or update a machine.</p>
+      {plainHttp && <Callout kind="warning" title="This address uses plain HTTP">
+        An operator token travels unencrypted here, when it is created and on every CLI request.
+        Anyone on the network path can read it and act as you until it expires or is revoked.
+      </Callout>}
       <form className="form" onSubmit={(event) => { void create(event); }}>
         <div className="field">
           <label htmlFor="operator-name">Grant name</label>
@@ -72,7 +79,7 @@ export function OperatorAccessPage() {
         <p>This token is shown only now. Treat it like your password. Pass it to the CLI through private stdin, never a command argument.</p>
         <label htmlFor="operator-token">Operator token</label>
         <textarea id="operator-token" readOnly value={token} spellCheck={false} autoComplete="off" />
-        <code>octopushy operator login --server https://your-controller --token-stdin --ca-file /path/to/public-ca.pem</code>
+        <code>octopushy operator login --server {origin} --token-stdin{plainHttp ? "" : " --ca-file /path/to/public-ca.pem"}</code>
         <button className="button" onClick={() => setToken(null)}>I saved it privately</button>
       </section>}
       <ErrorMessage error={error ?? list.error} />

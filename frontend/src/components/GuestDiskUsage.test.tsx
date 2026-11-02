@@ -65,9 +65,12 @@ describe("guest disk usage", () => {
     show();
     fireEvent.click(screen.getByRole("button", { name: "Configure reporter" }));
     const create = screen.getByRole("button", { name: "Create reporting token" });
-    fireEvent.change(screen.getByLabelText("Octopushy HTTPS address"), { target: { value: "http://octopushy.test" } });
+    fireEvent.change(screen.getByLabelText("Octopushy address"), { target: { value: "ftp://octopushy.test" } });
     expect(create).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Octopushy HTTPS address"), { target: { value: "https://octopushy.test" } });
+    fireEvent.change(screen.getByLabelText("Octopushy address"), { target: { value: "http://octopushy.test/path" } });
+    expect(create).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Octopushy address"), { target: { value: "https://octopushy.test" } });
+    expect(screen.queryByText("This address uses plain HTTP")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Reporting interval (minutes)"), { target: { value: "30" } });
     fireEvent.click(create);
     expect(await screen.findByText(token)).toBeInTheDocument();
@@ -77,6 +80,23 @@ describe("guest disk usage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure reporter" }));
     expect(screen.queryByText(token)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create reporting token" })).toBeInTheDocument();
+  });
+
+  it("accepts a plain HTTP address and says the token is readable on the network path", async () => {
+    const token = "a".repeat(64);
+    mockApi({
+      "POST /api/guests/vm-1/disk-usage/token": () => ({
+        token, reportPath: "/api/guests/vm-1/disk-usage", intervalSeconds: 3600,
+      }),
+    });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Configure reporter" }));
+    fireEvent.change(screen.getByLabelText("Octopushy address"), { target: { value: "http://10.15.30.5:8081" } });
+    expect(screen.getByText("This address uses plain HTTP")).toBeVisible();
+    expect(screen.getByText(/Anyone on the network path can read it/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Create reporting token" }));
+    expect(await screen.findByText(token)).toBeInTheDocument();
+    expect(screen.getByText(/"endpoint": "http:\/\/10.15.30.5:8081\/api\/guests\/vm-1\/disk-usage"/)).toBeInTheDocument();
   });
 
   it("requires confirmation to revoke the reporter without erasing the last reading", async () => {

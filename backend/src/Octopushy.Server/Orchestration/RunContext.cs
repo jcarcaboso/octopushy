@@ -63,6 +63,9 @@ public sealed record RunContext
     /// </summary>
     public string? DefinitionRemovedIn { get; init; }
 
+    /// <summary>Whether Octopushy's own key goes to this guest with the keys it declares.</summary>
+    public bool ManagedAccess { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
