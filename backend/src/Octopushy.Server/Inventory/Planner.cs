@@ -223,10 +223,10 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     public Task ExpireScheduledAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
-            var waiting = await db.Runs.AsNoTracking()
+            var waiting = await db.Runs.Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
                 .Where(r => r.Reason == RunReasons.Schedule
                     && (r.Status == RunStatuses.Queued || r.Status == RunStatuses.Running || r.Status == RunStatuses.Blocked))
-                .Select(r => r.Id).ToListAsync(cancellationToken);
+                .ToListAsync(cancellationToken);
             foreach (var run in waiting)
                 await engine.StopIfLateAsync(db, run, now, cancellationToken);
             return 0;

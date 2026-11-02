@@ -438,6 +438,74 @@ public class ScheduleRunTests(PostgresFixture postgres)
         Assert.Contains(agent.TakeAssignments(), a => a.Action == "run");
     }
 
+    private static readonly DateTimeOffset Limit = At(6) + Planner.ScheduleLateLimit;
+
+    /// <summary>Lets the limit pass after this many reads of the clock, wherever that lands in the work.</summary>
+    private static void CrossTheLimit(TestClock clock, int reads)
+    {
+        clock.Now = Limit - TimeSpan.FromMilliseconds(1);
+        clock.MoveOnAfter(reads, Limit + TimeSpan.FromMilliseconds(1));
+    }
+
+    private static Task<Attempt?> ChangeAsync(ServerHarness server, Guid run) =>
+        server.QueryAsync(db => db.Attempts.AsNoTracking().SingleOrDefaultAsync(a => a.RunId == run && a.Mutating));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task The_limit_passing_during_assignment_cannot_send_a_change_late(int reads)
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(), clock: clock);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        await ConfigureRunTests.PreviewAsync(agent);
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+
+        CrossTheLimit(clock, reads);
+        await server.Engine.DispatchAsync(CancellationToken.None);
+
+        var change = await ChangeAsync(server, run.Id);
+        if (agent.TakeAssignments().Any(a => a.Action == "run"))
+            Assert.True(change!.AssignedAt <= Limit, $"Assigned at {change.AssignedAt:O}, after {Limit:O}.");
+        else
+            Assert.Equal(AttemptStatuses.Cancelled, change!.Status);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    public async Task The_limit_passing_during_a_result_cannot_create_a_change_late(int reads)
+    {
+        var clock = new TestClock();
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled(), clock: clock);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        await PassAsync(server, clock, At(1));
+        await PassAsync(server, clock, At(6, 1));
+        var preview = await agent.NextAsync("preview");
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+
+        CrossTheLimit(clock, reads);
+        var (outputs, artifact) = ConfigureRunTests.Preview();
+        await agent.ReportAsync(preview, Outcome.Succeeded, outputs, artifacts: artifact);
+
+        if (await ChangeAsync(server, run.Id) is { } change)
+            Assert.True(change.CreatedAt <= Limit, $"Created at {change.CreatedAt:O}, after {Limit:O}.");
+    }
+
     [Fact]
     public async Task A_person_who_approves_after_the_limit_decides_and_the_limit_stops_applying()
     {

@@ -22,9 +22,25 @@ namespace Octopushy.Tests.Server;
 /// <summary>The server's time, for a test that has to say what it is. It is real time until one does.</summary>
 public sealed class TestClock : TimeProvider
 {
+    private int _readsLeft;
+    private DateTimeOffset? _then;
+
     public DateTimeOffset? Now { get; set; }
 
-    public override DateTimeOffset GetUtcNow() => Now ?? System.GetUtcNow();
+    /// <summary>Moves the time on after this many reads, to land a change of time inside an operation.</summary>
+    public void MoveOnAfter(int reads, DateTimeOffset then) => (_readsLeft, _then) = (reads, then);
+
+    public override DateTimeOffset GetUtcNow()
+    {
+        var now = Now ?? System.GetUtcNow();
+        if (_then is { } then && _readsLeft-- <= 0)
+        {
+            Now = then;
+            _then = null;
+        }
+
+        return now;
+    }
 }
 
 [CollectionDefinition(Name)]

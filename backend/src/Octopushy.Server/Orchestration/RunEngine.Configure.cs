@@ -99,13 +99,14 @@ public sealed partial class RunEngine
 
     /// <summary>
     /// Cancels a scheduled run that has missed its time. Every release of a change comes through
-    /// here, so nothing depends on how recently the periodic pass ran.
+    /// here, so nothing depends on how recently the periodic pass ran. A release passes the time
+    /// it will record, read after the work that leads up to it, so that time is what gets decided.
     /// </summary>
-    internal async Task<bool> StopIfLateAsync(OctopushyDb db, Guid runId, DateTimeOffset now, CancellationToken cancellationToken)
+    internal async Task<bool> StopIfLateAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        if (!MissedItsTime(await LoadRunAsync(db, runId, cancellationToken), now))
+        if (!MissedItsTime(run, now))
             return false;
-        await CancelInternalAsync(db, runId, "This did not start within an hour of its time, so nothing reached the guest. The next time tries again.", cancellationToken);
+        await CancelInternalAsync(db, run.Id, "This did not start within an hour of its time, so nothing reached the guest. The next time tries again.", cancellationToken);
         return true;
     }
 

@@ -389,8 +389,6 @@ public sealed partial class RunEngine(
                     }
                     break;
                 case StepStatuses.Pending or StepStatuses.Blocked:
-                    if (AssignmentBuilder.ActionFor(step.Name).Mutating && await StopIfLateAsync(db, run.Id, clock.GetUtcNow(), cancellationToken))
-                        return;
                     var missing = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step.Name, context));
                     if (missing.Count > 0)
                     {
@@ -401,7 +399,10 @@ public sealed partial class RunEngine(
                         break;
                     }
 
-                    CreateAttempt(db, run, step, context);
+                    var createdAt = clock.GetUtcNow();
+                    if (AssignmentBuilder.ActionFor(step.Name).Mutating && await StopIfLateAsync(db, run, createdAt, cancellationToken))
+                        return;
+                    CreateAttempt(db, run, step, context, createdAt: createdAt);
                     step.Status = StepStatuses.Queued;
                     step.Detail = null;
                     run.Status = RunStatuses.Running;
@@ -528,7 +529,7 @@ public sealed partial class RunEngine(
         return false;
     }
 
-    private void CreateAttempt(OctopushyDb db, Run run, Step step, RunContext context, Guid? preferredAgent = null)
+    private void CreateAttempt(OctopushyDb db, Run run, Step step, RunContext context, Guid? preferredAgent = null, DateTimeOffset? createdAt = null)
     {
         var action = AssignmentBuilder.ActionFor(step.Name);
         if (preferredAgent is null && step.Name == StepNames.Apply)
@@ -552,7 +553,7 @@ public sealed partial class RunEngine(
             HostKey = context.HostKey,
             HostLimit = context.HostLimit,
             PreferredAgentId = preferredAgent,
-            CreatedAt = clock.GetUtcNow(),
+            CreatedAt = createdAt ?? clock.GetUtcNow(),
         };
         step.Attempts.Add(attempt);
         db.Attempts.Add(attempt);
