@@ -125,13 +125,8 @@ refused, not replaced. The default local mode still binds to loopback; remote mo
 does not open listeners or change deployment settings. This is readiness work,
 **not a claim of live remote-topology validation**.
 
-## Optional Portainer helper
+## Service workflows
 
-`PORTAINER_WORKFLOW=1` runs the [Portainer test](../portainer/README.md) on an isolated
-NixOS service-node fixture instead of resizing. Its helper uses guest-agent execution
-and receives the privileged file through its existing `PVE_TOKEN_FILE` interface only
-when that workflow is selected. The surrounding real lifecycle remains blocked as
-described above.
-
-The native Fedora service workflow and its `FEDORA_WORKFLOW=1` option moved to the
-`jcarcaboso/octopushy-lab` workflows repository.
+The native Fedora service workflow (`FEDORA_WORKFLOW=1`) and the Portainer test on a
+NixOS service node (`PORTAINER_WORKFLOW=1`) moved to the `jcarcaboso/octopushy-lab`
+workflows repository, with the NixOS modules they use.

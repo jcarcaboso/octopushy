@@ -50,10 +50,6 @@ check:
     just openapi
     git diff --exit-code -- contracts/openapi/octopushy.json frontend/src/api/schema.d.ts
 
-# Locked Nix module/derivation evaluation only; no images, VMs, or activation.
-check-nix:
-    bash tests/nixos/run.sh
-
 # End to end: backend, a real agent running OpenTofu in rootless podman, and a mock Proxmox API.
 e2e: dev-db
     tests/e2e/run.sh

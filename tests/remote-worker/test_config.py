@@ -45,8 +45,7 @@ class RemoteConfigTests(unittest.TestCase):
         prefix, _ = script.read_text().split(
             "# Offline preflight boundary: all controller/local side effects start below.", 1
         )
-        for default in ("proxmox-e2e", "portainer-vm-e2e"):
-            prefix = prefix.replace(f"work=$root/.dev/{default}", 'work=$HARNESS_TEST_WORK')
+        prefix = prefix.replace("work=$root/.dev/proxmox-e2e", 'work=$HARNESS_TEST_WORK')
         return subprocess.run(
             ["bash", "-c", prefix + "\n" + after, str(script)],
             env={"PATH": os.environ["PATH"], "HARNESS_TEST_WORK": str(self.root / "fixture"), **env},
@@ -98,7 +97,7 @@ class RemoteConfigTests(unittest.TestCase):
             "REMOTE_AGENT_ID": ["not-a-uuid"],
             "REMOTE_AGENT_LABEL": ["x,other", "x\nother"],
             "REMOTE_WORK_DIR": ["relative", "/"],
-            "PORTAINER_WORKFLOW": ["1"],
+            "KEEP": ["1"],
             "UI": ["1"],
         }
         for key, values in cases.items():
@@ -197,7 +196,7 @@ class RemoteConfigTests(unittest.TestCase):
         ])
         self.assertNotIn("DO-NOT-PRINT", result.stdout + result.stderr)
 
-    def test_cleanup_and_resume_refuse_legacy_fixture_without_rebinding_context(self):
+    def test_cleanup_refuses_legacy_fixture_without_rebinding_context(self):
         fixture = self.root / "fixture"
         installation = fixture / "lab/labs/home/proxmox/umbrel/installation.yaml"
         installation.parent.mkdir(parents=True)
@@ -206,21 +205,13 @@ class RemoteConfigTests(unittest.TestCase):
         (fixture / "vmid").write_text("9999\n")
         context = fixture / "run-context.json"
         context.write_text('{"tokenKey":"proxmox/umbrel/api-token","revision":"historical"}\n')
-        config = self.root / "nixos"
-        config.mkdir()
-        (config / "flake.lock").write_text("{}\n")
-        for mode in ({"CLEANUP": "1"}, {
-            "RESUME_SERVICE": "1", "PORTAINER_WORKFLOW": "1", "KEEP_GUEST": "1",
-            "PORTAINER_CONFIG_DIR": str(config),
-        }):
-            with self.subTest(mode=mode):
-                result = self.harness_preflight({**self.env, **mode})
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("explicit split-credential migration", result.stderr)
-                self.assertEqual(installation.read_text(), legacy)
-                self.assertEqual((fixture / "vmid").read_text(), "9999\n")
-                self.assertEqual(context.read_text(),
-                                 '{"tokenKey":"proxmox/umbrel/api-token","revision":"historical"}\n')
+        result = self.harness_preflight({**self.env, "CLEANUP": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("explicit split-credential migration", result.stderr)
+        self.assertEqual(installation.read_text(), legacy)
+        self.assertEqual((fixture / "vmid").read_text(), "9999\n")
+        self.assertEqual(context.read_text(),
+                         '{"tokenKey":"proxmox/umbrel/api-token","revision":"historical"}\n')
 
     def test_retained_fixture_requires_the_exact_split_keys_not_an_alias(self):
         # Hosted runners need no ripgrep installation for this offline preflight.

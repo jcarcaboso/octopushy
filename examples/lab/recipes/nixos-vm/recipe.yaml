@@ -1,7 +1,0 @@
-schemaVersion: 1
-description: Proxmox VM provisioning for a NixOS guest.
-operation: provision
-executor: opentofu
-root: ../../modules/opentofu/proxmox-vm
-inputs: ../proxmox-vm/inputs.schema.json
-verify: proxmox

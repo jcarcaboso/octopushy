@@ -135,7 +135,7 @@ script. Mock credential wiring does not prove upstream PVE privileges.
 
 Remote mode never launches/enrolls a local worker or builds/starts a local backend.
 It does not modify listener bindings or public URLs. The local harness defaults
-remain loopback-only. UI, service workflows and `KEEP`/`KEEP_GUEST` modes are rejected
+remain loopback-only. UI and `KEEP` modes are rejected
 in this deliberately narrow VM-lifecycle mode.
 
 ## Retention and interrupted runs

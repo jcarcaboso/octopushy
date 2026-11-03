@@ -93,7 +93,7 @@ def proxmox_credentials(env):
 
 def validate(env, preflight=False):
     proxmox_credentials(env)
-    for name in ("PORTAINER_WORKFLOW", "RESUME_SERVICE", "KEEP_GUEST", "KEEP", "UI"):
+    for name in ("KEEP", "UI"):
         if env.get(name, "0") != "0":
             raise ValueError(f"{name} is not supported in remote-worker mode")
     for name, schemes in (
