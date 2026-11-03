@@ -262,6 +262,9 @@ async fn vm_config(
             if !vm.tags.is_empty() {
                 v["tags"] = Value::String(vm.tags.join(";"));
             }
+            if let Some(description) = &vm.description {
+                v["description"] = Value::String(description.clone());
+            }
             data(v)
         }
         Err(e) => e.into_response(),

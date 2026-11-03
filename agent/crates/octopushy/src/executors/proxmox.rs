@@ -215,6 +215,10 @@ struct GuestReport {
     node: Option<String>,
     status: Option<String>,
     name: Option<String>,
+    /// The VM's tags and its description, by which the controller tells a VM its
+    /// guest's module made from any other VM at that VMID.
+    tags: Vec<String>,
+    description: Option<String>,
     ipv4: Vec<Ipv4Addr>,
     checks: Vec<Check>,
 }
@@ -239,6 +243,8 @@ impl GuestReport {
             "node": self.node,
             "status": self.status,
             "name": self.name,
+            "tags": self.tags,
+            "description": self.description,
             "ipv4Addresses": self.ipv4.iter().map(|ip| ip.to_string()).collect::<Vec<_>>(),
             "checks": self.checks.iter().map(|c| json!({
                 "name": c.name, "ok": c.ok, "detail": c.detail,
@@ -271,6 +277,21 @@ async fn evaluate_guest(
     report.present = true;
     report.node = Some(vm.node.clone());
     report.name = vm.name.clone();
+    report.tags = vm.tags.clone();
+    if vm.kind == GuestKind::Qemu {
+        match c.vm_config(&vm.node, vmid).await {
+            Ok(config) => {
+                report.description = config
+                    .other
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            // It vanished between the two requests; the next round sees that.
+            Err(PveError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
     report
         .checks
         .push(check("present", true, format!("VM {vmid} exists")));

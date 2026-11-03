@@ -110,6 +110,7 @@ Output:
 ```json
 {
   "present": true, "node": "korriban", "status": "running", "name": "krb-crt-01",
+  "tags": ["octopushy", "home"], "description": "Managed by Octopushy as home/korriban/krb-crt-01.",
   "ipv4Addresses": ["10.1.0.21"],
   "checks": [
     { "name": "present", "ok": true, "detail": "VM 210 exists" },
@@ -117,6 +118,11 @@ Output:
   ]
 }
 ```
+
+`tags` and `description` are the VM's own (`description` from its QEMU config; absent for a
+container). They are reported, not checked: the controller records a guest as owning its VM only
+when a verified VM its approved plan created carries the tag `octopushy` and a description naming
+the guest's address; see [the safety boundary](../../../docs/safety-boundary.md).
 
 Succeeds when every check passes, fails otherwise (with the outputs still set). With
 `expectRunning: false` and the VM stopped, the address check is reported as passed
