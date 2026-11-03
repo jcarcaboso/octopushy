@@ -94,6 +94,11 @@ public sealed partial class AssignmentBuilder(
             return await BuildStageAsync(attempt, step, run!, context, agentId, cancellationToken);
         if (action.Executor == "ansible")
             return await BuildAnsibleAsync(attempt, step!, run!, context, agentId, cancellationToken);
+        // Observations are runtime data, so what was valid when the run was made is asked again here.
+        if (run is { Operation: Operations.Provision } && stepName == StepNames.Plan && context.Proxmox.Vmid is { } vmid
+            && await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is { ParentAddress: { } installation } guest
+            && await SafetyBoundary.VmidCollisionAsync(db, states, guest, installation, vmid, cancellationToken, run.Id) is { } collision)
+            throw new AssignmentException(collision);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
         var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken

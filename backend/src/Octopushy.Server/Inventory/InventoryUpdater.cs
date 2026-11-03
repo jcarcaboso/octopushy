@@ -4,6 +4,7 @@ using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Inventory;
 
@@ -13,7 +14,8 @@ namespace Octopushy.Server.Inventory;
 /// retired, and a retire run for each guest whose folder was deleted. Each installation whose
 /// definition changed is observed again.
 /// </summary>
-public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
+public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TofuStateStore states, TimeProvider clock,
+    ILogger<InventoryUpdater> logger)
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
@@ -97,7 +99,13 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         {
             // Missing definitions still retain durable ownership. In particular,
             // an invalid rename must not let a second row claim a guest's VM.
-            var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, byAddress.Values);
+            var definition = repository.Guest(resource.Address)!;
+            var problem = IdentityProblem(resource, definition, byAddress.Values);
+            // A VM the installation's latest observation shows at this VMID, and that is not this guest's.
+            // Observations are runtime data, so the dispatch of the plan asks again. A retired guest's
+            // removal destroys only what its own state holds, so it is not asked.
+            if (problem is null && !definition.Retired)
+                problem = await SafetyBoundary.VmidCollisionAsync(db, states, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
             if (problem is not null)
             {
                 resource.Valid = false;

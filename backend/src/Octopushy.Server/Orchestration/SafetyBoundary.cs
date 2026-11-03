@@ -1,13 +1,14 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>
 /// What keeps Octopushy off machines it does not manage, apart from the refusal of plans in
-/// <see cref="GuestVmPlan.ForeignRemoval"/>: installations it only observes (<c>manage: false</c>).
-/// See docs/safety-boundary.md.
+/// <see cref="GuestVmPlan.ForeignRemoval"/>: installations it only observes (<c>manage: false</c>), and a
+/// guest whose VMID is a VM it observes and does not manage. See docs/safety-boundary.md.
 /// </summary>
 public static class SafetyBoundary
 {
@@ -78,6 +79,55 @@ public static class SafetyBoundary
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Why a guest may not be provisioned at <paramref name="vmid"/>, or null: the installation's latest
+    /// observation shows a VM there that is not this guest's. A VM bound to the guest is its own, and so is
+    /// one the guest's own OpenTofu state records, which an apply of it made but did not finish.
+    /// </summary>
+    /// <remarks>
+    /// Without an observation of the installation yet, nothing is refused here: there is nothing to compare
+    /// with. Creating a VM at a VMID that exists fails at the provider anyway, and the removal of a machine
+    /// that is not the guest's own is refused by <see cref="GuestVmPlan.ForeignRemoval"/> whatever is observed.
+    /// </remarks>
+    public static async Task<string?> VmidCollisionAsync(OctopushyDb db, TofuStateStore states, Resource guest, string installationAddress, int vmid,
+        CancellationToken cancellationToken, Guid? exceptRun = null)
+    {
+        if (guest.BoundVmid == vmid && guest.BoundInstallation == installationAddress)
+            return null;
+        var installationId = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.Address == installationAddress && r.RetiredAt == null)
+            .Select(r => (Guid?)r.Id).FirstOrDefaultAsync(cancellationToken);
+        var data = installationId is null ? null : await db.Observations.AsNoTracking()
+            .Where(o => o.ResourceId == installationId)
+            .OrderByDescending(o => o.ObservedAt)
+            .Select(o => o.Data)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (data is null)
+            return null;
+        var observed = (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(g => g["vmid"] is JsonValue id && id.TryGetValue<int>(out var observedVmid) && observedVmid == vmid);
+        if (observed is null)
+            return null;
+
+        // Work of this guest's that may have made the VM and not reported yet: its result binds it.
+        if (await db.Attempts.AsNoTracking().AnyAsync(a => a.Mutating && a.RunId != exceptRun
+                && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Status == AttemptStatuses.Uncertain)
+                && db.Runs.Any(r => r.Id == a.RunId && r.ResourceId == guest.Id), cancellationToken))
+            return null;
+
+        var node = observed["host"]?.ToString() is { Length: > 0 } host ? host : "an unknown node";
+        var holder = await db.Resources.AsNoTracking()
+            .Where(r => r.Id != guest.Id && r.Kind == ResourceKinds.Guest && r.RetiredAt == null && r.BoundVmid == vmid && r.BoundInstallation == installationAddress)
+            .Select(r => r.Address).FirstOrDefaultAsync(cancellationToken);
+        if (holder is not null)
+            return $"VMID {vmid} on {node} is the VM of {holder}, not of this guest.";
+        if (await states.RecordsMachineAsync(guest.Id, vmid, cancellationToken))
+            return null;
+        var name = observed["name"]?.ToString() is { Length: > 0 } n ? $" ({n})" : "";
+        return $"VMID {vmid} on {node} is an existing VM Octopushy does not manage{name}. Give this guest a free VMID: "
+            + "Octopushy plans nothing against a machine it did not create.";
     }
 
     private static string NormalEndpoint(string endpoint) => endpoint.Trim().TrimEnd('/');
