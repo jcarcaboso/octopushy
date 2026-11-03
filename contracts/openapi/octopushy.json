@@ -4702,6 +4702,7 @@
           "type",
           "endpoint",
           "valid",
+          "managed",
           "issueCount",
           "observedAt",
           "observeError",
@@ -4739,6 +4740,9 @@
             ]
           },
           "valid": {
+            "type": "boolean"
+          },
+          "managed": {
             "type": "boolean"
           },
           "issueCount": {

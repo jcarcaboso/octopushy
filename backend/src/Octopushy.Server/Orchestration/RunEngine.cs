@@ -78,9 +78,13 @@ public sealed partial class RunEngine(
     /// <summary>Adds runs built elsewhere and starts them.</summary>
     public async Task AddRunsAsync(OctopushyDb db, IEnumerable<Run> runs, CancellationToken cancellationToken)
     {
+        var observedOnly = await SafetyBoundary.ObservedOnlyInstallationsAsync(db, cancellationToken);
         foreach (var run in runs)
         {
-            if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+            // Refused, not held: a run in an installation Octopushy only observes never waits to go.
+            if (await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, RunContext.Parse(run.Context), cancellationToken, observedOnly) is { } refused)
+                Finish(run, RunStatuses.Failed, refused);
+            else if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
             {
                 run.Status = RunStatuses.Blocked;
                 run.Detail = reason;
@@ -223,6 +227,21 @@ public sealed partial class RunEngine(
         // uncertain mutation behind a trust wait: it must retain its serialization lock
         // and the explicit close workflow. Known failures/completion also settle normally.
         var reconcilingOutcome = next is null || next.Status is StepStatuses.Uncertain or StepStatuses.Failed or StepStatuses.Cancelled;
+        var context = RunContext.Parse(run.Context);
+        // Asked before anything that would make it wait: such a run fails. See docs/safety-boundary.md.
+        if (!inFlight && !reconcilingOutcome && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken) is { } observedOnly)
+        {
+            foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
+            {
+                attempt.Status = AttemptStatuses.Cancelled;
+                attempt.Error = observedOnly;
+                attempt.FinishedAt = clock.GetUtcNow();
+            }
+            Finish(run, RunStatuses.Failed, observedOnly);
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
         if (!inFlight && !reconcilingOutcome && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
         {
             run.Status = RunStatuses.Blocked;
@@ -255,7 +274,6 @@ public sealed partial class RunEngine(
             run.Detail = null;
         }
 
-        var context = RunContext.Parse(run.Context);
         if (!inFlight && !reconcilingOutcome && CredentialBindings.Validate(context) is { Count: > 0 } invalid)
         {
             run.Status = RunStatuses.Blocked;

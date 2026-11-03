@@ -69,6 +69,9 @@ public sealed partial class AssignmentBuilder(
     /// <summary>Builds the assignment for a step's attempt, or for an observation when <paramref name="step"/> and <paramref name="run"/> are null.</summary>
     public async Task<Assignment> BuildAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
+        // Only an observation reaches an installation Octopushy only observes. Asked first, so this fails and never waits.
+        if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken) is { } observedOnly)
+            throw new AssignmentException(observedOnly);
         var blocked = run is null
             ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
             : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);

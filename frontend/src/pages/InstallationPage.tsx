@@ -97,7 +97,7 @@ function TrustCallout({ installation }: { installation: InstallationSummary }) {
         }
       >
         <p>
-          Plans, applies, and observations wait until you trust{" "}
+          {installation.managed ? "Plans, applies, and observations wait" : "Observations wait"} until you trust{" "}
           {untrusted.map((endpoint, i) => (
             <span key={endpoint}>
               {i > 0 ? ", " : null}
@@ -140,6 +140,7 @@ export function InstallationPage() {
           <span className="inline-group">
             <span className="mono">{installation.address}</span>
             {installation.valid ? null : <StatusBadge status="invalid" />}
+            {installation.managed ? null : <Badge tone="info">Observed only</Badge>}
             {installation.observedAt ? (
               <span>
                 Observed <RelativeTime value={installation.observedAt} />
@@ -164,6 +165,14 @@ export function InstallationPage() {
         }
       />
       <div className="stack stack--large">
+        {installation.managed ? null : (
+          <Callout kind="info" title="Observed only">
+            <p>
+              This installation sets <span className="mono">manage: false</span>. Octopushy observes its hosts and VMs and changes nothing
+              here: it defines no guests or services, starts no runs, and sends its Proxmox token only to observations.
+            </p>
+          </Callout>
+        )}
         <TrustCallout installation={installation} />
         <ErrorMessage error={observe.error} />
         <WaitingNote text={installation.observeWaiting} />
@@ -193,6 +202,10 @@ export function InstallationPage() {
               <KeyValue
                 items={[
                   { term: "Type", value: installation.type ? humanize(installation.type) : "—" },
+                  {
+                    term: "Management",
+                    value: installation.managed ? "Managed" : <Badge tone="info">Observed only</Badge>,
+                  },
                   { term: "Endpoint", value: <span className="mono break">{installation.endpoint ?? "—"}</span> },
                   {
                     term: "Trust",

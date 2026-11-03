@@ -594,6 +594,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             definition?["type"]?.GetValue<string>(),
             definition?["connection"]?["endpoint"]?.GetValue<string>(),
             installation.Valid,
+            !SafetyBoundary.ObservedOnly(definition),
             Issues(installation.Issues).Count(i => i.Severity == "error"),
             observation?["observedAt"]?.GetValue<DateTimeOffset>(),
             installation.ObserveError,

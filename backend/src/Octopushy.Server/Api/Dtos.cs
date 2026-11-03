@@ -199,6 +199,7 @@ public sealed record InstallationTrustDto(
 /// <summary>The endpoints the operator was shown; trust is refused when the installation declares others by now.</summary>
 public sealed record TrustInstallationRequest(IReadOnlyList<string> Endpoints);
 
+/// <param name="Managed">False for <c>manage: false</c>: Octopushy only observes the installation. See docs/safety-boundary.md.</param>
 public sealed record InstallationSummaryDto(
     Guid Id,
     string Address,
@@ -206,6 +207,7 @@ public sealed record InstallationSummaryDto(
     string? Type,
     string? Endpoint,
     bool Valid,
+    bool Managed,
     int IssueCount,
     DateTimeOffset? ObservedAt,
     string? ObserveError,

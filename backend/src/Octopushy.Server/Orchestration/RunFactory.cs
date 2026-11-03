@@ -29,6 +29,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var removal = removedIn is not null;
         if (removal && guest.Retired)
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
+        Managed(repository, guest.InstallationAddress);
         var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -122,6 +123,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     {
         if (guest.Retired)
             throw new RunException("A retired guest is not configured.");
+        Managed(repository, guest.InstallationAddress);
         var inputs = ConfigureInputs.Build(repository, guest);
         if (!inputs.Configure.Actions.TryGetValue(actionId, out var action))
             throw new RunException($"The recipe {inputs.Recipe.Id} has no action {actionId}.");
@@ -206,6 +208,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// </summary>
     public Run RotateAccess(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, AccessRotationContext rotation)
     {
+        Managed(repository, guest.InstallationAddress);
         var inputs = ConfigureInputs.Build(repository, guest);
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = inputs.HostKey.Key };
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -293,6 +296,18 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     }
 
     public static string RetireHash(string inputsHash) => "retire:" + inputsHash;
+
+    /// <summary>
+    /// Refuses a run in an installation Octopushy only observes. Its guests are invalid already; this is
+    /// asked again where every run is made, and the engine asks once more before anything is sent.
+    /// </summary>
+    private static void Managed(LabRepository repository, string installation)
+    {
+        if (repository.Installation(installation) is not { Managed: true })
+            throw new RunException(repository.Installation(installation) is null
+                ? $"The installation {installation} is not defined."
+                : SafetyBoundary.ObservedOnlyReason(installation));
+    }
 
     public static string InstallationHash(InstallationDefinition installation) => Canonical.Hash(installation.Json);
 

@@ -1088,6 +1088,7 @@ export interface components {
             type: null | string;
             endpoint: null | string;
             valid: boolean;
+            managed: boolean;
             /** Format: int32 */
             issueCount: number;
             /** Format: date-time */
