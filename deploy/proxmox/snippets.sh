@@ -51,6 +51,18 @@ done
 
 ((EUID == 0)) || die "run this as root on the Proxmox host"
 [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "not a user name: $user"
+# The account is this script's own. It never takes over one that exists, root least of all: the
+# sshd block it writes would make that account's logins SFTP-only, in a chroot. Checked before
+# anything changes, for --remove as well.
+marker="Octopushy snippet uploads"
+[[ $user != root ]] || die "the account cannot be root"
+if entry=$(getent passwd "$user"); then
+  IFS=: read -r _ _ uid _ gecos _ <<<"$entry"
+  ((uid != 0)) || die "$user is UID 0; choose another OCTOPUSHY_SNIPPETS_USER"
+  [[ $gecos == "$marker" ]] || die "$user exists and this script did not create it; choose another OCTOPUSHY_SNIPPETS_USER"
+elif getent group "$user" >/dev/null; then
+  die "a group $user exists without this script's account; choose another OCTOPUSHY_SNIPPETS_USER"
+fi
 [[ $datastore =~ ^[A-Za-z][A-Za-z0-9_.-]*$ ]] || die "not a datastore name: $datastore"
 for tool in pvesh pvesm sshd ssh-keygen systemctl systemd-escape; do
   command -v "$tool" >/dev/null || die "$tool is missing: is this a Proxmox VE host?"
@@ -130,7 +142,7 @@ fi
 say "Account $user"
 if ! getent group "$user" >/dev/null; then groupadd --system "$user"; note "created the group $user"; fi
 if ! id -u "$user" >/dev/null 2>&1; then
-  useradd --system --gid "$user" --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$user"
+  useradd --system --gid "$user" --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --comment "$marker" "$user"
   note "created the user $user"
 fi
 # No password: '*' matches nothing, and unlike '!' sshd does not read it as a locked account.
@@ -190,33 +202,50 @@ Match User $user
     PermitTTY no
     PermitUserRC no
     X11Forwarding no"
-old_conf=$(cat "$conf" 2>/dev/null || true)
-old_keys=$(cat "$keys" 2>/dev/null || true)
+# Written, checked as sshd will read it, and reloaded only then. If anything fails, the files are
+# put back as they were, and sshd is reloaded again if it already had them, so it keeps running
+# what it had. What came before this stage is left for a second run or --remove.
+had_conf=0 had_keys=0 old_conf= old_keys=
+if [[ -f $conf ]]; then had_conf=1; old_conf=$(cat "$conf"); fi
+if [[ -f $keys ]]; then had_keys=1; old_keys=$(cat "$keys"); fi
+sshd -t || die "sshd -t refuses the configuration as it is, before any change of this script's; fix that first"
+root_before=$(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1")
+staged=0 reloaded=0 sshd_changed=0
+restore_sshd() {
+  ((staged)) || return 0
+  if ((had_conf)); then printf '%s\n' "$old_conf" >"$conf"; else rm -f -- "$conf"; fi
+  if ((had_keys)); then printf '%s\n' "$old_keys" >"$keys"; else rm -f -- "$keys"; fi
+  if ((reloaded)); then systemctl reload "$service"; fi
+  printf '\033[31m    sshd: put back as it was\033[0m\n' >&2
+}
+trap restore_sshd EXIT
+staged=1
 mkdir -p -- "$keys_dir"
 chmod 755 "$keys_dir"
-if [[ $old_keys != "$key_line" ]]; then
+if ((!had_keys)) || [[ $old_keys != "$key_line" ]]; then
   printf '%s\n' "$key_line" >"$keys"
   chmod 644 "$keys"
   note "installed the key $fingerprint in $keys"
+  sshd_changed=1
 fi
-if [[ $old_conf != "$conf_text" ]]; then
+if ((!had_conf)) || [[ $old_conf != "$conf_text" ]]; then
   printf '%s\n' "$conf_text" >"$conf"
   chmod 644 "$conf"
-  if ! reload_sshd; then
-    # Put back what was there, so sshd keeps the configuration it is running.
-    if [[ -n $old_conf ]]; then printf '%s\n' "$old_conf" >"$conf"; else rm -f -- "$conf"; fi
-    die "sshd -t refused the configuration; nothing in sshd was changed"
-  fi
-  note "wrote $conf and reloaded sshd"
+  note "wrote $conf"
+  sshd_changed=1
 fi
-
-# What sshd will actually do for this account, and that root's login is untouched.
+sshd -t || die "sshd -t refused the configuration"
+# What sshd will do for this account, and that root's login is exactly as it was.
 effective=$(sshd -T -C "user=$user,host=octopushy,addr=127.0.0.1")
-grep -qx "chrootdirectory $chroot" <<<"$effective" || die "sshd does not chroot $user; another Match block may take precedence"
-grep -qx "forcecommand internal-sftp -u 0077" <<<"$effective" || die "sshd does not force SFTP for $user"
-root_effective=$(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1")
-grep -q "^chrootdirectory none" <<<"$root_effective" || die "the Match block reaches root's login too; check $conf"
-grep -q "^forcecommand none" <<<"$root_effective" || die "the Match block reaches root's login too; check $conf"
+grep -qx "chrootdirectory $chroot" <<<"$effective" || die "sshd would not chroot $user; another Match block may take precedence"
+grep -qx "forcecommand internal-sftp -u 0077" <<<"$effective" || die "sshd would not force SFTP for $user"
+[[ $(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1") == "$root_before" ]] || die "the configuration would change root's login"
+if ((sshd_changed)); then
+  reloaded=1
+  systemctl reload "$service"
+  note "reloaded sshd"
+fi
+staged=0
 
 say "Done. ${#changed[@]} change(s)."
 if ((${#changed[@]} == 0)); then echo "    nothing changed: this host was already set up"; fi

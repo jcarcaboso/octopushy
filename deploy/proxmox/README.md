@@ -167,6 +167,7 @@ interface. It has this form:
 
 ```sh
 OCTOPUSHY_SNIPPETS_KEY='ssh-ed25519 AAAA… octopushy-snippets@home/pve01' \
+  OCTOPUSHY_SNIPPETS_USER='octopushy-snippets' OCTOPUSHY_SNIPPETS_DATASTORE='local' \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/v<version>/deploy/proxmox/snippets.sh)"
 ```
 
@@ -179,9 +180,12 @@ It changes, and prints:
 | Chroot | `/var/lib/octopushy-snippets`, holding only the snippets directory at its own path, through a bind mount kept by a systemd mount unit |
 | sshd | `/etc/ssh/sshd_config.d/octopushy-snippets.conf`: a `Match User` block allowing only that key, only SFTP, only in the chroot, files created mode 0600, no forwarding or TTY. The key is in `/etc/ssh/octopushy-snippets/authorized_keys`, marked `restrict` |
 
-`sshd -t` checks the whole configuration before sshd reloads, and a configuration it refuses is
-put back. Then the script checks that sshd chroots the account and leaves root's login as it was,
-and prints the host's own SSH host key. Store that line in **Variables** as a **plain** value,
+It refuses root, and any account that exists and that it did not create, before it changes
+anything. It checks the whole configuration with `sshd -t`, and with `sshd -T` that the account
+would be chrooted and root's effective settings would be exactly as they were, before sshd
+reloads; if any of that fails, sshd's files are put back and sshd keeps running what it had. A
+configuration that `sshd -t` already refuses stops it before it touches sshd. Then it prints the
+host's own SSH host key. Store that line in **Variables** as a **plain** value,
 under the key the installation's `snippets.hosts.<host>.hostKey` names; uploads connect to that
 key and nothing else. Running the script again changes nothing.
 

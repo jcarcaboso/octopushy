@@ -42,6 +42,19 @@ run_on() {
   in_host sshd -T -C user=root,host=x,addr=127.0.0.1 >"$work/root-before"
   in_host sh -c 'cat /etc/passwd /etc/group; ls -1A /var/lib; find /etc/ssh /etc/systemd/system | sort' >"$work/host-before"
 
+  # Refused before anything changes: root, and an account this script did not create.
+  for account in root daemon; do
+    if podman exec -e OCTOPUSHY_SNIPPETS_KEY="$(cat "$work/id.pub")" -e OCTOPUSHY_SNIPPETS_USER="$account" "$name" bash /root/snippets.sh >"$work/refused" 2>&1; then
+      fail "the run as $account passed"
+    fi
+    in_host sshd -T -C user=root,host=x,addr=127.0.0.1 | diff -q - "$work/root-before" >/dev/null || fail "the run as $account changed root's sshd settings"
+    in_host sh -c 'cat /etc/passwd /etc/group; ls -1A /var/lib; find /etc/ssh /etc/systemd/system | sort' | diff -q - "$work/host-before" >/dev/null \
+      || fail "the run as $account changed the host"
+    grep -q 'changed:' "$work/refused" && fail "the run as $account changed something before refusing"
+  done
+  grep -q 'did not create it' "$work/refused" || fail "the refusal does not say why"
+  pass "root and an account it did not create are refused before anything changes"
+
   setup "$work/id.pub" >"$work/first" || { cat "$work/first"; fail "the first run failed"; }
   grep -q "added snippets to the content of local" "$work/first" || fail "snippets were not added to local"
   grep -q 'iso,vztmpl,backup,import,snippets' <(in_host cat /etc/pve-stub/storage.json) || fail "the content list lost an entry"
@@ -78,7 +91,8 @@ run_on() {
   pass "a second run changes nothing"
 
   setup "$work/id2.pub" >"$work/third" || fail "the run with a new key failed"
-  [[ $(grep -c 'changed:' "$work/third") == 1 ]] || { cat "$work/third"; fail "a new key changed more than the key"; }
+  [[ $(grep -c 'changed:' "$work/third") == 2 ]] && grep -q 'installed the key' "$work/third" && grep -q 'reloaded sshd' "$work/third" \
+    || { cat "$work/third"; fail "a new key changed more than the key"; }
   printf 'ls /\n' | sftp_as "$work/id" >/dev/null 2>&1 && fail "the old key still logs in"
   printf 'ls /\n' | sftp_as "$work/id2" >/dev/null || fail "the new key does not log in"
   pass "a new key replaces the old one, and changes nothing else"
@@ -88,15 +102,28 @@ run_on() {
   printf 'ls /var/lib/vz/snippets\n' | sftp_as "$work/id2" | grep -q guest-user-data.yaml || fail "the chroot is empty after a restart"
   pass "the bind mount comes back after a restart"
 
-  # A configuration sshd refuses is put back, and sshd keeps running what it had.
+  # A configuration sshd already refuses stops the run before it changes sshd, and sshd keeps running.
   in_host sh -c 'rm /etc/ssh/sshd_config.d/octopushy-snippets.conf; echo "NotADirective yes" > /etc/ssh/sshd_config.d/00-broken.conf'
   if setup "$work/id2.pub" >"$work/broken" 2>&1; then fail "the run passed with a broken sshd configuration"; fi
-  grep -q 'nothing in sshd was changed' "$work/broken" || { cat "$work/broken"; fail "the refusal did not say so"; }
+  grep -q 'refuses the configuration as it is' "$work/broken" || { cat "$work/broken"; fail "the refusal did not say so"; }
   in_host test ! -e /etc/ssh/sshd_config.d/octopushy-snippets.conf || fail "the refused block was left in place"
   in_host systemctl is-active ssh >/dev/null || fail "sshd stopped"
   in_host rm /etc/ssh/sshd_config.d/00-broken.conf
   setup "$work/id2.pub" >/dev/null || fail "the run after the fix failed"
-  pass "a configuration sshd -t refuses is put back, and sshd keeps running"
+  pass "a configuration sshd -t already refuses stops the run before sshd changes, and sshd keeps running"
+
+  # A block that sshd would read first, so the account would not be chrooted: checked before the
+  # reload, and everything put back. sshd keeps its configuration, and root's login with it.
+  in_host sh -c 'printf "Match User octopushy-snippets\n    ChrootDirectory /var/empty\n" > /etc/ssh/sshd_config.d/00-other.conf'
+  in_host rm /etc/ssh/sshd_config.d/octopushy-snippets.conf
+  if setup "$work/id2.pub" >"$work/shadowed" 2>&1; then fail "the run passed when another block takes precedence"; fi
+  grep -q 'would not chroot' "$work/shadowed" && grep -q 'put back as it was' "$work/shadowed" || { cat "$work/shadowed"; fail "the refusal did not say so"; }
+  grep -q 'reloaded sshd' "$work/shadowed" && fail "sshd was reloaded with a configuration that failed its checks"
+  in_host test ! -e /etc/ssh/sshd_config.d/octopushy-snippets.conf || fail "the refused block was left in place"
+  in_host rm /etc/ssh/sshd_config.d/00-other.conf
+  in_host sshd -T -C user=root,host=x,addr=127.0.0.1 | diff -q - "$work/root-before" >/dev/null || fail "root's sshd settings changed"
+  setup "$work/id2.pub" >/dev/null || fail "the run after removing the other block failed"
+  pass "a configuration that would not chroot the account is put back before sshd reloads"
 
   in_host bash /root/snippets.sh --remove >"$work/remove" || { cat "$work/remove"; fail "--remove failed"; }
   printf 'ls /\n' | sftp_as "$work/id2" >/dev/null 2>&1 && fail "the account still logs in after --remove"

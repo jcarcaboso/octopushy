@@ -312,13 +312,21 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 .Select(k => new ManagedHostKeyDto(k.PublicKey, k.Fingerprint, k.CreatedAt, k.ProvisionedAt)).FirstOrDefaultAsync(cancellationToken));
     }
 
-    /// <summary>The command that sets up one host, from the release this server is, so the script matches it.</summary>
-    public static string SnippetsCommand(string publicKey)
+    /// <summary>
+    /// The command that sets up one host: the installation's own account and datastore, so what it
+    /// sets up is what uploads use, and the script of the release this server is, so it matches.
+    /// </summary>
+    public static string SnippetsCommand(string publicKey, string user, string datastore)
     {
         var version = typeof(Views).Assembly.GetName().Version;
         var reference = version is null ? "main" : $"v{version.Major}.{version.Minor}.{version.Build}";
-        return $"OCTOPUSHY_SNIPPETS_KEY='{publicKey}' bash -c \"$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/{reference}/deploy/proxmox/snippets.sh)\"";
+        return $"OCTOPUSHY_SNIPPETS_KEY={ShellQuote(publicKey)} OCTOPUSHY_SNIPPETS_USER={ShellQuote(user)} "
+            + $"OCTOPUSHY_SNIPPETS_DATASTORE={ShellQuote(datastore)} "
+            + $"bash -c \"$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/{reference}/deploy/proxmox/snippets.sh)\"";
     }
+
+    /// <summary>One word for a POSIX shell, whatever it holds: single quotes, with each one inside closed and reopened.</summary>
+    public static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
     /// <summary>An installation's snippet uploads, from its latest definition and the key Octopushy made for it.</summary>
     public async Task<SnippetAccessDto> SnippetAccessAsync(string address, JsonNode? definition, CancellationToken cancellationToken)
@@ -336,15 +344,17 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == store && e.CurrentVersion > 0, cancellationToken)));
         }
 
+        var datastore = snippets?["datastore"]?.GetValue<string>() ?? SnippetSettings.DefaultDatastore;
+        var user = snippets?["user"]?.GetValue<string>() ?? SnippetSettings.DefaultUser;
         return new SnippetAccessDto(
             key?.PublicKey,
             key?.Fingerprint,
             key?.CreatedAt,
             snippets is not null,
-            snippets?["datastore"]?.GetValue<string>() ?? SnippetSettings.DefaultDatastore,
-            snippets?["user"]?.GetValue<string>() ?? SnippetSettings.DefaultUser,
+            datastore,
+            user,
             hosts,
-            key is null ? null : SnippetsCommand(key.PublicKey));
+            key is null ? null : SnippetsCommand(key.PublicKey, user, datastore));
     }
 
     /// <summary>The services the repository shows on a guest, and those it no longer does until they are dealt with.</summary>

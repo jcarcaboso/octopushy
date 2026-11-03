@@ -468,9 +468,17 @@ Someone holding it can answer as the guest. Everyone on that list except API use
 **A guest that switches to this is a new machine.** The provider replaces a VM whose
 `user_data_file_id` changes, so adding a managed key to an existing guest plans a replacement,
 which follows `policy.destructive`. There is no migration for a machine that already exists:
-recreate it. Afterwards, a change to what the snippet holds, such as a person's key in
-`access.sshAuthorizedKeys`, uploads a new snippet but does not change the VM's configuration, so
-it reaches the guest the next time the VM starts, not at once.
+recreate it.
+
+**Afterwards, a change to what the snippet holds keeps the VM.** A person's key in
+`access.sshAuthorizedKeys`, for example, uploads the snippet again: the provider deletes the file
+and uploads it under the same name. The VM names the snippet by a volume id known when planning,
+`<datastore>:snippets/octopushy-<vmid>-user-data.yaml`, so its configuration does not change and
+the plan leaves it alone. Proxmox rebuilds the cloud-init drive from the snippet each time it
+starts the VM, so the change reaches the guest at its next start from Proxmox, where cloud-init
+sees a new instance and applies it; a reboot from inside the guest does not rebuild the drive. A
+start in the seconds between the delete and the upload fails, because the file is missing, and
+the next one works. That last part was read from qemu-server's source, not tried on Proxmox.
 
 **For a machine Octopushy did not create**, `access.hostKey` is a store reference to its public
 host key, in the form `ssh-ed25519 AAAA…`. One entry per line is allowed. It has to be a plain
@@ -495,19 +503,23 @@ tell apart; on an isolated VLAN that is your decision, and you should know that 
 
 Once per Proxmox host, as root, for example in the host's shell in the Proxmox web interface. The
 installation's page has a **Create upload key** button and then shows the exact command, with the
-key and this release's script:
+key, the installation's `snippets.user` and `snippets.datastore`, and this release's script:
 
 ```sh
 OCTOPUSHY_SNIPPETS_KEY='ssh-ed25519 AAAA… octopushy-snippets@home/pve01' \
+  OCTOPUSHY_SNIPPETS_USER='octopushy-snippets' OCTOPUSHY_SNIPPETS_DATASTORE='local' \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/v<version>/deploy/proxmox/snippets.sh)"
 ```
 
 [`deploy/proxmox/snippets.sh`](../deploy/proxmox/snippets.sh) adds `snippets` to the datastore's
 content, creates the account `octopushy-snippets` with no password and no shell, and lets it log in
 only with that key, only over SFTP, only inside a chroot that holds the datastore's snippets
-directory at its own path, where it creates files mode 0600. It checks the whole sshd configuration
-with `sshd -t` before reloading, puts back a configuration that fails, prints what it changed, and
-prints the host's own SSH host key. Store that key as a plain value under the name
+directory at its own path, where it creates files mode 0600. It refuses root, and any account that
+exists and that it did not create, before it changes anything. It writes its sshd block, checks the
+whole configuration with `sshd -t`, checks with `sshd -T` that the account would be chrooted and
+that root's effective settings would be exactly as they were, and only then reloads sshd. If any of
+that fails, it puts sshd's files back as they were, and sshd keeps running what it had. It prints
+what it changed, and the host's own SSH host key. Store that key as a plain value under the name
 `snippets.hosts.<host>.hostKey` gives. Running it again changes nothing; running it with a new key
 replaces the old one. `bash snippets.sh --remove` undoes it, and leaves the datastore's content and
 its snippets alone. [`tests/proxmox-snippets/run.sh`](../tests/proxmox-snippets/run.sh) runs all of

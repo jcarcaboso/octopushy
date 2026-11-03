@@ -254,7 +254,8 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         Assert.Equal(snippets["publicKey"]!.GetValue<string>(), publicKey);
         Assert.EndsWith("octopushy-snippets@home/korriban", publicKey);
         Assert.True(installationPage["declared"]!.GetValue<bool>());
-        Assert.Contains($"OCTOPUSHY_SNIPPETS_KEY='{publicKey}'", installationPage["command"]!.GetValue<string>());
+        Assert.Contains($"OCTOPUSHY_SNIPPETS_KEY='{publicKey}' OCTOPUSHY_SNIPPETS_USER='octopushy-snippets' OCTOPUSHY_SNIPPETS_DATASTORE='local' ",
+            installationPage["command"]!.GetValue<string>());
         Assert.Contains("/deploy/proxmox/snippets.sh", installationPage["command"]!.GetValue<string>());
         var host = installationPage["hosts"]!.AsArray().Single()!;
         Assert.Equal("korriban", host["host"]!.GetValue<string>());
@@ -398,6 +399,41 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         Assert.Equal(hostKey.PublicKey, JsonNode.Parse(playbook.InputJson)!["host"]!["hostKey"]!.GetValue<string>());
         foreach (var assignment in new[] { plan, preview, playbook })
             Assert.DoesNotContain(Everything(assignment), v => v.Contains(privateHalf));
+    }
+
+    [Fact]
+    public async Task The_command_sets_up_the_account_and_datastore_the_installation_names()
+    {
+        var test = Managed();
+        test.Write(InstallationFile, File.ReadAllText(Path.Combine(test.Root, InstallationFile))
+            .Replace("snippets:\n", "snippets:\n  datastore: snippets-dir\n  user: uploader\n"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (_, http, snippets) = await ReadyAsync(server);
+        using var _ = http;
+        Assert.Equal(("snippets-dir", "uploader"), (snippets["datastore"]!.GetValue<string>(), snippets["user"]!.GetValue<string>()));
+        var command = snippets["command"]!.GetValue<string>();
+        Assert.Contains("OCTOPUSHY_SNIPPETS_USER='uploader'", command);
+        Assert.Contains("OCTOPUSHY_SNIPPETS_DATASTORE='snippets-dir'", command);
+        // The account the uploads log in as is the one the command creates.
+        var provision = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal("uploader", RunContext.Parse(provision.Context).OpenTofu!.Env[SecretNames.SnippetsUserEnv]);
+    }
+
+    [Fact]
+    public void The_command_quotes_what_it_passes_so_a_shell_reads_it_back_exactly()
+    {
+        var key = "ssh-ed25519 AAAA it's $(not run) `nor this` \\ \"quoted\"";
+        var command = Octopushy.Server.Api.Views.SnippetsCommand(key, "uploader", "snippets-dir");
+        Assert.EndsWith("/deploy/proxmox/snippets.sh)\"", command);
+        // Everything before the script's download, with the download swapped for printing what it would get.
+        var assignments = command[..command.IndexOf("bash -c", StringComparison.Ordinal)];
+        var start = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add(assignments + "sh -c 'printf \"%s\\n%s\\n%s\" \"$OCTOPUSHY_SNIPPETS_KEY\" \"$OCTOPUSHY_SNIPPETS_USER\" \"$OCTOPUSHY_SNIPPETS_DATASTORE\"'");
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        Assert.Equal($"{key}\nuploader\nsnippets-dir", output);
     }
 
     [Fact]
