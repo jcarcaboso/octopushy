@@ -196,7 +196,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     {
         var endpoints = RepositoryTrust.DeclaredEndpoints(installation.Definition is null ? null : JsonNode.Parse(installation.Definition));
         // Trusted while observed only, and now asking to be managed: every endpoint needs trust again.
-        var managementChanged = trust is { ObservedOnly: true } && !installation.ObservedOnly;
+        var managementChanged = trust is not null && trust.ObservedOnly != installation.ObservedOnly;
         return new InstallationTrustDto(endpoints, endpoints.Where(e => managementChanged || trust?.Endpoints.Contains(e) != true).ToList(),
             trust?.TrustedAt, trust?.TrustedBy, managementChanged);
     }

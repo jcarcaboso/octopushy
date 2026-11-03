@@ -56,10 +56,14 @@ public static class RepositoryTrust
             return $"{WaitingForInstallation}: {address} is a new Proxmox installation. Trust it on its page before its credentials are sent to {endpoint}.";
         if (!trust.Endpoints.Contains(endpoint))
             return $"{WaitingForInstallation}: {endpoint} is a new endpoint for {address}. Trust the installation again on its page before its credentials are sent there.";
-        if (trust.ObservedOnly && await db.Resources.AnyAsync(r => r.Kind == ResourceKinds.Installation && r.Address == address && r.RetiredAt == null
-                && !r.ObservedOnly, ct))
-            return $"{WaitingForInstallation}: {address} was trusted while it was observed only (manage: false), and now asks to be managed. "
-                + "Trust it again on its page before Octopushy works on it.";
+        // A grant is for the management mode it was given in, as well as for its endpoints.
+        var observedOnly = await db.Resources.Where(r => r.Kind == ResourceKinds.Installation && r.Address == address && r.RetiredAt == null)
+            .Select(r => (bool?)r.ObservedOnly).FirstOrDefaultAsync(ct);
+        if (observedOnly is { } mode && mode != trust.ObservedOnly)
+            return trust.ObservedOnly
+                ? $"{WaitingForInstallation}: {address} was trusted while it was observed only (manage: false), and now asks to be managed. "
+                  + "Trust it again on its page before Octopushy works on it."
+                : $"{WaitingForInstallation}: {address} was trusted as managed and is now observed only. Trust it again on its page.";
         return null;
     }
 }

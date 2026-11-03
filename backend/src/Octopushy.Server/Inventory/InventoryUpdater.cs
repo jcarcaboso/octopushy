@@ -91,7 +91,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             resource.DefinitionFile = entry.File;
             resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(entry.Address).ToList(), IssueJson);
             if (entry.Kind == ResourceKind.Installation)
-                RecordObservedOnly(resource, entry);
+                await RecordObservedOnlyAsync(db, resource, entry, cancellationToken);
         }
 
         var guests = byAddress.Values.Where(r => r.Kind == ResourceKinds.Guest && seen.Contains(r.Id) && r.RetiredAt is null).ToList();
@@ -265,10 +265,17 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
     /// installation off, and its keys and endpoints stay refused to other installations' work until an
     /// operator trusts it again as managed. An invalid or missing definition changes nothing.
     /// </summary>
-    private static void RecordObservedOnly(Resource resource, ResourceEntry entry)
+    /// <remarks>
+    /// Entering observed-only ends any trust given while the installation was managed: that grant becomes one for
+    /// observations alone, so going back to managed takes trust again, however briefly it was observed only.
+    /// </remarks>
+    private static async Task RecordObservedOnlyAsync(OctopushyDb db, Resource resource, ResourceEntry entry, CancellationToken cancellationToken)
     {
         if (entry.Json is { } json && SafetyBoundary.ObservedOnly(json))
         {
+            if (!resource.ObservedOnly
+                && await db.InstallationTrusts.FirstOrDefaultAsync(t => t.Address == resource.Address, cancellationToken) is { ObservedOnly: false } trust)
+                trust.ObservedOnly = true;
             resource.ObservedOnly = true;
             resource.ObservedOnlyStoreKeys = resource.ObservedOnlyStoreKeys.Union(SafetyBoundary.TokenKeys(json), StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal).ToList();

@@ -97,6 +97,48 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_trip_through_observed_only_ends_the_trust_given_while_managed()
+    {
+        var test = TestRepository.Minimal();
+        test.Write(ZiostFile, Ziost.Replace("manage: false\n", ""));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("proxmox/ziost/token", ZiostToken);
+        await server.SyncAndTrustAsync();
+        Assert.False((await server.QueryAsync(db => db.InstallationTrusts.AsNoTracking().FirstAsync(t => t.Address == "home/ziost"))).ObservedOnly);
+
+        // Observed only for one commit: the grant given while managed now covers observations alone.
+        server.Repository.Write(ZiostFile, Ziost);
+        server.Commit("Observe ziost only");
+        await server.SyncAsync();
+        Assert.True((await server.QueryAsync(db => db.InstallationTrusts.AsNoTracking().FirstAsync(t => t.Address == "home/ziost"))).ObservedOnly);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.TickAsync();
+        Assert.Contains(agent.TakeAssignments(), a => a.Action == "observe" && a.Secrets.Values.Contains(ZiostToken));
+
+        // Managed again, with no trust in between: its work waits.
+        server.Repository.Write(ZiostFile, Ziost.Replace("manage: false\n", ""));
+        server.Repository.Write("labs/home/proxmox/ziost/guests/zst-app-01/guest.yaml", ZiostGuest);
+        server.Commit("Manage ziost again");
+        await server.SyncAsync();
+        await server.TickAsync();
+        var run = await server.LatestRunAsync("home/ziost/zst-app-01", Operations.Provision);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("was trusted while it was observed only", run.Detail);
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.InputJson.Contains("zst-app-01") || a.Secrets.Values.Contains(ZiostToken));
+    }
+
+    private const string ZiostGuest = """
+        schemaVersion: 1
+        type: vm
+        host: ziost
+        vmid: 400
+        hardware: { cores: 2, memory: 2048 }
+        network: { bridge: vmbr0, mode: static, address: 10.9.0.40/24, gateway: 10.9.0.1 }
+        provision:
+          recipe: test-vm
+        """;
+
+    [Fact]
     public async Task An_installation_that_asks_to_be_managed_waits_to_be_trusted_again()
     {
         await using var server = await WithZiostAsync();
