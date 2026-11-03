@@ -374,6 +374,10 @@ is refused, and the same call on a copy labelled `etc_t` works. So:
    the copy made by `sudo` rather than by cloud-init. An agent step could make it automatic
    later and write to the same pin; nothing here would change.
 
+**Without a person, for guests Octopushy creates:** not built. Every VM route that matches the
+request needs a change on the Proxmox host. [Guest host keys](research/guest-host-keys.md) has the
+evidence, the options and what the owner has to decide.
+
 **The trade-off, plainly.** The pin is exactly as trustworthy as the channel it was read
 through. Route 1 and 2 both anchor it in Proxmox: anyone who controls the hypervisor can lie
 about the guest, and they already own it. With `tls.verify: false` on the installation, a
