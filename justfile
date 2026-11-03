@@ -33,10 +33,11 @@ openapi:
     dotnet build backend/src/Octopushy.Server --no-incremental
     cd frontend && pnpm run gen:api
 
-# Validate a lab repository offline, as Octopushy reads it: its definitions and its own workflows/.
+# Validate a lab repository offline, as Octopushy reads it, with the workflows its octopushy.yaml names
+# (extra arguments pass through, such as `--workflows <git url|path>`, or `--workflows-only <dir>` in place of <dir>).
 [no-cd]
-validate dir:
-    dotnet run --project "{{justfile_directory()}}/backend/src/Octopushy.Validate" -- "{{dir}}"
+validate dir *args:
+    dotnet run --project "{{justfile_directory()}}/backend/src/Octopushy.Validate" -- "{{dir}}" {{args}}
 
 # Run disposable tests only (Testcontainers needs Docker or a Podman API socket).
 test:
@@ -82,3 +83,4 @@ images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .
     podman build -f frontend/Containerfile -t octopushy-frontend:{{version}} .
     podman build -f agent/Containerfile -t octopushy-agent:{{version}} .
+    podman build -f backend/src/Octopushy.Validate/Containerfile -t octopushy-validate:{{version}} .
