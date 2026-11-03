@@ -157,6 +157,20 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("getInstallation");
 
+        // The key snippet uploads use, made when a person asks for it, since they install its public
+        // half on each host. Asking again returns the same key: replacing it is not done here.
+        api.MapPost("/installations/{id:guid}/snippets-key", async (Guid id, RunEngine engine, TimeProvider clock, CancellationToken ct) =>
+            TypedResults.Ok(await engine.ExecuteAsync(async (db, services) =>
+            {
+                var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Installation && r.RetiredAt == null, ct)
+                    ?? throw new RunException("There is no such installation.");
+                await InstallationSnippetCredentials.EnsureAsync(db, services.GetRequiredService<VariableStore>(), resource.Address, clock.GetUtcNow(), ct);
+                return await services.GetRequiredService<Views>().SnippetAccessAsync(
+                    resource.Address, resource.Definition is null ? null : JsonNode.Parse(resource.Definition), ct);
+            }, ct)))
+            .WithTags("Inventory")
+            .WithName("createInstallationSnippetsKey");
+
         api.MapPost("/installations/{id:guid}/observe", async (Guid id, Planner planner, CancellationToken ct) =>
         {
             await planner.ObserveAsync(id, ct);

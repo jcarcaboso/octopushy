@@ -9,7 +9,7 @@
 //!   repo/          the extracted repository snapshot; `root` is inside it
 //!   state/         the built-in state, when there is no external backend
 //!   out/plan.bin   the saved plan
-//!   home/          HOME for OpenTofu
+//!   home/          HOME for OpenTofu; home/.ssh/known_hosts holds the input's `knownHosts`
 //!   tmp/           TMPDIR (local runtime only; containers get a tmpfs)
 //! ```
 
@@ -53,6 +53,11 @@ struct Input {
     destroy: bool,
     #[serde(default)]
     retain_no_changes_plan: bool,
+    /// The SSH host keys a provider may connect to, as `known_hosts` lines. The Proxmox provider
+    /// reads `$HOME/.ssh/known_hosts` and refuses a host whose key differs, but adds any host it
+    /// has not seen, so without this its first connection would trust whoever answered.
+    #[serde(default)]
+    known_hosts: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +153,22 @@ fn backend_value(key: &str, value: &Value) -> Result<Option<String>, Failure> {
     }
 }
 
+/// Checks `knownHosts` before it is written: printable lines, nothing that could end a line early.
+fn check_known_hosts(text: &str) -> Result<(), Failure> {
+    const LIMIT: usize = 16 * 1024;
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if text.len() > LIMIT
+        || lines.is_empty()
+        || text.chars().any(|c| c.is_control() && c != '\n')
+        || lines.iter().any(|l| l.split_whitespace().count() < 3)
+    {
+        return Err(Failure::msg(
+            "knownHosts must be known_hosts lines: a host pattern, a key type and a key",
+        ));
+    }
+    Ok(())
+}
+
 /// Removes whatever is at `path` (a file or symlink from the repository) and
 /// writes a fresh file, so the write never follows a symlink.
 fn write_fresh(path: &Path, contents: &[u8]) -> Result<(), Failure> {
@@ -223,6 +244,12 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     let out_dir = ws.join("out");
     mk(&home)?;
     mk(&out_dir)?;
+    if let Some(known) = &input.known_hosts {
+        check_known_hosts(known)?;
+        let ssh = home.join(".ssh");
+        crate::fsutil::ensure_private_dir(&ssh)?;
+        crate::fsutil::write_atomic(&ssh.join("known_hosts"), known.as_bytes(), 0o600)?;
+    }
     let mut settings: Vec<(String, String)> = vec![
         ("TF_IN_AUTOMATION".into(), "1".into()),
         ("TF_INPUT".into(), "0".into()),
@@ -659,6 +686,22 @@ mod tests {
         ] {
             assert!(check_env_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn known_hosts_lines() {
+        assert!(check_known_hosts("* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKii\n").is_ok());
+        assert!(check_known_hosts("* ssh-ed25519 AAAA\n* ecdsa-sha2-nistp256 AAAA\n").is_ok());
+        for bad in [
+            "",
+            "\n",
+            "ssh-ed25519 AAAA",
+            "* ssh-ed25519 AAAA\r\n",
+            "* ssh-ed25519 AAAA\u{0}",
+        ] {
+            assert!(check_known_hosts(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_known_hosts(&"* ssh-ed25519 AAAA\n".repeat(2000)).is_err());
     }
 
     #[test]

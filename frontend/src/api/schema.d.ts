@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/installations/{id}/snippets-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createInstallationSnippetsKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/installations/{id}/observe": {
         parameters: {
             query?: never;
@@ -1134,6 +1150,7 @@ export interface components {
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
             configuration: null | components["schemas"]["GuestConfigurationDto"];
             managedAccess: null | components["schemas"]["ManagedAccessDto"];
+            hostKey?: null | components["schemas"]["ManagedHostKeyDto"];
         };
         GuestDiskUsageDto: {
             enabled: boolean;
@@ -1189,6 +1206,7 @@ export interface components {
             verifyTls: null | boolean;
             observedGuests: components["schemas"]["ObservedGuestDto"][];
             clusterName: null | string;
+            snippets?: null | components["schemas"]["SnippetAccessDto"];
         };
         InstallationSummaryDto: {
             /** Format: uuid */
@@ -1287,6 +1305,14 @@ export interface components {
             promotionEvidence: null | string;
             /** Format: date-time */
             removedAt: null | string;
+        };
+        ManagedHostKeyDto: {
+            publicKey: string;
+            fingerprint: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            provisionedAt: null | string;
         };
         MissingVariableDto: {
             key: string;
@@ -1513,6 +1539,25 @@ export interface components {
             setupCode: string;
             username: string;
             password: string;
+        };
+        SnippetAccessDto: {
+            publicKey: null | string;
+            fingerprint: null | string;
+            /** Format: date-time */
+            createdAt: null | string;
+            declared: boolean;
+            datastore: string;
+            user: string;
+            hosts: components["schemas"]["SnippetHostDto"][];
+            command: null | string;
+        };
+        SnippetHostDto: {
+            host: string;
+            address: string;
+            /** Format: int32 */
+            port: number;
+            hostKeyStore: string;
+            hostKeySet: boolean;
         };
         StartedRun: {
             /** Format: uuid */
@@ -2460,6 +2505,55 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    createInstallationSnippetsKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnippetAccessDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
             };
             /** @description Conflict */
             409: {

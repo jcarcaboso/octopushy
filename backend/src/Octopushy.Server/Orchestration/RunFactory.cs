@@ -105,6 +105,26 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             : BackendContext.BuiltIn;
 
         var retire = guest.Retired || removal;
+        // A guest whose host key is Octopushy's: the plan gets the private half to write into the
+        // snippet, and the apply gets the upload key and the host's own key to pin. A retire
+        // deletes the snippet through the API and needs none of them.
+        var snippets = !retire && ManagedHostKey.Wanted(repository, guest) ? ManagedHostKey.Settings(inputs.Installation) : null;
+        SnippetsContext? uploads = null;
+        if (snippets is not null)
+        {
+            var node = snippets.Hosts[guest.Host];
+            secrets[SecretNames.GuestHostKey] = GuestHostCredentials.Key(resource.Id);
+            secrets[SecretNames.SnippetsKey] = InstallationSnippetCredentials.Key(inputs.Installation.Address);
+            secrets[SecretNames.SnippetsHostKey] = node.HostKey.Key;
+            if (node.HostKey.Version is { } pinVersion)
+                requestedVersions[SecretNames.SnippetsHostKey] = pinVersion;
+            env[SecretNames.SnippetsUserEnv] = snippets.User;
+            secretEnv[SecretNames.GuestHostKeyEnv] = SecretNames.GuestHostKey;
+            secretEnv[SecretNames.SnippetsKeyEnv] = SecretNames.SnippetsKey;
+            uploads = new SnippetsContext(inputs.Installation.Address, snippets.User, node.Address, node.Port);
+        }
+        else
+            inputs.Variables.Remove("octopushy_snippets");
         var reporter = options.Value.DiskReporter;
         reporter.Validate();
         var guestReporter = guest.Json["setup"]?["diskReporter"];
@@ -142,6 +162,8 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             WorkerUpdate = update,
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(guest),
+            ManagedHostKey = uploads is not null,
+            Snippets = uploads,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,
@@ -255,7 +277,9 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        Bind(SecretNames.AnsibleHostKey, inputs.HostKey);
+        // Without a pin of its own, the guest's host key is Octopushy's, which no store entry holds.
+        if (inputs.HostKey is { } pin)
+            Bind(SecretNames.AnsibleHostKey, pin);
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -281,6 +305,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
+            ManagedHostKey = inputs.HostKey is null,
             Ansible = new AnsibleContext(
                 inputs.Recipe.Id,
                 action.Id,
@@ -319,10 +344,14 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     public Run RotateAccess(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, AccessRotationContext rotation)
     {
         var inputs = ConfigureInputs.Build(repository, guest);
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = inputs.HostKey.Key };
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (inputs.HostKey.Version is { } hostVersion)
-            requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        if (inputs.HostKey is { } pin)
+        {
+            secrets[SecretNames.AnsibleHostKey] = pin.Key;
+            if (pin.Version is { } hostVersion)
+                requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        }
         var installation = repository.Installation(guest.InstallationAddress)!;
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -338,6 +367,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             AccessRotation = rotation,
+            ManagedHostKey = inputs.HostKey is null,
             Ansible = new AnsibleContext(
                 GuestAccessPlaybooks.Root,
                 Operations.RotateAccess,

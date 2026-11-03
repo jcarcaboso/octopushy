@@ -84,6 +84,18 @@ public sealed record ProvisionInputs(
         };
         if (guest.ManagedWorker is { } worker)
             variables["guest"]!["workerGeneration"] = worker.Generation.ToString();
+        // Where the guest's snippet goes. Its public host key joins it when a run is built, so it
+        // is never in Git; the private half goes to the plan alone, as a sensitive variable.
+        var snippets = ManagedHostKey.Wanted(repository, guest) ? ManagedHostKey.Settings(installation) : null;
+        if (snippets is not null)
+        {
+            var node = snippets.Hosts[guest.Host];
+            variables["octopushy_snippets"] = new JsonObject
+            {
+                ["datastore"] = snippets.Datastore,
+                ["node"] = new JsonObject { ["name"] = host.Id, ["address"] = node.Address, ["port"] = node.Port },
+            };
+        }
 
         var guestJson = guest.Json.DeepClone().AsObject();
         foreach (var field in NotProvisioned)
@@ -123,6 +135,12 @@ public sealed record ProvisionInputs(
         if (ManagedAccess.Wanted(guest))
         {
             hashed["managedAccess"] = true;
+        }
+        // That the host key is Octopushy's changes the machine, and so does where its snippet goes.
+        // Which key, and how the upload logs in, do not. Omitted otherwise, as above.
+        if (snippets is not null)
+        {
+            hashed["managedHostKey"] = new JsonObject { ["datastore"] = snippets.Datastore };
         }
         // Reporter setup changes need a new run, but never become OpenTofu inputs.
         // Omit the key entirely for existing definitions to preserve their hashes.

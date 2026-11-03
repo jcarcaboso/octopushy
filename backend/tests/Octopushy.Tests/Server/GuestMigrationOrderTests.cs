@@ -18,6 +18,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
     private const string Schedules = "20261102164720_GuestSchedules";
     private const string Rotation = "20261102173935_GuestAccessRotation";
     private const string FollowedSecrets = "20261103100001_FollowedSecrets";
+    private const string HostKeys = "20261103113429_ManagedHostKeys";
 
     private static async Task<Guid> ReleasedGuestAsync(OctopushyDb db)
     {
@@ -40,6 +41,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         Assert.Contains(Rotation, applied);
         Assert.Contains(Schedules, applied);
         Assert.Contains(FollowedSecrets, applied);
+        Assert.Contains(HostKeys, applied);
     }
 
     /// <summary>Both tables, with every column the running server reads and writes.</summary>
@@ -49,6 +51,8 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         db.GuestAccessKeys.Add(new GuestAccessKey { ResourceId = guest, Version = 2, PublicKey = "ssh-ed25519 AAAA", Fingerprint = "SHA256:new", CreatedAt = now, AuthorizedAt = now, VerifiedAt = now, PromotedAt = now, PromotedBy = "ops", RemovedAt = now });
         db.GuestSchedules.Add(new GuestScheduleState { ResourceId = guest, Action = "update-system", Cron = "30 6 * * *", LastSlot = now });
         db.GuestConfigurations.Add(new GuestConfiguration { ResourceId = guest, SecretVersions = """{"shared/git-ssh-key":2}""" });
+        db.GuestHostKeys.Add(new GuestHostKey { ResourceId = guest, PublicKey = "ssh-ed25519 AAAA", Fingerprint = "SHA256:host", CreatedAt = now, ProvisionedAt = now });
+        db.InstallationSnippetKeys.Add(new InstallationSnippetKey { Installation = "home/korriban", PublicKey = "ssh-ed25519 BBBB", Fingerprint = "SHA256:upload", CreatedAt = now });
         await db.SaveChangesAsync();
     }
 
@@ -72,7 +76,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var migrator = db.GetService<IMigrator>();
 
         await migrator.MigrateAsync(Schedules);
-        Assert.Equal([Rotation, FollowedSecrets], await db.Database.GetPendingMigrationsAsync());
+        Assert.Equal([Rotation, FollowedSecrets, HostKeys], await db.Database.GetPendingMigrationsAsync());
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO guest_access_keys (resource_id, version, public_key, fingerprint, bootstrap, created_at)
             VALUES ({guest}, 1, 'ssh-ed25519 AAAA', 'SHA256:old', TRUE, {DateTimeOffset.UtcNow});

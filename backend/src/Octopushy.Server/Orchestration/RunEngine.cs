@@ -79,6 +79,16 @@ public sealed partial class RunEngine(
     {
         foreach (var run in runs)
         {
+            // A run pins its credentials before its first step, so a guest's own host key has to
+            // exist by then. Making it twice is harmless, so it does not wait for this run.
+            if (RunContext.Parse(run.Context) is { Snippets: not null } uploading)
+            {
+                using var scope = scopes.CreateScope();
+                var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
+                await GuestHostCredentials.EnsureAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), store, run.ResourceId,
+                    uploading.Proxmox.Name ?? run.ResourceId.ToString(), clock.GetUtcNow(), cancellationToken);
+            }
+
             if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
             {
                 run.Status = RunStatuses.Blocked;
@@ -656,6 +666,7 @@ public sealed partial class RunEngine(
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+                await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
                 await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);

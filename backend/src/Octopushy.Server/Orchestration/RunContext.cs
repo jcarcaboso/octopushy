@@ -66,6 +66,15 @@ public sealed record RunContext
     /// <summary>Whether Octopushy's own key goes to this guest with the keys it declares.</summary>
     public bool ManagedAccess { get; init; }
 
+    /// <summary>
+    /// Whether the guest's host key is Octopushy's: a provision run delivers it, and a configure
+    /// or rotation run pins its public half instead of a store entry.
+    /// </summary>
+    public bool ManagedHostKey { get; init; }
+
+    /// <summary>Where a provision run uploads the guest's snippet, for a guest whose host key is Octopushy's.</summary>
+    public SnippetsContext? Snippets { get; init; }
+
     /// <summary>The versions a rotation of the guest's key works with.</summary>
     public AccessRotationContext? AccessRotation { get; init; }
 
@@ -85,6 +94,9 @@ public sealed record RunContext
 /// everything after that; <see cref="Remove"/> are the versions it takes off the guest.
 /// </summary>
 public sealed record AccessRotationContext(int Current, int Candidate, IReadOnlyList<int> Remove);
+
+/// <summary>An installation's snippet uploads: whose key opens which account, on which sshd.</summary>
+public sealed record SnippetsContext(string Installation, string User, string Address, int Port);
 
 public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
 
@@ -225,6 +237,18 @@ public static class SecretNames
     public const string AnsibleSshKey = "ansible.ssh-key";
     public const string AnsibleRefusedKeys = "ansible.refused-keys";
     public const string AnsibleHostKey = "ansible.host-key";
+
+    /// <summary>A guest's private host key, for its provision run's plan only.</summary>
+    public const string GuestHostKey = "opentofu.host-key";
+    /// <summary>The installation's snippet upload key, for provision applies only.</summary>
+    public const string SnippetsKey = "snippets.ssh-key";
+    /// <summary>The host's own SSH host key, which the upload is pinned to. Public.</summary>
+    public const string SnippetsHostKey = "snippets.host-key";
+
+    /// <summary>The environment the OpenTofu provider takes the upload key and the guest's host key from.</summary>
+    public const string SnippetsKeyEnv = "PROXMOX_VE_SSH_PRIVATE_KEY";
+    public const string SnippetsUserEnv = "PROXMOX_VE_SSH_USERNAME";
+    public const string GuestHostKeyEnv = "TF_VAR_octopushy_host_key";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
 

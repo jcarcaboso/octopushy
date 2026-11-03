@@ -241,6 +241,42 @@ public sealed class GuestScheduleState
 /// kept apart from the provisioning hash, so what is authorized can change without a plan. The
 /// store's current version says which one runs use; this says where each one stands.
 /// </summary>
+/// <summary>
+/// A guest's SSH host key, when it is Octopushy's: the public half, which configure runs pin. The
+/// private half is the secret at <c>system/guest-host-key/&lt;resource id&gt;</c>, released only to the
+/// plan of a provision run, which puts it in the guest's cloud-init snippet.
+/// </summary>
+public sealed class GuestHostKey
+{
+    public Guid ResourceId { get; set; }
+
+    public required string PublicKey { get; set; }
+
+    public required string Fingerprint { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>When an apply carrying this key finished. Until then no configure run pins it.</summary>
+    public DateTimeOffset? ProvisionedAt { get; set; }
+}
+
+/// <summary>
+/// The key Octopushy uploads snippets to an installation's hosts with, through the SFTP-only
+/// account <c>deploy/proxmox/snippets.sh</c> creates. The private half is the secret at
+/// <c>system/installation-snippets/&lt;installation address&gt;</c>, released only to provision applies.
+/// </summary>
+public sealed class InstallationSnippetKey
+{
+    /// <summary>The installation's address, such as <c>home/pve01</c>.</summary>
+    public required string Installation { get; set; }
+
+    public required string PublicKey { get; set; }
+
+    public required string Fingerprint { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed class GuestAccessKey
 {
     public Guid ResourceId { get; set; }

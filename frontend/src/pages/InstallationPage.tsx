@@ -9,6 +9,7 @@ import { Card } from "../components/Card";
 import { DefinitionView } from "../components/DefinitionView";
 import { GuestTable } from "../components/GuestTable";
 import { ObserveError } from "../components/ObserveError";
+import { SnippetAccessCard } from "../components/SnippetAccess";
 import { HostTable } from "../components/HostTable";
 import { IssueList } from "../components/IssueList";
 import { KeyValue } from "../components/KeyValue";
@@ -228,6 +229,7 @@ export function InstallationPage() {
                 ]}
               />
             </Card>
+            {data.snippets ? <SnippetAccessCard id={installation.id} snippets={data.snippets} /> : null}
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>

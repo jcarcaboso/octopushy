@@ -297,7 +297,44 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             GuestDiskUsageEndpoints.View(resource,
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
             configure,
-            await ManagedAccessAsync(id, cancellationToken));
+            await ManagedAccessAsync(id, cancellationToken),
+            await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == id)
+                .Select(k => new ManagedHostKeyDto(k.PublicKey, k.Fingerprint, k.CreatedAt, k.ProvisionedAt)).FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>The command that sets up one host, from the release this server is, so the script matches it.</summary>
+    public static string SnippetsCommand(string publicKey)
+    {
+        var version = typeof(Views).Assembly.GetName().Version;
+        var reference = version is null ? "main" : $"v{version.Major}.{version.Minor}.{version.Build}";
+        return $"OCTOPUSHY_SNIPPETS_KEY='{publicKey}' bash -c \"$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/{reference}/deploy/proxmox/snippets.sh)\"";
+    }
+
+    /// <summary>An installation's snippet uploads, from its latest definition and the key Octopushy made for it.</summary>
+    public async Task<SnippetAccessDto> SnippetAccessAsync(string address, JsonNode? definition, CancellationToken cancellationToken)
+    {
+        var key = await InstallationSnippetCredentials.FindAsync(db, address, cancellationToken);
+        var snippets = definition?["snippets"] as JsonObject;
+        var hosts = new List<SnippetHostDto>();
+        foreach (var (host, node) in (snippets?["hosts"] as JsonObject) ?? [])
+        {
+            var store = node?["hostKey"]?["store"]?.GetValue<string>() ?? "";
+            var endpoint = definition?["hosts"]?[host]?["endpoint"]?.GetValue<string>() ?? definition?["connection"]?["endpoint"]?.GetValue<string>();
+            var sshd = node?["address"]?.GetValue<string>()
+                ?? (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ? uri.Host : "");
+            hosts.Add(new SnippetHostDto(host, sshd, node?["port"]?.GetValue<int>() ?? 22, store,
+                await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == store && e.CurrentVersion > 0, cancellationToken)));
+        }
+
+        return new SnippetAccessDto(
+            key?.PublicKey,
+            key?.Fingerprint,
+            key?.CreatedAt,
+            snippets is not null,
+            snippets?["datastore"]?.GetValue<string>() ?? SnippetSettings.DefaultDatastore,
+            snippets?["user"]?.GetValue<string>() ?? SnippetSettings.DefaultUser,
+            hosts,
+            key is null ? null : SnippetsCommand(key.PublicKey));
     }
 
     /// <summary>The version runs use: public, and all there is to show. The private half never reaches this layer.</summary>
@@ -375,7 +412,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             definition?["connection"]?["token"]?["store"]?.GetValue<string>(),
             definition?["connection"]?["tls"]?["verify"]?.GetValue<bool>() ?? (definition is null ? null : true),
             observedGuests,
-            observation?["cluster"]?["name"]?.GetValue<string>());
+            observation?["cluster"]?["name"]?.GetValue<string>(),
+            await SnippetAccessAsync(resource.Address, definition, cancellationToken));
     }
 
     public async Task<OverviewDto> OverviewAsync(RepositoryDto repository, CancellationToken cancellationToken)

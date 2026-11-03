@@ -310,7 +310,31 @@ public sealed record GuestDetailDto(
     IReadOnlyList<RunSummaryDto> Runs,
     GuestDiskUsageDto DiskUsage,
     GuestConfigurationDto? Configuration,
-    ManagedAccessDto? ManagedAccess);
+    ManagedAccessDto? ManagedAccess,
+    ManagedHostKeyDto? HostKey = null);
+
+/// <summary>
+/// A guest's SSH host key, when it is Octopushy's: the public half, which configure runs pin.
+/// <see cref="ProvisionedAt"/> is when an apply carrying it finished; until then nothing pins it.
+/// </summary>
+public sealed record ManagedHostKeyDto(string PublicKey, string Fingerprint, DateTimeOffset CreatedAt, DateTimeOffset? ProvisionedAt);
+
+/// <summary>
+/// An installation's snippet uploads: the public half of Octopushy's key for them, if one was made,
+/// what the installation's definition declares, and the command that sets up one of its hosts.
+/// </summary>
+public sealed record SnippetAccessDto(
+    string? PublicKey,
+    string? Fingerprint,
+    DateTimeOffset? CreatedAt,
+    bool Declared,
+    string Datastore,
+    string User,
+    IReadOnlyList<SnippetHostDto> Hosts,
+    string? Command);
+
+/// <summary>A host declared for uploads, and whether its own SSH host key is in Variables yet.</summary>
+public sealed record SnippetHostDto(string Host, string Address, int Port, string HostKeyStore, bool HostKeySet);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,
@@ -320,7 +344,8 @@ public sealed record InstallationDetailDto(
     string? TokenKey,
     bool? VerifyTls,
     IReadOnlyList<ObservedGuestDto> ObservedGuests,
-    string? ClusterName);
+    string? ClusterName,
+    SnippetAccessDto? Snippets = null);
 
 /// <summary>An installation whose latest observation did not succeed.</summary>
 public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At);

@@ -9,7 +9,10 @@ namespace Octopushy.Server.Orchestration;
 internal static class CredentialBindings
 {
     // CA certificates are public trust material. Other current bindings feed credential channels.
-    internal static bool RequiresSecret(string name) => name is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
+    internal static bool RequiresSecret(string name) => name is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey or SecretNames.SnippetsHostKey);
+
+    /// <summary>A pin goes to steps that hold no secret, so a secret must not pose as one.</summary>
+    private static bool IsPin(string name) => name is SecretNames.AnsibleHostKey or SecretNames.SnippetsHostKey;
 
     internal static List<string> Validate(RunContext context)
     {
@@ -46,15 +49,28 @@ internal static class CredentialBindings
                 {
                     "PROXMOX_VE_ENDPOINT" => value == context.Proxmox.Endpoint,
                     "PROXMOX_VE_INSECURE" => value == (context.Proxmox.VerifyTls ? "false" : "true"),
+                    SecretNames.SnippetsUserEnv => value == context.Snippets?.User,
                     _ => false,
                 }))
                     problems.Add($"Proxmox provider environment '{name}' is reserved; inspect and replan");
+                if (name == SecretNames.GuestHostKeyEnv)
+                    problems.Add($"'{name}' is reserved for the guest's host key; inspect and replan");
             }
             if (tofu.SecretEnv.GetValueOrDefault("PROXMOX_VE_API_TOKEN") != SecretNames.ProxmoxToken)
                 problems.Add("Proxmox provider token mapping is reserved; inspect and replan");
+            // The snippet roles exist exactly when the run uploads a snippet, under their own names.
+            var uploads = context.Snippets is not null;
+            foreach (var role in new[] { SecretNames.GuestHostKey, SecretNames.SnippetsKey, SecretNames.SnippetsHostKey })
+            {
+                if (context.Secrets.ContainsKey(role) != uploads)
+                    problems.Add($"The role {role} belongs to a snippet upload, and this run {(uploads ? "lacks it" : "makes none")}; inspect and replan");
+            }
             foreach (var (name, role) in tofu.SecretEnv)
             {
                 if (name == "PROXMOX_VE_API_TOKEN" && role == SecretNames.ProxmoxToken)
+                    continue;
+                if (uploads && ((name == SecretNames.SnippetsKeyEnv && role == SecretNames.SnippetsKey)
+                    || (name == SecretNames.GuestHostKeyEnv && role == SecretNames.GuestHostKey)))
                     continue;
                 if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) || role != SecretNames.Backend(name)
                     || !context.Secrets.ContainsKey(role))
@@ -89,9 +105,13 @@ internal static class CredentialBindings
         var problems = new List<string>();
         if (context.Secrets.Keys.Any(n => n is SecretNames.ProxmoxSharedToken or SecretNames.ProxmoxReadOnlyToken or SecretNames.ProxmoxPrivilegedToken or SecretNames.ProxmoxToken))
             problems.Add("A configure run carries no Proxmox credentials; inspect and replan");
-        // A rotation takes the guest's own key by step, so it binds only the pin.
-        if ((context.AccessRotation is null && !context.Secrets.ContainsKey(SecretNames.AnsibleSshKey)) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
+        // A rotation takes the guest's own key by step, so it binds only the pin. A guest whose host
+        // key is Octopushy's binds no pin: the public half comes from the guest's own record.
+        if ((context.AccessRotation is null && !context.Secrets.ContainsKey(SecretNames.AnsibleSshKey))
+            || context.Secrets.ContainsKey(SecretNames.AnsibleHostKey) == context.ManagedHostKey)
             problems.Add("A configure run needs an SSH key and a pinned host key; inspect and replan");
+        if (context.Secrets.Keys.Any(n => n is SecretNames.GuestHostKey or SecretNames.SnippetsKey or SecretNames.SnippetsHostKey))
+            problems.Add("A configure run carries no snippet upload credentials; inspect and replan");
         return problems;
     }
 
@@ -127,7 +147,13 @@ internal static class CredentialBindings
         foreach (var (name, key) in bindings)
         {
             // A guest's own key is the one thing under system/ a run may bind, and only its own guest's.
-            var ownKey = name == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(run.ResourceId);
+            var ownKey = run is not null && name switch
+            {
+                SecretNames.AnsibleSshKey => key == GuestAccessCredentials.Key(run.ResourceId),
+                SecretNames.GuestHostKey => key == GuestHostCredentials.Key(run.ResourceId),
+                SecretNames.SnippetsKey => context.Snippets is { } uploads && key == InstallationSnippetCredentials.Key(uploads.Installation),
+                _ => false,
+            };
             if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal) && !ownKey)
             {
                 problems.Add($"{key}: reserved system scope");
@@ -142,7 +168,9 @@ internal static class CredentialBindings
 
             if (!entries.TryGetValue(key, out var entry))
             {
-                problems.Add($"{key}: missing");
+                problems.Add(name == SecretNames.SnippetsKey
+                    ? $"{key}: missing. Create the snippet upload key on the installation's page, and run deploy/proxmox/snippets.sh on each host with it"
+                    : $"{key}: missing");
                 continue;
             }
 
@@ -153,7 +181,7 @@ internal static class CredentialBindings
             }
 
             // A pin is public and goes to steps with no secrets, so a secret must not pose as one.
-            if (name == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
+            if (IsPin(name) && entry.Visibility == Visibilities.Secret)
             {
                 problems.Add($"{key}: a host key is public; store it as plain");
                 continue;

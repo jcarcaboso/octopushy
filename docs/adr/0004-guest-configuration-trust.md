@@ -23,3 +23,10 @@ can connect anywhere with them or send them anywhere. Code on a `local` runtime 
 can also read that agent's identity. All of this follows from accepting tool-native code,
 as 0002 did: review before merging is the defence, and the last point is the reason to run
 sensitive work on an agent of its own. Scoping a secret to reviewed code is separate work.
+
+**Amended November 3, 2026.** For a guest Octopushy creates, the pin can be Octopushy's own key,
+generated before the machine exists and delivered in its cloud-init snippet, so no person sets it.
+The decision above is unchanged: a commit still cannot put a new key behind an address, because
+the key is the guest's record in Octopushy, and the snippet upload is itself pinned to the Proxmox
+host's own SSH key. [Host key trust](../guest-configuration.md#host-key-trust) has the design,
+including that anyone with `VM.Audit` on such a VM can read its private host key.

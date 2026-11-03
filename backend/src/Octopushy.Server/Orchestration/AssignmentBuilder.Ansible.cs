@@ -17,7 +17,8 @@ public sealed partial class AssignmentBuilder
     /// approved. The rest goes to the steps after approval.
     /// </summary>
     private static List<string> AnsibleSecretsFor(string stepName, RunContext context) =>
-        stepName == StepNames.Preview ? [SecretNames.AnsibleHostKey] : context.Secrets.Keys.ToList();
+        stepName != StepNames.Preview ? context.Secrets.Keys.ToList()
+        : context.ManagedHostKey ? [] : [SecretNames.AnsibleHostKey];
 
     /// <summary>Builds a configure run's attempt, after the checks every assignment goes through.</summary>
     private async Task<Assignment> BuildAnsibleAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
@@ -81,7 +82,16 @@ public sealed partial class AssignmentBuilder
         if (missing.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         values.Remove(SecretNames.AnsibleHostKey, out var hostKey);
-        if (string.IsNullOrWhiteSpace(hostKey))
+        if (context.ManagedHostKey)
+        {
+            // Octopushy's own key, and only once an apply has carried it: before that the guest
+            // still has whatever key its image made, and nothing here should connect to it.
+            var own = await db.GuestHostKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId, cancellationToken);
+            hostKey = own?.ProvisionedAt is not null ? own.PublicKey
+                : throw new CredentialUnavailableException(
+                    "Blocked credentials: this guest's host key is Octopushy's, and no provision run has delivered it yet. Provision the guest first.");
+        }
+        else if (string.IsNullOrWhiteSpace(hostKey))
             throw new CredentialUnavailableException($"Blocked credentials: {context.Secrets[SecretNames.AnsibleHostKey]}: empty");
 
         var input = new JsonObject

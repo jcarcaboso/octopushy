@@ -233,7 +233,12 @@ public sealed partial class RunEngine
     /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>
     private static async Task RecordProvisionedKeyAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        if (!RunContext.Parse(run.Context).ManagedAccess)
+        var context = RunContext.Parse(run.Context);
+        // The host key a configure run pins from now on: the apply that uploaded it has finished.
+        if (context.Snippets is not null
+            && await db.GuestHostKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId, cancellationToken) is { } hostKey)
+            hostKey.ProvisionedAt = now;
+        if (!context.ManagedAccess)
             return;
         var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Bootstrap, cancellationToken);
         if (key is not null)

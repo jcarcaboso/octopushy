@@ -16,7 +16,8 @@ public sealed record ConfigureInputs(
     string User,
     /// <summary>A key the guest names itself; null means Octopushy's own, see <see cref="ManagedAccess"/>.</summary>
     StoreReference? SshKey,
-    StoreReference HostKey,
+    /// <summary>The pin the guest names itself; null means Octopushy's own, see <see cref="ManagedHostKey"/>.</summary>
+    StoreReference? HostKey,
     JsonObject Vars,
     IReadOnlyDictionary<string, StoreReference> SecretVars,
     IReadOnlyDictionary<string, StoreReference> SecretFiles,
@@ -81,7 +82,7 @@ public sealed record ConfigureInputs(
             guest.Json["access"]?["port"]?.GetValue<int>() ?? 22,
             guest.Json["access"]!["user"]!.GetValue<string>(),
             Reference(guest, "sshKey"),
-            Reference(guest, "hostKey")!,
+            Reference(guest, "hostKey"),
             setup["inputs"]?.DeepClone().AsObject() ?? [],
             Secrets(guest, "secrets"),
             Secrets(guest, "secretFiles"),

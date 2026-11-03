@@ -1,8 +1,8 @@
 # Guest host keys without a person
 
-**Researched November 3, 2026. Not built: every route that matches the request for VMs needs a
-change on the Proxmox host, and that is the owner's decision.** This page records what was checked,
-the options and a recommendation. Scope, as the owner set it: only guests Octopushy creates from now
+**Researched November 3, 2026. The owner chose option A the same day, and it is built:** see
+[host key trust](../guest-configuration.md#host-key-trust), which is the design now. This page
+keeps what was checked and the options that were weighed. Scope, as the owner set it: only guests Octopushy creates from now
 on. `pve01-ai` will be recreated, so existing machines need no path. `access.hostKey` stays as the
 override for machines Octopushy did not create.
 
@@ -115,10 +115,18 @@ narrowing the tokens matters more afterwards. Containers take the task-log route
 If no SSH to hypervisors is acceptable, **B with a custom template image** works with no host change,
 at the cost of an image pipeline in `homelab-config`. A person stays out of it either way.
 
-## For the owner to decide
+## Decided
 
-1. Whether to enable `snippets` on a datastore on each host, and which one.
-2. Whether OpenTofu may get SSH, or SFTP only, to each node, and with which account.
-3. Whether the private host key may sit in OpenTofu state and the VM's cloud-init data, readable by
-   anyone with `VM.Audit`.
-4. If not: whether `homelab-config` should build and host its own Fedora image, for B.
+On November 3, 2026 the owner chose A ("I don't want to build custom images, makes more sense to
+make a one time setup"), with these settings:
+
+1. Snippets on each installation's `local` directory datastore by default, settable per installation.
+2. One SFTP-only account per host, `octopushy-snippets`, chrooted to the snippets directory, with
+   bpg's `upload_mode = "sftp"` and no `sudo`, and a key Octopushy generates per installation.
+3. The private host key may sit in OpenTofu's plan and state and in the VM's cloud-init data,
+   which `VM.Audit` can read. Narrowing the Proxmox tokens matters more as a result.
+4. No migration for machines that already exist. `pve01-ai` will be recreated.
+
+Building it found two more things. bpg trusts any node it has not seen, so Octopushy pins the
+host's own SSH key in the attempt's `known_hosts`. sshd will not load a private key without a final
+newline, so the module adds one.

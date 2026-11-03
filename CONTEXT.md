@@ -87,8 +87,9 @@ Values a recipe's prepare step resolved for a run, such as release versions. An
 approval covers them, and they are kept for later actions only after a run succeeds.
 
 **Host key pin**:
-A guest's public SSH host key, read through a trusted channel and set in the variable
-store by an operator. A configure run connects to nothing else.
+A guest's public SSH host key, which a configure run connects to and to nothing else: the
+key Octopushy generated and delivered to a guest it created, or, for any other machine, one
+read through a trusted channel and set in the variable store by an operator.
 _Avoid_: Host key scan, which authenticates nothing
 
 **Declared outcome**:

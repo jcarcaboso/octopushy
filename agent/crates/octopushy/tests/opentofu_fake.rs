@@ -254,6 +254,81 @@ fn built_in(extra_env: Value) -> Value {
 }
 
 #[tokio::test]
+async fn known_hosts_are_written_where_the_provider_reads_them_and_nothing_else_is() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let mut with_hosts = input(false, json!({}));
+    with_hosts["knownHosts"] = json!(
+        "* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiijI7PL8NeaSlRIfsOf1JSG69ZMULksy817NNUwsNZ\n"
+    );
+    let r = run(
+        &fx,
+        "hosts-1",
+        "preview",
+        &with_hosts,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let ssh = r.workspace.join("home/.ssh");
+    let path = ssh.join("known_hosts");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        with_hosts["knownHosts"].as_str().unwrap()
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        Path::new(&env_of(&fx, "plan")["HOME"]),
+        r.workspace.join("home")
+    );
+
+    // Without it there is no file for the provider to trust a first host into.
+    fx.reset();
+    let r = run(
+        &fx,
+        "hosts-2",
+        "preview",
+        &input(false, json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    assert!(!r.workspace.join("home/.ssh").exists());
+
+    // A line that is not one is refused before anything runs.
+    fx.reset();
+    let mut bad = input(false, json!({}));
+    bad["knownHosts"] = json!("ssh-ed25519\r\n");
+    let r = run(
+        &fx,
+        "hosts-3",
+        "preview",
+        &bad,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(r.result.is_err());
+    assert_eq!(fx.read("args.log"), "");
+}
+
+#[tokio::test]
 async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
     let fx = Fixture::new();
     let state_v7 = b"{\"version\":4,\"serial\":7,\"lineage\":\"l\"}\n".to_vec();

@@ -285,6 +285,15 @@ export function useRotateGuestAccess(id: string) {
   });
 }
 
+/** Makes the installation's snippet upload key, or returns the one it has. */
+export function useCreateSnippetsKey(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/installations/{id}/snippets-key", { params: { path: { id } } })),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["installation"] }),
+  });
+}
+
 /** Observes an installation in the background; it is not a run, so only the installation views refresh. */
 export function useObserveInstallation() {
   const client = useQueryClient();
