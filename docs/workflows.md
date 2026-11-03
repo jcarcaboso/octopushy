@@ -10,10 +10,10 @@ The owner's rule of November 2 still holds: **Octopushy provides the infra to de
 It holds nothing service-specific.** No code in `backend/src`, `agent/crates`, `contracts` or `frontend/src` names a service or
 a kind of service. What a service is, and what is on a VM, lives in the repository, as workflows.
 
-**What exists today:** workflows kept in the lab repository itself, in `workflows/` ("local workflows"), and the offline
-validator. Each workflow's version is the one its `workflow.yaml` declares. **Next:** a separate workflows repository whose
-versions are resolved from tags, so the lab repository holds only data. Anything marked **Later** is the agreed design, not
-built. Its fields are refused, not ignored.
+**What exists today:** workflows come either from a separate workflows repository, released by tags, so the lab repository
+holds only data ([workflows from their own repository](#workflows-from-their-own-repository)), or, mainly for development and
+tests, from the lab repository itself, in `workflows/` ("local workflows"). The offline validator reads both the way the server
+does. Anything marked **Later** is the agreed design, not built. Its fields are refused, not ignored.
 
 ## What the repository holds
 
@@ -56,15 +56,18 @@ lab-repo/
 │                               ├── service.yaml
 │                               └── site.conf
 ├── templates/fedora-44/template.yaml       # base images: data, an image URL and its checksum
-├── workflows/
+├── workflows/                              # local workflows only; otherwise in the workflows repository
 │   ├── machine-tools/
 │   │   ├── workflow.yaml                   # version, stages, actions, outcomes
 │   │   └── inputs.schema.json              # its inputs, which are also its form
 │   └── web/…
-└── modules/                                # shared tool-native code, used by workflows
+└── modules/                                # shared tool-native code, used by workflows; likewise
     ├── opentofu/proxmox-vm/
     └── ansible/machine-tools/
 ```
+
+With a [workflows repository](#workflows-from-their-own-repository), `workflows/` and `modules/` live there, with the same
+layout, and the lab repository has neither.
 
 ## Rules
 
@@ -227,18 +230,87 @@ A guest or service names a workflow and a version:
 | `fedora-vm@2.3` | exactly `2.3` |
 | `fedora-vm` | invalid: a major version is never adopted by accident |
 
+**In a workflows repository, a version is a release tag,** `fedora-vm/v2.3`: `@2` takes the newest usable `2.x` release and
+`@2.3` exactly that one. See [workflows from their own repository](#workflows-from-their-own-repository).
+
 **In this repository's `workflows/`, each workflow has one version,** the one its `workflow.yaml` declares. `@2` matches it
 when its major is 2, and `@2.3` only when it is exactly `2.3`. Otherwise the guest or service is invalid, and says what is
 there: `fedora-vm@3 not found; available 2.3.` A reference to a workflow whose `workflow.yaml` cannot be read says so, and so
 does one to a workflow that manages something else.
 
 What a reference resolved to is part of the loaded definition and of every hash below. Pages show it beside what was
-written: a guest on `fedora-vm@2` shows `fedora-vm@2.3`. Runs and approval documents name the workflow at its version.
+written: a guest on `fedora-vm@2` shows `fedora-vm@2.3`. Runs and approval documents name the workflow at its version and
+the commit its files came from. Resolution sits behind one interface, `IWorkflowSource`, in `Octopushy.Definitions`:
+`LocalWorkflowSource` for a folder, `GitTagWorkflowSource` for a workflows repository, and nothing that reads definitions
+knows which.
 
-**Next:** with a separate workflows repository, a version is a tag, `fedora-vm/v2.3`, and `@2` takes the newest tag on that
-major. A new minor release then reaches every guest on `@2` under its own policy, and a new major is offered, not applied.
-Resolution sits behind one interface, `IWorkflowSource`, in `Octopushy.Definitions`, so that source replaces the local one
-without changing anything that reads definitions.
+## Workflows from their own repository
+
+```yaml
+# octopushy.yaml of the lab repository
+schemaVersion: 1
+workflows:
+  repository: git@github.com:jcarcaboso/octopushy-lab.git   # https://, ssh://, user@host:path, file:// or an absolute path
+  # credential: { store: git/octopushy-lab }                 # optional
+```
+
+The workflows repository holds `workflows/<id>/` and `modules/`, laid out as above. The lab repository then holds data only:
+**a lab repository that names a workflows repository and also has `workflows/` or `modules/` is an invalid revision**,
+"Workflows come from &lt;repository&gt;; remove workflows/ and modules/ here." What a run executes is never a mix of two
+repositories.
+
+**Credential.** `credential` names a store key: an HTTPS token for an `https://` repository, or an SSH private key for an SSH
+one. Without it, the lab repository's own credential (`system/git/credential`, set under **Repository**) is used when both
+repositories are reached the same way, HTTPS or SSH; otherwise none. A path or `file://` needs none.
+
+### Releases are tags, and a tag never moves
+
+Octopushy keeps a second bare mirror next to the lab repository's, one per workflows repository, and fetches every branch's
+objects and **every tag** on the same poll as the lab repository's branch, and on **Repository → Sync now**. A failed fetch is
+shown on the Repository page; the releases already recorded keep resolving, from the mirror.
+
+- **A release is a tag `<id>/v<M>.<m>`,** such as `fedora-vm/v2.3`: `M` and `m` are non-negative integers with no leading
+  zeros (`0` itself is fine). Any other tag is ignored.
+- **Its commit is the one the tag pointed to the first time Octopushy saw it,** recorded with when (`workflow_releases`). That
+  commit is the release for good, and Octopushy keeps it in the mirror under a ref of its own.
+- **At that commit, `workflows/<id>/workflow.yaml` must exist and declare the tag's `version`.** Otherwise the release is
+  invalid: it is never resolved to, and the Repository page says why.
+- **A tag that later points to another commit is not followed.** The first commit stays the only one used, and the Repository
+  page says "fedora-vm/v2.3 was moved from &lt;a&gt; to &lt;b&gt;; the original commit is used. Moved tags are not followed."
+  Release a new version instead.
+- **A deleted tag stays a release** while its commit is in the mirror, which Octopushy's own ref sees to. If the commit is
+  gone, as after the mirror was lost, a reference that resolves to it is invalid and says so.
+
+### Resolution and revisions
+
+For each reference in a lab repository's commit, `@M` takes the highest minor among the usable releases of major `M`, and
+`@M.m` takes exactly that release; an invalid release named exactly says why it cannot be used. Each reference resolves to
+`(workflow, version, commit)`, and the workflow is read from that commit's files: its folder and `modules/` there, checked
+with the [path rules](#paths) as a local workflow is.
+
+**A revision is the lab repository's commit together with what its references resolved to.** Its identity is the source, the
+commit and the digest of those resolutions. So:
+
+- **A new tag that changes a resolution is a new revision,** even with no new commit in the lab repository, and it is applied
+  like a new commit: hashes are compared and runs proposed under each resource's policy. That is how a new minor release
+  reaches every guest and service on `@M`. One pinned to `@M.m` resolves as before, so nothing is proposed for it.
+- **A new major is offered, not applied.** The Repository page shows "fedora-vm 3.0 available, breaking" beside each guest
+  and service on an older major. Upgrading is a change to the reference.
+- **A revision is always read again with the resolutions it recorded,** never with newer releases: a run waiting for approval
+  is built from exactly what it was proposed from.
+- Head selection, the revision cache, bundles, pruning, runs, approval documents and the editor all use this identity. The
+  editor validates a draft and its base with the releases recorded now, as a sync would read them, including a draft that
+  changes a version.
+
+**Hashes** are computed from the resolved commit's files. They cover the workflow's id, version and files, not its commit, so
+the same files at the same version from another commit change nothing.
+
+### What a run gets
+
+Each attempt's bundle is the lab repository's files at the run's commit, with the workflows repository's `workflows/` and
+`modules/` at the resolved workflow's commit, merged at the bundle root. Paths stay what they are, so a stage's `root` and a
+guest's directory read the same, and agents need no change. Bundles are cached per pair of commits. Every run records the
+workflow, its version and its commit, and the run page shows them.
 
 ### Paths
 
@@ -346,15 +418,17 @@ a step taken out of order stops the work rather than delivering nothing.
 ```yaml
 schemaVersion: 1
 # workflows: { source: local }    # the default: this repository's workflows/
+# workflows: { repository: <git url or path>, credential: { store: <key> } }
 defaults:
   policy:
     approval: automatic           # automatic | manual
     # destructive: unset, so it follows approval
 ```
 
-Holds where workflows come from and repository-wide defaults. `workflows.source` accepts only `local` for now, which is
-also what an absent `workflows` means. A workflows repository comes next. OpenTofu state needs nothing here: Octopushy keeps
-every guest's state. Server settings (provider routing, agents, sign-in) stay out of Git.
+Holds where workflows come from and repository-wide defaults. `workflows.source: local`, which is also what an absent
+`workflows` means, is this repository's `workflows/`; `workflows.repository` names a
+[workflows repository](#workflows-from-their-own-repository). One or the other, not both. OpenTofu state needs nothing here:
+Octopushy keeps every guest's state. Server settings (provider routing, agents, sign-in) stay out of Git.
 
 ### Lab
 
@@ -638,16 +712,62 @@ There is nothing to migrate (a fresh start, decided November 3, 2026), so the re
 ## Validating offline
 
 `octopushy-validate` reads a repository the way the server does, with the same `Octopushy.Definitions`, and prints every
-issue with its file and line:
+issue with its file and line, then what each guest and service resolved to:
 
 ```sh
+octopushy-validate <config-dir> [--workflows <git url|path>]
+octopushy-validate --workflows-only <dir>
+
 just validate examples/lab
 # or
-dotnet run --project backend/src/Octopushy.Validate -- <repo-dir>
+dotnet run --project backend/src/Octopushy.Validate -- <config-dir>
+# or, with no .NET installed
+docker run --rm -v "$PWD:/repo:ro" docker.io/skorcius/octopushy:validate-main /repo
 ```
 
-It exits non-zero when there is an error. Warnings are printed and do not fail it. It reads workflows from the repository's
-own `workflows/`. **Next:** `--workflows <git url or path>`, to validate a repository against a separate workflows repository.
+- **Without `--workflows`,** workflows are the repository's own `workflows/`, or the release tags of the workflows repository
+  its `octopushy.yaml` names, fetched with Git's own credentials.
+- **`--workflows <url>`,** a Git URL (`https://`, `ssh://`, `user@host:path`, `file://`) or a bare repository: its tags,
+  resolved exactly as the server resolves them, with the same code. A validation has no history, so a tag is taken where it
+  points now; an invalid release is a warning.
+- **`--workflows <dir>`,** a directory with `workflows/`: every workflow at the version its `workflow.yaml` declares, as it is
+  on disk, the way local workflows are read. This is for a workflows repository's own CI, with a fixture lab repository.
+- **`--workflows-only <dir>`** checks every `workflows/*/workflow.yaml` in a directory and the paths it names, with no lab
+  repository.
+
+It exits 1 when there is an error, 2 for a usage error, and 0 otherwise; warnings are printed and do not fail it. The image
+`validate-<version>` (and `validate-main`) is published with the others, and runs as `octopushy-validate`.
+
+**CI in the workflows repository** checks its workflows alone, then against a fixture lab repository that names them at the
+versions on the branch:
+
+```yaml
+# .github/workflows/validate.yml in octopushy-lab
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    container: docker.io/skorcius/octopushy:validate-main
+    steps:
+      - uses: actions/checkout@v6
+      - run: octopushy-validate --workflows-only .
+      - run: octopushy-validate tests/fixture-config --workflows .
+```
+
+**CI in the lab repository** resolves its references against the workflows repository's tags, as the server will:
+
+```yaml
+# .github/workflows/validate.yml in homelab-config
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    container: docker.io/skorcius/octopushy:validate-main
+    steps:
+      - uses: actions/checkout@v6
+      # A private workflows repository needs a credential Git can use, such as a read-only deploy key or token.
+      - run: octopushy-validate .
+```
 
 ## The first journey through the files
 
@@ -681,7 +801,7 @@ and the lab shows a warning.
 
 1. **Stages with one approval, and services shown on guests.** Built.
 2. **Workflows kept in the lab repository, with versions, and the offline validator.** Built.
-3. **A workflows repository resolved by tags,** with immutable tags recorded per commit.
+3. **A workflows repository resolved by tags,** with immutable tags recorded per commit. Built.
 4. **Interfaces, and secrets for OpenTofu stages.** `lab.dns` goes. A stage's plan gets its token here, which is the limit
    stated above.
 5. **Containers.**

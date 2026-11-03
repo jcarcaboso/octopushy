@@ -264,9 +264,9 @@ The phases ship in this order. Phase 4 can run beside any of them.
 
 ### Phase 2: versioned workflows from their own repository
 
-**In progress.** The format, resolution from the repository's own `workflows/` ("local workflows"), the hashes and the
-offline validator are built: [workflows.md](workflows.md). The workflows source, its tags and the per-attempt bundles are
-next.
+**Built in Octopushy:** the format, local workflows, the hashes, the workflows source with its tags and per-attempt bundles,
+and the offline validator with `--workflows` and `--workflows-only` and its image: [workflows.md](workflows.md). What is left
+is in the two other repositories: their CI, and converting the recipes into workflows released as `1.0`.
 
 - **Format.** Write the `workflow.yaml` schema: version, `manages`, stages, actions, inputs, generated values. Guests and
   services reference `workflow: <id>@<M>` or `@<M.m>`, with `inputs` and `secrets`.
