@@ -37,21 +37,82 @@ Three repositories, each with one job.
 
 | Repository | Holds | Never holds |
 |---|---|---|
-| `octopushy` | The engine: API, run engine, agent, UI, its own contract tests with minimal fixtures | Recipes, modules, anything that names a service |
-| `octopushy-lab` (**workflows**) | `blueprints/`, `recipes/`, `modules/` (OpenTofu, Ansible, NixOS), `templates/`, their tests and CI | Installations, guests, endpoints, secrets |
-| `homelab-config` (**config**) | `octopushy.yaml`, `labs/**`: installations, guests, services, policies, schedules | Code: no `recipes/`, `modules/`, `templates/` |
+| `octopushy` | The engine: API, run engine, agent, UI, its own contract tests with minimal fixtures | Workflows, modules, anything that names a service |
+| `octopushy-lab` (**workflows**) | `workflows/<id>/`, each versioned `M.m`, plus shared `modules/` (OpenTofu, Ansible, NixOS), tests and CI | Installations, guests, endpoints, secrets |
+| `homelab-config` (**config**) | `octopushy.yaml`, `labs/**` (installations, guests, services, policies, schedules), `templates/` (image URL and checksum are data) | Code: no workflows, modules or playbooks |
 
-`homelab-config/octopushy.yaml` pins the workflows **by commit**. Only a config PR can change what runs:
+### Workflows and their versions
+
+**Decided by the owner on November 3: a version belongs to a whole workflow, and is `M.m`.** A workflow is everything needed
+to manage one kind of thing from start to end, for example a Fedora VM: create it, set it up, update it, run its actions
+and retire it. It is not a single stage.
+
+- **A major version (`M`) is a breaking change.** Examples are an input that is removed, renamed, newly required or
+  narrowed, or a change that would replace existing machines.
+- **A minor version (`m`) does not break the flow.**
+
+`octopushy-lab` layout:
+
+```text
+workflows/fedora-vm/workflow.yaml      version, stages, actions, form
+workflows/fedora-vm/inputs.schema.json the inputs, which are also the wizard's form
+workflows/technitium-dns/…
+workflows/octopushy-worker/…
+modules/opentofu/proxmox-vm/           shared code, versioned through the workflows that use it
+modules/ansible/machine/
+```
 
 ```yaml
+# workflows/fedora-vm/workflow.yaml
 schemaVersion: 1
-workflows:
-  repository: git@github.com:jcarcaboso/octopushy-lab.git
-  commit: 3f9c2a1e…      # full SHA, immutable
-  release: v0.3.0         # display only; a tag that does not point at `commit` is a warning
-defaults:
-  policy: { approval: manual }
+version: 2.3
+manages: vm                       # vm | container | service
+description: A Fedora VM on Proxmox, set up with the parts it selects.
+inputs: inputs.schema.json        # validates the guest's inputs; renders the form
+generated: [vmid]                 # filled by Octopushy in the wizard
+stages:
+  - name: machine                 # provision: approved on its own, before setup
+    executor: opentofu
+    root: ../../modules/opentofu/proxmox-vm
+    verify: proxmox
+  - name: setup
+    executor: ansible
+    root: ../../modules/ansible/machine
+    playbook: configure.yml
+actions:
+  update-system: { stage: setup, playbook: update-system.yml, destructive: false }
 ```
+
+A guest in `homelab-config` names one workflow and its major version. `@2` takes the newest `2.x`, and `@2.3` stays on
+exactly `2.3`. A reference without a version is invalid, so a major version is never adopted by accident:
+
+```yaml
+# labs/home/proxmox/pve01/guests/pve01-ai/guest.yaml
+schemaVersion: 1
+workflow: fedora-vm@2
+host: pve01
+vmid: 200
+inputs: { cores: 2, memory: 1024, features: [ai-tools, cli-tools, developer, t3, tailscale] }
+secrets: { machine_tailscale_auth_key: { store: pve01-ai/tailscale-auth-key } }
+policy: { approval: automatic, destructive: manual }
+```
+
+`homelab-config/octopushy.yaml` names only the repository: `workflows: { repository: git@github.com:jcarcaboso/octopushy-lab.git }`.
+
+**Releases and the rules around them:**
+
+- **Tags.** CI in `octopushy-lab` tags each workflow as `fedora-vm/v2.3` when it is merged to `main` with a new
+  `version`.
+- **Version bumps are enforced by CI.** A change to a workflow's folder, or to a module it uses, needs a version bump.
+  A change to its inputs schema that rejects inputs the previous version accepted needs a **major** bump.
+- **A tag never moves.** Octopushy records the commit each tag pointed to when it first saw it, and refuses a tag that
+  later points somewhere else.
+- **A new minor release reaches every guest on that major.** Each affected guest's inputs hash changes, and its runs are
+  proposed under its policy. That is the point of `@2`. Guests that pin `@2.3` do not move.
+- **A new major release is offered, not applied.** The guest page shows "fedora-vm 3.0 available, breaking". Upgrading
+  is a UI change, so it becomes a commit from `@2` to `@3` and then follows the normal process. The form asks for any
+  new inputs.
+- **Each run records what it ran:** the workflow, its version and its commit.
 
 ### Changing things from the UI
 
@@ -70,37 +131,33 @@ as a change made in Git:
 Git stays the one source of truth. Nothing the UI changes exists only in the database, and there is no drift to
 reconcile.
 
-**Forms come from schemas, not from code.** A guest's form is rendered from its recipe's `inputs` schema, plus optional
-UI hints in the recipe. A new field in a recipe appears in the UI without an engine change.
+**Forms come from schemas, not from code.** A guest's form is rendered from its workflow's `inputs` schema, plus
+optional UI hints. A new field in a workflow appears in the UI without an engine change.
 
 **Operations that are not desired state** do not go through Git:
 
 - start, stop, shutdown and reboot;
 - snapshot, rollback and delete snapshot;
-- run a recipe action;
+- run a workflow action;
 - retry;
 - open the console.
 
 They still go through the run engine: each is a run with steps, an agent attempt and a log, so it is recorded like any
 other run. They are refused on an installation with `manage: false`.
 
-### One-click deployment: blueprints
+### One-click deployment: the workflow is the form
 
-A **blueprint** in `octopushy-lab` (`blueprints/<id>/blueprint.yaml`) describes something to deploy in one go. Examples
-are a Fedora AI machine, an Octopushy worker and a Technitium node. A blueprint names:
+The wizard is generic:
 
-- its provision recipe;
-- its setup recipes;
-- its services;
-- their default inputs;
-- a form, as JSON Schema with UI hints;
-- **generated values**, which the engine fills in. These are the next free VMID on the chosen host, an agent enrollment
-  token put in the store, and guest keys.
+1. Choose a workflow, such as Fedora VM, Octopushy worker or Technitium DNS.
+2. Choose an installation and host.
+3. Fill in the form, which is the workflow's `inputs` schema with UI hints.
+4. Review the `guest.yaml` it will commit.
+5. **Deploy.** Deploy commits, syncs and runs, and can include the approval in the same click.
 
-The wizard is generic: choose a blueprint, then an installation and host, fill in the form, review the files it will
-commit, then **Deploy**. Deploy commits, syncs and runs, and can include the approval in the same click. An Octopushy
-worker is just a blueprint whose setup installs the agent with a generated enrollment token. One click gives a worker,
-with no worker-specific code in the engine.
+**Generated values** are filled in by Octopushy: the next free VMID on the host, an agent enrollment token put in the
+store, and keys. An Octopushy worker is just the `octopushy-worker` workflow, whose setup installs the agent with a
+generated enrollment token. One click gives a worker, with no worker-specific code in the engine.
 
 ### What the engine keeps
 
@@ -110,7 +167,7 @@ with no worker-specific code in the engine.
 - Git sync and the repository editor. The editor stays config-only.
 - UI changes as commits: forms rendered from schemas, the compare-and-swap commit, immediate sync, and following the run
   to the end.
-- The blueprint wizard and generated values.
+- The workflow wizard and generated values.
 - VM operations (power, snapshots, actions), as recorded runs.
 - Approvals and policy.
 - Proxmox observation, inventory, `verify-guest`/`verify-absent` and VM protection.
@@ -122,7 +179,7 @@ with no worker-specific code in the engine.
 ### What the engine loses
 
 - Managed workers: their steps, the worker-only wizard, the `worker` field, the `managed-worker` executor, and
-  `deploy/worker-template-v1`. One-click workers come back as a blueprint.
+  `deploy/worker-template-v1`. One-click workers come back as the `octopushy-worker` workflow.
 - The disk reporter: the step, its tokens and ingest endpoint, the `guest` executor, and the `disk-reporter` crate.
 - NixOS root growth: `guestFilesystem`, the `nixos-rootfs` executor, and the `grow-root`/`verify-root` steps.
 - External OpenTofu state backends (`stateBackends`, `provision.state`).
@@ -130,9 +187,9 @@ with no worker-specific code in the engine.
 
 ### How runs work in the end
 
-- **The generic unit is the stage:** one recipe, one executor, one fixed pattern.
+- **The generic unit is the stage** of a workflow: one executor, one fixed pattern.
   - `opentofu`: `plan`, approval, then `apply` of exactly that plan.
-  - `ansible`: `preview`, approval, then `run`, plus the outcome approvals a recipe declares.
+  - `ansible`: `preview`, approval, then `run`, plus the outcome approvals a workflow declares.
 - **Step meaning comes from a step-type registry**, not from name switches. Each type is one class that says how to
   build its assignment, which credentials it may hold, how it is approved, and what effects it has. The types are:
   `opentofu.plan`, `opentofu.apply`, `ansible.preview`, `ansible.run`, `approval`, `proxmox.verify`,
@@ -185,7 +242,8 @@ The phases ship in this order. Phase 4 can run beside any of them.
   goes in Phase 1 along with the worker.
 
 **`octopushy-lab`:**
-- Replace its contents with `homelab-config`'s `recipes/`, `modules/`, `templates/` and `tests/`, which are the newest.
+- Replace its contents with `homelab-config`'s `recipes/`, `modules/` and `tests/`, which are the newest. They keep the
+  recipe format until Phase 2 converts them into workflows.
 - Merge `tests/technitium` from both sources on purpose, rather than overwriting one with the other.
 - Add CI: `tofu validate`, `ansible-lint`, the container tests and the snippet test.
 
@@ -196,7 +254,7 @@ The phases ship in this order. Phase 4 can run beside any of them.
 ### Phase 1: shrink the engine
 
 - **Delete managed workers, the disk reporter and NixOS root growth,** across the backend, agent, contracts, frontend and
-  docs. Workers become ordinary guests with an `octopushy-agent` setup recipe and a one-time enrollment token from the
+  docs. Workers become ordinary guests with an agent-install setup stage and a one-time enrollment token from the
   store (**D1**).
 - **Delete external state backends and the code for earlier releases.**
 - **Squash migrations into a new `Initial`.**
@@ -204,36 +262,46 @@ The phases ship in this order. Phase 4 can run beside any of them.
   the VMID check against observed VMs, each with tests.
 - **Result:** the run kinds are provision, retire, configure, pipeline and rotate-access, with no feature steps.
 
-### Phase 2: workflows from their own repository
+### Phase 2: versioned workflows from their own repository
 
-- **Separate mirrors per source,** each fetching by commit. Workflows authentication is a store key.
-- **Composed snapshot.** An immutable, separate snapshot overlays the workflows repository's `recipes/`, `modules/` and
-  `templates/` onto the config tree. Paths in the bundle stay what they are today, so the loader, the agents and the
-  recorded OpenTofu roots do not change. If the config repository holds any of those folders as well, the revision is
-  invalid.
-- **Revision identity becomes `(config commit, workflows commit)`.** It is used in sync, head selection, `RevisionCache`,
-  bundles, pruning, `Run`, approval manifests and `PipelineDocument`. The commit diff in `Planner.cs:334-344` diffs the
-  composed trees.
-- **The editor writes only config.** It validates drafts against the composed snapshot, including a draft that moves the
-  pin, and refuses writes into `recipes/`, `modules/` and `templates/`.
-- **Close the hash gaps:** an `inputs` schema outside the recipe folder is refused, and so is an OpenTofu `source` outside
-  `root`.
-- **Offline validator:** `octopushy validate <config> --workflows <path>`, reusing `Octopushy.Definitions`. It runs in CI
-  for `homelab-config` (against the pinned commit) and for `octopushy-lab` (against a fixture config).
-- **Cut over:** pin `octopushy-lab` in `homelab-config` and delete `recipes/`, `modules/` and `templates/` there.
+- **Format.** Write the `workflow.yaml` schema: version, `manages`, stages, actions, inputs, generated values. Guests and
+  services reference `workflow: <id>@<M>` or `@<M.m>`, with `inputs` and `secrets`.
+  - `provision`/`setup`/`recipe` in `guest.yaml` and `stages` in `pipeline.yaml` go, since this is a fresh start and
+    there is nothing to migrate.
+  - `templates/` stays in `homelab-config`.
+- **Workflows source.** A second mirror fetches the workflows repository's branches and tags, authenticated with a store
+  key. Tags are parsed as `<id>/v<M>.<m>`, and tag-to-commit records refuse a tag that moves.
+- **Resolution.** Each config revision resolves every reference to `(version, commit)`.
+  - A revision's identity becomes `(config commit, digest of the resolutions)`. A new minor tag is a new revision, even
+    with no new config commit.
+  - Every commit-keyed path uses that identity: sync, head selection, `RevisionCache`, bundle cache, pruning, `Run`,
+    approval manifests and `PipelineDocument`.
+- **Bundles are per attempt:** the config tree plus the workflows tree at the resolved workflow's commit. Paths inside
+  stay relative, so agents need no change.
+- **Hashes** cover the resolved version, the workflow's folder and the modules it uses. A workflow that references
+  anything outside its folder and `modules/` is refused.
+- **The editor writes only config.** It validates drafts against their resolved workflows, including a draft that changes
+  a version.
+- **`octopushy validate <config> --workflows <path>`,** reusing `Octopushy.Definitions`.
+- **CI in `octopushy-lab`:**
+  - validate every workflow against a fixture config;
+  - enforce version bumps, including breaking schema changes as a major;
+  - tag on merge;
+  - `tofu validate`, `ansible-lint` and the container tests.
+- **CI in `homelab-config`:** validate against the resolved workflows.
+- **Convert** `octopushy-lab`'s recipes into workflows (`fedora-vm`, `technitium-dns`, `octopushy-worker`) and release
+  each as `1.0`. Delete recipes and modules from `homelab-config`.
 
 ### Phase 3: change from the UI, and one-click deployment
 
 - **UI changes as commits.**
-  - Form editing for guests and services, rendered from recipe `inputs` schemas.
+  - Form editing for guests and services, rendered from the workflow's `inputs` schema.
   - A compare-and-swap commit through the existing `RepositoryMirror.Write` path, with immediate sync.
   - A change page that follows commit → revision → run → applied, with approval inline.
   - Octopushy needs a repository-scoped deploy key with write access to `homelab-config`.
-- **Blueprints.**
-  - The `blueprint.yaml` schema, with the next free VMID, an enrollment token and keys as generated values.
-  - The generic wizard: blueprint, then installation and host, then form, then review, then Deploy. Deploy can include
-    the approval.
-  - First blueprints in `octopushy-lab`: `fedora-machine`, `octopushy-worker` and `proxmox-vm`.
+- **The workflow wizard.** Choose a workflow, then installation and host, then form, then review, then Deploy. Deploy can
+  include the approval. Generated values are the next free VMID, an enrollment token and keys.
+- **Upgrades.** A new major version is shown on guests that use the workflow, with an upgrade that commits `@M+1`.
 - **Acceptance on real Proxmox:** rebuild `pve01-ai` and a worker **through the wizard**, then resize one from its form.
   Each change shows as a commit in `homelab-config` and is applied through the normal process.
 
@@ -254,9 +322,9 @@ The phases ship in this order. Phase 4 can run beside any of them.
 
 ### Phase 5: LXC and DNS
 
-- **LXC is engine work plus a recipe.** It needs guest `type: container`, client types, `verify-guest`/`verify-absent` and
-  protection for containers, the access behaviour (keys are `ForceNew`), and a `proxmox-lxc` recipe in `octopushy-lab`.
-- **DNS starts as an explicit recipe stage,** such as Technitium records, before any `interfaces` abstraction. A Proxmox
+- **LXC is engine work plus a workflow.** It needs guest `type: container`, client types, `verify-guest`/`verify-absent` and
+  protection for containers, the access behaviour (keys are `ForceNew`), and a `proxmox-lxc` workflow in `octopushy-lab`.
+- **DNS starts as an explicit workflow stage,** such as Technitium records, before any `interfaces` abstraction. A Proxmox
   cluster installation (`type: cluster`) and a Technitium cluster are different things, and they are planned separately.
 
 ### Phase 6: step-type registry
@@ -279,17 +347,19 @@ Specified in its own document before any code is written. It covers:
 ## Decisions
 
 - **D1: managed workers.** **Recommended:** delete the engine machinery. A worker is an ordinary guest deployed from
-  the `octopushy-worker` blueprint, whose generated enrollment token keeps it one click. Keep the drain safeguard when
+  the `octopushy-worker` workflow, whose generated enrollment token keeps it one click. Keep the drain safeguard when
   a worker is retired. Between Phase 1 and Phase 3 a worker is enrolled by hand.
 - **D2: disk usage.** **Recommended:** read it from the QEMU guest agent during observation (Phase 4). Until then, no
   disk meter.
-- **D3: pinning.** **Recommended:** by commit, with the release tag for display only. Tracking a branch is not offered.
+- **D3: versions.** **Decided by the owner, November 3:** each whole workflow has a version `M.m`, and references name
+  `@M` (newest minor) or `@M.m` (exact). Commit pins are not used. Tags are immutable, and CI enforces bumps.
 - **D4: old docs.** **Recommended:** delete what is superseded, since Git keeps it.
   - **Keep:** `CONTEXT.md`, the ADRs, and the docs for credentials, state, installation trust, operator access and
     recovery.
   - **Rewrite** `lab-repository.md` and `pipelines.md` into one `workflows.md`.
-- **D5: trusting a workflows bump.** **Recommended:** no extra gate, since the pin is a commit in a reviewed config PR.
-  Apply approval and the destructive policy still apply to every change, and approval does not sandbox planning.
+- **D5: adopting a minor release.** **Recommended:** automatic for `@M` references, under each guest's approval and
+  destructive policy, with no config commit. A guest that must not move pins `@M.m`. Approval does not sandbox
+  planning, so a minor release runs its plan with the guest's credentials before anyone approves.
 - **D6: UI changes.** **Decided by the owner, November 3:** the UI may change anything, and every change is a commit to
   `homelab-config` that then goes through the normal process. Operations that are not desired state, such as power and
   snapshots, are recorded runs with no commit.
