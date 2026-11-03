@@ -11,6 +11,7 @@ COPY pvesh pvesm /usr/local/bin/
 # Only for the tests that force a failure: inactive until a file in /run/fault says otherwise.
 COPY fault-sshd /usr/local/sbin/sshd
 COPY fault-systemctl /usr/local/sbin/systemctl
+COPY fault-userdel /usr/local/sbin/userdel
 RUN echo '{"local": {"type": "dir", "path": "/var/lib/vz", "content": "iso,vztmpl,backup,import"}}' > /etc/pve-stub/storage.json \
  && echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
 STOPSIGNAL SIGRTMIN+3

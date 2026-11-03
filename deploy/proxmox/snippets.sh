@@ -31,11 +31,15 @@
 # drop-in's name is taken by a file this script did not write, or another drop-in sorts before
 # it; or any other sshd file mentions the account.
 #
-# --remove undoes 2 to 5 with the same checks and the same restore, and also refuses while the
-# account has a process or the chroot holds something it did not make. It leaves the datastore's
+# It also refuses a link, or anything but a regular file or directory, at any path it writes or
+# backs up.
+#
+# --remove undoes 2 to 5 with the same checks, and also refuses while the account has a process,
+# a process uses the chroot, or the chroot holds something it did not make. It locks and expires
+# the account and deletes its key first, and removes the block last, so if a step fails part way
+# the account still has no way in; run --remove again to carry on. It leaves the datastore's
 # content and the snippets, which it gives to root first, so a later account with the same UID
-# cannot read them. Once sshd no longer lets the account in, its later steps are not undone if one
-# fails: run --remove again.
+# cannot read them.
 set -euo pipefail
 # Byte order for comparing file names, as sshd's Include sorts them, and plain messages.
 export LC_ALL=C
@@ -137,6 +141,19 @@ shopt -u nullglob
 mentions=$(grep -lE -- "(^|[^A-Za-z0-9_.-])$user([^A-Za-z0-9_.-]|\$)" "$main_conf" "$conf_dir"/* 2>/dev/null | grep -vxF -- "$conf" || true)
 [[ -z $mentions ]] || die "other sshd files mention $user: $(tr '\n' ' ' <<<"$mentions")nothing was changed"
 
+# Every path the script writes, backs up or deletes is what it looks like: a regular file or a
+# directory, never a link to somewhere else, so a copy is of what sshd reads and a write lands
+# where it is meant to.
+for path in "$conf" "$keys" "/etc/systemd/system/$unit"; do
+  if [[ -L $path || ( -e $path && ! -f $path ) ]]; then die "$path is not a regular file; nothing was changed"; fi
+done
+dirs=("$keys_dir" "$snippets" "$chroot")
+dir=$chroot
+for part in ${snippets//\// }; do dir=$dir/$part; dirs+=("$dir"); done
+for path in "${dirs[@]}"; do
+  if [[ -L $path || ( -e $path && ! -d $path ) ]]; then die "$path is not a directory; nothing was changed"; fi
+done
+
 # ---- sshd's files: written, checked and reloaded, or put back. ----
 
 # Copies of sshd's files as they are, bytes, mode and owner, in a directory only root can read.
@@ -169,13 +186,24 @@ apply_sshd() {
 
 if ((remove)); then
   say "Removing the $user account and its SFTP access"
-  # What would stop the removal once access is gone, checked while it can still be refused: a
-  # process of the account, such as an open SFTP session, and anything in the chroot but its
+  # What would stop the removal part way, checked while it can still be refused: a process of the
+  # account, such as an open SFTP session; anything using the chroot, such as a process working in
+  # it, which would keep it from being unmounted; another mount in it; and anything in it but its
   # directories and the mounted snippets directory.
   if id -u "$user" >/dev/null 2>&1 && pgrep -u "$user" >/dev/null; then
     die "processes of $user are running, such as an SFTP session: $(pgrep -u "$user" -d ' '); nothing was changed"
   fi
   if [[ -d $chroot ]]; then
+    users=()
+    for proc in /proc/[0-9]*; do
+      for link in "$proc"/cwd "$proc"/root "$proc"/fd/*; do
+        target=$(readlink -- "$link" 2>/dev/null) || continue
+        if [[ $target == "$chroot" || $target == "$chroot"/* ]]; then users+=("${proc#/proc/}"); break; fi
+      done
+    done
+    ((${#users[@]} == 0)) || die "processes use $chroot, so it cannot be unmounted: ${users[*]}; nothing was changed"
+    others=$(findmnt -rn -o TARGET | grep -E "^$chroot(/|\$)" | grep -vxF -- "$inner" || true)
+    [[ -z $others ]] || die "other file systems are mounted in $chroot: $others; nothing was changed"
     stray=()
     while IFS= read -r found; do
       # The directories on the way to the snippets directory are the script's; anything else is not.
@@ -183,17 +211,15 @@ if ((remove)); then
     done < <(find "$chroot" -mindepth 1 -path "$inner" -prune -o -print)
     ((${#stray[@]} == 0)) || die "$chroot holds more than this script made: ${stray[*]}; nothing was changed"
   fi
-  # From here on, each step is done or the removal stops. Only sshd's step is put back: once
-  # sshd no longer lets the account in, what follows can be repeated with --remove.
-  if ((had_conf || had_keys)); then
-    staged=1
-    rm -f -- "$conf" "$keys"
-    ((had_conf)) && note "removed $conf"
-    ((had_keys)) && note "removed $keys"
-    apply_sshd
-    staged=0
+
+  # The restrictive block is the last thing to go. Until then, every way into the account but its
+  # key is off, so taking the key away and expiring the account leaves no way in at all. If any
+  # step below fails, the block is still there, and --remove can be run again to carry on.
+  if id -u "$user" >/dev/null 2>&1; then
+    if [[ $(getent shadow "$user" | cut -d: -f8) != 1 ]]; then usermod -L -e 1 "$user"; note "locked and expired $user"; fi
   fi
-  [[ -d $keys_dir ]] && rmdir -- "$keys_dir" && note "removed $keys_dir"
+  if [[ -f $keys ]]; then rm -f -- "$keys"; note "removed $keys, so $user has no key that sshd accepts"; fi
+  if [[ -d $keys_dir ]]; then rmdir -- "$keys_dir"; note "removed $keys_dir"; fi
   if [[ -f /etc/systemd/system/$unit ]]; then
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
     rm -f -- "/etc/systemd/system/$unit"
@@ -224,6 +250,16 @@ if ((remove)); then
   fi
   if id -u "$user" >/dev/null 2>&1; then userdel "$user"; note "removed the user $user"; fi
   if getent group "$user" >/dev/null; then groupdel "$user"; note "removed the group $user"; fi
+
+  # Last, the block itself: removed, checked and reloaded, or put back byte for byte.
+  if ((had_conf)); then
+    had_keys=0
+    staged=1
+    rm -f -- "$conf"
+    note "removed $conf"
+    apply_sshd
+    staged=0
+  fi
   say "Done. ${#changed[@]} change(s)."
   echo "The datastore $datastore keeps snippets in its content, and $snippets keeps its files."
   echo "To stop offering snippets: pvesm set $datastore --content <the list without snippets>"
@@ -252,6 +288,8 @@ if ! id -u "$user" >/dev/null 2>&1; then
 fi
 # No password: '*' matches nothing, and unlike '!' sshd does not read it as a locked account.
 if [[ $(getent shadow "$user" | cut -d: -f2) != '*' ]]; then usermod -p '*' "$user"; note "set no password for $user"; fi
+# An expiry is what a --remove that stopped part way leaves; setting up again clears it.
+if [[ -n $(getent shadow "$user" | cut -d: -f8) ]]; then usermod -e '' "$user"; note "cleared the expiry of $user"; fi
 # The account writes snippets and nothing else. Proxmox reads them as root.
 if [[ $(stat -c '%G %a' "$snippets") != "$user 2770" ]]; then
   chgrp "$user" "$snippets"

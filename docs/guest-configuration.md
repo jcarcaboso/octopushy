@@ -552,16 +552,26 @@ than by testing one connection:
 - **Before it changes anything**, it refuses: root, an account or group that exists and that it did
   not create, a configuration `sshd -t` already rejects, a drop-in of its name that it did not write,
   and any other sshd file that mentions the account, such as a `Match User` block for it on some
-  addresses. This holds for `--remove` too, which also refuses while the account has a process,
-  such as an open SFTP session, or the chroot holds anything it did not make.
+  addresses. It also refuses a link, or anything but a regular file or a real directory, at any
+  path it writes or backs up: the drop-in, the key file and its directory, the mount unit and the
+  chroot's directories. This holds for `--remove` too, which also refuses while the account has a
+  process, such as an open SFTP session, while any process uses the chroot, such as one working in
+  it, which would keep it from being unmounted, or while the chroot holds anything it did not make.
 - **sshd's files are written, checked and reloaded, or put back.** It copies them first, with
   their modes, into a directory only root can read. After writing, it checks `sshd -t` and
   reloads only then. If that or the reload fails, it puts the copies back, reloads again if the
   first reload went through, and sshd keeps running what it had, for setup and `--remove` alike.
+- **`--remove` takes the block away last.** It locks and expires the account and deletes its key
+  first. The block still turns off every other way in, so the account cannot log in at all from
+  that moment. Then it unmounts the chroot, gives root the snippets the account owns, deletes the
+  account, its group and the mount unit, and only then removes the drop-in, checks `sshd -t` and
+  reloads. If any step fails part way, the block is still there and nothing gets in as the
+  account, not even with a certificate from a CA the host trusts. Running `--remove` again carries
+  on from there; running setup again clears the expiry and puts the key back.
 - **What is not put back.** Setup's earlier steps (the datastore's content, the account, the chroot
   and its mount) stay if sshd's step fails; a second run or `--remove` deals with them. In
-  `--remove`, once sshd no longer lets the account in, the steps after it are not undone if one
-  fails; `--remove` can be run again.
+  `--remove`, only the drop-in is put back if its own step fails: the steps before it, which leave
+  the account with no way in, are not undone.
 - **Kept snippets stay root's.** `--remove` keeps the snippets, which hold guests' private host
   keys. Before the account's UID is freed, it gives root every file the account owns there,
   without following links, keeping each file's mode, so an account made later with the same UID

@@ -10,7 +10,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
-script=$repo/deploy/proxmox/snippets.sh
+script=${SNIPPETS_SH:-$repo/deploy/proxmox/snippets.sh}
 work=$(mktemp -d "${TMPDIR:-/tmp}/octopushy-snippets.XXXXXX")
 port=${OCTOPUSHY_SNIPPETS_TEST_PORT:-22987}
 name=octopushy-snippets-test-$$
@@ -191,7 +191,14 @@ run_on() {
       sha256sum sshd_config.d/00-octopushy-snippets.conf octopushy-snippets/authorized_keys
       for u in root octopushy-snippets; do sshd -T -C user=$u,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default; done'
   }
+  # In --remove the drop-in is the last thing to go, so a failure there puts back only the drop-in:
+  # the account is already locked or gone, with no key, which is as safe as it gets.
+  sshd_dropin() {
+    in_host sh -c 'cd /etc/ssh; stat -c "%n %a %U %G %s" sshd_config.d/00-octopushy-snippets.conf; sha256sum sshd_config.d/00-octopushy-snippets.conf
+      sshd -T -C user=root,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default'
+  }
   sshd_files >"$work/files-before"
+  sshd_dropin >"$work/dropin-before"
   for fault in sshd-t reload; do
     for mode in setup remove; do
       # sshd -t's second call is the one after the write; its first is the check before any change.
@@ -202,15 +209,80 @@ run_on() {
         in_host bash /root/snippets.sh --remove >"$work/faulted" 2>&1 && { cat "$work/faulted"; fail "--remove passed with the fault '$fault'"; }
       fi
       in_host rm -f /run/fault/sshd-t /run/fault/sshd-t-count /run/fault/reload
-      sshd_files >"$work/files-after"
-      diff "$work/files-before" "$work/files-after" >/dev/null || fail "$mode with the fault '$fault' left sshd's files changed: $(diff "$work/files-before" "$work/files-after" | head -8)"
+      if [[ $mode == setup ]]; then
+        sshd_files >"$work/files-after"
+        diff "$work/files-before" "$work/files-after" >/dev/null || fail "$mode with the fault '$fault' left sshd's files changed: $(diff "$work/files-before" "$work/files-after" | head -8)"
+      else
+        sshd_dropin >"$work/dropin-after"
+        diff "$work/dropin-before" "$work/dropin-after" >/dev/null || fail "$mode with the fault '$fault' did not put the drop-in back: $(diff "$work/dropin-before" "$work/dropin-after" | head -8)"
+      fi
       grep -q 'put back as it was' "$work/faulted" || { cat "$work/faulted"; fail "$mode with the fault '$fault' did not say it put sshd back"; }
-      sftp_ok "$work/id2" || fail "after $mode with the fault '$fault', the account's key no longer logs in"
-      sftp_ok "$work/id" && fail "after $mode with the fault '$fault', the new key logs in"
+      if [[ $mode == setup ]]; then
+        sftp_ok "$work/id2" || fail "after $mode with the fault '$fault', the account's key no longer logs in"
+        sftp_ok "$work/id" && fail "after $mode with the fault '$fault', the new key logs in"
+      else
+        sftp_ok "$work/id2" && fail "after $mode with the fault '$fault', the account still logs in"
+        # Set up again, as an operator would, and put back the bytes and modes the next case compares.
+        setup "$work/id2.pub" >/dev/null || fail "setup after $mode with the fault '$fault' failed"
+        in_host sh -c 'echo >> /etc/ssh/octopushy-snippets/authorized_keys'
+        sshd_files | diff -q "$work/files-before" - >/dev/null || fail "setup after $mode with the fault '$fault' did not get back to where it was"
+      fi
     done
   done
   in_host sh -c 'chmod 644 /etc/ssh/sshd_config.d/00-octopushy-snippets.conf'
   pass "a failure after the write or after the reload, in setup or --remove, puts sshd's files back byte for byte, modes included"
+
+  # Refused before any change: a link at any path the script writes or backs up, so a copy is
+  # always of the file itself. The link's target is left as it was.
+  in_host sh -c 'cp -a /etc/ssh/octopushy-snippets/authorized_keys /root/keys-target
+    ln -sf /root/keys-target /etc/ssh/octopushy-snippets/authorized_keys'
+  refused "is not a regular file" "a linked authorized_keys" setup "$work/id.pub"
+  refused "is not a regular file" "--remove with a linked authorized_keys" in_host bash /root/snippets.sh --remove
+  in_host sh -c 'rm /etc/ssh/octopushy-snippets/authorized_keys; mv /root/keys-target /etc/ssh/octopushy-snippets/authorized_keys'
+  in_host sh -c 'mv /etc/ssh/sshd_config.d/00-octopushy-snippets.conf /root/conf-target
+    ln -s /root/conf-target /etc/ssh/sshd_config.d/00-octopushy-snippets.conf'
+  refused "is not a regular file" "a linked drop-in" setup "$work/id.pub"
+  in_host sh -c 'rm /etc/ssh/sshd_config.d/00-octopushy-snippets.conf; mv /root/conf-target /etc/ssh/sshd_config.d/00-octopushy-snippets.conf'
+  in_host sh -c 'mv /etc/ssh/octopushy-snippets /root/keys-dir-target; ln -s /root/keys-dir-target /etc/ssh/octopushy-snippets'
+  refused "is not a directory" "a linked key directory" setup "$work/id.pub"
+  in_host sh -c 'rm /etc/ssh/octopushy-snippets; mv /root/keys-dir-target /etc/ssh/octopushy-snippets'
+  sftp_ok "$work/id2" || fail "the account no longer works after the refused runs"
+  pass "a link at the drop-in, the key file or its directory is refused before any change, setup and --remove alike"
+
+  # The reviewer's case: the host trusts a CA for everyone and serves internal-sftp, and --remove
+  # cannot finish. Whatever stopped it, the account must not get in.
+  in_host sh -c 'cp -a /etc/ssh/sshd_config /root/sshd_config.before-ca
+    sed -i "s|^Subsystem.*|Subsystem sftp internal-sftp|" /etc/ssh/sshd_config
+    echo "TrustedUserCAKeys /etc/ssh/user_ca.pub" >> /etc/ssh/sshd_config; systemctl reload ssh'
+  cert_refused() {
+    printf 'get /etc/passwd %s/leaked\n' "$work" | sftp -i "$work/certified" -o CertificateFile="$work/certified-cert.pub" "${opts[@]}" -P "$port" \
+      -b - octopushy-snippets@127.0.0.1 >/dev/null 2>&1 && fail "$1: a certificate from the host's CA logged in as the account"
+    [[ ! -e $work/leaked ]] || fail "$1: the account read /etc/passwd"
+  }
+  cert_refused "with the block in place"
+  # A process working in the chroot, as root: the mount could not be taken away, so --remove refuses.
+  podman exec -d "$name" sh -c 'cd /var/lib/octopushy-snippets/var/lib/vz/snippets && exec sleep 300'
+  timeout 10 sh -c "until podman exec $name sh -c 'ls -l /proc/*/cwd 2>/dev/null | grep -q octopushy-snippets/var'; do sleep 1; done"
+  refused "processes use /var/lib/octopushy-snippets" "--remove with the chroot busy" in_host bash /root/snippets.sh --remove
+  in_host pkill -f 'sleep 300'
+  cert_refused "after --remove refused a busy chroot"
+  # A step that fails part way, after the account is locked and its key gone: the block stays.
+  in_host sh -c 'mkdir -p /run/fault; touch /run/fault/userdel'
+  if in_host bash /root/snippets.sh --remove >"$work/partial" 2>&1; then cat "$work/partial"; fail "--remove passed with userdel failing"; fi
+  in_host rm -f /run/fault/userdel
+  cert_refused "after --remove failed part way"
+  sftp_ok "$work/id2" && fail "the account's own key still logs in after --remove failed part way"
+  effective=$(in_host sshd -T -C user=octopushy-snippets,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default)
+  grep -qx 'chrootdirectory /var/lib/octopushy-snippets' <<<"$effective" && grep -qx 'trustedusercakeys none' <<<"$effective" \
+    || fail "after --remove failed part way, the block is no longer in effect"
+  in_host test -f /etc/ssh/sshd_config.d/00-octopushy-snippets.conf || fail "after --remove failed part way, the drop-in is gone"
+  # Setting up again carries on from there: the expiry is cleared and the key is back.
+  setup "$work/id2.pub" >"$work/again" || { cat "$work/again"; fail "setup after a partial --remove failed"; }
+  grep -q 'cleared the expiry' "$work/again" || { cat "$work/again"; fail "setup did not clear the expiry --remove left"; }
+  sftp_ok "$work/id2" || fail "the account does not work again after setup"
+  cert_refused "after setting up again"
+  in_host sh -c 'cp -a /root/sshd_config.before-ca /etc/ssh/sshd_config; systemctl reload ssh'
+  pass "with a host-wide CA, --remove refuses a busy chroot, and one that fails part way leaves the block, so nothing gets in"
 
   # Refused while something --remove cannot undo past sshd: a stray file in the chroot, a session.
   in_host touch /var/lib/octopushy-snippets/var/stray
