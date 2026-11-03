@@ -176,13 +176,19 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                     continue;
                 }
 
-                var recorded = FollowedSecrets.Parse(configuration.SecretVersions);
-                var changes = FollowedSecrets.Changes(recorded, usable);
-                if (changes.Count == 0 || repository.Recipes[guest.SetupRecipe!].Configure?.OnChange is not { } onChange)
+                if (repository.Recipes[guest.SetupRecipe!].Configure?.OnChange is not { } onChange)
                     continue;
-                // A run that pinned the new version after it was created has delivered it already.
+                // What the newest run of the action actually took counts, not what was active when
+                // it was created: it pins at its first dispatch, which can follow a promotion. That
+                // is read before comparing, so a run that took a newer version than was recorded is
+                // owed a run when the recorded one is promoted again. Nothing holds this guest, so
+                // that run has finished.
+                var recorded = FollowedSecrets.Parse(configuration.SecretVersions);
                 if (await FollowedSecrets.PinnedByNewestAsync(db, resource.Id, onChange.Id, cancellationToken) is { } pinned)
-                    changes = changes.Where(c => pinned.GetValueOrDefault(c.Key) != c.To).ToList();
+                    foreach (var key in keys)
+                        if (pinned.TryGetValue(key, out var took))
+                            recorded[key] = took;
+                var changes = FollowedSecrets.Changes(recorded, usable);
                 configuration.SecretVersions = FollowedSecrets.Serialize(FollowedSecrets.Started(recorded, usable));
                 if (changes.Count == 0)
                     continue;

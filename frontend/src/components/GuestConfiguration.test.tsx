@@ -97,8 +97,8 @@ describe("the store values a guest follows", () => {
       { path: "/guests/:id", route: "/guests/guest-1" },
     );
     const list = screen.getByRole("list", { name: "Store values" });
-    expect(list).toHaveTextContent("shared/git-ssh-key active v3, last configured with v2 Run pending");
-    expect(list).toHaveTextContent("pve01-ai/tailscale active not set, last configured with not set");
+    expect(list).toHaveTextContent("shared/git-ssh-key active v3, last attempted with v2 Run pending");
+    expect(list).toHaveTextContent("pve01-ai/tailscale active not set, last attempted with not set");
     expect(screen.getAllByText("Run pending")).toHaveLength(1);
   });
 });

@@ -71,6 +71,8 @@ public static class FollowedSecrets
     /// The versions the newest run of an action pinned, by store key, or null if it has not
     /// pinned yet. A run pins at its first dispatch, which can be after a promotion that came
     /// moments after it was created, and that run then delivered the new version already.
+    /// Only bindings that follow the active version count: one pinned to a version in Git says
+    /// nothing about what a following binding of the same key received.
     /// </summary>
     public static async Task<Dictionary<string, int>?> PinnedByNewestAsync(OctopushyDb db, Guid resourceId, string action, CancellationToken cancellationToken)
     {
@@ -86,7 +88,7 @@ public static class FollowedSecrets
             if (!context.SecretBindingsPinned)
                 return null;
             return context.SecretVersions
-                .Where(p => context.Secrets.ContainsKey(p.Key))
+                .Where(p => context.Secrets.ContainsKey(p.Key) && !context.RequestedSecretVersions.ContainsKey(p.Key))
                 .GroupBy(p => context.Secrets[p.Key], StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.Max(p => p.Value), StringComparer.Ordinal);
         }

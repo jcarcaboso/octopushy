@@ -51,7 +51,7 @@ function FollowedSecretRow({ secret }: { secret: FollowedSecret }) {
     <li>
       <span className="mono">{secret.key}</span>{" "}
       <span className="muted">
-        active {version(secret.activeVersion)}, last configured with {version(secret.startedVersion)}
+        active {version(secret.activeVersion)}, last attempted with {version(secret.startedVersion)}
       </span>{" "}
       {secret.pending && <Badge tone="neutral">Run pending</Badge>}
     </li>

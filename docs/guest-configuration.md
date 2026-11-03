@@ -113,8 +113,10 @@ Octopushy records, for each guest, the active version of each key its setup name
 `version`, at the moment its `onChange` action starts. When a key's active version later differs,
 the guest gets one run of that action, with the reason **Store value changed** and a detail naming
 the key and both versions, such as `shared/git-ssh-key v2 to v3`. Its guest page lists the keys it
-follows, the version active now, the one it was last configured with, and **Run pending** while a
-run is owed. Each guest's own `policy.approval` applies, so a guest with manual approval waits
+follows, the version active now, the one it was last attempted with, and **Run pending** while a
+run is owed. "Attempted" is deliberate: a run that failed still counts, because a failure is not
+repeated for the same version, so the machine may still hold the older value. Before revoking the
+old credential upstream, check that each guest's newest run with the new version succeeded. Each guest's own `policy.approval` applies, so a guest with manual approval waits
 for a person, as for a commit. A promotion configures every guest that follows the key, each
 independently: one failing does not hold back another.
 
