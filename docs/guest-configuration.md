@@ -189,8 +189,8 @@ preview -> approval -> playbook [-> outcome-approval -> playbook-approved]
 
 ### Preview, approval and destructive
 
-Ansible's check mode is refused, as the [Fedora module](../examples/lab/modules/ansible/fedora/README.md)
-records: it is not an exact preview, tasks that depend on earlier tasks misreport, and
+Ansible's check mode is refused, as the [Fedora module](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/examples/lab/modules/ansible/fedora/README.md)
+(now in `octopushy-lab`) records: it is not an exact preview, tasks that depend on earlier tasks misreport, and
 playbooks like the Fedora workflow assert against it. **Octopushy therefore does not show a
 prediction of what will change.** It shows what will run, and binds approval to exactly that.
 

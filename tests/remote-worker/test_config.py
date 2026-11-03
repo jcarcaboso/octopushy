@@ -99,7 +99,6 @@ class RemoteConfigTests(unittest.TestCase):
             "REMOTE_AGENT_LABEL": ["x,other", "x\nother"],
             "REMOTE_WORK_DIR": ["relative", "/"],
             "PORTAINER_WORKFLOW": ["1"],
-            "FEDORA_WORKFLOW": ["1"],
             "UI": ["1"],
         }
         for key, values in cases.items():

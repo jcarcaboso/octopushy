@@ -15,7 +15,6 @@
 #   UI=1             also serve the web interface at http://127.0.0.1:5174 while it runs
 #   KEEP=1           leave everything running at the end, until Ctrl-C
 #   CLEANUP=1        only retire a VM left behind by an interrupted run, reusing its state
-#   FEDORA_WORKFLOW=1 also test the native Fedora service workflow after resizing, before retiring
 #   PORTAINER_WORKFLOW=1 use an isolated NixOS service-node fixture (no resize)
 #   PORTAINER_TEMPLATE_DIR  reviewed NixOS image template directory for that fixture
 #   PORTAINER_CONFIG_DIR    locked native NixOS deployment flake for that fixture
@@ -40,7 +39,6 @@ database=proxmox_e2e
 state_database=proxmox_e2e_state
 template=fedora-44
 if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-  [[ ${FEDORA_WORKFLOW:-0} != 1 ]] || { echo "Choose exactly one service workflow." >&2; exit 1; }
   work=$root/.dev/portainer-vm-e2e
   api_port=18081
   agent_port=18444
@@ -116,10 +114,6 @@ if [[ ${RESUME_SERVICE:-0} == 1 ]]; then
   [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${KEEP_GUEST:-0} == 1 && ${CLEANUP:-0} != 1 ]] ||
     fail "RESUME_SERVICE requires PORTAINER_WORKFLOW=1 KEEP_GUEST=1 and is not a retirement."
   [[ -s ${PORTAINER_CONFIG_DIR:-/nonexistent}/flake.lock ]] || fail "The retained locked NixOS configuration is required."
-fi
-if [[ ${FEDORA_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
-  [[ -s ${TEST_SSH_KNOWN_HOSTS:-/nonexistent} || ${ALLOW_TEST_SSH_TOFU:-0} == 1 ]] ||
-    fail "The Fedora test needs TEST_SSH_KNOWN_HOSTS or explicit ALLOW_TEST_SSH_TOFU=1 (disposable trusted-LAN test only)."
 fi
 
 if [[ ${CLEANUP:-0} == 1 || ${RESUME_SERVICE:-0} == 1 ]]; then
@@ -473,13 +467,6 @@ if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
 else
   created=1
   guest=$(guest_id)
-fi
-
-if [[ ${FEDORA_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
-  log "Fedora service workflow on the disposable VM"
-  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$read_only_token_file TEST_NAME=$name \
-    "$root/tests/fedora/run.sh" "$work" ||
-    fail "The Fedora service workflow failed. Logs are in $work/fedora."
 fi
 
 if [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
