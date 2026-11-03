@@ -264,6 +264,10 @@ The phases ship in this order. Phase 4 can run beside any of them.
 
 ### Phase 2: versioned workflows from their own repository
 
+**In progress.** The format, resolution from the repository's own `workflows/` ("local workflows"), the hashes and the
+offline validator are built: [workflows.md](workflows.md). The workflows source, its tags and the per-attempt bundles are
+next.
+
 - **Format.** Write the `workflow.yaml` schema: version, `manages`, stages, actions, inputs, generated values. Guests and
   services reference `workflow: <id>@<M>` or `@<M.m>`, with `inputs` and `secrets`.
   - `provision`/`setup`/`recipe` in `guest.yaml` and `stages` in `pipeline.yaml` go, since this is a fresh start and

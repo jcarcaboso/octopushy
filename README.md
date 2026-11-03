@@ -9,9 +9,11 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 Milestone 1 has shipped, up to release 0.4.0:
 
+- Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
+  or `@<major>.<minor>`, resolved from the repository's own `workflows/` for now.
 - Proxmox VMs provisioned, verified and retired with OpenTofu, with state kept by Octopushy.
 - [Guest setup with Ansible](docs/guest-configuration.md) once a VM exists, and
-  [service pipelines](docs/pipelines.md) of OpenTofu and Ansible stages.
+  [services](docs/workflows.md#services-and-their-runs) of OpenTofu and Ansible stages.
 - Actions on a schedule declared in Git, and SSH access keys that Octopushy manages and rotates.
 - A [repository editor](docs/repository-editor.md) that publishes drafts as commits.
 - Proxmox installations observed through their API, next to what Git declares. An
@@ -34,7 +36,7 @@ Service workflows, the NixOS modules and their tests live in `jcarcaboso/octopus
 | [`frontend/`](frontend) | Vite + React + TypeScript, served by Caddy, which forwards `/api` to the backend |
 | [`agent/`](agent) | Rust: the `octopushy` binary (agent mode) and Octopushy's own Proxmox API library |
 | [`contracts/`](contracts) | What the parts share: the agent protocol, executor inputs and outputs, JSON Schemas for definitions, the OpenAPI document |
-| [`examples/lab/`](examples/lab) | An example lab repository: the `proxmox-vm` and `machine-tools` recipes |
+| [`examples/lab/`](examples/lab) | An example lab repository, with two workflows: `proxmox-vm` (the machine only) and `machine-tools` (the machine, set up by `modules/ansible/machine-tools`) |
 | [`tests/`](tests) | End-to-end harnesses and offline checks |
 | [`deploy/`](deploy) | Compose project for the control host, and the Proxmox LXC installer |
 | [`docs/`](docs) | Design notes, ADRs and operating guides |
@@ -74,7 +76,8 @@ and `just e2e-pipelines` do the same for guest setup and service pipelines.
 `just demo` leaves that setup running at http://127.0.0.1:5174 (user `demo`, password
 `octopushy-demo`) with manual approval, to try the web interface without a Proxmox
 installation. `just openapi` regenerates the OpenAPI document and the frontend's client
-after an API change. `just proxmox-e2e` runs the [real Proxmox end-to-end test](tests/proxmox/README.md).
+after an API change. `just validate <dir>` checks a lab repository offline, the way the server reads it, and
+fails on any error ([validating offline](docs/workflows.md#validating-offline)). `just proxmox-e2e` runs the [real Proxmox end-to-end test](tests/proxmox/README.md).
 
 ### CI
 

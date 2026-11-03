@@ -73,8 +73,8 @@ An operation establishing or reconciling a machine's declared configuration and
 prerequisites, rather than an action that is necessarily performed only once.
 
 **Configure run**:
-A run of one action of a guest's setup recipe, which reaches the guest over SSH and
-holds no Proxmox credentials.
+A run of one action of the setup stage of a guest's workflow, `setup` or one the
+workflow declares, which reaches the guest over SSH and holds no Proxmox credentials.
 _Avoid_: Provisioning when referring to what happens inside an existing machine
 
 **Preview**:
@@ -83,7 +83,7 @@ key. It says what will run, not what will change.
 _Avoid_: Plan, or dry run, when referring to a configure run
 
 **Prepared snapshot**:
-Values a recipe's prepare step resolved for a run, such as release versions. An
+Values an action's prepare playbook resolved for a run, such as release versions. An
 approval covers them, and they are kept for later actions only after a run succeeds.
 
 **Host key pin**:
@@ -92,7 +92,7 @@ store by an operator. A configure run connects to nothing else.
 _Avoid_: Host key scan, which authenticates nothing
 
 **Declared outcome**:
-A result a playbook reports by name, as its recipe declares, that is neither success
+A result a playbook reports by name, as its workflow declares, that is neither success
 nor failure, such as work being deferred.
 _Avoid_: Failure when the playbook deliberately stopped
 
@@ -148,8 +148,9 @@ published, the draft is validated, merged with any newer commits, and committed.
 _Avoid_: Commit when the edits have not been published
 
 **Service**:
-What a pipeline deploys on one guest, read from `services/<id>/pipeline.yaml` in its
-folder. Octopushy knows it by its stages, not by what it is.
+What runs on one guest, read from `services/<id>/service.yaml` in its folder, which
+names a workflow with `manages: service`. Octopushy knows it by its workflow's stages,
+not by what it is.
 _Avoid_: Job when referring to the workload rather than its deployment
 
 **Pipeline**:
@@ -159,12 +160,20 @@ results.
 _Avoid_: Rollout, which spans independent targets
 
 **Stage**:
-One recipe in a pipeline, OpenTofu or Ansible.
+One part of a workflow: one executor, OpenTofu or Ansible, run from one root. A VM
+workflow has the machine stage and at most one setup stage; a service workflow has
+one or more.
 _Avoid_: Step, which is one thing a run does; a stage has a plan or preview step and an apply step
 
+**Action**:
+One playbook that can be run from a workflow's Ansible stage, as a whole. A guest's
+setup stage runs `setup` when anything it is built from changes; the workflow's
+`actions` are run by hand or on the guest's schedules.
+_Avoid_: Task, which is a part of a playbook
+
 **Interface**:
-A named slot, such as `dns`, bound to a recipe in the lab, with a schema in the
-repository. Swapping the recipe is one line. Not built yet.
+A named slot, such as `dns`, bound to a workflow in the lab, with a schema in the
+repository. Swapping the workflow is one line. Not built yet.
 
 **Deployment instance**:
 A service's installation on a particular target, with its own desired release,
@@ -290,20 +299,34 @@ absence has been verified. Revoking its agent enrollment alone is not retirement
 A supported action on explicitly selected resources, such as provisioning,
 setup, maintenance, tool updates, service deployment, or verification.
 
-**Operation recipe**:
-A versioned declaration of how to perform an operation and interpret its result.
-_Avoid_: Run when referring to the reusable procedure
-
 **Workflow**:
-A coordinated sequence of operations or steps with their prerequisites and
-recovery boundaries.
+Everything needed to manage one kind of thing from start to end, such as a Fedora VM
+or a web service, kept in `workflows/<id>/` with one version for all of it: what it
+manages, its inputs schema, its stages, actions and outcomes. Guests and services
+name a workflow; it holds no lab data.
+_Avoid_: Recipe, the earlier format of one stage; run, when referring to the reusable procedure
+
+**Workflow version**:
+`M.m`, declared in `workflow.yaml` as a quoted string. A new major is a breaking change,
+such as an input removed or narrowed, or a change that would replace machines; a new
+minor is not.
+
+**Workflow reference**:
+What a guest or service writes: `<id>@M` for the newest `M.x`, or `<id>@M.m` for exactly
+that version. A reference without a version is invalid.
+
+**Resolution**:
+Finding the workflow version a reference names, from a workflow source: today the lab
+repository's own `workflows/`. What it resolved to is part of the loaded definition and
+of every inputs hash; a reference that resolves to none makes its guest or service
+invalid.
 
 **Run**:
 One requested execution of an operation or workflow against a fixed configuration
 revision, input set, and target set.
 
 **Step**:
-A named, observable unit of a workflow with its own outcome and recovery rules.
+A named, observable unit of a run with its own outcome and recovery rules.
 
 **Attempt**:
 One execution of a step; a retry creates a new attempt without erasing the

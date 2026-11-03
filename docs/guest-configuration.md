@@ -5,34 +5,40 @@ from Octopushy, once it is provisioned. This page is the design: what a definiti
 what a run does, and what it trusts. It carries no knowledge of any one application.
 [ADR 0004](adr/0004-guest-configuration-trust.md) records the trust decision.
 
-`configure` is a recipe operation like `provision`. It is not VM-specific: a run reaches a
-guest over SSH and never talks to Proxmox, so a container guest with `sshd` uses the same
-definitions once the [Technitium branch](#how-this-fits-other-work) brings `type: container`.
+A guest's setup is the Ansible stage of its [workflow](workflows.md), after the stage that makes the
+machine. It is not VM-specific: a run reaches a guest over SSH and never talks to Proxmox, so a
+container guest with `sshd` uses the same definitions once `type: container` lands. *Until November 3,
+2026 this was a recipe with `operation: configure`, named by `setup.recipe`.*
 
 ## Definitions
 
-A recipe names the tool-native project and what can be run from it:
+A workflow with `manages: vm` names the Ansible project and what can be run from it:
 
 ```yaml
-# recipes/ai-server/recipe.yaml
+# workflows/ai-server/workflow.yaml
 schemaVersion: 1
-operation: configure
-executor: ansible
-root: ../../modules/ansible/ai-server   # the Ansible project: ansible.cfg, playbooks, roles
-inputs: inputs.schema.json              # JSON Schema for the guest's setup.inputs
+version: "1.0"
+manages: vm
+inputs: inputs.schema.json              # JSON Schema for { hardware, network, inputs }
 secrets: [ai_server_tailscale_key]      # what a guest must provide
-actions:
-  configure:
-    playbook: playbooks/configure.yml   # relative to root
+stages:
+  - name: machine
+    executor: opentofu
+    root: ../../modules/opentofu/proxmox-vm
+  - name: setup
+    executor: ansible
+    root: ../../modules/ansible/ai-server # the Ansible project: ansible.cfg, playbooks, roles
+    playbook: playbooks/configure.yml   # the action named setup; relative to root
     prepare: playbooks/prepare.yml      # runs on the agent before approval; see below
-    destructive: false                  # required: Octopushy cannot tell, so the recipe says
-    onChange: true                      # runs when the guest or these files change
-    timeoutMinutes: 180
+    timeoutMinutes: 180                 # destructive: false unless the stage says so
+actions:
   update-tools:
+    stage: setup
     playbook: playbooks/update-tools.yml
     prepare: playbooks/prepare.yml
-    destructive: false
+    destructive: false                  # required: Octopushy cannot tell, so the workflow says
   update-system:
+    stage: setup
     playbook: playbooks/update-system.yml
     snapshot: applied                   # reuses what the last successful run prepared
     destructive: false
@@ -43,55 +49,54 @@ outcomes:
       vars: { ai_server_allow_busy: true }
 ```
 
-A guest points at it from `setup`:
+A guest names the workflow and gives it inputs and secrets:
 
 ```yaml
 # guest.yaml
-setup:
-  recipe: ai-server
-  inputs:                               # extra vars, validated by the recipe's schema
-    ai_server_hostname: pve01-ai
-  secrets:                              # extra var name -> store reference
-    ai_server_tailscale_key: { store: pve01-ai/tailscale-key }
-  secretFiles:                          # extra var name -> a private file holding the value
-    ai_server_git_private_key_src: { store: pve01-ai/git-ssh-key }
+workflow: ai-server@1
+inputs:                                 # extra vars, validated by the workflow's schema
+  ai_server_hostname: pve01-ai
+secrets:                                # extra var name -> store reference
+  ai_server_tailscale_key: { store: pve01-ai/tailscale-key }
+secretFiles:                            # extra var name -> a private file holding the value
+  ai_server_git_private_key_src: { store: pve01-ai/git-ssh-key }
 access:
   address: 10.15.60.10                  # defaults to the static or reserved address
   user: ops
   hostKey: { store: access/pve01-ai/host-key }
 ```
 
-- **`provision` makes the machine, `setup` configures it.** They are separate runs on one
-  resource, so the existing per-resource rule serializes them: a later run waits for an
-  earlier one, and an uncertain run holds the guest until a person closes it.
-- **`operation` selects the shape.** `provision` keeps its plan and apply. `configure` has
-  the steps below. The guest never names an executor; the recipe does.
-- **An action is the whole unit.** Octopushy passes no `--tags`, `--limit`, `--start-at-task`
-  or `--check`, and no definition can add one, so the selective runs the `nodes` wrapper
-  refuses cannot be asked for. The inventory holds this one guest.
+- **The machine stage makes the machine, the setup stage configures it.** They are separate runs
+  on one resource, provision and configure, so the existing per-resource rule serializes them: a
+  later run waits for an earlier one, and an uncertain run holds the guest until a person closes it.
+- **The stage's executor selects the shape.** The OpenTofu stage keeps its plan and apply. The
+  Ansible stage has the steps below. The guest never names an executor; the workflow does.
+- **An action is the whole unit.** The setup stage's own playbook is the action `setup`, and the
+  workflow's `actions` are the others. Octopushy passes no `--tags`, `--limit`, `--start-at-task`
+  or `--check`, and no definition can add one, so the selective runs the `nodes` wrapper refuses
+  cannot be asked for. The inventory holds this one guest.
 - **Files.** The run receives the repository snapshot, like a plan does. `{{ octopushy.guest_directory }}`
   is the guest's folder in it, for files that belong to one guest.
 
 Extra vars may not start with `ansible_` or `octopushy`: those are how Octopushy pins the
-connection, and they are refused in `setup.inputs`, `setup.secrets`, `setup.secretFiles`,
-`approve.vars` and whatever a prepare step returns.
+connection, and they are refused in `inputs`, `secrets`, `secretFiles`, `approve.vars` and
+whatever a prepare step returns.
 
 ### What starts a run
 
 | Trigger | Action | Status |
 |---|---|---|
-| The first time a provisioned, verified guest has a `setup.recipe` | the `onChange` action | Implemented |
-| A change to `setup`, `access`, the recipe, its `root`, or the guest's folder | the `onChange` action | Implemented |
-| A provision run that creates or replaces something, such as a new VM | the `onChange` action | Implemented |
-| A new active version of a store value `setup.secrets` or `setup.secretFiles` names | the `onChange` action | Implemented, [below](#shared-store-values) |
+| The first time a provisioned, verified guest's workflow has a setup stage | `setup` | Implemented |
+| A change to the guest's `inputs`, `secrets`, `secretFiles` or `access`, the workflow's version or folder, the setup stage's `root`, or the guest's folder | `setup` | Implemented |
+| A provision run that creates or replaces something, such as a new VM | `setup` | Implemented |
+| A new active version of a store value `secrets` or `secretFiles` names | `setup` | Implemented, [below](#shared-store-values) |
 | **Configure** on the guest page, or `POST /api/guests/{id}/configure` | the one chosen | Implemented |
 | A schedule declared on the guest | the one it names | Implemented, [below](#schedules) |
 
 Each input hash gets one automatic run, and so does each active version of a store value the
 setup follows. A failure is not retried by itself: it waits for a new commit, a new version or
 a person. A guest that is not in sync with its provisioning waits for that
-first, so one commit that changes both runs them in order. A guest whose recipe declares no
-`onChange` action is only ever run by hand. Automatic runs use the head of the branch, so a
+first, so one commit that changes both runs them in order. Automatic runs use the head of the branch, so a
 rollback configures the commit it returned to. A person cannot start a run on a guest whose
 provisioning has not caught up either.
 
@@ -102,15 +107,14 @@ SSH key, a GitHub CLI `hosts.yml` or a GitLab CLI config. Promoting a new versio
 every guest that names it:
 
 ```yaml
-setup:
-  secrets:
-    machine_gh_hosts: { store: shared/gh-hosts }
-  secretFiles:
-    machine_git_ssh_key: { store: shared/git-ssh-key }
+secrets:
+  machine_gh_hosts: { store: shared/gh-hosts }
+secretFiles:
+  machine_git_ssh_key: { store: shared/git-ssh-key }
 ```
 
-Octopushy records, for each guest, the active version of each key its setup names without a
-`version`, at the moment its `onChange` action starts. When a key's active version later differs,
+Octopushy records, for each guest, the active version of each key its `secrets` and `secretFiles` name without a
+`version`, at the moment its `setup` action starts. When a key's active version later differs,
 the guest gets one run of that action, with the reason **Store value changed** and a detail naming
 the key and both versions, such as `shared/git-ssh-key v2 to v3`. Its guest page lists the keys it
 follows, the version active now, the one it was last attempted with, and **Run pending** while a
@@ -126,12 +130,12 @@ independently: one failing does not hold back another.
 | **Rollback.** An older version is promoted again | A change like any other: one run, with that older version. As a commit rollback configures the commit it returned to, the value that is active is the one delivered |
 | **Revoked or deleted.** The active version is revoked, or the key is removed | Nothing. There is nothing to deliver, and a run would only block. The record keeps the version it had, so promoting a working version afterwards starts the run |
 | **Failure.** | Each version gets one automatic run. A failed run is not repeated for the same version: it waits for the next promotion, a commit, or a person |
-| **Active run.** Any run is active or waiting on the guest | The change waits, like a commit's. If that run is of the `onChange` action and pinned the new version, because the promotion came before its first step went out, it delivered it, and nothing more is owed. Otherwise the run starts once the guest is free |
+| **Active run.** Any run is active or waiting on the guest | The change waits, like a commit's. If that run is of the `setup` action and pinned the new version, because the promotion came before its first step went out, it delivered it, and nothing more is owed. Otherwise the run starts once the guest is free |
 | **Uncertain run.** | Holds the change with everything else until a person closes it |
-| **Schedule.** | A scheduled run, or one a person starts, of the `onChange` action delivers what is active and is recorded the same way, so nothing is owed after it. A schedule of another action does not count, even though it takes the new version too: the `onChange` action is the one that converges a guest. A firing while the store's run is active is skipped, as with any overlap |
+| **Schedule.** | A scheduled run, or one a person starts, of the `setup` action delivers what is active and is recorded the same way, so nothing is owed after it. A schedule of another action does not count, even though it takes the new version too: the `setup` action is the one that converges a guest. A firing while the store's run is active is skipped, as with any overlap |
 | **A commit too.** | A commit that changes the guest's configure inputs runs the action once, recording the store's versions at the same time, so one change of each makes one run |
 | **Pinned in Git.** `{ store: …, version: 2 }` | Not followed. That version changes only with a commit, which the configure hash already covers |
-| **`system/` keys.** | Not followed. Validation refuses them in `setup`, and the guest's own access key keeps its [own rotation](#rotating-the-key), whose stages prove a login. `access.sshKey` and `access.hostKey` are not followed either: they decide how a run connects, not what it configures |
+| **`system/` keys.** | Not followed. Validation refuses them in a guest's definition, and the guest's own access key keeps its [own rotation](#rotating-the-key), whose stages prove a login. `access.sshKey` and `access.hostKey` are not followed either: they decide how a run connects, not what it configures |
 | **Upgrade.** | A guest configured before this was built records what is active at its first check and starts nothing, so upgrading runs no guest |
 
 A plan of the guest's provisioning is not affected: OpenTofu receives no setup secret, and the
@@ -142,19 +146,18 @@ provisioning hash does not include store versions.
 **Decided November 2, 2026.** A schedule is declared in Git, on the guest, and runs one action:
 
 ```yaml
-setup:
-  recipe: ai-server
-  schedules:
-    - { action: update-tools, cron: "0 6 * * *" }
-    - { action: update-system, cron: "30 6 * * sun" }
+workflow: ai-server@1
+schedules:                              # setup, or an action of the workflow
+  - { action: update-tools, cron: "0 6 * * *" }
+  - { action: update-system, cron: "30 6 * * sun" }
 ```
 
-It belongs on the guest because one recipe serves machines with different maintenance times,
-and a field on a recipe action would force one time on all of them. The expression has five
+It belongs on the guest because one workflow serves machines with different maintenance times,
+and a field on a workflow's action would force one time on all of them. The expression has five
 fields and is read in the lab's `timezone`, or UTC if the lab names none. When the clocks change, a
 time in the hour they skip runs as they jump, and a time in the hour they repeat runs once, the
 first time round. A schedule that runs every hour keeps going through both. A schedule that names
-an action the recipe lacks, an expression that does not parse or never falls due, or a time zone that does not
+an action the workflow lacks, an expression that does not parse or never falls due, or a time zone that does not
 exist is a validation error. Changing a schedule starts no run: it says when an action runs,
 not what it does, so it is outside the configure hash.
 
@@ -169,11 +172,11 @@ page shows its next time and what the last firing did.
 | **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
 | **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
 | **Approval.** `policy.approval: manual`, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run. The hour does not apply to a run waiting for a person or approved by one: the time is then theirs, however late, and an approved run waits for an agent as any other does |
-| **Declared outcome**, such as `deferred`, on a recipe that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval. This rule is about outcomes with `approve`: one without it has nobody to wait for, so it ends as its `result` declares, as on any run. `failed` fails the run and promotes nothing, and `succeeded` ends it as succeeded and promotes what was prepared |
+| **Declared outcome**, such as `deferred`, on a workflow that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval. This rule is about outcomes with `approve`: one without it has nobody to wait for, so it ends as its `result` declares, as on any run. `failed` fails the run and promotes nothing, and `succeeded` ends it as succeeded and promotes what was prepared |
 | **Failure** | Each time comes up once, whatever happens to it, so a failed run is not repeated until the next time. It stays on the guest's page and in **Runs**, with a link from the schedule |
 
 **A schedule is not a window.** A schedule says when an action starts. `policy.windows`, which
-is documented in the lab repository format and not built, would limit when any automatic
+is documented in the [repository format](workflows.md#maintenance-windows) and not built, would limit when any automatic
 change may start. When windows arrive, a scheduled run is an automatic change: a firing
 outside a window would be skipped with a note like any other, and nothing here needs to
 change. Until then a guest's schedule is the only limit on when its scheduled actions start.
@@ -200,7 +203,7 @@ if it has one. An operator sees:
 
 - the action, playbook, commit, tool version and image;
 - the list of tasks, by name. Dynamic includes are listed as the include, not expanded;
-- the files changed under the recipe and project since this guest's last successful run;
+- the files changed under the workflow's folder, the stage's project and the guest's folder since this guest's last successful run;
 - the inputs, with their values, and the secrets, by name, store key and version;
 - what `prepare` resolved, such as the versions an update would install;
 - the SHA-256 fingerprint of the pinned host key.
@@ -212,11 +215,11 @@ another plan.
 - **`policy.approval: manual`** waits for approval on every run, automatic, scheduled or manual.
 - **`policy.destructive: manual`** waits only for an action declared `destructive: true`.
   Rule 11 says Octopushy decides from the preview, but a playbook has no preview that shows
-  deletes. So the recipe states it, and `destructive` is required on every action: a
+  deletes. So the workflow states it: `destructive` is required on every action, and the setup stage's own playbook is `false` unless the stage says so: a
   forgotten declaration fails validation rather than running unattended. This is a claim
   by the repository, not something Octopushy verifies.
 - **A rebuilt machine** is a provision run. It follows that run's rules, including those of
-  [replacing a VM](lab-repository.md#rules).
+  [replacing a VM](workflows.md#rules).
 
 ### Prepare
 
@@ -293,8 +296,8 @@ but they do take an agent slot: the default is two.
 **Octopushy logs in with a key of its own, and `access.sshAuthorizedKeys` is for people.**
 
 A guest Octopushy provisions that runs any Ansible work gets one Ed25519 key, generated by the server
-the first time it is needed. That work is a `setup.recipe` or an Ansible stage of one of its valid
-[services](pipelines.md#services-on-a-guest) alike: the key follows who manages the machine, not what
+the first time it is needed. That work is its workflow's setup stage or an Ansible stage of one of its valid
+[services](workflows.md#services-on-a-guest) alike: the key follows who manages the machine, not what
 kind of Ansible work runs on it. A leaked key reaches one machine. Nobody copies a private key anywhere.
 
 - **The private half** is a versioned secret at `system/guest-access/<resource id>`, which no
@@ -307,10 +310,10 @@ kind of Ansible work runs on it. A leaked key reaches one machine. Nobody copies
 - **`GuestAccessKey` records where each version stands**, apart from the provisioning hash. That
   hash only says that the guest has a managed key, so a change of key plans nothing.
 - **A rebuild keeps the key**, and retiring the guest removes it. The record of who received it stays.
-- **Once issued, the key stays wanted** until the guest is retired or names `access.sshKey`. Removing the setup
-  recipe, or every Ansible stage of the guest's services, or breaking a service in any way, does not take it off
+- **Once issued, the key stays wanted** until the guest is retired or names `access.sshKey`. Moving the guest to a
+  workflow without a setup stage, removing every Ansible stage of the guest's services, or breaking a service in any way, does not take it off
   the guest's provisioning, which would reboot a VM and replace a container for a key that is harmless where it
-  is. Before pipelines, removing a setup recipe dropped it.
+  is. Before pipelines, removing a setup dropped it.
 - **It is unaffected by the refusal of Proxmox and OpenTofu credentials,** because only the
   public half goes to that work, as a variable, and is never a released secret.
 
@@ -353,7 +356,7 @@ guest that had no Ansible work had no managed key, so the service changes its pr
 provisioned again first, which for a VM is the in-place update and one reboot above, with new host keys,
 and for a container is a replacement. The service waits for that. The owner's approach is to rebuild
 guests rather than migrate them, so there is no migration path for existing guests. An invalid
-service gives no key, and nothing about a service takes one away, as [pipelines.md](pipelines.md) says.
+service gives no key, and nothing about a service takes one away, as [workflows.md](workflows.md#services-on-a-guest) says.
 
 The guest agent cannot carry a key: on Fedora, with SELinux enforcing, `guest-ssh-add-authorized-keys`
 fails and `guest-file-open` for appending to `authorized_keys` is denied.
@@ -545,7 +548,7 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
   and its dependencies installed from a lock with `--require-hashes`, `openssh-client`,
   `octopushy-ansible`, and the recap callback. No collections: the `nodes` playbooks use only
   `ansible.builtin`, and a repository that needs more vendors them beside its playbooks, or
-  names its own image with `image:` on the recipe. Nothing is installed during a run.
+  names its own image with `image:` on a workflow's stage. Nothing is installed during a run.
 - **How it is pinned.** The tag's hash covers every file in `agent/ansible/`, so changed
   content is a new tag, and `images.yml` never overwrites one. The server's default,
   `Tools:AnsibleImage`, has to match, and `scripts/checks/offline.sh` fails if it does not.
@@ -559,7 +562,7 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
   inside its own container, so the agreement's "pinned image the agent starts" cannot apply
   to it. `agent/Containerfile` copies the same locked environment into the agent image, as
   it already does for OpenTofu. There, the agent image is the pin: `octopushy-update` moves
-  it, and a recipe's `image:` has no effect and is logged as ignored. This adds about 150 MB
+  it, and a stage's `image:` has no effect and is logged as ignored. This adds about 150 MB
   to the agent image.
 - **Footprint.** Ansible runs with one fork. A 120-task playbook with fact gathering peaked
   at 109 MiB, measured on a local connection, so each `ssh` it runs comes on top. Nothing
@@ -568,20 +571,19 @@ The image is `docker.io/skorcius/octopushy:ansible-<ansible-core>-<hash>`.
 
 ## How this fits other work
 
-**The Technitium work** ([PR 21](https://github.com/jcarcaboso/octopushy/pull/21)) adds `guestType`, a recipe
-`secrets` list, `provision.inputs` and `provision.secrets`. This design uses the same
-shapes, `setup.inputs`, `setup.secrets` and a recipe `secrets` list, so one recipe format
-covers both. Its `technitium` executor stays what it is: a product API, not a guest
+**The Technitium work** ([PR 21](https://github.com/jcarcaboso/octopushy/pull/21)) added `guestType`, a recipe
+`secrets` list, `provision.inputs` and `provision.secrets`. Workflows keep the same shapes:
+a guest's `inputs` and `secrets`, and a workflow's `secrets` list, given to its stages. Its `technitium` executor stays what it is: a product API, not a guest
 configuration seam.
 
 **One seam for installing on a guest.** The generic "install software on an LXC" request, with
-`ha-db` first, needs no second mechanism: `type: container`, an `sshd`, and `setup.recipe`.
+`ha-db` first, needs no second mechanism: `type: container`, an `sshd`, and a workflow with a setup stage.
 That branch's container already installs over SSH, through OpenTofu provisioners, which its
 own documentation says cannot authenticate who answers, so it seals what it sends. A plan
 noted on November 1 extracts that into a generic repository install module. Doing so would
 leave two ways to declare what runs on a guest, and the second has no pin, no preview
 of tasks, no declared outcomes, and secrets that pass through OpenTofu. **The recommendation
-is to build `ha-db` as a configure recipe instead.** It reuses `setup.secrets`, the pin and
+is to build `ha-db` as a workflow's setup stage instead.** It reuses `secrets`, the pin and
 the approval flow. What it needs from that branch is `type: container` and a root SSH key in
 the container, and neither depends on the install module. The services layer being built on
 this executor settles that question in the same direction.
