@@ -16,15 +16,13 @@ class RemoteConfigTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.pg = self.root / "pg"
-        self.pg.write_text("postgres://tofu:DO-NOT-PRINT@state.example.test:5432/remote_state?sslmode=require\n")
         self.cookie = self.root / "cookies"
         self.cookie.write_text("# Netscape HTTP Cookie File\n")
         self.read_only = self.root / "read-only-token"
         self.read_only.write_text("reader@pve!inventory=DO-NOT-PRINT-READ\n")
         self.privileged = self.root / "privileged-token"
         self.privileged.write_text("writer@pve!lifecycle=DO-NOT-PRINT-WRITE\n")
-        for path in (self.pg, self.cookie, self.read_only, self.privileged):
+        for path in (self.cookie, self.read_only, self.privileged):
             path.chmod(0o600)
         self.env = {
             "REMOTE_API_URL": "https://controller.example.test",
@@ -32,7 +30,6 @@ class RemoteConfigTests(unittest.TestCase):
             "REMOTE_AGENT_ID": "11111111-2222-4333-8444-555555555555",
             "REMOTE_AGENT_LABEL": "remote-acceptance",
             "REMOTE_COOKIE_FILE": str(self.cookie),
-            "REMOTE_TOFU_PG_FILE": str(self.pg),
             "REMOTE_WORK_DIR": str(self.root / "fixture"),
             "PVE_ENDPOINT": "https://pve.example.test:8006/",
             "PVE_READ_ONLY_TOKEN_FILE": str(self.read_only),
@@ -106,24 +103,11 @@ class RemoteConfigTests(unittest.TestCase):
                     validate({**self.env, key: value})
                 self.assertNotIn("DO-NOT-PRINT", str(caught.exception))
 
-    def test_backend_endpoint_and_private_files(self):
-        for pg in (
-            "postgres://tofu:DO-NOT-PRINT@localhost/db",
-            "postgres://tofu:DO-NOT-PRINT@state.example.test/",
-            "postgres://tofu:DO-NOT-PRINT@state.example.test/db?host=127.0.0.1",
-            "postgres:///db?host=/var/run/postgresql",
-            "postgres://state.example.test:bad/db",
-        ):
-            self.pg.write_text(pg)
-            with self.subTest(pg=pg), self.assertRaises(ValueError) as caught:
-                validate(self.env)
-            self.assertNotIn("DO-NOT-PRINT", str(caught.exception))
-        self.pg.write_text("postgres://state.example.test/remote_state")
-        for path in (self.pg, self.cookie):
-            path.chmod(0o644)
-            with self.assertRaises(ValueError):
-                validate(self.env)
-            path.chmod(0o600)
+    def test_cookie_file_must_be_private(self):
+        self.cookie.chmod(0o644)
+        with self.assertRaises(ValueError):
+            validate(self.env)
+        self.cookie.chmod(0o600)
 
     def test_both_proxmox_files_must_be_nonempty_private_regular_files(self):
         for name, path in (("PVE_READ_ONLY_TOKEN_FILE", self.read_only),
@@ -153,7 +137,7 @@ class RemoteConfigTests(unittest.TestCase):
 
         with patch("socket.getaddrinfo", return_value=address("10.20.30.40")) as dns:
             validate(self.env, preflight=True)
-            self.assertEqual(dns.call_count, 4)
+            self.assertEqual(dns.call_count, 3)
         for resolved in ("127.0.0.1", "0.0.0.0", "169.254.10.1"):
             with patch("socket.getaddrinfo", return_value=address(resolved)), self.assertRaises(ValueError):
                 validate(self.env, preflight=True)

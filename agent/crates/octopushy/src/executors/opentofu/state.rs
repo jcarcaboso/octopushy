@@ -19,8 +19,6 @@ use serde_json::Value;
 use super::{ExecContext, Failure, write_fresh};
 use crate::tls::sha256_hex;
 
-/// The `backend.type` that selects the built-in state.
-pub const BACKEND_TYPE: &str = "octopushy";
 /// What `Hello.capabilities` advertises.
 pub const CAPABILITY: &str = "opentofu-builtin-state";
 pub const ARTIFACT: &str = "terraform.tfstate";

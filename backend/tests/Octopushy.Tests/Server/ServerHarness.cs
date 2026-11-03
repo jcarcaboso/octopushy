@@ -191,7 +191,6 @@ public sealed class ServerHarness : IAsyncDisposable
         {
             await harness.SetSecretAsync("proxmox/korriban/read-only-token", "octopushy@pve!agent=secret-token");
             await harness.SetSecretAsync("proxmox/korriban/privileged-token", "octopushy@pve!writer=writer-token");
-            await harness.SetSecretAsync("opentofu/pg", "postgres://state");
         }
 
         return harness;
@@ -388,8 +387,19 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         throw new InvalidOperationException($"No {action} assignment arrived.");
     }
 
-    public Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts) =>
-        ReportAsync(assignment.AttemptId, outcome, outputs, error, artifacts);
+    /// <summary>
+    /// Reports an assignment's result. An OpenTofu apply that succeeded or failed hands back the
+    /// state it was given unless the test passes one, as an agent always returns the state; use
+    /// the overload that takes an attempt ID to report an apply without it.
+    /// </summary>
+    public Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
+    {
+        if (assignment is { Executor: "opentofu", Action: "apply" } && outcome is Outcome.Succeeded or Outcome.Failed
+            && artifacts.All(a => a.Name != TofuStateStore.ArtifactName)
+            && assignment.Artifacts.FirstOrDefault(a => a.Name == TofuStateStore.ArtifactName) is { } state)
+            artifacts = [.. artifacts, state];
+        return ReportAsync(assignment.AttemptId, outcome, outputs, error, artifacts);
+    }
 
     public async Task<bool> ReportAsync(string attemptId, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
     {

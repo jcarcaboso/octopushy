@@ -47,12 +47,6 @@ public sealed partial class AssignmentBuilder
                 ["stack"] = tofu.Stack,
                 ["root"] = tofu.Root,
                 ["image"] = tofu.Image,
-                ["backend"] = new JsonObject
-                {
-                    ["type"] = tofu.Backend.Type,
-                    ["config"] = new JsonObject(),
-                    ["workspace"] = tofu.Backend.Workspace,
-                },
                 ["variables"] = tofu.Variables.DeepClone(),
                 ["env"] = new JsonObject(),
                 ["secretEnv"] = new JsonObject(),
@@ -61,8 +55,7 @@ public sealed partial class AssignmentBuilder
         };
         if (approved is not null)
             assignment.Artifacts.Add(approved);
-        if (state is not null)
-            assignment.Artifacts.Add(state);
+        assignment.Artifacts.Add(state);
         return assignment;
     }
 

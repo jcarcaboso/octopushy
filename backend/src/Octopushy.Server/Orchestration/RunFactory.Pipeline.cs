@@ -37,7 +37,6 @@ public sealed partial class RunFactory
                     $"{service.Address.Replace('/', '.')}.{stage.Name}",
                     recipe.Root,
                     recipe.Image ?? options.Value.Tools.OpenTofuImage,
-                    BackendContext.BuiltIn,
                     stage.Inputs.DeepClone().AsObject(),
                     [],
                     []), null));

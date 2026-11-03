@@ -240,7 +240,7 @@ rest. When a member is replaced, the cluster's pipeline is due again.
 
 - `interface` on a stage, `interfaces` on a lab, and any other field: refused by the schema. A `clusters` folder in a lab is
   not read, and the lab shows a warning.
-- Secrets on an OpenTofu stage: refused. An external state backend for a stage: there is no field for one.
+- Secrets on an OpenTofu stage: refused. A stage's state is always the built-in state.
 - `dependsOn` between services: refused like any unknown field.
 - A list of what changed since the last success, which a configure run's preview has. A stage's preview does not have it.
 - Choosing an action. A stage runs the recipe's `onChange` action, and the service's page offers Deploy only.

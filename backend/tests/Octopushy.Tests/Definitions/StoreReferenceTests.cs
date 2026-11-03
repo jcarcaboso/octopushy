@@ -13,7 +13,6 @@ public class StoreReferenceTests
 
     private static readonly (DefinitionKind Kind, string File, string Consumer, string[] Path)[] ReferenceLocations =
     [
-        (DefinitionKind.Repository, "octopushy.yaml", "octopushy.yaml", ["stateBackends", "postgres", "env", "PG_CONN_STR"]),
         (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "readOnlyToken"]),
         (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "privilegedToken"]),
         (DefinitionKind.Installation, InstallationFile, "home/korriban", ["connection", "tls", "caCertificate"]),
@@ -43,10 +42,6 @@ public class StoreReferenceTests
             test.Write(location.File, document.ToJsonString());
         }
 
-        var settings = ReadDefinition(test, "octopushy.yaml");
-        settings["stateBackends"]!["postgres"]!["env"]!["PG_USER"] = "octopushy";
-        test.Write("octopushy.yaml", settings.ToJsonString());
-
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
         Assert.All(repository.Resources, resource => Assert.True(resource.Valid));
@@ -54,10 +49,6 @@ public class StoreReferenceTests
         Assert.Equal(new StoreReference("credentials/readOnlyToken", version), connection.ReadOnlyToken);
         Assert.Equal(new StoreReference("credentials/privilegedToken", version), connection.PrivilegedToken);
         Assert.Equal(new StoreReference("credentials/caCertificate", version), connection.CaCertificate);
-        var env = repository.Settings!.StateBackends["postgres"].Env;
-        Assert.Equal(new StoreReference("credentials/PG_CONN_STR", version), env["PG_CONN_STR"].Store);
-        Assert.Null(env["PG_CONN_STR"].Value);
-        Assert.Equal(new EnvValue("octopushy", null), env["PG_USER"]);
         var sshKey = Assert.Single(repository.Guests).Json["access"]!["sshKey"]!;
         Assert.Equal("credentials/sshKey", sshKey["store"]!.GetValue<string>());
         Assert.Equal(version, sshKey["version"]?.GetValue<int>());
@@ -155,7 +146,7 @@ public class StoreReferenceTests
 
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
-        Assert.Equal(9, repository.StoreUses.Count);
+        Assert.Equal(8, repository.StoreUses.Count);
         Assert.Contains(new StoreUse("integrations/first", "home", LabFile, 2), repository.StoreUses);
         Assert.Contains(new StoreUse("integrations/second", "home", LabFile), repository.StoreUses);
         Assert.Contains(new StoreUse("dns/token", "home", LabFile, 3), repository.StoreUses);

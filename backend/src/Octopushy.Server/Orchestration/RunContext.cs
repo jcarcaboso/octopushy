@@ -130,7 +130,6 @@ public sealed record OpenTofuContext(
     string Stack,
     string Root,
     string Image,
-    BackendContext Backend,
     JsonObject Variables,
     Dictionary<string, string> Env,
     Dictionary<string, string> SecretEnv);
@@ -163,17 +162,6 @@ public sealed record AnsibleContext(
 
 /// <summary>A declared outcome, as the run was built with it.</summary>
 public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
-
-public sealed record BackendContext(string Type, Dictionary<string, JsonNode?> Config, string? Workspace)
-{
-    /// <summary>The backend type that means Octopushy keeps the state itself.</summary>
-    public const string BuiltInType = "octopushy";
-
-    public static BackendContext BuiltIn => new(BuiltInType, [], null);
-
-    [JsonIgnore]
-    public bool IsBuiltIn => Type == BuiltInType;
-}
 
 public sealed record ProxmoxContext(
     string Endpoint,
@@ -236,8 +224,6 @@ public static class SecretNames
     public const string AnsibleSshKey = "ansible.ssh-key";
     public const string AnsibleRefusedKeys = "ansible.refused-keys";
     public const string AnsibleHostKey = "ansible.host-key";
-
-    public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";
 
     /// <summary>A guest's <c>setup.secrets</c> entry.</summary>
     public static string AnsibleVar(string name) => $"ansible.var.{name}";

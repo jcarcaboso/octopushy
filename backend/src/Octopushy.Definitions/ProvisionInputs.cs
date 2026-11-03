@@ -7,7 +7,7 @@ namespace Octopushy.Definitions;
 /// <summary>
 /// Everything a guest's provisioning run is built from, and a hash of it that changes exactly
 /// when a new plan could differ: the guest's definition, its host and installation settings,
-/// its template, its recipe and root files, and its external state backend.
+/// its template, and its recipe and root files.
 /// </summary>
 public sealed record ProvisionInputs(
     GuestDefinition Guest,
@@ -15,7 +15,6 @@ public sealed record ProvisionInputs(
     HostDefinition Host,
     RecipeDefinition Recipe,
     TemplateDefinition? Template,
-    StateBackendDefinition? Backend,
     JsonObject Variables,
     string Hash)
 {
@@ -31,7 +30,6 @@ public sealed record ProvisionInputs(
         var host = installation.Hosts[guest.Host];
         var recipe = repository.Recipes[guest.Recipe];
         var template = guest.Template is null ? null : repository.Templates[guest.Template];
-        var backend = guest.StateBackend is { } name ? repository.Settings!.StateBackends[name] : null;
 
         var variables = new JsonObject
         {
@@ -112,10 +110,6 @@ public sealed record ProvisionInputs(
             ["recipeFiles"] = TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
             ["rootFiles"] = TreeHash(repository.Root, recipe.Root),
         };
-        if (backend is not null)
-        {
-            hashed["backend"] = backend.Json.DeepClone();
-        }
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
         if (ManagedAccess.Wanted(repository, guest, keyIssued))
@@ -123,7 +117,7 @@ public sealed record ProvisionInputs(
             hashed["managedAccess"] = true;
         }
 
-        return new ProvisionInputs(guest, installation, host, recipe, template, backend, variables, Canonical.Hash(hashed));
+        return new ProvisionInputs(guest, installation, host, recipe, template, variables, Canonical.Hash(hashed));
     }
 
     /// <summary>The API endpoint for a host: its own when set, otherwise the installation's.</summary>

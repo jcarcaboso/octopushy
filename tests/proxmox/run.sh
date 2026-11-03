@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The full VM lifecycle against a real Proxmox host, driven through Octopushy: create a VM,
 # resize it, then delete it. Everything goes through the backend's API and a real agent
-# running OpenTofu (bpg/proxmox) in rootless podman; the state lives in the development
-# PostgreSQL. Every plan waits for approval, and the script checks each plan before
+# running OpenTofu (bpg/proxmox) in rootless podman; the state is Octopushy's built-in state,
+# in the development PostgreSQL. Every plan waits for approval, and the script checks each plan before
 # approving it: creating adds resources, resizing must not recreate the VM, deleting
 # removes it.
 #
@@ -31,7 +31,6 @@ api=http://127.0.0.1:18080
 api_port=18080
 agent_port=18443
 database=proxmox_e2e
-state_database=proxmox_e2e_state
 template=fedora-44
 agent_label=proxmox-e2e
 if [[ $remote == 1 ]]; then
@@ -147,8 +146,7 @@ if [[ $remote == 1 ]]; then
 elif [[ ${CLEANUP:-0} != 1 ]]; then
   [[ ! -f $work/vmid ]] || fail "A previous run left state in $work (VMID $(<"$work/vmid")). Retire it with CLEANUP=1 first, or delete $work if the VM is gone."
   rm -rf "$work" && mkdir -p "$work"
-  "${pg[@]}" -c "DROP DATABASE IF EXISTS $database" -c "DROP DATABASE IF EXISTS $state_database" \
-    -c "CREATE DATABASE $database" -c "CREATE DATABASE $state_database"
+  "${pg[@]}" -c "DROP DATABASE IF EXISTS $database" -c "CREATE DATABASE $database"
 else
   [[ -f $work/vmid ]] || fail "Nothing to clean up: $work has no VM recorded."
 fi
@@ -185,13 +183,6 @@ if [[ ${CLEANUP:-0} != 1 ]]; then
     call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"e2e\",\"password\":\"proxmox-e2e-password\"}" >/dev/null
   fi
   import_proxmox_credentials
-  if [[ $remote == 1 ]]; then
-    jq -n --rawfile pg "$REMOTE_TOFU_PG_FILE" \
-      '{key:"opentofu/pg",value:($pg | rtrimstr("\n")),visibility:"secret",description:"Remote acceptance OpenTofu state"}' |
-      call -X PUT "$api/api/variables" --data-binary @- >/dev/null
-  else
-    call -X PUT "$api/api/variables" -d "{\"key\":\"opentofu/pg\",\"value\":\"postgres://octopushy:octopushy@127.0.0.1:55432/$state_database?sslmode=disable\",\"visibility\":\"secret\",\"description\":\"OpenTofu state for the test\"}"
-  fi
 
   mkdir -p "$lab/labs/home/proxmox/$node" "$lab/recipes" "$lab/templates" "$lab/modules/opentofu"
   cp -r "$root/examples/lab/recipes/proxmox-vm" "$lab/recipes/"
@@ -199,13 +190,6 @@ if [[ ${CLEANUP:-0} != 1 ]]; then
   cp -r "$root/examples/lab/modules/opentofu/proxmox-vm" "$lab/modules/opentofu/"
   cat >"$lab/octopushy.yaml" <<YAML
 schemaVersion: 1
-stateBackends:
-  postgres:
-    type: pg
-    config: { schema_name: octopushy_state }
-    workspace: "{stack}"
-    env:
-      PG_CONN_STR: { store: opentofu/pg }
 YAML
   cat >"$lab/labs/home/lab.yaml" <<YAML
 schemaVersion: 1
@@ -368,7 +352,6 @@ network:
   mode: dhcp
 provision:
   recipe: proxmox-vm
-  state: { backend: postgres }
 access:
   sshAuthorizedKeys:
     - $(<"$work/ssh-key.pub")

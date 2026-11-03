@@ -44,8 +44,6 @@ Do not run it against a production controller, retained service fixture, or VM.
 4. The worker's actual execution environment must reach:
    - the controller's HTTPS/mTLS agent channel;
    - Proxmox HTTPS using both independently reviewed token identities and TLS policy;
-   - a **dedicated remote PostgreSQL OpenTofu state database**, with permissions
-     to create/use the `octopushy_state` schema and workspaces;
    - the configured OpenTofu image/provider registries (or existing caches).
    Check these routes from the worker/container environment independently.
    **`127.0.0.1` inside a worker or its container is not the controller.**
@@ -56,19 +54,17 @@ Do not run it against a production controller, retained service fixture, or VM.
 6. On the controller host: Bash, Python 3, curl, jq, rg, Git and ssh-keygen.
    Neither Cargo/.NET builds nor local Podman/PostgreSQL are used by remote mode.
 7. A private Netscape-format **authenticated controller cookie file** for the
-   dedicated account; two distinct private Proxmox API-token files; and a private file holding
-   the OpenTofu PostgreSQL URI. Use mode `0600` (or `0400`). Obtain these through
+   dedicated account, and two distinct private Proxmox API-token files. Use mode `0600` (or `0400`). Obtain these through
    normal administrative workflows, not by copying another fixture's credentials.
    The cookie file is read, not overwritten.
 
 The existing Proxmox fixture uses `tls.verify: false` for its disposable trusted-LAN
 target. That behavior is unchanged; it does not demonstrate production Proxmox TLS
 trust. Controller API TLS uses curl's normal verification. Agent trust stays pinned
-to its enrolled CA. PostgreSQL TLS/trust must work in the worker's tool environment;
-this mode does not add custom OpenTofu CA-file transport or disable TLS to make it work.
+to its enrolled CA. OpenTofu state is the controller's built-in state, carried on the
+agent channel, so the worker needs no route to any state database.
 Do not use shell tracing or put credentials in endpoint URLs or environment command
-arguments. The PostgreSQL URI goes from its file to the variable store via stdin,
-never into the command line or the harness's normal output.
+arguments.
 
 ## Configuration and explicit run
 
@@ -81,7 +77,6 @@ export REMOTE_AGENT_ID=11111111-2222-4333-8444-555555555555
 export REMOTE_AGENT_LABEL=remote-acceptance
 export REMOTE_WORK_DIR=/absolute/private/remote-worker-acceptance
 export REMOTE_COOKIE_FILE=/private/controller.cookies
-export REMOTE_TOFU_PG_FILE=/private/remote-state-uri
 export PVE_ENDPOINT=https://pve.example.test:8006/
 export PVE_READ_ONLY_TOKEN_FILE=/private/disposable-proxmox-read-only-token
 export PVE_PRIVILEGED_TOKEN_FILE=/private/disposable-proxmox-privileged-token
@@ -95,9 +90,6 @@ listener on the worker. It must match the controller URL used during that worker
 enrollment (`AgentChannel.PublicUrl`); supplying it here does not reconfigure either
 process. `REMOTE_API_URL` is the controller API origin (or proxy base path, without
 `/api`). Neither may contain credentials, query parameters or fragments.
-The state file must contain one `postgres://…/dedicated_database` or
-`postgresql://…/dedicated_database` URI, optionally with its trailing newline.
-Backend query parameters may configure TLS but may not override host/port/database.
 
 Both Proxmox files are required, must contain independent `USER@REALM!ID=SECRET`
 credentials, and must be nonempty regular files with mode `0600` or `0400`.
@@ -143,13 +135,13 @@ in this deliberately narrow VM-lifecycle mode.
 Remote mode **never deletes a fixture directory or drops/creates databases**.
 A new run refuses an existing `REMOTE_WORK_DIR`; it also refuses to replace an
 existing controller repository/revision. Fixture files/SSH keys/metadata remain
-under that directory; execution logs and run/backend state remain in the dedicated
-controller/state databases, even after a successful retirement.
+under that directory; execution logs, runs and OpenTofu state remain in the dedicated
+controller database, even after a successful retirement.
 The controller and worker remain running because the harness does not own them.
 
 If interrupted after a VMID is recorded, preserve everything. Inspect the current
 run/VM first. Only when retirement is authorized, use **the same exported inputs**
-and cookie/state/both token files:
+and cookie and both token files:
 
 ```sh
 REMOTE_WORKER=1 CLEANUP=1 tests/proxmox/run.sh
@@ -166,4 +158,4 @@ run bindings. Cleanup's refresh/destroy plan is subject to the same provider
 blocker; this mode is not a guaranteed recovery path.
 It does not cancel an in-flight apply; wait for and inspect that outcome first.
 Do not remove fixtures/state to get past a guard. A new acceptance run needs a new
-dedicated controller/state database and fixture directory provisioned separately.
+dedicated controller database and fixture directory provisioned separately.

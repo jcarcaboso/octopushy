@@ -235,8 +235,8 @@ its configuration source or execution history.
 _Avoid_: Status when referring to persistent infrastructure state
 
 **Built-in state**:
-OpenTofu state Octopushy keeps for a guest in its own database, encrypted and versioned,
-used unless the guest names an external state backend.
+OpenTofu state Octopushy keeps for a guest in its own database, encrypted and versioned.
+It is the only state backend.
 _Avoid_: Local state, which OpenTofu means as a file that outlives a run
 
 **State-derived inventory**:

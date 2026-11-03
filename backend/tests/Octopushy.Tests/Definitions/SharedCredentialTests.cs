@@ -65,7 +65,6 @@ public class SharedCredentialTests
 
     [Theory]
     [InlineData("ca")]
-    [InlineData("backend")]
     [InlineData("split-reader")]
     [InlineData("split-writer")]
     public void Shared_tokens_cannot_bypass_other_credential_roles(string alias)
@@ -75,12 +74,6 @@ public class SharedCredentialTests
         var token = json["connection"]!["token"]!;
         if (alias == "ca")
             json["connection"]!["tls"]!["caCertificate"] = token.DeepClone();
-        if (alias == "backend")
-        {
-            var settings = YamlDocumentReader.Read(System.IO.File.ReadAllText(Path.Combine(repo.Root, "octopushy.yaml"))).Root!;
-            settings["stateBackends"]!["postgres"]!["env"]!["PG_EXTRA"] = token.DeepClone();
-            repo.Write("octopushy.yaml", settings.ToJsonString());
-        }
         if (alias.StartsWith("split-", StringComparison.Ordinal))
         {
             var other = YamlDocumentReader.Read(System.IO.File.ReadAllText(Path.Combine(repo.Root, File))).Root!;

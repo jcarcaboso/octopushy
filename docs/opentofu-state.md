@@ -2,8 +2,7 @@
 
 Octopushy keeps each guest's OpenTofu state in its own PostgreSQL database. There is no
 backend or credential to set up: install Octopushy, add a lab repository, and provision.
-`stateBackends` in `octopushy.yaml` remains an optional override for a guest that names one
-with `provision.state`.
+It is the only state backend: a recipe's root must not declare one of its own.
 
 ## How it reaches OpenTofu
 
@@ -88,19 +87,7 @@ it needs the **original key-encryption key**, like stored secrets: see the
 [recovery checklist](recovery-rehearsal.md). Without any key, an installation holding state
 refuses to start rather than create a new one.
 
-## Moving between backends
-
-There is no migration in either direction. A plan is refused rather than started from a
-state that may be missing resources, which would try to create them again:
-
-- **Removing `provision.state`** is refused while the guest's latest started apply used an
-  external backend, even if that apply failed, unless it was a retirement that finished.
-- **Adding `provision.state`** is refused while the built-in state tracks resources, or while
-  the guest's latest started built-in apply is `uncertain`, because the stored state may not
-  include what it did.
-
-A guest with no started apply can use either. While refused, the guest keeps working with the
-backend it has; a finished apply there clears an `uncertain` one.
+## Renames and retirement
 
 The key is the guest's resource, not its name, so a rename with `renamedFrom` keeps the
 state. A retired guest keeps its versions; a new guest at the same address starts empty.

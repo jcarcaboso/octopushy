@@ -138,12 +138,6 @@ public sealed partial class AssignmentBuilder(
                 ["stack"] = tofu.Stack,
                 ["root"] = tofu.Root,
                 ["image"] = tofu.Image,
-                ["backend"] = new JsonObject
-                {
-                    ["type"] = tofu.Backend.Type,
-                    ["config"] = new JsonObject(tofu.Backend.Config.Select(p => KeyValuePair.Create(p.Key, p.Value?.DeepClone()))),
-                    ["workspace"] = tofu.Backend.Workspace,
-                },
                 ["variables"] = await VariablesAsync(run, context, tofu, cancellationToken),
                 ["env"] = new JsonObject(tofu.Env.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
@@ -154,10 +148,7 @@ public sealed partial class AssignmentBuilder(
             {
                 assignment.Artifacts.Add(approvedPlan!);
             }
-            if (state is not null)
-            {
-                assignment.Artifacts.Add(state);
-            }
+            assignment.Artifacts.Add(state!);
         }
         else
         {

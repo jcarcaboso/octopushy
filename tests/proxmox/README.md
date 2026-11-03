@@ -27,7 +27,7 @@ live acceptance. The intended `run.sh` lifecycle on a disposable Proxmox host is
 4. **Delete** it (`lifecycle: retired`).
 
 The backend, a real agent, and OpenTofu (bpg/proxmox in rootless podman) do the work;
-the OpenTofu state lives in the development PostgreSQL. The lab asks for approval of every
+the OpenTofu state is the built-in state, in the development PostgreSQL. The lab asks for approval of every
 plan, and the script reviews each one before approving it: creating must only add,
 resizing must update without replacing or deleting, and deleting must delete. Any other
 plan is rejected and the test stops. After each step it asks Proxmox, through an
@@ -115,7 +115,7 @@ for retained-fixture checks.
 `REMOTE_WORKER=1 tests/proxmox/run.sh` reuses a **dedicated existing controller**
 and an **already enrolled, separately hosted worker**. It skips local builds,
 backend/agent launch, enrollment and database resets. Explicit routable controller
-API/agent-channel and PostgreSQL state endpoints, an exclusive worker label/UUID,
+API/agent-channel endpoints, an exclusive worker label/UUID,
 and private authentication files are required. No source checkout is needed on
 the worker: assignments carry the source.
 

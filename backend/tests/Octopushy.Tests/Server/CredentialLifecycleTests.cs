@@ -129,7 +129,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Revoking_a_completed_backend_credential_does_not_block_guest_verification()
+    public async Task Revoking_a_completed_apply_privileged_token_does_not_block_guest_verification()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
@@ -137,9 +137,9 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await server.SyncAndTrustAsync(client);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
-        (await client.PostAsJsonAsync("/api/variables/revoke", new { key = "opentofu/pg", version = 1, reason = "Retiring the state credential" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/revoke", new { key = "proxmox/korriban/privileged-token", version = 1, reason = "Retiring the writer" })).EnsureSuccessStatusCode();
         var verify = await agent.NextAsync("verify-guest");
-        Assert.DoesNotContain("backend.PG_CONN_STR", verify.Secrets.Keys);
+        Assert.Equal("octopushy@pve!agent=secret-token", Assert.Single(verify.Secrets).Value);
         await agent.ReportAsync(verify, Outcome.Succeeded, new JsonObject { ["present"] = true });
         await server.TickAsync();
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
@@ -213,7 +213,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             await store.SetAsync(Token, "plain-token", Visibilities.Plain, null, CancellationToken.None);
         }
-        await server.SetSecretAsync("opentofu/pg", "postgres://fixture");
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "writer-fixture");
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         await server.TickAsync();

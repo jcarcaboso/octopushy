@@ -9,7 +9,7 @@ import re
 import socket
 import stat
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 import uuid
 
 
@@ -35,27 +35,22 @@ def check_host(host):
         raise ValueError("loopback, wildcard, link-local and multicast endpoints are not supported")
 
 
-def endpoint(name, value, schemes, preflight=False, credentials=False):
-    # Never include URLs or parser/socket errors: a PostgreSQL URL contains credentials.
+def endpoint(name, value, schemes, preflight=False):
+    # Never include URLs or parser/socket errors in messages.
     try:
         if any(c.isspace() or ord(c) < 32 for c in value):
             raise ValueError("must not contain whitespace")
         url = urlsplit(value)
         if url.scheme not in schemes or not url.hostname or url.fragment:
             raise ValueError("requires an explicit supported URL with a hostname and no fragment")
-        if not credentials and (url.username is not None or url.password is not None or url.query):
+        if url.username is not None or url.password is not None or url.query:
             raise ValueError("credentials and query strings are not supported here")
         port = url.port
         if port == 0:
             raise ValueError("port must be between 1 and 65535")
         check_host(url.hostname)
-        if credentials:
-            if not url.path.strip("/"):
-                raise ValueError("a dedicated database name is required")
-            if set(parse_qs(url.query)) & {"host", "hostaddr", "port", "service", "servicefile", "dbname"}:
-                raise ValueError("query parameters must not override the backend endpoint")
         if preflight:
-            default_port = 5432 if credentials else 443 if url.scheme == "https" else 80
+            default_port = 443 if url.scheme == "https" else 80
             addresses = socket.getaddrinfo(url.hostname, port or default_port, type=socket.SOCK_STREAM)
             if not addresses:
                 raise ValueError("hostname resolved to no addresses")
@@ -112,12 +107,6 @@ def validate(env, preflight=False):
     if not Path(require(env, "REMOTE_WORK_DIR")).is_absolute() or Path(env["REMOTE_WORK_DIR"]) == Path("/"):
         raise ValueError("REMOTE_WORK_DIR must be an absolute non-root fixture directory")
     private_file(env, "REMOTE_COOKIE_FILE")
-    pg_file = private_file(env, "REMOTE_TOFU_PG_FILE")
-    try:
-        pg = pg_file.read_text().rstrip("\n")
-    except (OSError, UnicodeError):
-        raise ValueError("REMOTE_TOFU_PG_FILE could not be read") from None
-    endpoint("REMOTE_TOFU_PG_FILE", pg, ("postgres", "postgresql"), preflight, credentials=True)
 
 
 if __name__ == "__main__":

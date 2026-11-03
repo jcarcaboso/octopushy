@@ -20,7 +20,7 @@ public class PolicyAndInputsTests
     public void The_nearest_setting_wins_and_destructive_follows_a_manual_approval()
     {
         using var test = TestRepository.Minimal();
-        test.Write("octopushy.yaml", "schemaVersion: 1\ndefaults:\n  policy: { approval: automatic }\nstateBackends:\n  postgres: { type: pg }\n");
+        test.Write("octopushy.yaml", "schemaVersion: 1\ndefaults:\n  policy: { approval: automatic }\n");
         test.Write("labs/home/lab.yaml", "schemaVersion: 1\npolicy: { approval: manual }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         var policy = PolicyResolver.For(repository, repository.Guests[0]);

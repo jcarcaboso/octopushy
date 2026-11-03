@@ -114,7 +114,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Empty(preview.Secrets);
         Assert.DoesNotContain(Password, preview.InputJson);
         var tofu = JsonNode.Parse(plan.InputJson)!;
-        Assert.Equal("octopushy", tofu["backend"]!["type"]!.GetValue<string>());
+        Assert.Null(tofu["backend"]);
         Assert.Equal(8080, tofu["variables"]!["port"]!.GetValue<int>());
         Assert.Empty(tofu["secretEnv"]!.AsObject());
         var ansible = JsonNode.Parse(preview.InputJson)!;

@@ -56,14 +56,8 @@ internal static class CredentialBindings
             }
             if (tofu.SecretEnv.GetValueOrDefault("PROXMOX_VE_API_TOKEN") != SecretNames.ProxmoxToken)
                 problems.Add("Proxmox provider token mapping is reserved; inspect and replan");
-            foreach (var (name, role) in tofu.SecretEnv)
-            {
-                if (name == "PROXMOX_VE_API_TOKEN" && role == SecretNames.ProxmoxToken)
-                    continue;
-                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) || role != SecretNames.Backend(name)
-                    || !context.Secrets.ContainsKey(role))
-                    problems.Add($"Backend environment '{name}' cannot override reserved Proxmox roles; inspect and replan");
-            }
+            foreach (var (name, _) in tofu.SecretEnv.Where(e => e.Key != "PROXMOX_VE_API_TOKEN"))
+                problems.Add($"OpenTofu secret environment '{name}' is not allowed; only the Proxmox token is released; inspect and replan");
         }
         return problems;
     }
@@ -99,7 +93,7 @@ internal static class CredentialBindings
         return problems;
     }
 
-    /// <summary>An OpenTofu stage holds nothing yet: no token, no backend environment, no secret of any kind.</summary>
+    /// <summary>An OpenTofu stage holds nothing yet: no token, no secret environment, no secret of any kind.</summary>
     private static List<string> ValidateOpenTofuStage(RunContext context) =>
         context.Secrets.Count == 0 && context.OpenTofu is { SecretEnv.Count: 0 } tofu && tofu.Env.Keys.All(n => !n.StartsWith("PROXMOX_", StringComparison.Ordinal))
             ? [] : ["An OpenTofu stage carries no credentials; inspect and replan"];
@@ -117,7 +111,7 @@ internal static class CredentialBindings
         if (problems.Count > 0)
             return problems;
         // Pin every binding initially, but later steps need only their own credentials:
-        // revoking a completed apply's backend credential must not prevent guest verification.
+        // revoking a completed apply's privileged token must not prevent guest verification.
         var bindings = context.Secrets.Where(s => !context.SecretBindingsPinned || neededNames is null || neededNames.Contains(s.Key)).ToList();
         var keys = bindings.Select(s => s.Value).Distinct().ToArray();
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);

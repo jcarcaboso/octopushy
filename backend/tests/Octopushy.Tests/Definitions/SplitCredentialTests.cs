@@ -36,13 +36,10 @@ public class SplitCredentialTests
 
     [Theory]
     [InlineData("same-key")]
-    [InlineData("reserved-plain")]
-    [InlineData("reserved-secret")]
-    [InlineData("writer-alias")]
     [InlineData("writer-ca")]
     [InlineData("cross-reader")]
     [InlineData("cross-ca")]
-    public void Configuration_cannot_rebind_provider_environment_or_alias_a_privileged_reference(string attack)
+    public void Configuration_cannot_alias_a_privileged_reference(string attack)
     {
         using var repo = TestRepository.Minimal();
         var json = YamlDocumentReader.Read(System.IO.File.ReadAllText(Path.Combine(repo.Root, File))).Root!.AsObject();
@@ -63,13 +60,6 @@ public class SplitCredentialTests
         if (attack == "writer-ca")
             connection["tls"]!["caCertificate"] = connection["privilegedToken"]!.DeepClone();
         repo.Write(File, json.ToJsonString());
-        if (attack.StartsWith("reserved") || attack == "writer-alias")
-        {
-            var settings = YamlDocumentReader.Read(System.IO.File.ReadAllText(Path.Combine(repo.Root, "octopushy.yaml"))).Root!;
-            settings["stateBackends"]!["postgres"]!["env"]![attack == "writer-alias" ? "PG_EXTRA" : "PROXMOX_VE_API_TOKEN"] =
-                attack == "reserved-plain" ? JsonValue.Create("injected-token") : connection["privilegedToken"]!.DeepClone();
-            repo.Write("octopushy.yaml", settings.ToJsonString());
-        }
         var loaded = LabRepositoryLoader.Load(repo.Root);
         Assert.False(loaded.IsValid("home/korriban/krb-app-01"));
         Assert.Contains(loaded.Issues, i => i.Severity == IssueSeverity.Error &&

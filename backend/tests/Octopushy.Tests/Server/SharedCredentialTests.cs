@@ -25,7 +25,6 @@ public class SharedCredentialTests(PostgresFixture postgres)
             "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         using var http = await LoginAsync(server);
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(http);
@@ -62,13 +61,12 @@ public class SharedCredentialTests(PostgresFixture postgres)
     [InlineData("secretVersions", SecretNames.ProxmoxToken)]
     [InlineData("requestedSecretVersions", SecretNames.ProxmoxToken)]
     [InlineData("secrets", SecretNames.ProxmoxCa)]
-    [InlineData("secrets", "backend.PG_CONN_STR")]
+    [InlineData("secrets", "extra.role")]
     public async Task Invalid_persisted_roles_and_shared_key_aliases_block_before_release(string map, string role)
     {
         using var repo = SharedRepository();
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         using var http = await LoginAsync(server);
         await server.SyncAndTrustAsync(http);
         await server.TickAsync();
@@ -93,33 +91,33 @@ public class SharedCredentialTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Observe_pins_one_shared_role_while_guest_binding_waits_atomically_for_backend()
+    public async Task Observe_and_the_guest_each_pin_only_the_shared_role()
     {
         using var repo = SharedRepository();
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        var observe = await worker.NextAsync("observe");
+        // Nothing holds the guest back, so its preview can go out with the observation.
+        var assignments = new List<Assignment>();
+        for (var i = 0; i < 5 && !(assignments.Any(a => a.Action == "observe") && assignments.Any(a => a.Action == "preview")); i++)
+        {
+            await server.TickAsync();
+            assignments.AddRange(worker.TakeAssignments());
+        }
+        var observe = assignments.First(a => a.Action == "observe");
         Assert.Equal("shared-v1", Assert.Single(observe.Secrets).Value);
         var observed = await server.LatestObservationAsync("home/korriban");
         Assert.Equal(Shared, Assert.Single(observed.Secrets).Value);
         Assert.Equal(SharedRole, Assert.Single(observed.Secrets).Key);
         Assert.Equal(1, Assert.Single(observed.SecretVersions).Value);
         Assert.Equal(SharedRole, Assert.Single(observed.SecretVersions).Key);
-        var guest = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(RunStatuses.Blocked, guest.Status);
-        var blocked = RunContext.Parse(guest.Context);
-        Assert.False(blocked.SecretBindingsPinned);
-        Assert.Empty(blocked.SecretVersions);
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
-        var preview = await worker.NextAsync("preview");
+        var preview = assignments.First(a => a.Action == "preview");
         Assert.Equal("shared-v1", preview.Secrets["proxmox.token"]);
         var ready = RunContext.Parse((await server.LatestRunAsync(Guest, Operations.Provision)).Context);
         Assert.True(ready.SecretBindingsPinned);
-        Assert.Equal(2, ready.SecretVersions.Count);
-        Assert.Equal(1, ready.SecretVersions[SharedRole]);
-        Assert.Equal(1, ready.SecretVersions["backend.PG_CONN_STR"]);
+        Assert.Equal(1, Assert.Single(ready.SecretVersions).Value);
+        Assert.Equal(SharedRole, Assert.Single(ready.SecretVersions).Key);
     }
 
     [Theory]
@@ -140,7 +138,6 @@ public class SharedCredentialTests(PostgresFixture postgres)
             "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         using var http = await LoginAsync(server);
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(http);
@@ -202,7 +199,6 @@ public class SharedCredentialTests(PostgresFixture postgres)
             .Replace($"store: {Shared} }}", $"store: {Shared}, version: 2 }}"));
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         using var http = await LoginAsync(server);
         (await http.PostAsJsonAsync("/api/variables/candidates", new { key = Shared, value = "shared-v2" })).EnsureSuccessStatusCode();
         var worker = await server.ConnectAgentAsync("home");
@@ -290,7 +286,6 @@ public class SharedCredentialTests(PostgresFixture postgres)
             "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
         await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         using var http = await LoginAsync(server);
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(http);

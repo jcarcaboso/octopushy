@@ -326,7 +326,6 @@ esac
     let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
     let input = serde_json::json!({
         "root": ".",
-        "backend": { "type": "octopushy" },
         "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate") },
     });
     let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());

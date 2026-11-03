@@ -38,19 +38,7 @@ public sealed record RepositoryDefinition(
     string File,
     JsonObject Json,
     PolicySettings? DefaultPolicy,
-    IReadOnlyList<string>? DefaultAgentLabels,
-    IReadOnlyDictionary<string, StateBackendDefinition> StateBackends);
-
-/// <summary>An environment value for OpenTofu: written directly, or read from the store.</summary>
-public sealed record EnvValue(string? Value, StoreReference? Store);
-
-public sealed record StateBackendDefinition(
-    string Id,
-    string Type,
-    IReadOnlyDictionary<string, JsonNode?> Config,
-    string? Workspace,
-    IReadOnlyDictionary<string, EnvValue> Env,
-    JsonObject Json);
+    IReadOnlyList<string>? DefaultAgentLabels);
 
 public sealed record LabDefinition(
     string Id,
@@ -105,8 +93,6 @@ public sealed record GuestDefinition(
     int Vmid,
     string? Template,
     string Recipe,
-    /// <summary>A backend from octopushy.yaml; null keeps the state in Octopushy itself.</summary>
-    string? StateBackend,
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {

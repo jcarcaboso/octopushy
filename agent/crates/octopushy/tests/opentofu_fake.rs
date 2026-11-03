@@ -18,7 +18,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 const PVE_TOKEN: &str = "octopushy@pve!agent=5ec2e7-70ke-n000-aaaa-bbbbbbbbbbbb";
-const PG_CONN: &str = "postgres://tofu:pg-pa55word@db.lan/state";
+const EXTRA_SECRET: &str = "extra-pa55word";
 
 const FAKE_TOFU: &str = r#"#!/bin/bash
 set -u
@@ -151,14 +151,9 @@ fn input(destroy: bool, extra_env: Value) -> Value {
         "stack": "home.korriban.krb-crt-01",
         "root": "modules/opentofu/test-vm",
         "image": "ghcr.io/opentofu/opentofu:1.13.1",
-        "backend": {
-            "type": "pg",
-            "config": { "schema_name": "octopushy_state", "skip_schema_creation": false },
-            "workspace": "home.korriban.krb-crt-01"
-        },
         "variables": { "octopushy": { "stack": "home.korriban.krb-crt-01" }, "guest": { "vmid": 210 } },
         "env": env,
-        "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR" },
+        "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "EXTRA_SECRET": "extra.secret" },
         "destroy": destroy,
         "someFutureField": true
     })
@@ -182,7 +177,7 @@ async fn run(
 ) -> Run {
     let secrets = HashMap::from([
         ("proxmox.token".to_owned(), PVE_TOKEN.to_owned()),
-        ("backend.PG_CONN_STR".to_owned(), PG_CONN.to_owned()),
+        ("extra.secret".to_owned(), EXTRA_SECRET.to_owned()),
     ]);
     let buffer = Arc::new(LogBuffer::default());
     let masker = Arc::new(Masker::new(secrets.values().map(String::as_str)));
@@ -216,7 +211,7 @@ async fn run(
 fn assert_no_secrets(fx: &Fixture, r: &Run) {
     for (_, text) in &r.lines {
         assert!(
-            !text.contains("pg-pa55word") && !text.contains("5ec2e7-70ke"),
+            !text.contains("extra-pa55word") && !text.contains("5ec2e7-70ke"),
             "secret in log: {text}"
         );
         assert!(
@@ -227,7 +222,7 @@ fn assert_no_secrets(fx: &Fixture, r: &Run) {
     // Secrets never appear on a command line.
     let args = fx.read("args.log");
     assert!(
-        !args.contains("pg-pa55word") && !args.contains("5ec2e7"),
+        !args.contains("extra-pa55word") && !args.contains("5ec2e7"),
         "{args}"
     );
 }
@@ -246,13 +241,6 @@ fn env_of(fx: &Fixture, step: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn built_in(extra_env: Value) -> Value {
-    let mut input = input(false, extra_env);
-    input["backend"] = json!({ "type": "octopushy", "config": {}, "workspace": null });
-    input["secretEnv"] = json!({ "PROXMOX_VE_API_TOKEN": "proxmox.token" });
-    input
-}
-
 #[tokio::test]
 async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
     let fx = Fixture::new();
@@ -267,7 +255,7 @@ async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
         &fx,
         "p1",
         "preview",
-        &built_in(json!({})),
+        &input(false, json!({})),
         repo_tar(None),
         vec![state.clone()],
         CancellationToken::new(),
@@ -289,17 +277,14 @@ async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
         } } } })
     );
     let args = fx.read("args.log");
-    assert!(
-        !args.contains("workspace") && !args.contains("-backend-config"),
-        "{args}"
-    );
+    assert!(!args.contains("workspace"), "{args}");
 
     let plan = success.artifacts[0].clone();
     let apply = run(
         &fx,
         "a1",
         "apply",
-        &built_in(json!({ "FAKE_APPLY_SLEEP": "0.2" })),
+        &input(false, json!({ "FAKE_APPLY_SLEEP": "0.2" })),
         repo_tar(None),
         vec![plan, state.clone()],
         CancellationToken::new(),
@@ -321,7 +306,7 @@ async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state()
         &fx,
         "p1",
         "preview",
-        &built_in(json!({})),
+        &input(false, json!({})),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -332,7 +317,10 @@ async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state()
         &fx,
         "a1",
         "apply",
-        &built_in(json!({ "FAKE_ERRORED": "1", "FAKE_APPLY_EXIT": "1" })),
+        &input(
+            false,
+            json!({ "FAKE_ERRORED": "1", "FAKE_APPLY_EXIT": "1" }),
+        ),
         repo_tar(None),
         vec![plan],
         CancellationToken::new(),
@@ -348,7 +336,7 @@ async fn failed_apply(fx: &Fixture, env: Value) -> Result<Success, Failure> {
         fx,
         "p1",
         "preview",
-        &built_in(json!({})),
+        &input(false, json!({})),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -359,7 +347,7 @@ async fn failed_apply(fx: &Fixture, env: Value) -> Result<Success, Failure> {
         fx,
         "a1",
         "apply",
-        &built_in(env),
+        &input(false, env),
         repo_tar(None),
         vec![plan],
         CancellationToken::new(),
@@ -394,26 +382,8 @@ async fn output_that_quotes_the_failure_is_an_ordinary_failure() {
 }
 
 #[tokio::test]
-async fn built_in_state_refuses_settings_and_a_corrupt_state() {
+async fn built_in_state_refuses_a_corrupt_state() {
     let fx = Fixture::new();
-    let mut bad = built_in(json!({}));
-    bad["backend"]["workspace"] = json!("somewhere");
-    let refused = run(
-        &fx,
-        "s1",
-        "preview",
-        &bad,
-        repo_tar(None),
-        vec![],
-        CancellationToken::new(),
-    )
-    .await;
-    assert!(
-        matches!(&refused.result, Err(Failure::Failed { message, .. }) if message.contains("no backend settings")),
-        "{:?}",
-        refused.result
-    );
-
     let corrupt = Artifact {
         name: state::ARTIFACT.into(),
         sha256: "0".repeat(64),
@@ -423,7 +393,7 @@ async fn built_in_state_refuses_settings_and_a_corrupt_state() {
         &fx,
         "s2",
         "preview",
-        &built_in(json!({})),
+        &input(false, json!({})),
         repo_tar(None),
         vec![corrupt],
         CancellationToken::new(),
@@ -484,9 +454,11 @@ async fn preview_with_changes_then_apply() {
         args,
         [
             "version -json".to_owned(),
-            "init -input=false -no-color -backend-config=schema_name=octopushy_state -backend-config=skip_schema_creation=false".to_owned(),
-            "workspace select -or-create=true -no-color home.korriban.krb-crt-01".to_owned(),
-            format!("plan -input=false -no-color -detailed-exitcode -out={}", plan_path.display()),
+            "init -input=false -no-color".to_owned(),
+            format!(
+                "plan -input=false -no-color -detailed-exitcode -out={}",
+                plan_path.display()
+            ),
             format!("show -json -no-color {}", plan_path.display()),
         ]
     );
@@ -502,7 +474,7 @@ async fn preview_with_changes_then_apply() {
     // Environment: secrets and settings arrive in the environment.
     let env = env_of(&fx, "plan");
     assert_eq!(env["PROXMOX_VE_API_TOKEN"], PVE_TOKEN);
-    assert_eq!(env["PG_CONN_STR"], PG_CONN);
+    assert_eq!(env["EXTRA_SECRET"], EXTRA_SECRET);
     assert_eq!(env["PROXMOX_VE_ENDPOINT"], "https://10.1.0.10:8006/");
     assert_eq!(env["TF_IN_AUTOMATION"], "1");
     assert_eq!(env["TF_INPUT"], "0");
@@ -518,7 +490,12 @@ async fn preview_with_changes_then_apply() {
 
     // Generated files.
     let backend: Value = serde_json::from_str(&fx.read("backend.json")).unwrap();
-    assert_eq!(backend, json!({ "terraform": { "backend": { "pg": {} } } }));
+    assert_eq!(
+        backend,
+        json!({ "terraform": { "backend": { "local": {
+            "path": "../../../../state/terraform.tfstate"
+        } } } })
+    );
     let tfvars: Value = serde_json::from_str(&fx.read("tfvars.json")).unwrap();
     assert_eq!(tfvars["guest"]["vmid"], 210);
 
@@ -586,8 +563,7 @@ async fn preview_with_changes_then_apply() {
         args,
         [
             "version -json".to_owned(),
-            "init -input=false -no-color -lockfile=readonly -backend-config=schema_name=octopushy_state -backend-config=skip_schema_creation=false".to_owned(),
-            "workspace select -or-create=true -no-color home.korriban.krb-crt-01".to_owned(),
+            "init -input=false -no-color -lockfile=readonly".to_owned(),
             format!("apply -input=false -no-color {}", plan_path.display()),
             "output -json -no-color".to_owned(),
         ]
@@ -672,7 +648,7 @@ async fn destroy_no_changes_and_errors() {
         other => panic!("{other:?}"),
     }
 
-    // Missing secret, escaping root, reserved env, local backend.
+    // Missing secret, escaping root, reserved env.
     let mut bad = input(false, json!({}));
     bad["secretEnv"]["X_TOKEN"] = json!("not.provided");
     let r = run(
@@ -721,24 +697,6 @@ async fn destroy_no_changes_and_errors() {
     .await;
     assert!(
         matches!(&r.result, Err(Failure::Failed { message, .. }) if message.contains("reserved")),
-        "{:?}",
-        r.result
-    );
-
-    let mut bad = input(false, json!({}));
-    bad["backend"]["type"] = json!("local");
-    let r = run(
-        &fx,
-        "e-5",
-        "preview",
-        &bad,
-        repo_tar(None),
-        vec![],
-        CancellationToken::new(),
-    )
-    .await;
-    assert!(
-        matches!(&r.result, Err(Failure::Failed { message, .. }) if message.contains("local backend")),
         "{:?}",
         r.result
     );
