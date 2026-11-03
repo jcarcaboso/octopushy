@@ -42,7 +42,7 @@ readOnlyToken: { store: proxmox/home/read-only-token, version: 2 }
 
 The same version syntax applies to `privilegedToken`; installations require both
 roles with distinct keys. See [Proxmox credential roles](proxmox-credentials.md)
-for approval, legacy-run handling and read-only provider compatibility limits.
+for approval and read-only provider compatibility limits.
 
 Before the first attempt is queued, a run resolves all of its bindings as one
 metadata snapshot. An unversioned reference selects the active version; an
@@ -94,20 +94,12 @@ All `system/` keys remain unavailable to these user lifecycle endpoints.
 Keys with pinned run history or resolution records cannot be deleted; revoke
 instead. Plain values remain API-readable, so do not put credentials in them.
 
-## Upgrade and encryption-key custody
+## Encryption-key custody
 
-The `CredentialLifecycle` database migration preserves existing ciphertext and
-authenticated encryption contexts. Existing versions are marked as previously
-active, with an explicit legacy/unverified note; their active pointers and
-allocation counters are retained. No live credential needs to be replaced merely
-to upgrade the schema.
-
-Old runs without version snapshots recover bindings from unambiguous resolution
-records. Previously dispatched runs with missing or mixed-version evidence
-block for reconciliation; they do not adopt the current credential silently.
-The migration deliberately refuses downgrade: older binaries do not understand
-candidate allocation or revocation. Recovery requires a matched pre-upgrade
-database/key backup, not dropping lifecycle columns.
+A run pins every binding's version before its first attempt is dispatched, so a
+later promotion never changes what it holds. Migrations are forward-only: older
+binaries do not understand candidate allocation or revocation, so recovery
+requires a matched database/key backup, not dropping lifecycle columns.
 
 On an empty installation the server creates its encryption-key file. On an
 existing installation, a missing key now stops startup if store records or

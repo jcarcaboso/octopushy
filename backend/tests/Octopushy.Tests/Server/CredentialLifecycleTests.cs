@@ -285,40 +285,6 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Requeued_legacy_work_does_not_choose_a_new_CA_without_historical_evidence()
-    {
-        using var repository = TestRepository.Minimal();
-        const string caKey = "proxmox/korriban/ca";
-        var file = Path.Combine(repository.Root, "labs/home/proxmox/korriban/installation.yaml");
-        File.WriteAllText(file, File.ReadAllText(file).Replace("tls: { verify: false }", $"tls: {{ verify: false, caCertificate: {{ store: {caKey} }} }}"));
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        await using var scope = server.Services.CreateAsyncScope();
-        var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
-        await store.SetAsync(caKey, "old-public-CA-fixture", Visibilities.Plain, null, CancellationToken.None);
-        var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAndTrustAsync();
-        await agent.NextAsync("preview"); // Token and backend resolved; CA was not released to OpenTofu.
-        await server.Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Null(Assert.Single(run.Steps.Single(s => s.Name == StepNames.Plan).Attempts).AssignedAt);
-        await store.SetAsync(caKey, "new-public-CA-fixture", Visibilities.Plain, null, CancellationToken.None);
-        await server.WithDbAsync(async db =>
-        {
-            var persisted = await db.Runs.SingleAsync(r => r.Id == run.Id);
-            var context = JsonNode.Parse(persisted.Context)!.AsObject();
-            context.Remove("secretBindingsPinned");
-            context.Remove("secretVersions");
-            persisted.Context = context.ToJsonString();
-            await db.SaveChangesAsync();
-        });
-        await server.TickAsync();
-        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
-        run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(RunStatuses.Blocked, run.Status);
-        Assert.Contains(caKey + ": legacy run", run.Detail);
-    }
-
-    [Fact]
     public async Task System_keys_are_rejected_by_every_lifecycle_endpoint()
     {
         await using var server = await ServerHarness.StartAsync(postgres);

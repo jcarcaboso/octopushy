@@ -182,7 +182,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 var usable = keys.ToDictionary(k => k, k => active[k], StringComparer.Ordinal);
                 if (configuration.SecretVersions is null)
                 {
-                    // Recorded once, from what is active now: an upgrade starts no run on any guest.
+                    // Recorded once, from what is active now: the first record starts no run.
                     configuration.SecretVersions = FollowedSecrets.Serialize(usable);
                     continue;
                 }

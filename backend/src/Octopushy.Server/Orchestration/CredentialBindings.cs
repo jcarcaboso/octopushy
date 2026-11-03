@@ -20,10 +20,11 @@ internal static class CredentialBindings
         if (context.Stage is not null)
             return ValidateOpenTofuStage(context);
 
+        // The executor's alias for whichever token a step holds; a run binds the role itself.
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
-            return ["Legacy Proxmox token context cannot be upgraded automatically; inspect and replan with a shared token or explicit read-only and privileged credentials"];
+            return ["The Proxmox token alias is not a credential role; inspect and replan with a shared token or explicit read-only and privileged credentials"];
 
         var problems = new List<string>();
         var roles = context.Secrets.Keys.Concat(context.SecretVersions.Keys).Concat(context.RequestedSecretVersions.Keys).ToHashSet(StringComparer.Ordinal);
@@ -119,14 +120,6 @@ internal static class CredentialBindings
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
         var refused = context.Ansible is null && context.Stages is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
 
-        // Recover old runs from release evidence, never from today's current pointer.
-        var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
-            .Where(r => db.Attempts.Any(a => a.Id == r.AttemptId && a.RunId == run.Id)).ToListAsync(ct);
-        var previouslyDispatched = !context.SecretBindingsPinned && run is not null && (audit.Count > 0 ||
-            await db.Attempts.AsNoTracking().AnyAsync(a => a.RunId == run.Id &&
-                (a.AssignedAt != null || a.StartedAt != null || a.FinishedAt != null), ct) ||
-            await db.Steps.AsNoTracking().AnyAsync(s => s.RunId == run.Id && s.StartedAt != null, ct));
-
         foreach (var (name, key) in bindings)
         {
             var role = RunContext.BareRole(name);
@@ -174,20 +167,7 @@ internal static class CredentialBindings
             }
             else
             {
-                var historical = audit.Where(a => a.Key == key).Select(a => a.Version).Distinct().ToArray();
-                if (historical.Length > 1 || (previouslyDispatched && historical.Length == 0))
-                {
-                    problems.Add($"{key}: legacy run has no unambiguous version evidence; reconcile before starting a new run");
-                    continue;
-                }
-
-                version = context.RequestedSecretVersions.GetValueOrDefault(name,
-                    historical.Length == 1 ? historical[0] : entry.CurrentVersion);
-                if (historical.Length == 1 && historical[0] != version)
-                {
-                    problems.Add($"{key}: requested version conflicts with execution history");
-                    continue;
-                }
+                version = context.RequestedSecretVersions.GetValueOrDefault(name, entry.CurrentVersion);
             }
 
             var value = versions.SingleOrDefault(v => v.Key == key && v.Version == version);
