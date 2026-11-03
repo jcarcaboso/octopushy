@@ -485,7 +485,8 @@ public class AccessRotationTests(PostgresFixture postgres)
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, run.Status);
-        Assert.Contains("without saying its VMID", run.Detail);
+        // A machine the plan cannot place names no machine of this guest's, so the safety boundary refuses it first.
+        Assert.Contains("an unknown VMID on node korriban", run.Detail);
         Assert.True((await KeysAsync(server))[0].Bootstrap);
     }
 

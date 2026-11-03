@@ -21,7 +21,7 @@ public sealed partial class RunEngine
         // Each plan's effects refuse this already; asked again so no path offers it for approval.
         foreach (var plan in run.Steps.Where(s => s.Stage is not null && s.Name == StepNames.Plan))
         {
-            if (GuestVmPlan.ForeignRemoval(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), context.ForStep(plan)) is { } foreign)
+            if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), context.ForStep(plan)) is { } foreign)
             {
                 step.Status = StepStatuses.Failed;
                 step.Detail = foreign;
@@ -78,7 +78,7 @@ public sealed partial class RunEngine
     private async Task ApplyStageEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
     {
         // A stage owns no machine, so a plan that removes one is refused before the approval: see docs/safety-boundary.md.
-        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignRemoval(outputs, RunContext.Parse(run.Context).ForStep(step)) is { } foreign)
+        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context).ForStep(step)) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
             step.Detail = foreign;

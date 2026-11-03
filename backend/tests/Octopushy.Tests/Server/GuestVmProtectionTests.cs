@@ -432,7 +432,7 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Failed, run.Status);
         Assert.Contains(named, run.Detail);
-        Assert.Contains("refuses to remove a machine it does not manage", run.Detail);
+        Assert.Contains("refuses to act on a machine it does not manage", run.Detail);
         Assert.Equal(StepStatuses.Failed, run.Steps.Single(s => s.Name == StepNames.Plan).Status);
         // No approval was offered, and nothing changed.
         var approval = run.Steps.Single(s => s.Name == StepNames.Approval);

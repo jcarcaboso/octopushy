@@ -387,7 +387,7 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         // The plan's effects refuse this already; asked again so no path offers it for approval.
-        if (GuestVmPlan.ForeignRemoval(outputs, context) is { } foreign)
+        if (GuestVmPlan.ForeignChange(outputs, context) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
             step.Detail = foreign;
@@ -511,7 +511,7 @@ public sealed partial class RunEngine(
         }
 
         // Refused before anything else is recorded, and before any approval is offered: see docs/safety-boundary.md.
-        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignRemoval(outputs, RunContext.Parse(run.Context)) is { } foreign)
+        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context)) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
             step.Detail = foreign;

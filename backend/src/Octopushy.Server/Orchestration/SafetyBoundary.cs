@@ -7,7 +7,7 @@ namespace Octopushy.Server.Orchestration;
 
 /// <summary>
 /// What keeps Octopushy off machines it does not manage, apart from the refusal of plans in
-/// <see cref="GuestVmPlan.ForeignRemoval"/>: installations it only observes (<c>manage: false</c>), and a
+/// <see cref="GuestVmPlan.ForeignChange"/>: installations it only observes (<c>manage: false</c>), and a
 /// guest whose VMID is a VM it observes and does not manage. See docs/safety-boundary.md.
 /// </summary>
 public static class SafetyBoundary
@@ -89,7 +89,7 @@ public static class SafetyBoundary
     /// <remarks>
     /// Without an observation of the installation yet, nothing is refused here: there is nothing to compare
     /// with. Creating a VM at a VMID that exists fails at the provider anyway, and the removal of a machine
-    /// that is not the guest's own is refused by <see cref="GuestVmPlan.ForeignRemoval"/> whatever is observed.
+    /// that is not the guest's own is refused by <see cref="GuestVmPlan.ForeignChange"/> whatever is observed.
     /// </remarks>
     public static async Task<string?> VmidCollisionAsync(OctopushyDb db, TofuStateStore states, Resource guest, string installationAddress, int vmid,
         CancellationToken cancellationToken, Guid? exceptRun = null)
