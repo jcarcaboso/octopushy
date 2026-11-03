@@ -476,9 +476,29 @@ and uploads it under the same name. The VM names the snippet by a volume id know
 `<datastore>:snippets/octopushy-<vmid>-user-data.yaml`, so its configuration does not change and
 the plan leaves it alone. Proxmox rebuilds the cloud-init drive from the snippet each time it
 starts the VM, so the change reaches the guest at its next start from Proxmox, where cloud-init
-sees a new instance and applies it; a reboot from inside the guest does not rebuild the drive. A
-start in the seconds between the delete and the upload fails, because the file is missing, and
-the next one works. That last part was read from qemu-server's source, not tried on Proxmox.
+sees a new instance and applies it; a reboot from inside the guest does not rebuild the drive.
+
+**The upload is not atomic, an accepted limit.** The provider deletes the file, then creates it
+under its final name and writes into it, and Proxmox reads whatever is there when it starts the VM.
+A start from Proxmox in that moment, or after an upload that failed, reads a missing, empty or
+partial file. On a real Fedora 44 VM with SELinux enforcing:
+
+- **no file:** the start fails, and the next one works (from qemu-server's source);
+- **an empty file, or one cut so it is no longer YAML:** a new instance. cloud-init deletes the host
+  keys and makes new ones, so the pin no longer matches and configure runs are refused. A person's
+  existing `authorized_keys` still work;
+- **a file cut inside the private key:** sshd does not start, so nothing reaches the guest over SSH;
+- **the whole snippet at the next start:** Octopushy's key is back, alone, and the pin matches.
+
+So it fails closed, and heals at the next start from Proxmox with the whole snippet. The apply
+itself never starts or reboots the VM in that moment: the VM waits on the snippet, and an upload
+that fails stops the apply before any call for the VM, which homelab-config's test checks. What is
+left is a start by something else, such as a person, HA or the host booting, during the few
+milliseconds of an upload, or after one that failed and before the next apply.
+
+**What replaces the VM.** Changing a guest's `vmid` or the installation's `snippets.datastore`
+changes `user_data_file_id`, so the provider replaces the VM, as it does when a guest first gets
+this. Each follows the guest's `policy.destructive`.
 
 **For a machine Octopushy did not create**, `access.hostKey` is a store reference to its public
 host key, in the form `ssh-ed25519 AAAA…`. One entry per line is allowed. It has to be a plain
@@ -514,12 +534,24 @@ OCTOPUSHY_SNIPPETS_KEY='ssh-ed25519 AAAA… octopushy-snippets@home/pve01' \
 [`deploy/proxmox/snippets.sh`](../deploy/proxmox/snippets.sh) adds `snippets` to the datastore's
 content, creates the account `octopushy-snippets` with no password and no shell, and lets it log in
 only with that key, only over SFTP, only inside a chroot that holds the datastore's snippets
-directory at its own path, where it creates files mode 0600. It refuses root, and any account that
-exists and that it did not create, before it changes anything. It writes its sshd block, checks the
-whole configuration with `sshd -t`, checks with `sshd -T` that the account would be chrooted and
-that root's effective settings would be exactly as they were, and only then reloads sshd. If any of
-that fails, it puts sshd's files back as they were, and sshd keeps running what it had. It prints
-what it changed, and the host's own SSH host key. Store that key as a plain value under the name
+directory at its own path, where it creates files mode 0600. It is safe by construction rather
+than by testing one connection:
+
+- **The block is read first.** The drop-in is `00-<account>.conf`, and the script refuses unless
+  `sshd_config` starts with Debian's `Include /etc/ssh/sshd_config.d/*.conf` and no drop-in sorts
+  before it. sshd takes the first value it finds for these settings, so the block wins for every
+  connection of the account.
+- **It names one account.** The block is `Match User <account>` with no other condition, so no
+  other user's settings can change.
+- **Before it changes anything**, it refuses: root, an account or group that exists and that it did
+  not create, a configuration `sshd -t` already rejects, a drop-in of its name that it did not write,
+  and any other sshd file that mentions the account, such as a `Match User` block for it on some
+  addresses. This holds for `--remove` too.
+- **sshd's files are written, checked and reloaded, or put back.** After writing, it checks
+  `sshd -t`, and reloads only then. If that or the reload fails, it puts the files back and sshd
+  keeps running what it had, for setup and `--remove` alike.
+
+It prints what it changed, and the host's own SSH host key. Store that key as a plain value under the name
 `snippets.hosts.<host>.hostKey` gives. Running it again changes nothing; running it with a new key
 replaces the old one. `bash snippets.sh --remove` undoes it, and leaves the datastore's content and
 its snippets alone. [`tests/proxmox-snippets/run.sh`](../tests/proxmox-snippets/run.sh) runs all of

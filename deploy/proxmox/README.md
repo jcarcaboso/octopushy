@@ -178,14 +178,18 @@ It changes, and prints:
 | Datastore | `snippets` added to the content of `local` (`OCTOPUSHY_SNIPPETS_DATASTORE` picks another directory datastore), and its `snippets` directory made writable by the account's group, mode 2770 |
 | Account | `octopushy-snippets` (`OCTOPUSHY_SNIPPETS_USER`), a system user with no password and no shell |
 | Chroot | `/var/lib/octopushy-snippets`, holding only the snippets directory at its own path, through a bind mount kept by a systemd mount unit |
-| sshd | `/etc/ssh/sshd_config.d/octopushy-snippets.conf`: a `Match User` block allowing only that key, only SFTP, only in the chroot, files created mode 0600, no forwarding or TTY. The key is in `/etc/ssh/octopushy-snippets/authorized_keys`, marked `restrict` |
+| sshd | `/etc/ssh/sshd_config.d/00-octopushy-snippets.conf`: one `Match User` block allowing only that key, only SFTP, only in the chroot, files created mode 0600, no forwarding or TTY. The key is in `/etc/ssh/octopushy-snippets/authorized_keys`, marked `restrict` |
 
-It refuses root, and any account that exists and that it did not create, before it changes
-anything. It checks the whole configuration with `sshd -t`, and with `sshd -T` that the account
-would be chrooted and root's effective settings would be exactly as they were, before sshd
-reloads; if any of that fails, sshd's files are put back and sshd keeps running what it had. A
-configuration that `sshd -t` already refuses stops it before it touches sshd. Then it prints the
-host's own SSH host key. Store that line in **Variables** as a **plain** value,
+Before it changes anything, it refuses:
+- root, or an account or group that exists and that it did not create;
+- an `sshd_config` that does not start with `Include /etc/ssh/sshd_config.d/*.conf`;
+- a configuration `sshd -t` already rejects;
+- a drop-in of its name that it did not write, or one that sorts before it;
+- any other sshd file that mentions the account.
+
+Its block sorts first and names only that account, so sshd applies it to every connection of that
+account and to no one else. sshd's files are checked with `sshd -t` and reloaded, or put back if
+anything fails, for setup and `--remove` alike. Then it prints the host's own SSH host key. Store that line in **Variables** as a **plain** value,
 under the key the installation's `snippets.hosts.<host>.hostKey` names; uploads connect to that
 key and nothing else. Running the script again changes nothing.
 
