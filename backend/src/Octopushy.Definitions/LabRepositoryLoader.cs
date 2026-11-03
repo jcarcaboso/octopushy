@@ -85,6 +85,20 @@ public sealed partial class LabRepositoryLoader
                 CheckService(service, guest, recipes, installations);
         }
 
+        // An installation Octopushy only observes holds nothing it would change: see docs/safety-boundary.md.
+        foreach (var installation in installations.Where(i => !i.Managed))
+        {
+            foreach (var entry in entries.Where(e => e.Kind is ResourceKind.Guest or ResourceKind.Service
+                         && e.Address.StartsWith(installation.Address + "/", StringComparison.Ordinal)))
+            {
+                var what = entry.Kind == ResourceKind.Guest ? "guest" : "service";
+                Error(entry.File, null,
+                    $"{installation.Address} is observed only (manage: false in {installation.File}): Octopushy changes nothing there, "
+                    + $"so no {what} may be defined under it. Remove this {what}, or set manage: true if Octopushy should manage the installation.",
+                    entry.Address);
+            }
+        }
+
         var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, settings) }).ToList();
         return new LabRepository(
             _root,
@@ -510,7 +524,8 @@ public sealed partial class LabRepositoryLoader
                     connection.ContainsKey("token")),
                 hosts,
                 ParsePolicy(json["policy"]),
-                ParseLabels(json["execution"])));
+                ParseLabels(json["execution"]),
+                json["manage"]?.GetValue<bool>() ?? true));
         }
 
         foreach (var guestDirectory in SubDirectories(Path.Combine(directory, "guests")))
