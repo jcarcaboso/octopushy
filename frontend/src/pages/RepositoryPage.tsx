@@ -13,6 +13,7 @@ import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton, Skeleton } from "../components/States";
 import { EmptyRow, Table } from "../components/Table";
+import { WorkflowsSource } from "../components/WorkflowsSource";
 
 type Kind = "none" | "token" | "ssh";
 
@@ -169,6 +170,18 @@ function RevisionSummary({ revision }: { revision: Revision }) {
           term: "Commit",
           value: <Commit commit={revision.commit} length={10} />,
         },
+        ...(revision.workflowsDigest
+          ? [
+              {
+                term: "Workflows",
+                value: (
+                  <span title={`Resolutions ${revision.workflowsDigest}`}>
+                    from <span className="mono break">{revision.workflowsRepository}</span>
+                  </span>
+                ),
+              },
+            ]
+          : []),
         { term: "Definition validity", value: revision.valid ? <Badge tone="success">Valid</Badge> : <Badge tone="danger">Has errors</Badge> },
         { term: "Subject", value: revision.subject ?? <span className="muted">—</span> },
         { term: "Author", value: revision.author ?? <span className="muted">—</span> },
@@ -229,6 +242,12 @@ function History({ latestId }: { latestId: string | null }) {
             <tr key={r.id} className={r.id === selected ? "row--selected" : undefined}>
               <td>
                 <Commit commit={r.commit} />
+                {r.workflowsDigest ? (
+                  <span className="muted small" title={`A revision is its commit and what its workflow references resolved to (${r.workflowsDigest})`}>
+                    {" "}
+                    + workflows <code className="mono">{r.workflowsDigest.slice(0, 7)}</code>
+                  </span>
+                ) : null}
                 {r.id === latestId ? (
                   <>
                     {" "}
@@ -301,7 +320,7 @@ export function RepositoryPage() {
     <>
       <PageHeader
         title="Repository"
-        meta="The lab repository: Octopushy's source of truth for labs, installations, and guests."
+        meta="The lab repository: Octopushy's source of truth for labs, installations, and guests, and where their workflows come from."
         actions={
           <button
             type="button"
@@ -350,6 +369,11 @@ export function RepositoryPage() {
             </Card>
           </div>
         </div>
+        {data.workflows ? (
+          <Card title="Workflows" id="workflows">
+            <WorkflowsSource workflows={data.workflows} />
+          </Card>
+        ) : null}
         <Card title="History">
           <History latestId={revision?.id ?? null} />
         </Card>
