@@ -67,7 +67,8 @@ public static class Executors
 /// <summary>
 /// One workflow, at one version, read from <c>workflows/&lt;id&gt;/workflow.yaml</c> under <paramref name="SourceRoot"/>: everything
 /// needed to manage one kind of thing. Its paths are relative to <paramref name="SourceRoot"/>, the directory that holds
-/// <c>workflows/</c> and <c>modules/</c>; for workflows kept in the lab repository, that is the repository.
+/// <c>workflows/</c> and <c>modules/</c>; for workflows kept in the lab repository, that is the repository, and for a
+/// release of a workflows repository, the files of its tagged commit.
 /// </summary>
 /// <param name="InputsSchema">The inputs schema's path, inside the workflow's folder.</param>
 /// <param name="Ui">Hints for a form rendered from the inputs schema: stored and served, never interpreted.</param>
@@ -96,6 +97,12 @@ public sealed record WorkflowDefinition(
 
     /// <summary>The inputs schema, built; null when it has none or it is not a valid schema.</summary>
     public JsonSchema? Schema { get; init; }
+
+    /// <summary>For a workflow from a workflows repository, the repository it was released from; null for one kept in the lab repository.</summary>
+    public string? Repository { get; init; }
+
+    /// <summary>For a workflow from a workflows repository, the commit its release tag recorded; null for one kept in the lab repository.</summary>
+    public string? Commit { get; init; }
 
     /// <summary>The workflow at its version, as runs and pages name it: <c>fedora-vm@2.3</c>.</summary>
     public string Label => $"{Id}@{Version}";
