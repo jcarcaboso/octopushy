@@ -110,6 +110,8 @@ public sealed partial class AssignmentBuilder(
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", invalid)}.");
         var stepName = step?.Name ?? StepNames.Observe;
         var action = ActionFor(stepName);
+        if (step?.Stage is not null)
+            return await BuildStageAsync(attempt, step, run!, context, agentId, cancellationToken);
         if (action.Executor == "ansible")
             return await BuildAnsibleAsync(attempt, step!, run!, context, agentId, cancellationToken);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even

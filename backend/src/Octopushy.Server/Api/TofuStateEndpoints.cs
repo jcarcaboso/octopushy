@@ -16,9 +16,10 @@ public static class TofuStateEndpoints
 {
     public static void MapTofuState(this RouteGroupBuilder api)
     {
-        api.MapGet("/guests/{id:guid}/state", async (Guid id, TofuStateStore states, CancellationToken ct) =>
+        // A guest's own state, or with stage, one of a service's: id is then the service's.
+        api.MapGet("/guests/{id:guid}/state", async (Guid id, string? stage, TofuStateStore states, CancellationToken ct) =>
         {
-            var (state, held, versions) = await states.DescribeAsync(id, ct);
+            var (state, held, versions) = await states.DescribeAsync(id, ct, stage ?? "");
             return TypedResults.Ok(new TofuStateDto(state?.HeadVersion ?? 0, held, state?.LockAttemptId, state?.LockedAt,
                 versions.Select(v => new TofuStateVersionDto(v.Version, v.Serial, v.Lineage, v.ResourceCount, v.Sha256, v.Size,
                     v.AttemptId, v.RestoredFrom, v.RestoredBy, v.CreatedAt, v.UpdatedAt)).ToList()));
@@ -27,11 +28,11 @@ public static class TofuStateEndpoints
         .WithName("getGuestState");
 
         api.MapPost("/guests/{id:guid}/state/rollback", async Task<NoContent> (
-            Guid id, TofuStateRollback request, HttpContext http, RunEngine engine, CancellationToken ct) =>
+            Guid id, string? stage, TofuStateRollback request, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {
             await engine.ExecuteAsync(async (_, services) =>
             {
-                await services.GetRequiredService<TofuStateStore>().RollBackAsync(id, request.Version, request.ExpectedHead, http.User.Identity!.Name!, ct);
+                await services.GetRequiredService<TofuStateStore>().RollBackAsync(id, request.Version, request.ExpectedHead, http.User.Identity!.Name!, ct, stage ?? "");
                 return true;
             }, ct);
             return TypedResults.NoContent();

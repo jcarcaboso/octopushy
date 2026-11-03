@@ -14,6 +14,10 @@ public static class GuestHostCredentials
 {
     public static string Key(Guid resourceId) => $"system/guest-host-key/{resourceId}";
 
+    /// <summary>Whether Octopushy holds a host key for the guest. Once it does, the guest keeps it; see <see cref="Definitions.ManagedHostKey.Wanted"/>.</summary>
+    public static Task<bool> IssuedAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken) =>
+        db.GuestHostKeys.AnyAsync(k => k.ResourceId == resourceId, cancellationToken);
+
     /// <summary>The guest's key, generating it the first time a plan needs it.</summary>
     public static async Task<GuestHostKey> EnsureAsync(
         OctopushyDb db, VariableStore store, Guid resourceId, string guestName, DateTimeOffset now, CancellationToken cancellationToken)

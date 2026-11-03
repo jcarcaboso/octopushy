@@ -15,8 +15,8 @@ public sealed record EffectivePolicy(ResolvedSetting<string> Approval, ResolvedS
 }
 
 /// <summary>
-/// Settings flow down the tree (octopushy.yaml defaults, lab, installation, guest) and the
-/// nearest one wins. An unset destructive setting takes the resource's approval setting.
+/// Settings flow down the tree (octopushy.yaml defaults, lab, installation, guest, service) and
+/// the nearest one wins. An unset destructive setting takes the resource's approval setting.
 /// </summary>
 public static class PolicyResolver
 {
@@ -27,6 +27,12 @@ public static class PolicyResolver
         Resolve(Chain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
             .Append((guest.Address, guest.Policy)));
 
+    /// <summary>A service adds only its own override to what its guest resolves to.</summary>
+    public static EffectivePolicy For(LabRepository repository, GuestDefinition guest, ServiceDefinition service) =>
+        Resolve(Chain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
+            .Append((guest.Address, guest.Policy))
+            .Append((service.Address, service.Policy)));
+
     public static EffectivePolicy For(LabRepository repository, InstallationDefinition installation) =>
         Resolve(Chain(repository, installation.Lab, installation));
 
@@ -34,6 +40,11 @@ public static class PolicyResolver
     public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, GuestDefinition guest) =>
         ResolveLabels(LabelChain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
             .Append((guest.Address, guest.AgentLabels)));
+
+    public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, GuestDefinition guest, ServiceDefinition service) =>
+        ResolveLabels(LabelChain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
+            .Append((guest.Address, guest.AgentLabels))
+            .Append((service.Address, service.AgentLabels)));
 
     public static ResolvedSetting<IReadOnlyList<string>> AgentLabels(LabRepository repository, InstallationDefinition installation) =>
         ResolveLabels(LabelChain(repository, installation.Lab, installation));

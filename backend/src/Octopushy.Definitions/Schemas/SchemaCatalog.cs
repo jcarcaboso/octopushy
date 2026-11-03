@@ -17,6 +17,7 @@ public enum DefinitionKind
     Guest,
     Template,
     Recipe,
+    Pipeline,
 }
 
 /// <summary>The JSON Schemas shared with the editor, embedded from <c>contracts/schemas</c>.</summary>
@@ -38,6 +39,7 @@ public sealed class SchemaCatalog
         _schemas[DefinitionKind.Guest] = Build(options, "guest");
         _schemas[DefinitionKind.Template] = Build(options, "template");
         _schemas[DefinitionKind.Recipe] = Build(options, "recipe");
+        _schemas[DefinitionKind.Pipeline] = Build(options, "pipeline");
     }
 
     public static SchemaCatalog Instance => Shared.Value;

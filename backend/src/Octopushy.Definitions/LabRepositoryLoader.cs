@@ -23,6 +23,7 @@ public sealed partial class LabRepositoryLoader
     private readonly HashSet<string> _invalidTemplates = new(StringComparer.Ordinal);
     private readonly HashSet<string> _invalidRecipes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, JsonSchema?> _inputSchemas = new(StringComparer.Ordinal);
+    private readonly List<ServiceDefinition> _services = [];
     private bool _repositoryValid = true;
 
     private LabRepositoryLoader(string root)
@@ -92,6 +93,11 @@ public sealed partial class LabRepositoryLoader
             CheckGuest(guest, settings, installations, templates, recipes);
             CheckSetup(guest, recipes, installations, labs.Find(l => l.Id == guest.Lab)?.Timezone);
         }
+        foreach (var service in _services)
+        {
+            if (guests.FirstOrDefault(g => g.Address == service.GuestAddress) is { } guest)
+                CheckService(service, guest, recipes, installations);
+        }
         foreach (var duplicate in guests.Where(g => g.ManagedWorker is not null)
                      .GroupBy(g => g.ManagedWorker!.Generation).Where(g => g.Count() > 1))
         {
@@ -107,6 +113,7 @@ public sealed partial class LabRepositoryLoader
             labs,
             installations,
             guests,
+            _services,
             templates,
             recipes,
             validEntries,
@@ -133,6 +140,12 @@ public sealed partial class LabRepositoryLoader
             {
                 break;
             }
+        }
+
+        if (entry.Kind == ResourceKind.Service)
+        {
+            return _services.FirstOrDefault(s => s.Address == entry.Address) is { } service
+                && !service.Stages.Any(s => _invalidRecipes.Contains(s.Recipe));
         }
 
         if (entry.Kind != ResourceKind.Guest)
@@ -492,6 +505,9 @@ public sealed partial class LabRepositoryLoader
         {
             LoadInstallation(id, installationDirectory, installations, guests, entries);
         }
+
+        if (Directory.Exists(Path.Combine(labDirectory, "clusters")))
+            Warning(file, null, "Clusters are not supported yet: nothing under this lab's clusters folder is read.", id);
     }
 
     private void LoadInstallation(
@@ -577,6 +593,12 @@ public sealed partial class LabRepositoryLoader
 
         var (json, document) = ReadDefinition(file, DefinitionKind.Guest, address);
         entries.Add(new ResourceEntry(ResourceKind.Guest, address, $"{lab}/{installation}", file, json, false));
+        // Whatever the state of guest.yaml: an error there must not read as the guest's services having gone.
+        foreach (var serviceDirectory in SubDirectories(Path.Combine(directory, "services")))
+        {
+            LoadService(address, serviceDirectory, entries);
+        }
+
         if (json is null || document is null)
         {
             return;
@@ -601,6 +623,52 @@ public sealed partial class LabRepositoryLoader
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
     }
+
+    private void LoadService(string guest, string directory, List<ResourceEntry> entries)
+    {
+        var id = Path.GetFileName(directory);
+        var address = $"{guest}/{id}";
+        var file = Relative(Path.Combine(directory, "pipeline.yaml"));
+        if (!CheckId(id, file, address))
+        {
+            return;
+        }
+
+        if (!File.Exists(Path.Combine(directory, "pipeline.yaml")))
+        {
+            Warning(file, null, $"The service folder {Relative(directory)} has no pipeline.yaml and is ignored.", guest);
+            return;
+        }
+
+        var (json, document) = ReadDefinition(file, DefinitionKind.Pipeline, address);
+        entries.Add(new ResourceEntry(ResourceKind.Service, address, guest, file, json, false));
+        if (json is null || document is null)
+        {
+            return;
+        }
+
+        CollectStoreUses(json, address, file, document);
+        var shared = json["inputs"] as JsonObject;
+        var stages = json["stages"]!.AsArray().Select(node =>
+        {
+            var inputs = shared?.DeepClone().AsObject() ?? [];
+            foreach (var (name, value) in (node!["inputs"] as JsonObject) ?? [])
+            {
+                inputs[name] = value?.DeepClone();
+            }
+
+            return new StageDefinition(
+                node["name"]!.GetValue<string>(),
+                node["recipe"]!.GetValue<string>(),
+                inputs,
+                StageSecrets(node["secrets"]),
+                StageSecrets(node["secretFiles"]));
+        }).ToList();
+        _services.Add(new ServiceDefinition(id, guest, file, Relative(directory), json, stages, ParsePolicy(json["policy"]), ParseLabels(json["execution"])));
+    }
+
+    private static Dictionary<string, StoreReference> StageSecrets(JsonNode? node) =>
+        (node as JsonObject)?.ToDictionary(p => p.Key, p => ParseStoreReference(p.Value!), StringComparer.Ordinal) ?? [];
 
     private void CheckInstallation(InstallationDefinition installation, List<GuestDefinition> guests)
     {
@@ -818,6 +886,88 @@ public sealed partial class LabRepositoryLoader
             foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
                 Invalid($"/setup/inputs{error.Pointer}", $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})");
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a pipeline may name, checked once every recipe is read. A stage runs on its guest's
+    /// connection, so an Ansible stage needs what a setup recipe does. An error here is the
+    /// service's alone: its guest and its siblings stay valid.
+    /// </summary>
+    private void CheckService(ServiceDefinition service, GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
+    {
+        void Invalid(string pointer, string message) => Error(service.File, LineOf(service.File, pointer), message, service.Address);
+
+        if (guest.ManagedWorker is not null)
+            Invalid("", "A managed worker is configured by its image; it cannot have services.");
+        foreach (var name in service.Stages.GroupBy(s => s.Name).Where(g => g.Count() > 1).Select(g => g.Key))
+        {
+            Invalid("/stages", $"The stage name '{name}' is used more than once.");
+        }
+
+        var connectionKeys = installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key })
+            .ToHashSet(StringComparer.Ordinal);
+        for (var index = 0; index < service.Stages.Count; index++)
+        {
+            var stage = service.Stages[index];
+            var at = $"/stages/{index}";
+            if (!recipes.TryGetValue(stage.Recipe, out var recipe))
+            {
+                Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' does not exist under recipes/.");
+                continue;
+            }
+
+            if (recipe.Configure is { } configure)
+            {
+                if (configure.OnChange is null)
+                    Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' marks no action with onChange, and that is the action a stage runs.");
+                if (configure.Outcomes.Values.Any(o => o.ApproveVars is not null))
+                    Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' has an outcome a person approves, and a pipeline has one approval, before anything runs.");
+                if (ConfigureInputs.AddressOf(guest) is null)
+                    Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.address, or a static or reserved address.");
+                if (guest.Json["access"]?["user"] is null)
+                    Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.user.");
+                if (guest.Json["access"]?["hostKey"] is null
+                    && !ManagedHostKey.Offered(recipes, installations.Find(i => i.Address == guest.InstallationAddress), guest))
+                    Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.hostKey, unless its provision recipe has "
+                        + $"hostKey: managed and its installation lists host {guest.Host} under snippets.hosts.");
+
+                // No access.sshKey means Octopushy's own key, as for a setup recipe: see ManagedAccess.
+
+                foreach (var name in configure.Secrets.Where(n => !stage.Secrets.ContainsKey(n) && !stage.SecretFiles.ContainsKey(n)))
+                {
+                    Invalid(at, $"The recipe '{stage.Recipe}' needs secrets.{name} or secretFiles.{name}.");
+                }
+
+                var names = stage.Secrets.Keys.Concat(stage.SecretFiles.Keys).ToList();
+                foreach (var name in stage.Secrets.Keys.Intersect(stage.SecretFiles.Keys).Concat(names.Intersect(stage.Inputs.Select(p => p.Key))))
+                {
+                    Invalid(at, $"{name} is set more than once in stage '{stage.Name}'.");
+                }
+
+                foreach (var (name, reference) in stage.Secrets.Concat(stage.SecretFiles))
+                {
+                    if (connectionKeys.Contains(reference.Key))
+                        Invalid(at, $"{name} cannot use a Proxmox API token.");
+                }
+            }
+            else if (recipe.Operation != "stage")
+            {
+                Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' cannot be a stage: it needs operation: configure or operation: stage.");
+                continue;
+            }
+            else if (stage.Secrets.Count + stage.SecretFiles.Count > 0)
+            {
+                Invalid(at, $"Stage '{stage.Name}' is OpenTofu, which gets no secrets yet.");
+            }
+
+            if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
+            {
+                foreach (var error in SchemaCatalog.Evaluate(schema, stage.Inputs))
+                {
+                    Invalid(at, $"{Describe(error.Pointer)}{error.Message} (stage {stage.Name}, recipe {recipe.Id})");
+                }
             }
         }
     }

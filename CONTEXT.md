@@ -149,8 +149,23 @@ published, the draft is validated, merged with any newer commits, and committed.
 _Avoid_: Commit when the edits have not been published
 
 **Service**:
-A named workload deployed to one or more managed machines.
+What a pipeline deploys on one guest, read from `services/<id>/pipeline.yaml` in its
+folder. Octopushy knows it by its stages, not by what it is.
 _Avoid_: Job when referring to the workload rather than its deployment
+
+**Pipeline**:
+A service's ordered stages: all planned and previewed, approved once, then applied in
+order, as one run. There is no rollback, and a later stage cannot use an earlier one's
+results.
+_Avoid_: Rollout, which spans independent targets
+
+**Stage**:
+One recipe in a pipeline, OpenTofu or Ansible.
+_Avoid_: Step, which is one thing a run does; a stage has a plan or preview step and an apply step
+
+**Interface**:
+A named slot, such as `dns`, bound to a recipe in the lab, with a schema in the
+repository. Swapping the recipe is one line. Not built yet.
 
 **Deployment instance**:
 A service's installation on a particular target, with its own desired release,
@@ -199,14 +214,9 @@ The Git repository holding Octopushy's definitions and the tool-native files for
 one or more labs, nested by lab, Proxmox installation, guest, and service instance.
 _Avoid_: Octopushy's source repository when referring to the desired configuration
 
-**Integration**:
-A system a lab uses to provide what services declare generically, such as a DNS
-server, connected through an adapter for its product.
-_Avoid_: Provider, which names where a secret's value comes from
-
 **Application cluster**:
-Service instances on several guests that a cluster recipe forms into one
-application, such as Technitium DNS with a primary and secondaries.
+A set of guests with stages applied to them, member by member, under one approval.
+Not built yet.
 _Avoid_: Proxmox cluster when referring to application membership
 
 **Maintenance window**:

@@ -1,0 +1,5 @@
+schemaVersion: 1
+description: An OpenTofu stage. It needs no provider, so a run holds no credentials at all.
+operation: stage
+executor: opentofu
+root: ../../modules/opentofu/web-rules

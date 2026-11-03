@@ -24,7 +24,9 @@ public sealed record ProvisionInputs(
     private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
-    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision)
+    /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>
+    /// <param name="hostKeyIssued">Whether Octopushy already holds a host key for the guest; see <see cref="ManagedHostKey.Wanted"/>.</param>
+    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision, bool keyIssued = false, bool hostKeyIssued = false)
     {
         var installation = repository.Installation(guest.InstallationAddress)
             ?? throw new InvalidOperationException($"{guest.Address} has no installation.");
@@ -86,7 +88,7 @@ public sealed record ProvisionInputs(
             variables["guest"]!["workerGeneration"] = worker.Generation.ToString();
         // Where the guest's snippet goes. Its public host key joins it when a run is built, so it
         // is never in Git; the private half goes to the plan alone, as a sensitive variable.
-        var snippets = ManagedHostKey.Wanted(repository, guest) ? ManagedHostKey.Settings(installation) : null;
+        var snippets = ManagedHostKey.Wanted(repository, guest, hostKeyIssued) ? ManagedHostKey.Settings(installation) : null;
         if (snippets is not null)
         {
             var node = snippets.Hosts[guest.Host];
@@ -132,7 +134,7 @@ public sealed record ProvisionInputs(
         }
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
-        if (ManagedAccess.Wanted(guest))
+        if (ManagedAccess.Wanted(repository, guest, keyIssued))
         {
             hashed["managedAccess"] = true;
         }
@@ -170,8 +172,11 @@ public sealed record ProvisionInputs(
             : null;
     }
 
-    /// <summary>A hash of every file below a repository directory, by relative path and content, except <paramref name="except"/>.</summary>
-    public static string TreeHash(string repositoryRoot, string relativeDirectory, string? except = null)
+    /// <summary>
+    /// A hash of every file below a repository directory, by relative path and content, except
+    /// <paramref name="except"/> and anything under the folder <paramref name="exceptFolder"/>.
+    /// </summary>
+    public static string TreeHash(string repositoryRoot, string relativeDirectory, string? except = null, string? exceptFolder = null)
     {
         var directory = Path.Combine(repositoryRoot, relativeDirectory);
         if (!Directory.Exists(directory))
@@ -182,7 +187,8 @@ public sealed record ProvisionInputs(
         var builder = new StringBuilder();
         foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
                      .Select(f => (Path: Path.GetRelativePath(directory, f).Replace('\\', '/'), Full: f))
-                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform") && f.Path != except)
+                     .Where(f => !f.Path.Split('/').Any(part => part is ".terraform") && f.Path != except
+                         && (exceptFolder is null || !f.Path.StartsWith(exceptFolder + "/", StringComparison.Ordinal)))
                      .OrderBy(f => f.Path, StringComparer.Ordinal))
         {
             using var stream = File.OpenRead(file.Full);

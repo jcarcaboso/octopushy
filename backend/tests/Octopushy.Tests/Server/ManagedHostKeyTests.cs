@@ -26,9 +26,9 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
     /// The configure fixture as a guest Octopushy creates: its own login key and no pin of its own,
     /// with a recipe that delivers one and a host set up for it.
     /// </summary>
-    internal static TestRepository Managed(bool declaredPin = false)
+    internal static TestRepository Managed(bool declaredPin = false, TestRepository? start = null)
     {
-        var test = Repository.Repository();
+        var test = start ?? Repository.Repository();
         var guest = File.ReadAllText(Path.Combine(test.Root, GuestFile)).Replace("  sshKey: { store: access/app/ssh-key }\n", "");
         test.Write(GuestFile, declaredPin ? guest : guest.Replace("  hostKey: { store: access/app/host-key }\n", ""));
         test.Write("recipes/test-vm/recipe.yaml", File.ReadAllText(Path.Combine(test.Root, "recipes/test-vm/recipe.yaml")) + "hostKey: managed\n");
@@ -358,6 +358,46 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         var preview = await ConfigureRunTests.PreviewAsync(agent);
         Assert.Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY",
             JsonNode.Parse(preview.InputJson)!["host"]!["hostKey"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_pipeline_stage_on_the_guest_pins_octopushys_key_too()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed(start: Definitions.PipelineDefinitionTests.Repository()));
+        await server.SetSecretAsync("web/password", "a-web-password");
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await ProvisionAsync(agent, server);
+        var guest = await server.ResourceAsync(Guest);
+        var hostKey = await QueryAsync(server, db => db.GuestHostKeys.AsNoTracking().SingleAsync());
+        var privateHalf = await PrivateHalfAsync(server, guest.Id);
+        await ScheduleAsync(server);
+        await ConfigureRunTests.PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+
+        await server.Services.GetRequiredService<Planner>().SchedulePipelinesAsync(CancellationToken.None);
+        var run = await server.LatestRunAsync(Definitions.PipelineDefinitionTests.Address, Operations.Pipeline);
+        Assert.DoesNotContain(RunContext.Parse(run.Context).Secrets.Keys, k => RunContext.BareRole(k) == SecretNames.AnsibleHostKey);
+        var plan = await agent.NextAsync("preview");
+        Assert.Equal("opentofu", plan.Executor);
+        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var preview = await agent.NextAsync("preview");
+        Assert.Equal("ansible", preview.Executor);
+        Assert.Equal(hostKey.PublicKey, JsonNode.Parse(preview.InputJson)!["host"]!["hostKey"]!.GetValue<string>());
+        var (outputs, artifact) = ConfigureRunTests.Preview();
+        await agent.ReportAsync(preview, Outcome.Succeeded, outputs, artifacts: artifact);
+        var state = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { version = 4, serial = 1, lineage = "l", resources = new[] { new { name = "r" } } });
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject(), artifacts: new Artifact
+        {
+            Name = TofuStateStore.ArtifactName,
+            Content = Google.Protobuf.ByteString.CopyFrom(state),
+            Sha256 = ArtifactStore.Sha256(state),
+        });
+        var playbook = await agent.NextAsync("run");
+        Assert.Equal(hostKey.PublicKey, JsonNode.Parse(playbook.InputJson)!["host"]!["hostKey"]!.GetValue<string>());
+        foreach (var assignment in new[] { plan, preview, playbook })
+            Assert.DoesNotContain(Everything(assignment), v => v.Contains(privateHalf));
     }
 
     [Fact]

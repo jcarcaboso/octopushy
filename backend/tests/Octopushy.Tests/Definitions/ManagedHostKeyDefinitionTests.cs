@@ -27,7 +27,7 @@ public class ManagedHostKeyDefinitionTests
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
         var guest = repository.Guest(Address)!;
-        Assert.True(ManagedHostKey.Wanted(repository, guest));
+        Assert.True(ManagedHostKey.Wanted(repository, guest, keyIssued: false));
         Assert.Null(ConfigureInputs.Build(repository, guest).HostKey);
         var settings = ManagedHostKey.Settings(repository.Installation(guest.InstallationAddress)!)!;
         Assert.Equal("local", settings.Datastore);
@@ -90,8 +90,39 @@ public class ManagedHostKeyDefinitionTests
         var updated = LabRepositoryLoader.Load(after.Root);
         Assert.Empty(updated.Issues);
         Assert.Equal(ProvisionInputs.Build(old, old.Guest(Address)!, "c").Hash, ProvisionInputs.Build(updated, updated.Guest(Address)!, "c").Hash);
-        Assert.False(ManagedHostKey.Wanted(updated, updated.Guest(Address)!));
+        Assert.False(ManagedHostKey.Wanted(updated, updated.Guest(Address)!, keyIssued: false));
         Assert.Null(ProvisionInputs.Build(updated, updated.Guest(Address)!, "c").Variables["octopushy_snippets"]);
+    }
+
+    [Fact]
+    public void Once_issued_the_key_stays_while_offered_whatever_the_guests_ansible_work()
+    {
+        using var test = ManagedHostKeyTests.Managed();
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var guest = repository.Guest(Address)!;
+        var json = guest.Json.DeepClone().AsObject();
+        json.Remove("setup");
+        var idle = guest with { Json = json };
+        // No Ansible work: no key to start with, but one already issued is kept, or the VM would be replaced.
+        Assert.False(ManagedHostKey.Wanted(repository, idle, keyIssued: false));
+        Assert.True(ManagedHostKey.Wanted(repository, idle, keyIssued: true));
+        Assert.NotNull(ProvisionInputs.Build(repository, idle, "c", hostKeyIssued: true).Variables["octopushy_snippets"]);
+        // A pin of its own always wins.
+        json["access"]!["hostKey"] = new System.Text.Json.Nodes.JsonObject { ["store"] = "access/app/host-key" };
+        Assert.False(ManagedHostKey.Wanted(repository, guest with { Json = json }, keyIssued: true));
+    }
+
+    [Fact]
+    public void A_service_stage_on_the_guest_needs_a_pin_unless_the_guest_gets_octopushys()
+    {
+        using var managed = ManagedHostKeyTests.Managed(start: PipelineDefinitionTests.Repository());
+        var repository = LabRepositoryLoader.Load(managed.Root);
+        Assert.DoesNotContain(repository.Issues, i => i.Severity == IssueSeverity.Error);
+        Assert.True(ManagedHostKey.Wanted(repository, repository.Guest(Address)!, keyIssued: false));
+
+        using var plain = ManagedHostKeyTests.Managed(start: PipelineDefinitionTests.Repository());
+        Edit(plain, "recipes/test-vm/recipe.yaml", "hostKey: managed\n", "");
+        Assert.Contains("Stage 'deploy' runs on the guest, which needs access.hostKey, unless its provision recipe has hostKey: managed", Errors(plain));
     }
 
     private static TestRepository Repository() => GuestConfigurationTests.Repository();

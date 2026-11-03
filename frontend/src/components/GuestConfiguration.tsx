@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 import { useConfigureGuest } from "../api/queries";
 import type { FollowedSecret, GuestConfiguration, GuestSchedule } from "../api/types";
 import { Badge } from "./Badge";
+import { Callout } from "./Callout";
 import { Card } from "./Card";
 import { KeyValue } from "./KeyValue";
 import { Commit } from "./Mono";
@@ -51,7 +52,7 @@ function FollowedSecretRow({ secret }: { secret: FollowedSecret }) {
     <li>
       <span className="mono">{secret.key}</span>{" "}
       <span className="muted">
-        active {version(secret.activeVersion)}, last configured with {version(secret.startedVersion)}
+        active {version(secret.activeVersion)}, last attempted with {version(secret.startedVersion)}
       </span>{" "}
       {secret.pending && <Badge tone="neutral">Run pending</Badge>}
     </li>
@@ -85,6 +86,11 @@ export function GuestConfigurationCard({ id, configuration }: { id: string; conf
             },
           ]}
         />
+        {configuration.refused && (
+          <Callout kind="warning" title="Setup does not start">
+            {configuration.refused}
+          </Callout>
+        )}
         {configuration.schedules.length > 0 && (
           <ul className="stack stack--small" aria-label="Schedules">
             {configuration.schedules.map((schedule) => (

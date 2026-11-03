@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
+using Octopushy.Server.Store;
 using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
 
@@ -40,7 +41,7 @@ public static class GuestRemoval
             throw new RunException($"The guest's definition in {lastDefined.Commit[..10]} is not valid, so its removal cannot be planned; restore its folder instead.");
 
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
-            $"definition removed in {removal.Commit[..10]}");
+            $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
         if (!force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id)
             return null;
         resource.DesiredInputsHash = run.InputsHash;

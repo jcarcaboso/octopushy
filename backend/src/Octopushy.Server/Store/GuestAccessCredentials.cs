@@ -132,6 +132,25 @@ public static class GuestAccessCredentials
         return true;
     }
 
+    /// <summary>Whether Octopushy holds a key for the guest, whatever became of it. Only retiring the guest removes it.</summary>
+    public static Task<bool> IssuedAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken) =>
+        db.GuestAccessKeys.AnyAsync(k => k.ResourceId == resourceId, cancellationToken);
+
+    /// <summary>
+    /// Whether Octopushy has a record that its key reached the guest's machine: a successful apply of the guest's
+    /// provisioning carried a public key of its own, or a login with one alone worked. This is evidence of
+    /// delivery, not of who owns the machine, and not that the key is still installed. Octopushy puts its key on a
+    /// machine only through that apply, so without it a login with the key is not tried.
+    /// </summary>
+    public static Task<bool> DeliveredAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken) =>
+        db.GuestAccessKeys.AnyAsync(k => k.ResourceId == resourceId && (k.ProvisionedAt != null || k.VerifiedAt != null), cancellationToken);
+
+    /// <summary>Which of these guests <see cref="DeliveredAsync"/> holds for, in one query.</summary>
+    public static async Task<HashSet<Guid>> DeliveredAmongAsync(OctopushyDb db, IReadOnlyCollection<Guid> resourceIds, CancellationToken cancellationToken) =>
+        (await db.GuestAccessKeys.AsNoTracking()
+            .Where(k => resourceIds.Contains(k.ResourceId) && (k.ProvisionedAt != null || k.VerifiedAt != null))
+            .Select(k => k.ResourceId).Distinct().ToListAsync(cancellationToken)).ToHashSet();
+
     /// <summary>What Octopushy's own key can no longer be needed for: the guest is gone.</summary>
     public static async Task RemoveAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
     {

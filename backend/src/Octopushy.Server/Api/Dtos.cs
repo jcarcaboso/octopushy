@@ -64,7 +64,8 @@ public sealed record ApprovalDto(
     DateTimeOffset? DecidedAt,
     string? Note,
     string? PlanSha256,
-    string? WorkerUpdateSha256 = null);
+    string? WorkerUpdateSha256 = null,
+    JsonNode? Document = null);
 
 public sealed record AttemptDto(
     Guid Id,
@@ -97,7 +98,8 @@ public sealed record StepDto(
     PlanDto? Plan,
     ApprovalDto? Approval,
     IReadOnlyList<AttemptDto> Attempts,
-    ConfigurePreviewDto? ConfigurePreview = null);
+    ConfigurePreviewDto? ConfigurePreview = null,
+    string? Stage = null);
 
 /// <summary>What a plan step found: the resource changes OpenTofu proposes.</summary>
 public sealed record PlanDto(bool HasChanges, IReadOnlyList<PlanChangeDto> Changes, PlanCountsDto Counts, string? PlanSha256, string? ToolVersion);
@@ -242,7 +244,9 @@ public sealed record GuestConfigurationDto(
     DateTimeOffset? AppliedAt,
     bool HasSnapshot,
     IReadOnlyList<GuestScheduleDto> Schedules,
-    IReadOnlyList<FollowedSecretDto> Secrets);
+    IReadOnlyList<FollowedSecretDto> Secrets,
+    /// <summary>Why no setup run starts, automatically or by hand, when it would log in with a key nothing shows reached the machine.</summary>
+    string? Refused);
 
 /// <summary>
 /// A store value the guest's setup takes at its active version. <see cref="Pending"/> means a
@@ -311,6 +315,7 @@ public sealed record GuestDetailDto(
     GuestDiskUsageDto DiskUsage,
     GuestConfigurationDto? Configuration,
     ManagedAccessDto? ManagedAccess,
+    IReadOnlyList<ServiceSummaryDto> Services,
     ManagedHostKeyDto? HostKey = null);
 
 /// <summary>
@@ -335,6 +340,36 @@ public sealed record SnippetAccessDto(
 
 /// <summary>A host declared for uploads, and whether its own SSH host key is in Variables yet.</summary>
 public sealed record SnippetHostDto(string Host, string Address, int Port, string HostKeyStore, bool HostKeySet);
+
+/// <summary>A service on a guest, read from the repository, with its own status: one failing says nothing about the guest or the others.</summary>
+public sealed record ServiceSummaryDto(
+    Guid Id,
+    string Address,
+    string Name,
+    string Status,
+    string? StatusDetail,
+    bool Valid,
+    RunSummaryDto? ActiveRun,
+    RunSummaryDto? LastRun);
+
+public sealed record ServiceStageDto(string Name, string Recipe, string Executor);
+
+public sealed record ServiceDetailDto(
+    ServiceSummaryDto Service,
+    Guid? GuestId,
+    string? GuestAddress,
+    string? DefinitionFile,
+    string? DefinitionText,
+    IReadOnlyList<IssueDto> Issues,
+    PolicyDto? Policy,
+    IReadOnlyList<string> AgentLabels,
+    string? AgentLabelsSetBy,
+    IReadOnlyList<ServiceStageDto> Stages,
+    string? AppliedCommit,
+    DateTimeOffset? AppliedAt,
+    DateTimeOffset? MissingSince,
+    DateTimeOffset? RetiredAt,
+    IReadOnlyList<RunSummaryDto> Runs);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

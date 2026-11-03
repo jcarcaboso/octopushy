@@ -369,7 +369,7 @@ public class NativeDiskReporterRunTests
         var guest = repository.Guests.Single();
         var run = new RunFactory(Microsoft.Extensions.Options.Options.Create(options), TimeProvider.System).Guest(repository, guest,
             new Resource { Id = Guid.NewGuid(), Kind = ResourceKinds.Guest, Address = guest.Address, Lab = guest.Lab },
-            new DefinitionRevision { Commit = "fixture" }, "test");
+            new DefinitionRevision { Commit = "fixture" }, "test", false);
         return (run, options);
     }
 

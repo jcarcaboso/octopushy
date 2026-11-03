@@ -331,7 +331,7 @@ public class GuestConfigurationTests
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
         var guest = repository.Guest(Address)!;
-        Assert.True(ManagedAccess.Wanted(guest));
+        Assert.True(ManagedAccess.Wanted(repository, guest, false));
         Assert.Null(ConfigureInputs.Build(repository, guest).SshKey);
     }
 

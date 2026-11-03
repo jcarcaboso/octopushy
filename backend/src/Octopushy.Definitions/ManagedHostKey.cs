@@ -59,9 +59,18 @@ public static class ManagedHostKey
         && installation is not null && Settings(installation)?.Hosts.ContainsKey(guest.Host) == true;
 
     /// <summary>
-    /// A guest whose host key is Octopushy's. The guests Octopushy logs in to are those with a
-    /// setup recipe; if that rule widens, as for pipelines with an Ansible stage, it widens here.
+    /// A guest whose host key is Octopushy's: one Octopushy provisions and runs Ansible work on, from
+    /// a setup recipe or a service stage, as for its access key in <see cref="ManagedAccess.Wanted"/>,
+    /// where it is offered, unless it names <c>access.hostKey</c>, which always wins.
     /// </summary>
-    public static bool Wanted(LabRepository repository, GuestDefinition guest) =>
-        guest.SetupRecipe is not null && !guest.Retired && guest.Json["access"]?["hostKey"] is null && Offered(repository, guest);
+    /// <param name="keyIssued">
+    /// Whether Octopushy already holds a host key for this guest. Once it does, the guest keeps it while it
+    /// is offered, whatever happens to its Ansible work: dropping the snippet would replace the VM.
+    /// </param>
+    public static bool Wanted(LabRepository repository, GuestDefinition guest, bool keyIssued) =>
+        guest.Json["access"]?["hostKey"] is null
+        && guest.ManagedWorker is null
+        && !guest.Retired
+        && (keyIssued || guest.SetupRecipe is not null || ManagedAccess.RunsPlaybooks(repository, guest))
+        && Offered(repository, guest);
 }

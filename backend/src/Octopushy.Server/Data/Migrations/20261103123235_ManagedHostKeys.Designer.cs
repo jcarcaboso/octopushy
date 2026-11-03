@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261103113429_ManagedHostKeys")]
+    [Migration("20261103123235_ManagedHostKeys")]
     partial class ManagedHostKeys
     {
         /// <inheritdoc />
@@ -1256,6 +1256,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("detail");
 
+                    b.Property<string>("Document")
+                        .HasColumnType("text")
+                        .HasColumnName("document");
+
                     b.Property<DateTimeOffset?>("FinishedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("finished_at");
@@ -1285,6 +1289,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<Guid>("RunId")
                         .HasColumnType("uuid")
                         .HasColumnName("run_id");
+
+                    b.Property<string>("Stage")
+                        .HasColumnType("text")
+                        .HasColumnName("stage");
 
                     b.Property<DateTimeOffset?>("StartedAt")
                         .HasColumnType("timestamp with time zone")
@@ -1409,6 +1417,12 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("resource_id");
 
+                    b.Property<string>("Stage")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("")
+                        .HasColumnName("stage");
+
                     b.Property<int>("HeadVersion")
                         .HasColumnType("integer")
                         .HasColumnName("head_version");
@@ -1421,7 +1435,7 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("locked_at");
 
-                    b.HasKey("ResourceId")
+                    b.HasKey("ResourceId", "Stage")
                         .HasName("pk_tofu_states");
 
                     b.ToTable("tofu_states", (string)null);
@@ -1482,6 +1496,13 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("size");
 
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("")
+                        .HasColumnName("stage");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -1498,9 +1519,9 @@ namespace Octopushy.Server.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_tofu_state_versions");
 
-                    b.HasIndex("ResourceId", "Version")
+                    b.HasIndex("ResourceId", "Stage", "Version")
                         .IsUnique()
-                        .HasDatabaseName("ix_tofu_state_versions_resource_id_version");
+                        .HasDatabaseName("ix_tofu_state_versions_resource_id_stage_version");
 
                     b.ToTable("tofu_state_versions", (string)null);
                 });
@@ -1634,8 +1655,8 @@ namespace Octopushy.Server.Data.Migrations
             modelBuilder.Entity("Octopushy.Server.Data.TofuState", b =>
                 {
                     b.HasOne("Octopushy.Server.Data.Resource", null)
-                        .WithOne()
-                        .HasForeignKey("Octopushy.Server.Data.TofuState", "ResourceId")
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_tofu_states_resources_resource_id");
@@ -1645,10 +1666,10 @@ namespace Octopushy.Server.Data.Migrations
                 {
                     b.HasOne("Octopushy.Server.Data.TofuState", null)
                         .WithMany()
-                        .HasForeignKey("ResourceId")
+                        .HasForeignKey("ResourceId", "Stage")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_tofu_state_versions_tofu_states_resource_id");
+                        .HasConstraintName("fk_tofu_state_versions_tofu_states_resource_id_stage");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Resource", b =>

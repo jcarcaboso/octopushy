@@ -21,14 +21,14 @@ public class FollowedSecretTests(PostgresFixture postgres)
     private static Task ScheduleAsync(ServerHarness server) =>
         server.Services.GetRequiredService<Planner>().ScheduleConfigurationsAsync(CancellationToken.None);
 
-    private static async Task<int> StageAsync(HttpClient http, string key, string value)
+    internal static async Task<int> StageAsync(HttpClient http, string key, string value)
     {
         var staged = await http.PostAsJsonAsync("/api/variables/candidates", new { key, value });
         staged.EnsureSuccessStatusCode();
         return (await staged.Content.ReadFromJsonAsync<JsonObject>())!["version"]!.GetValue<int>();
     }
 
-    private static async Task PromoteAsync(HttpClient http, string key, int version, int current) =>
+    internal static async Task PromoteAsync(HttpClient http, string key, int version, int current) =>
         (await http.PostAsJsonAsync("/api/variables/promote", new { key, version, expectedCurrentVersion = current, verificationNote = "checked by hand" }))
             .EnsureSuccessStatusCode();
 
@@ -294,5 +294,101 @@ public class FollowedSecretTests(PostgresFixture postgres)
         Assert.Equal(new FollowedSecrets.Change("b", null, 1), change);
         Assert.Equal("A store value this guest's setup uses changed: b set, v1.", FollowedSecrets.Describe([change]));
         Assert.Equal(2, FollowedSecrets.Started(recorded, usable)["a"]);
+    }
+
+    [Fact]
+    public async Task A_rollback_while_a_run_holds_a_newer_version_still_runs()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server); // record v1
+        await PromoteAsync(http, Shared, await StageAsync(http, Shared, "new-v2"), 1);
+        await ConfigureRunTests.PreviewAsync(agent);
+        var playbook = await agent.NextAsync("run"); // first dispatch pinned v2
+        Assert.Equal("new-v2", playbook.Secrets[SecretNames.AnsibleFile("git_key_src")]);
+        var before = await ConfigureRunCountAsync(server);
+        await PromoteAsync(http, Shared, 1, 2); // rollback while the v2 playbook is active
+        await ScheduleAsync(server); // held behind the active run
+        Assert.Equal(before, await ConfigureRunCountAsync(server));
+        await agent.ReportAsync(playbook, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+        await ScheduleAsync(server);
+        Assert.Equal(before + 1, await ConfigureRunCountAsync(server));
+    }
+
+    [Fact]
+    public async Task A_binding_pinned_in_Git_does_not_stand_in_for_one_that_follows()
+    {
+        var test = Repository.Repository();
+        const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        // Same store key used by two roles, one deliberately pinned to v2.
+        test.Write(file, File.ReadAllText(Path.Combine(test.Root, file))
+            .Replace("tailscale_key: { store: app/tailscale }", "tailscale_key: { store: app/git-key, version: 2 }"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await PromoteAsync(http, Shared, await StageAsync(http, Shared, "new-v2"), 1);
+        await PromoteAsync(http, Shared, 1, 2); // v2 has been activated, but v1 is current
+        await ScheduleAsync(server);
+        var playbook = await FinishAsync(server, agent);
+        Assert.Equal("new-v2", playbook.Secrets[SecretNames.AnsibleVar("tailscale_key")]);
+        Assert.NotEqual("new-v2", playbook.Secrets[SecretNames.AnsibleFile("git_key_src")]);
+        var before = await ConfigureRunCountAsync(server);
+        await PromoteAsync(http, Shared, 2, 1);
+        await ScheduleAsync(server);
+        Assert.Equal(before + 1, await ConfigureRunCountAsync(server));
+    }
+
+    [Fact]
+    public async Task A_restart_neither_loses_nor_repeats_a_change()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        var before = await ConfigureRunCountAsync(server);
+        await PromoteAsync(http, Shared, await StageAsync(http, Shared, "restart-v2"), 1);
+        await server.RestartFixtureAsync();
+        await ScheduleAsync(server);
+        Assert.Equal(before + 1, await ConfigureRunCountAsync(server));
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        await server.RestartFixtureAsync();
+        await ScheduleAsync(server);
+        Assert.Equal(run.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
+        var agent = await server.ConnectAgentAsync("home");
+        Assert.Equal("restart-v2", (await FinishAsync(server, agent)).Secrets[SecretNames.AnsibleFile("git_key_src")]);
+        await server.RestartFixtureAsync();
+        await ScheduleAsync(server);
+        Assert.Equal(before + 1, await ConfigureRunCountAsync(server));
+    }
+
+    [Fact]
+    public async Task A_scheduled_run_delivers_the_new_version_and_a_change_does_not_overlap_it()
+    {
+        var test = Repository.Repository();
+        const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        test.Write(file, File.ReadAllText(Path.Combine(test.Root, file)).Replace("access:\n  user: ops",
+            "  schedules:\n    - { action: configure, cron: \"0 6 * * *\" }\naccess:\n  user: ops"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        var planner = server.Services.GetRequiredService<Planner>();
+        var today = new DateTimeOffset(DateTimeOffset.UtcNow.Date, TimeSpan.Zero).AddDays(2);
+        await planner.FireSchedulesAsync(today.AddHours(5), CancellationToken.None);
+        await PromoteAsync(http, Shared, await StageAsync(http, Shared, "scheduled-v2"), 1);
+        await planner.FireSchedulesAsync(today.AddHours(6), CancellationToken.None);
+        var scheduled = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunReasons.Schedule, scheduled.Reason);
+        await ScheduleAsync(server);
+        Assert.Equal(scheduled.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
+        Assert.Equal("scheduled-v2", (await FinishAsync(server, agent)).Secrets[SecretNames.AnsibleFile("git_key_src")]);
+        await ScheduleAsync(server);
+        Assert.Equal(scheduled.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
+        await PromoteAsync(http, Shared, await StageAsync(http, Shared, "scheduled-v3"), 2);
+        await ScheduleAsync(server);
+        var secret = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunReasons.Secret, secret.Reason);
+        await planner.FireSchedulesAsync(today.AddDays(1).AddHours(6), CancellationToken.None);
+        Assert.Equal(secret.Id, (await server.LatestRunAsync(Guest, Operations.Configure)).Id);
     }
 }

@@ -196,6 +196,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["deployService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/guests/{id}/access/rotate": {
         parameters: {
             query?: never;
@@ -510,6 +542,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["retryFilesystem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{id}/retry-stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retryStage"];
         delete?: never;
         options?: never;
         head?: never;
@@ -916,6 +964,7 @@ export interface components {
             note: null | string;
             planSha256: null | string;
             workerUpdateSha256?: null | string;
+            document?: unknown;
         };
         AttemptDto: {
             /** Format: uuid */
@@ -1121,6 +1170,7 @@ export interface components {
             hasSnapshot: boolean;
             schedules: components["schemas"]["GuestScheduleDto"][];
             secrets: components["schemas"]["FollowedSecretDto"][];
+            refused: null | string;
         };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];
@@ -1150,6 +1200,7 @@ export interface components {
             diskUsage: components["schemas"]["GuestDiskUsageDto"];
             configuration: null | components["schemas"]["GuestConfigurationDto"];
             managedAccess: null | components["schemas"]["ManagedAccessDto"];
+            services: components["schemas"]["ServiceSummaryDto"][];
             hostKey?: null | components["schemas"]["ManagedHostKeyDto"];
         };
         GuestDiskUsageDto: {
@@ -1535,6 +1586,43 @@ export interface components {
             waiting: null | string;
             reasonDetail?: null | string;
         };
+        ServiceDetailDto: {
+            service: components["schemas"]["ServiceSummaryDto"];
+            /** Format: uuid */
+            guestId: null | string;
+            guestAddress: null | string;
+            definitionFile: null | string;
+            definitionText: null | string;
+            issues: components["schemas"]["IssueDto"][];
+            policy: null | components["schemas"]["PolicyDto"];
+            agentLabels: string[];
+            agentLabelsSetBy: null | string;
+            stages: components["schemas"]["ServiceStageDto"][];
+            appliedCommit: null | string;
+            /** Format: date-time */
+            appliedAt: null | string;
+            /** Format: date-time */
+            missingSince: null | string;
+            /** Format: date-time */
+            retiredAt: null | string;
+            runs: components["schemas"]["RunSummaryDto"][];
+        };
+        ServiceStageDto: {
+            name: string;
+            recipe: string;
+            executor: string;
+        };
+        ServiceSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            address: string;
+            name: string;
+            status: string;
+            statusDetail: null | string;
+            valid: boolean;
+            activeRun: null | components["schemas"]["RunSummaryDto"];
+            lastRun: null | components["schemas"]["RunSummaryDto"];
+        };
         SetupRequest: {
             setupCode: string;
             username: string;
@@ -1581,6 +1669,7 @@ export interface components {
             approval: null | components["schemas"]["ApprovalDto"];
             attempts: components["schemas"]["AttemptDto"][];
             configurePreview?: null | components["schemas"]["ConfigurePreviewDto"];
+            stage?: null | string;
         };
         SystemVariableDto: {
             key: string;
@@ -2412,6 +2501,111 @@ export interface operations {
             };
         };
     };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetailDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    deployService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     rotateGuestAccess: {
         parameters: {
             query?: never;
@@ -2668,7 +2862,9 @@ export interface operations {
     };
     getGuestState: {
         parameters: {
-            query?: never;
+            query?: {
+                stage?: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -2717,7 +2913,9 @@ export interface operations {
     };
     rollBackGuestState: {
         parameters: {
-            query?: never;
+            query?: {
+                stage?: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -3499,6 +3697,53 @@ export interface operations {
         };
     };
     retryFilesystem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    retryStage: {
         parameters: {
             query?: never;
             header?: never;

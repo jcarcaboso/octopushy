@@ -15,8 +15,9 @@ sequence, see [Progress and next steps](docs/progress-and-next-steps.md).
 verified, and retired; installations are observed through the Proxmox API. Optional
 post-provision setup installs the disk reporter; the [repository editor](docs/repository-editor.md)
 edits the lab repository in drafts and publishes them as commits. A guest can be
-[configured by Ansible](docs/guest-configuration.md) once it is provisioned. General
-services, and DNS come later. The first Python proof of concept is archived
+[configured by Ansible](docs/guest-configuration.md) once it is provisioned, and a
+[service's pipeline](docs/pipelines.md) of OpenTofu and Ansible stages deployed on it.
+Octopushy holds nothing service-specific: services are recipes in the lab repository. The first Python proof of concept is archived
 in [`old/`](old/README.md).
 
 An opt-in [NixOS root-filesystem growth workflow](docs/guest-filesystem-growth.md)

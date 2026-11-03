@@ -6,10 +6,10 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
-    "operation": { "enum": ["provision", "configure"], "description": "provision makes a guest; configure sets up one that exists, from a guest's setup.recipe." },
+    "operation": { "enum": ["provision", "configure", "stage"], "description": "provision makes a guest; configure sets up one that exists, from a guest's setup.recipe or a pipeline stage; stage is an OpenTofu root a pipeline applies." },
     "executor": { "enum": ["opentofu", "ansible"] },
     "root": { "description": "The OpenTofu root module or Ansible project, relative to this file.", "type": "string", "minLength": 1 },
-    "inputs": { "description": "JSON Schema validating the guest's hardware and network, or for a configure recipe its setup.inputs, relative to this file.", "type": "string" },
+    "inputs": { "description": "JSON Schema validating the guest's hardware and network, for a configure recipe its setup.inputs, or for a pipeline stage its inputs, relative to this file.", "type": "string" },
     "secrets": {
       "description": "The extra vars a guest must provide in setup.secrets or setup.secretFiles.",
       "type": "array",
@@ -77,6 +77,10 @@
       "else": {
         "properties": { "executor": { "const": "opentofu" }, "actions": false, "outcomes": false, "secrets": false }
       }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "stage" } }, "required": ["operation"] },
+      "then": { "properties": { "verify": false, "guestFilesystem": false } }
     }
   ],
   "additionalProperties": false

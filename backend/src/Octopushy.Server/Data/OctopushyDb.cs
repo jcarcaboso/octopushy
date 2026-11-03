@@ -199,15 +199,17 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
         model.Entity<TofuState>(e =>
         {
-            e.HasKey(x => x.ResourceId);
-            e.HasOne<Resource>().WithOne().HasForeignKey<TofuState>(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasKey(x => new { x.ResourceId, x.Stage });
+            e.Property(x => x.Stage).HasDefaultValue("");
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
         });
 
         model.Entity<TofuStateVersion>(e =>
         {
-            e.HasIndex(x => new { x.ResourceId, x.Version }).IsUnique();
+            e.HasIndex(x => new { x.ResourceId, x.Stage, x.Version }).IsUnique();
+            e.Property(x => x.Stage).HasDefaultValue("");
             e.Property(x => x.Sha256).HasMaxLength(64);
-            e.HasOne<TofuState>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<TofuState>().WithMany().HasForeignKey(x => new { x.ResourceId, x.Stage }).OnDelete(DeleteBehavior.Restrict);
         });
 
         model.Entity<Observation>(e =>

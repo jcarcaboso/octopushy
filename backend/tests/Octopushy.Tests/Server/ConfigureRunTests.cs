@@ -18,7 +18,7 @@ namespace Octopushy.Tests.Server;
 public class ConfigureRunTests(PostgresFixture postgres)
 {
     private const string Guest = "home/korriban/krb-app-01";
-    private const string SshKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\n";
+    internal const string SshKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\n";
     private const string HostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
 
     internal static async Task<(ServerHarness Server, FakeAgent Agent, HttpClient Http)> ProvisionedAsync(

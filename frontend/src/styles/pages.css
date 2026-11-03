@@ -357,6 +357,12 @@
   font-size: var(--text-lg);
 }
 
+.timeline__stage {
+  margin-right: 0.5em;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 .timeline__item--quiet .timeline__title {
   color: var(--text-muted);
   font-weight: 550;

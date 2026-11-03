@@ -16,6 +16,7 @@ public enum ResourceKind
     Lab,
     Installation,
     Guest,
+    Service,
 }
 
 /// <summary>A variable-store key with an optional exact version, written as <c>{ store: key, version: 2 }</c>.</summary>
@@ -127,6 +128,31 @@ public sealed record GuestDefinition(
             worker["maxConcurrency"]!.GetValue<int>())
         : null;
 }
+
+/// <summary>
+/// One thing that runs on a guest: an ordered list of stages, from <c>services/&lt;id&gt;/pipeline.yaml</c>
+/// in the guest's folder. Octopushy knows nothing of what it is: what its inputs mean is its recipes'.
+/// </summary>
+public sealed record ServiceDefinition(
+    string Id,
+    string GuestAddress,
+    string File,
+    string Directory,
+    JsonObject Json,
+    IReadOnlyList<StageDefinition> Stages,
+    PolicySettings? Policy,
+    IReadOnlyList<string>? AgentLabels)
+{
+    public string Address => $"{GuestAddress}/{Id}";
+}
+
+/// <summary>A step of a service's pipeline. <paramref name="Inputs"/> holds the pipeline's inputs with the stage's own on top.</summary>
+public sealed record StageDefinition(
+    string Name,
+    string Recipe,
+    JsonObject Inputs,
+    IReadOnlyDictionary<string, StoreReference> Secrets,
+    IReadOnlyDictionary<string, StoreReference> SecretFiles);
 
 public sealed record ManagedWorkerSettings(int TemplateVersion, Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency);
 

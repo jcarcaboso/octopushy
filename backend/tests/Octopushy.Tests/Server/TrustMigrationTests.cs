@@ -48,6 +48,32 @@ public class TrustMigrationTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_guests_state_stays_its_own_when_state_becomes_per_stage()
+    {
+        await using var db = await NewDbAsync();
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261102164720_GuestSchedules");
+        var resource = Guid.NewGuid();
+        var version = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO resources (id, address, kind, lab, first_seen_at, valid, issues)
+            VALUES ({resource}, 'home/one/guest', 'guest', 'home', {now}, TRUE, '[]');
+            INSERT INTO tofu_states (resource_id, head_version) VALUES ({resource}, 3);
+            INSERT INTO tofu_state_versions (id, resource_id, version, serial, lineage, resource_count, sha256, size, ciphertext, wrapped_key, created_at, updated_at)
+            VALUES ({version}, {resource}, 3, 7, 'lineage', 1, {new string('a', 64)}, 1, ''::bytea, ''::bytea, {now}, {now});
+            """);
+        await migrator.MigrateAsync();
+        Assert.False(db.Database.HasPendingModelChanges());
+        var state = await db.TofuStates.SingleAsync();
+        Assert.Equal((resource, "", 3), (state.ResourceId, state.Stage, state.HeadVersion));
+        Assert.Equal("", (await db.TofuStateVersions.SingleAsync()).Stage);
+        // A second stage of the same resource is a row of its own, which the old key refused.
+        db.TofuStates.Add(new TofuState { ResourceId = resource, Stage = "one" });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
     public async Task Installations_defined_by_a_trusted_revision_stay_trusted_and_trust_waits_are_rechecked()
     {
         await using var db = await NewDbAsync();

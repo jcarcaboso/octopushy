@@ -4,10 +4,23 @@ namespace Octopushy.Definitions;
 public static class ManagedAccess
 {
     /// <summary>
-    /// A guest Octopushy configures, unless it names a key for a machine Octopushy did not create.
-    /// Anything else that logs in to a guest, such as services, belongs here too, so that one
-    /// rule decides who gets a key.
+    /// A guest Octopushy provisions that runs any Ansible work, from a setup recipe or a stage of one of its valid
+    /// services alike, unless it names a key itself. The key follows who manages the machine, not what kind of
+    /// work runs on it, and <c>access.sshKey</c> always wins. A managed worker is configured by its image.
     /// </summary>
-    public static bool Wanted(GuestDefinition guest) =>
-        guest.SetupRecipe is not null && guest.Json["access"]?["sshKey"] is null;
+    /// <param name="keyIssued">
+    /// Whether Octopushy already holds a key for this guest. Once it does, the guest keeps wanting it until the guest is
+    /// retired or names <c>access.sshKey</c>, whatever happens to its setup recipe or services. Taking the public key off
+    /// a machine is never worth provisioning it again for, which reboots a VM and replaces a container, and a service
+    /// broken in any way, even one that cannot be parsed, must not reach the guest's provisioning.
+    /// </param>
+    public static bool Wanted(LabRepository repository, GuestDefinition guest, bool keyIssued) =>
+        guest.Json["access"]?["sshKey"] is null
+        && guest.ManagedWorker is null
+        && (keyIssued || guest.SetupRecipe is not null || RunsPlaybooks(repository, guest));
+
+    /// <summary>Whether a valid service on the guest has a stage that runs on it: a recipe with <c>operation: configure</c>.</summary>
+    public static bool RunsPlaybooks(LabRepository repository, GuestDefinition guest) =>
+        repository.Services.Any(s => s.GuestAddress == guest.Address && repository.IsValid(s.Address)
+            && s.Stages.Any(stage => repository.Recipes.GetValueOrDefault(stage.Recipe)?.Configure is not null));
 }
