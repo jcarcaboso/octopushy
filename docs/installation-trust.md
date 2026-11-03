@@ -4,7 +4,9 @@ Octopushy sends Proxmox credentials only to API endpoints an operator trusted.
 Trust belongs to a Proxmox installation, not to a commit: once an installation
 is trusted, every later revision of the repository runs without another click,
 unless it points that installation at a new endpoint. Trust is separate from
-**apply approval**, which each guest's policy still decides.
+**apply approval**, which each guest's policy still decides. What Octopushy refuses
+even with trust and approval, such as work in an installation set to `manage: false`,
+is in the [safety boundary](safety-boundary.md).
 
 ## Operator workflow
 

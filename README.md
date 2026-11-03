@@ -14,7 +14,9 @@ Milestone 1 has shipped, up to release 0.4.0:
   [service pipelines](docs/pipelines.md) of OpenTofu and Ansible stages.
 - Actions on a schedule declared in Git, and SSH access keys that Octopushy manages and rotates.
 - A [repository editor](docs/repository-editor.md) that publishes drafts as commits.
-- Proxmox installations observed through their API, next to what Git declares.
+- Proxmox installations observed through their API, next to what Git declares. An
+  installation can be [observed only](docs/safety-boundary.md), and no plan may remove
+  a machine that is not its run's own.
 
 ## Direction
 

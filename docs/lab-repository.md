@@ -313,6 +313,7 @@ itself. `integrations` and `dns` are accepted and do nothing. **Later,**
 # labs/home/proxmox/moraband/installation.yaml
 schemaVersion: 1
 type: standalone                  # standalone | cluster
+# manage: false                   # observed only: no guests, no runs (default true)
 connection:
   endpoint: https://10.1.0.50:8006/
   tls: { verify: false }          # or caCertificate: { store: <key> }
@@ -330,6 +331,12 @@ folders, because guests are not nested under hosts (rule 2). Each host keeps its
 datastores, bridges, and capacity limits, and is its own failure domain. A cluster
 lists several hosts and may give each its own endpoint. Defining an installation
 does not mean Octopushy manages the cluster, its membership, or its storage.
+
+`manage: false` makes an installation observed only: Octopushy reads its hosts and VMs
+and changes nothing there. No guest or service may be defined under it, no run is made
+for it, and its token goes only to observations. See the
+[safety boundary](safety-boundary.md), which also covers the plans Octopushy refuses
+and a guest whose VMID is an observed VM it does not manage.
 
 One `token` reference is sufficient. Alternatively, omit it and configure both
 `readOnlyToken` and `privilegedToken` with distinct store keys; mixed modes are
