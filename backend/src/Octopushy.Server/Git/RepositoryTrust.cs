@@ -15,10 +15,10 @@ public static class RepositoryTrust
     public const string WaitingForInstallation = "Waiting for trust";
 
     public static bool IsCurrentSource(DefinitionRevision revision, RepositorySettings? settings) =>
-        settings?.Url is not null && revision.SourceId is { } source && source == settings.SourceId;
+        settings?.Url is not null && revision.SourceId == settings.SourceId;
 
     public static IQueryable<DefinitionRevision> CurrentRevisions(OctopushyDb db) =>
-        db.Revisions.Where(r => r.SourceId != null && db.RepositorySettings.Any(s => s.Id == 1 && s.Url != null && s.SourceId == r.SourceId));
+        db.Revisions.Where(r => db.RepositorySettings.Any(s => s.Id == 1 && s.Url != null && s.SourceId == r.SourceId));
 
     public static IQueryable<DefinitionRevision> EligibleRevisions(OctopushyDb db) =>
         CurrentRevisions(db).Where(r => r.RepositoryValid);

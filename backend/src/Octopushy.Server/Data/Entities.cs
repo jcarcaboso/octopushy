@@ -67,8 +67,8 @@ public sealed class DefinitionRevision
 {
     public Guid Id { get; set; }
 
-    /// <summary>Null for legacy revisions whose configured source cannot be established.</summary>
-    public Guid? SourceId { get; set; }
+    /// <summary>The configured source it was read from; see <see cref="RepositorySettings.SourceId"/>.</summary>
+    public Guid SourceId { get; set; }
 
     /// <summary>Increases with every revision loaded, for ordering.</summary>
     public long Sequence { get; set; }

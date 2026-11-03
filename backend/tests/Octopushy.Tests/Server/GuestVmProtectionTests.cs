@@ -48,7 +48,7 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
 
         await agent.ReportAsync(unprotect, Outcome.Succeeded, Lifted);
         var apply = await agent.NextAsync("apply");
-        Assert.Equal(artifact.Sha256, Assert.Single(apply.Artifacts).Sha256);
+        Assert.Equal(artifact.Sha256, Assert.Single(apply.Artifacts, a => a.Name == artifact.Name).Sha256);
         await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject { ["vm_id"] = Vmid } });
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
 

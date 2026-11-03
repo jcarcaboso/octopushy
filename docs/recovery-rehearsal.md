@@ -35,10 +35,9 @@ services' in-memory encryption objects.
 | Incomplete CA | Missing CA key, missing certificate, and mismatched pair are rejected when enrolled-agent records exist |
 | Incomplete artifact files | Missing file or tampered ciphertext fails explicit artifact verification |
 | Invalid input archive | `pg_restore` error fails the rehearsal rather than reporting successful recovery |
-| Forward-only migration | A real pre-upgrade archive retains the initial schema and decryptable legacy data; downgrade is refused without losing the migrated candidate; restoring the old archive into another database and upgrading it works |
+| Older schema history | A database whose migration history this release does not have is refused at startup and by `migrate`, untouched (`SchemaHistoryTests`) |
 
-The migration case extends `CredentialMigrationTests`; it does not boot an old
-application binary. The CA case checks signature trust and database serial
+The CA case checks signature trust and database serial
 evidence, **not an actual remote worker reconnect or renewal over TLS**.
 No scheduler runs against the restored uncertain work, so preservation is
 demonstrated without claiming that resumed dispatch is safe.
@@ -99,8 +98,7 @@ the synthetic tests is not permission to perform these actions.
   the guests' state is unrecoverable, and Octopushy would have nothing to plan from.
   A state written after the dump is not in it, so a restored guest can be behind its
   VM. Compare with the Proxmox observations and the last runs before planning.
-- Preserve external OpenTofu backends under their own backup/ownership procedure;
-  the Octopushy database does not hold their state, and it is not a VM/data backup.
+- The database dump is not a VM or data backup of the guests themselves.
 
 ### 2. Restore into an isolated destination
 

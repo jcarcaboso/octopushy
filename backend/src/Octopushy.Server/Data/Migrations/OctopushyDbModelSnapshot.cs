@@ -317,7 +317,7 @@ namespace Octopushy.Server.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Sequence"));
 
-                    b.Property<Guid?>("SourceId")
+                    b.Property<Guid>("SourceId")
                         .HasColumnType("uuid")
                         .HasColumnName("source_id");
 

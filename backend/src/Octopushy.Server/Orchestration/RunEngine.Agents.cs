@@ -99,7 +99,7 @@ public sealed partial class RunEngine
                 }
 
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
-                var needsBuiltInState = attempt.Executor == "opentofu" && context.ForStep(step).OpenTofu?.Backend.IsBuiltIn == true;
+                var needsBuiltInState = attempt.Executor == "opentofu";
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
@@ -376,7 +376,7 @@ public sealed partial class RunEngine
             logs.Close(attempt.Id);
 
             if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
-                && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu?.Backend.IsBuiltIn == true
+                && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu is not null
                 && await services.GetRequiredService<TofuStateStore>().SettleAsync(attempt, tofuRun.ResourceId, state?.Content.ToByteArray(), cancellationToken, attempt.Step.Stage ?? "") is { } refused)
             {
                 logger.LogError("The state of attempt {Attempt} was refused: {Reason}", attempt.Id, refused);
@@ -449,7 +449,7 @@ public sealed partial class RunEngine
             var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
             if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || attempt.Action != "apply" || attempt.Executor != "opentofu"
-                || RunContext.Parse(run.Context).ForStep(attempt.Step).OpenTofu?.Backend.IsBuiltIn != true)
+                || RunContext.Parse(run.Context).ForStep(attempt.Step).OpenTofu is null)
             {
                 logger.LogWarning("Agent {Agent} sent state for attempt {Attempt}, which may not write any.", agentId, attemptId);
                 return false;

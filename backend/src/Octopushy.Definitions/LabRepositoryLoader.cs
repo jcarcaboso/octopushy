@@ -58,8 +58,7 @@ public sealed partial class LabRepositoryLoader
         {
             CheckInstallation(installation, guests.Where(g => g.InstallationAddress == installation.Address).ToList());
         }
-        // Backend env is available at preview time: it must not be another route to
-        // a configured writer, including a writer from a different installation.
+        // A token must never reach a role it was not declared for, including through another installation.
         var privilegedKeys = installations.Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
         var splitPrivilegedKeys = installations.Where(i => !i.Connection.SharedToken)
             .Select(i => i.Connection.PrivilegedToken.Key).ToHashSet(StringComparer.Ordinal);
@@ -75,19 +74,6 @@ public sealed partial class LabRepositoryLoader
                 Error(installation.File, LineOf(installation.File, "/connection/tls/caCertificate"),
                     "A privileged Proxmox token cannot be used as a CA certificate.", installation.Address);
         }
-        foreach (var backend in settings?.StateBackends.Values ?? [])
-        {
-            foreach (var (name, value) in backend.Env)
-            {
-                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal))
-                    Error(settings!.File, LineOf(settings.File, $"/stateBackends/{backend.Id}/env/{name}"),
-                        $"The Proxmox provider environment '{name}' is reserved.");
-                if (value.Store is { } reference && privilegedKeys.Contains(reference.Key))
-                    Error(settings!.File, LineOf(settings.File, $"/stateBackends/{backend.Id}/env/{name}"),
-                        $"A privileged Proxmox token cannot be used as backend environment '{name}'.");
-            }
-        }
-
         foreach (var guest in guests)
         {
             CheckGuest(guest, settings, installations, templates, recipes);
@@ -172,41 +158,11 @@ public sealed partial class LabRepositoryLoader
 
         CollectStoreUses(json, "octopushy.yaml", file, document);
         var defaults = json["defaults"] as JsonObject;
-        var backends = new Dictionary<string, StateBackendDefinition>(StringComparer.Ordinal);
-        if (json["stateBackends"] is JsonObject backendObjects)
-        {
-            foreach (var (id, node) in backendObjects)
-            {
-                var backend = (JsonObject)node!;
-                var config = (backend["config"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.DeepClone())
-                    ?? [];
-                var env = new Dictionary<string, EnvValue>(StringComparer.Ordinal);
-                if (backend["env"] is JsonObject envObject)
-                {
-                    foreach (var (name, value) in envObject)
-                    {
-                        env[name] = value is JsonObject reference
-                            ? new EnvValue(null, ParseStoreReference(reference))
-                            : new EnvValue(value!.GetValue<string>(), null);
-                    }
-                }
-
-                backends[id] = new StateBackendDefinition(
-                    id,
-                    backend["type"]!.GetValue<string>(),
-                    config,
-                    backend["workspace"]?.GetValue<string>(),
-                    env,
-                    backend);
-            }
-        }
-
         return new RepositoryDefinition(
             file,
             json,
             ParsePolicy(defaults?["policy"]),
-            ParseLabels(defaults?["execution"]),
-            backends);
+            ParseLabels(defaults?["execution"]));
     }
 
     private Dictionary<string, T> LoadShared<T>(
@@ -380,7 +336,7 @@ public sealed partial class LabRepositoryLoader
         {
             if (BackendBlock().IsMatch(File.ReadAllText(tofuFile)))
             {
-                Error(Relative(tofuFile), null, "The root must not declare a backend: Octopushy sets it from the guest's state backend.", address);
+                Error(Relative(tofuFile), null, "The root must not declare a backend: Octopushy keeps the state.", address);
                 _invalidRecipes.Add(recipe.Id);
             }
         }
@@ -607,7 +563,6 @@ public sealed partial class LabRepositoryLoader
             json["vmid"]!.GetValue<int>(),
             json["template"]?.GetValue<string>(),
             provision["recipe"]!.GetValue<string>(),
-            provision["state"]?["backend"]?.GetValue<string>(),
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
     }
@@ -745,11 +700,6 @@ public sealed partial class LabRepositoryLoader
             {
                 Error(guest.File, LineOf(guest.File, error.Pointer), $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})", guest.Address);
             }
-        }
-
-        if (settings is not null && guest.StateBackend is { } backend && !settings.StateBackends.ContainsKey(backend))
-        {
-            Error(guest.File, LineOf(guest.File, "/provision/state/backend"), $"The state backend '{backend}' is not defined in octopushy.yaml.", guest.Address);
         }
     }
 

@@ -155,14 +155,9 @@ Input (the same for both actions):
   "stack": "home.korriban.krb-crt-01",
   "root": "modules/opentofu/proxmox-vm",
   "image": "ghcr.io/opentofu/opentofu:1.13.1",
-  "backend": {
-    "type": "pg",
-    "config": { "schema_name": "octopushy_state" },
-    "workspace": "home.korriban.krb-crt-01"
-  },
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
-  "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR" },
+  "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token" },
   "destroy": false
 }
 ```
@@ -171,27 +166,21 @@ Input (the same for both actions):
   directory inside it. The executor extracts it into the attempt's workspace and
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
   symbolic links that dangle or point outside the tree. (The server sends no links.)
-- The backend type `local` is refused, because its state would vanish with the
-  workspace; the built-in state below is the supported way to have none to set up.
-  `env` and `secretEnv` may not set what the agent or the container
+- `env` and `secretEnv` may not set what the agent or the container
   runtime needs itself: `HOME`, `PATH`, `TMPDIR`, `USER`, `XDG_RUNTIME_DIR`, the `TF_*`
   variables the agent sets, and names starting with `TF_CLI_ARGS`, `CONTAINERS_`,
   `PODMAN_`, `DOCKER_`, or `BUILDAH_`.
 - The executor writes `octopushy.auto.tfvars.json` (from `variables`) and
-  `octopushy_backend.tf.json` (`{"terraform":{"backend":{"<type>":{}}}}`) into the
-  root, so the root must not declare a backend of its own.
-- `backend.config` becomes `-backend-config=key=value` arguments to `tofu init`.
-  `backend.workspace`, when set, is selected with `tofu workspace select
-  -or-create=true` after init.
+  `octopushy_backend.tf.json` (the built-in state below) into the root, so the root must
+  not declare a backend of its own.
 - `env` and `secretEnv` are set for every OpenTofu command, together with
   `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, and `TF_PLUGIN_CACHE_DIR`. Secret values are
   passed through the environment, never as command-line arguments.
 
 ### Built-in state
 
-When no external backend is configured the input is `"backend": { "type": "octopushy" }`,
-with no `config`, no `workspace`, and no backend credentials in `secretEnv`. The controller
-keeps the state; see [how it works](../../../docs/opentofu-state.md).
+The controller keeps every stack's state; there is no other backend, and the input names
+none. See [how it works](../../../docs/opentofu-state.md).
 
 - The state travels on the agent channel only: an artifact `terraform.tfstate` in the
   assignment of `preview` and `apply`, an artifact of the same name in the `apply` result,

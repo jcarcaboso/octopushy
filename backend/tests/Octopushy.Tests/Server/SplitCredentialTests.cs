@@ -116,11 +116,11 @@ public class SplitCredentialTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData("legacy", false)]
-    [InlineData("legacy", true)]
+    [InlineData("token-alias", false)]
+    [InlineData("token-alias", true)]
     [InlineData("writer-alias", false)]
     [InlineData("provider-override", false)]
-    public async Task Trusted_queued_context_cannot_bypass_roles_or_upgrade_legacy_bindings(string attack, bool restart)
+    public async Task Trusted_queued_context_cannot_bypass_roles(string attack, bool restart)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var http = await LoginAsync(server);
@@ -131,7 +131,7 @@ public class SplitCredentialTests(PostgresFixture postgres)
         {
             var row = await db.Runs.SingleAsync(r => r.Id == run.Id);
             var context = JsonNode.Parse(row.Context)!;
-            if (attack == "legacy")
+            if (attack == "token-alias")
             {
                 var secrets = context["secrets"]!.AsObject();
                 secrets.Remove(SecretNames.ProxmoxReadOnlyToken);
@@ -140,7 +140,7 @@ public class SplitCredentialTests(PostgresFixture postgres)
             }
             if (attack == "writer-alias")
             {
-                context["secrets"]![SecretNames.Backend("PG_CONN_STR")] = Writer;
+                context["secrets"]!["extra.role"] = Writer;
             }
             if (attack == "provider-override")
             {
@@ -156,7 +156,7 @@ public class SplitCredentialTests(PostgresFixture postgres)
         Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "preview");
         run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
-        Assert.Contains(attack == "legacy" ? "replan" : attack == "writer-alias" ? "privileged" : "reserved", run.Detail);
+        Assert.Contains(attack == "token-alias" ? "replan" : attack == "writer-alias" ? "privileged" : "reserved", run.Detail);
         var attemptIds = run.Steps.SelectMany(s => s.Attempts).Select(a => a.Id).ToArray();
         Assert.False(await server.QueryAsync(db => db.SecretResolutions.AnyAsync(r => attemptIds.Contains(r.AttemptId))));
     }
@@ -184,7 +184,6 @@ public class SplitCredentialTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         await server.SetSecretAsync(Reader, "reader-only");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         var observe = await worker.NextAsync("observe");
@@ -234,7 +233,7 @@ public class SplitCredentialTests(PostgresFixture postgres)
     [Theory]
     [InlineData(Outcome.Succeeded)]
     [InlineData(Outcome.Uncertain)]
-    public async Task Legacy_inflight_outcomes_reconcile_but_never_release_next_work(Outcome outcome)
+    public async Task Inflight_outcomes_of_an_invalid_context_reconcile_but_never_release_next_work(Outcome outcome)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var worker = await server.ConnectAgentAsync("home");

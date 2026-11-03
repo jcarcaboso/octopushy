@@ -203,7 +203,7 @@ public class InstallationTrustTests(PostgresFixture postgres)
         var approval = retained.Steps.Single(s => s.Name == StepNames.Approval);
         Assert.Equal(artifact.Sha256, approval.PlanSha256);
         await server.Engine.ApproveAsync(retained.Id, approval.Id, artifact.Sha256, "ops", null, CancellationToken.None);
-        Assert.Equal(artifact.Content, Assert.Single((await agent.NextAsync("apply")).Artifacts).Content);
+        Assert.Equal(artifact.Content, Assert.Single((await agent.NextAsync("apply")).Artifacts, a => a.Name == artifact.Name).Content);
     }
 
     [Fact]

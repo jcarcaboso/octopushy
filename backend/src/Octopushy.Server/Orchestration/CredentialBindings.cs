@@ -20,10 +20,11 @@ internal static class CredentialBindings
         if (context.Stage is not null)
             return ValidateOpenTofuStage(context);
 
+        // The executor's alias for whichever token a step holds; a run binds the role itself.
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
             || context.RequestedSecretVersions.ContainsKey(SecretNames.ProxmoxToken))
-            return ["Legacy Proxmox token context cannot be upgraded automatically; inspect and replan with a shared token or explicit read-only and privileged credentials"];
+            return ["The Proxmox token alias is not a credential role; inspect and replan with a shared token or explicit read-only and privileged credentials"];
 
         var problems = new List<string>();
         var roles = context.Secrets.Keys.Concat(context.SecretVersions.Keys).Concat(context.RequestedSecretVersions.Keys).ToHashSet(StringComparer.Ordinal);
@@ -56,14 +57,8 @@ internal static class CredentialBindings
             }
             if (tofu.SecretEnv.GetValueOrDefault("PROXMOX_VE_API_TOKEN") != SecretNames.ProxmoxToken)
                 problems.Add("Proxmox provider token mapping is reserved; inspect and replan");
-            foreach (var (name, role) in tofu.SecretEnv)
-            {
-                if (name == "PROXMOX_VE_API_TOKEN" && role == SecretNames.ProxmoxToken)
-                    continue;
-                if (name.StartsWith("PROXMOX_", StringComparison.Ordinal) || role != SecretNames.Backend(name)
-                    || !context.Secrets.ContainsKey(role))
-                    problems.Add($"Backend environment '{name}' cannot override reserved Proxmox roles; inspect and replan");
-            }
+            foreach (var (name, _) in tofu.SecretEnv.Where(e => e.Key != "PROXMOX_VE_API_TOKEN"))
+                problems.Add($"OpenTofu secret environment '{name}' is not allowed; only the Proxmox token is released; inspect and replan");
         }
         return problems;
     }
@@ -99,7 +94,7 @@ internal static class CredentialBindings
         return problems;
     }
 
-    /// <summary>An OpenTofu stage holds nothing yet: no token, no backend environment, no secret of any kind.</summary>
+    /// <summary>An OpenTofu stage holds nothing yet: no token, no secret environment, no secret of any kind.</summary>
     private static List<string> ValidateOpenTofuStage(RunContext context) =>
         context.Secrets.Count == 0 && context.OpenTofu is { SecretEnv.Count: 0 } tofu && tofu.Env.Keys.All(n => !n.StartsWith("PROXMOX_", StringComparison.Ordinal))
             ? [] : ["An OpenTofu stage carries no credentials; inspect and replan"];
@@ -117,21 +112,13 @@ internal static class CredentialBindings
         if (problems.Count > 0)
             return problems;
         // Pin every binding initially, but later steps need only their own credentials:
-        // revoking a completed apply's backend credential must not prevent guest verification.
+        // revoking a completed apply's privileged token must not prevent guest verification.
         var bindings = context.Secrets.Where(s => !context.SecretBindingsPinned || neededNames is null || neededNames.Contains(s.Key)).ToList();
         var keys = bindings.Select(s => s.Value).Distinct().ToArray();
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);
         var versions = await db.StoreVersions.AsNoTracking().Where(v => keys.Contains(v.Key)).ToListAsync(ct);
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
         var refused = context.Ansible is null && context.Stages is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
-
-        // Recover old runs from release evidence, never from today's current pointer.
-        var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
-            .Where(r => db.Attempts.Any(a => a.Id == r.AttemptId && a.RunId == run.Id)).ToListAsync(ct);
-        var previouslyDispatched = !context.SecretBindingsPinned && run is not null && (audit.Count > 0 ||
-            await db.Attempts.AsNoTracking().AnyAsync(a => a.RunId == run.Id &&
-                (a.AssignedAt != null || a.StartedAt != null || a.FinishedAt != null), ct) ||
-            await db.Steps.AsNoTracking().AnyAsync(s => s.RunId == run.Id && s.StartedAt != null, ct));
 
         foreach (var (name, key) in bindings)
         {
@@ -180,20 +167,7 @@ internal static class CredentialBindings
             }
             else
             {
-                var historical = audit.Where(a => a.Key == key).Select(a => a.Version).Distinct().ToArray();
-                if (historical.Length > 1 || (previouslyDispatched && historical.Length == 0))
-                {
-                    problems.Add($"{key}: legacy run has no unambiguous version evidence; reconcile before starting a new run");
-                    continue;
-                }
-
-                version = context.RequestedSecretVersions.GetValueOrDefault(name,
-                    historical.Length == 1 ? historical[0] : entry.CurrentVersion);
-                if (historical.Length == 1 && historical[0] != version)
-                {
-                    problems.Add($"{key}: requested version conflicts with execution history");
-                    continue;
-                }
+                version = context.RequestedSecretVersions.GetValueOrDefault(name, entry.CurrentVersion);
             }
 
             var value = versions.SingleOrDefault(v => v.Key == key && v.Version == version);

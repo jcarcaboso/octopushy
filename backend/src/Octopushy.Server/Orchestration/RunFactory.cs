@@ -69,33 +69,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         {
             ["PROXMOX_VE_API_TOKEN"] = SecretNames.ProxmoxToken,
         };
-        foreach (var (name, value) in inputs.Backend?.Env ?? new Dictionary<string, EnvValue>())
-        {
-            if (value.Store is { } store)
-            {
-                secrets[SecretNames.Backend(name)] = store.Key;
-                if (store.Version is { } version)
-                {
-                    requestedVersions[SecretNames.Backend(name)] = version;
-                }
-                secretEnv[name] = SecretNames.Backend(name);
-            }
-            else
-            {
-                env[name] = value.Value!;
-            }
-        }
-
-        var backend = inputs.Backend is { } external
-            ? new BackendContext(
-                external.Type,
-                external.Config.ToDictionary(
-                    p => p.Key,
-                    p => p.Value is JsonValue v && v.TryGetValue<string>(out var text) ? JsonValue.Create(text.Replace("{stack}", guest.Stack)) : p.Value?.DeepClone(),
-                    StringComparer.Ordinal),
-                external.Workspace?.Replace("{stack}", guest.Stack))
-            : BackendContext.BuiltIn;
-
         var retire = guest.Retired || removal;
         var context = new RunContext
         {
@@ -112,7 +85,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 guest.Stack,
                 inputs.Recipe.Root,
                 inputs.Recipe.Image ?? options.Value.Tools.OpenTofuImage,
-                backend,
                 inputs.Variables,
                 env,
                 secretEnv),

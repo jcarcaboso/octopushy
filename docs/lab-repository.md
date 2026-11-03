@@ -91,13 +91,13 @@ Everything else lives elsewhere:
 |---|---|
 | Lab repository | Definitions, tool-native files, policies, variable-store key references |
 | Octopushy backend (PostgreSQL) | Variable-store values, provider routing, agent enrollments and labels, drafts, runs, attempts, evidence, approvals, the definition snapshot |
-| Octopushy backend, or an external OpenTofu backend for guests that name one | Infrastructure state |
+| Octopushy backend (PostgreSQL), its built-in state | Infrastructure state |
 
 ## Layout
 
 ```text
 lab-repo/
-├── octopushy.yaml                          # repository defaults, optional state backends
+├── octopushy.yaml                          # repository defaults
 ├── labs/
 │   ├── home/
 │   │   ├── lab.yaml                        # policy, windows; later, interfaces
@@ -257,7 +257,7 @@ the change is a replacement made in this order:
 2. Commit the changed references. A new key starts at version 1, so change any
    `version` too.
 3. Review the plans this causes. A reference in a guest, in an installation's
-   `connection`, or in a state backend is part of what a guest's plan is built from,
+   `connection` is part of what a guest's plan is built from,
    so renaming a Proxmox token plans every guest of that installation again, and a
    run waiting on the old definition is no longer current.
 4. Wait until **Used by** no longer lists the old key, which includes runs in
@@ -284,24 +284,11 @@ defaults:
   policy:
     approval: automatic           # automatic | manual
     # destructive: unset, so it follows approval
-stateBackends:                    # optional: only to keep some state outside Octopushy
-  gitlab:
-    type: http                    # any OpenTofu backend type
-    config:                       # passed to tofu init; {stack} is the guest's address with dots
-      address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}
-      lock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
-      unlock_address: https://gitlab.home.arpa/api/v4/projects/12/terraform/state/{stack}/lock
-      lock_method: POST
-      unlock_method: DELETE
-    env:                          # credentials go here, so they never enter a saved plan
-      TF_HTTP_USERNAME: octopushy
-      TF_HTTP_PASSWORD: { store: opentofu/gitlab-token }
 ```
 
-Holds repository-wide defaults and any external OpenTofu state backends. Most labs need
-none: a guest that names no backend has its state kept by Octopushy, with nothing to
-configure ([how it works](opentofu-state.md)). Server settings (provider routing, agents, sign-in) stay out of Git. The
-state backend format, the provisioning recipe file, and template images are the shapes
+Holds repository-wide defaults. OpenTofu state needs nothing here: Octopushy keeps every
+guest's state ([how it works](opentofu-state.md)). Server settings (provider routing, agents, sign-in) stay out of Git. The
+provisioning recipe file, and template images are the shapes
 [milestone 1](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/milestone-1.md#definitions) implements.
 
 ### Lab
@@ -348,7 +335,7 @@ One `token` reference is sufficient. Alternatively, omit it and configure both
 `readOnlyToken` and `privilegedToken` with distinct store keys; mixed modes are
 invalid. Shared mode deliberately gives planning the same token as apply, so
 approval does not make planning read-only. See [credentials](proxmox-credentials.md)
-for routing, approval, legacy-run handling, and the optional split mode's provider
+for routing, approval, and the optional split mode's provider
 refresh blocker; these examples do not certify live ACL sufficiency.
 
 ### Guest
@@ -375,7 +362,6 @@ network:
   gateway: 10.1.0.1
 provision:
   recipe: proxmox-vm
-  # state: { backend: gitlab }    # optional: an external backend from octopushy.yaml
 setup:
   recipe: machine-tools           # a recipe with operation: configure
   inputs: { machine_tools_channel: stable }
@@ -399,8 +385,7 @@ passed to the provisioning recipe as inputs and validated against the recipe's
 schema, so Octopushy does not need a VM model of its own. The recipe also receives
 the host's settings and the installation's connection, so one shared OpenTofu module
 provisions every guest. Each guest has its own state, so guests are planned, locked,
-and applied independently. Octopushy keeps it unless `provision.state` names an external
-backend, where it is named by the guest's address. `nodes` does the same today by
+and applied independently. Octopushy keeps it; see [OpenTofu state](opentofu-state.md). `nodes` does the same today by
 having each guest's OpenTofu root read `node.json`; here the executor passes the
 values instead.
 

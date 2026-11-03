@@ -129,7 +129,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Revoking_a_completed_backend_credential_does_not_block_guest_verification()
+    public async Task Revoking_a_completed_apply_privileged_token_does_not_block_guest_verification()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
@@ -137,9 +137,9 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         await server.SyncAndTrustAsync(client);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
-        (await client.PostAsJsonAsync("/api/variables/revoke", new { key = "opentofu/pg", version = 1, reason = "Retiring the state credential" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/revoke", new { key = "proxmox/korriban/privileged-token", version = 1, reason = "Retiring the writer" })).EnsureSuccessStatusCode();
         var verify = await agent.NextAsync("verify-guest");
-        Assert.DoesNotContain("backend.PG_CONN_STR", verify.Secrets.Keys);
+        Assert.Equal("octopushy@pve!agent=secret-token", Assert.Single(verify.Secrets).Value);
         await agent.ReportAsync(verify, Outcome.Succeeded, new JsonObject { ["present"] = true });
         await server.TickAsync();
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
@@ -213,7 +213,7 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             await store.SetAsync(Token, "plain-token", Visibilities.Plain, null, CancellationToken.None);
         }
-        await server.SetSecretAsync("opentofu/pg", "postgres://fixture");
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "writer-fixture");
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         await server.TickAsync();
@@ -282,40 +282,6 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains("replan", run.Detail);
-    }
-
-    [Fact]
-    public async Task Requeued_legacy_work_does_not_choose_a_new_CA_without_historical_evidence()
-    {
-        using var repository = TestRepository.Minimal();
-        const string caKey = "proxmox/korriban/ca";
-        var file = Path.Combine(repository.Root, "labs/home/proxmox/korriban/installation.yaml");
-        File.WriteAllText(file, File.ReadAllText(file).Replace("tls: { verify: false }", $"tls: {{ verify: false, caCertificate: {{ store: {caKey} }} }}"));
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        await using var scope = server.Services.CreateAsyncScope();
-        var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
-        await store.SetAsync(caKey, "old-public-CA-fixture", Visibilities.Plain, null, CancellationToken.None);
-        var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAndTrustAsync();
-        await agent.NextAsync("preview"); // Token and backend resolved; CA was not released to OpenTofu.
-        await server.Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Null(Assert.Single(run.Steps.Single(s => s.Name == StepNames.Plan).Attempts).AssignedAt);
-        await store.SetAsync(caKey, "new-public-CA-fixture", Visibilities.Plain, null, CancellationToken.None);
-        await server.WithDbAsync(async db =>
-        {
-            var persisted = await db.Runs.SingleAsync(r => r.Id == run.Id);
-            var context = JsonNode.Parse(persisted.Context)!.AsObject();
-            context.Remove("secretBindingsPinned");
-            context.Remove("secretVersions");
-            persisted.Context = context.ToJsonString();
-            await db.SaveChangesAsync();
-        });
-        await server.TickAsync();
-        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "preview");
-        run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(RunStatuses.Blocked, run.Status);
-        Assert.Contains(caKey + ": legacy run", run.Detail);
     }
 
     [Fact]

@@ -6,16 +6,11 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::routing::get;
-use base64::Engine;
 use octopushy::attempts::logs::{AttemptLogger, LogBuffer};
-use octopushy::executors::opentofu::archive;
+use octopushy::executors::opentofu::{archive, state};
 use octopushy::executors::{self, ExecContext, ExecutorConfig, Secrets};
 use octopushy::masking::Masker;
 use octopushy::tools::{Invocation, RuntimeKind, Tool, ToolRuntime};
@@ -24,7 +19,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 const IMAGE: &str = "ghcr.io/opentofu/opentofu:1.13.1";
-const STATE_PASSWORD: &str = "st4te-backend-pa55";
+const SECRET: &str = "s3cret-env-pa55";
 
 fn logger(secrets: &[&str]) -> (AttemptLogger, Arc<LogBuffer>) {
     let buffer = Arc::new(LogBuffer::default());
@@ -87,61 +82,12 @@ async fn podman_tofu_version() {
     assert_eq!(version.as_deref(), Some("1.13.1"));
 }
 
-/// A tiny OpenTofu `http` state backend with basic auth.
-async fn state_backend() -> (String, Arc<Mutex<Option<Vec<u8>>>>) {
-    type S = Arc<Mutex<Option<Vec<u8>>>>;
-    let state: S = Arc::new(Mutex::new(None));
-    fn authorized(h: &HeaderMap) -> bool {
-        let want = format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("octopushy:{STATE_PASSWORD}"))
-        );
-        h.get("authorization").and_then(|v| v.to_str().ok()) == Some(want.as_str())
-    }
-    let app = axum::Router::new()
-        .route(
-            "/state",
-            get(|State(s): State<S>, h: HeaderMap| async move {
-                if !authorized(&h) {
-                    return (StatusCode::UNAUTHORIZED, Vec::new());
-                }
-                match s.lock().unwrap().clone() {
-                    Some(body) => (StatusCode::OK, body),
-                    None => (StatusCode::NOT_FOUND, Vec::new()),
-                }
-            })
-            .post(|State(s): State<S>, h: HeaderMap, body: Bytes| async move {
-                if !authorized(&h) {
-                    return StatusCode::UNAUTHORIZED;
-                }
-                *s.lock().unwrap() = Some(body.to_vec());
-                StatusCode::OK
-            }),
-        )
-        .with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!(
-        "http://127.0.0.1:{}/state",
-        listener.local_addr().unwrap().port()
-    );
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (url, state)
-}
-
 #[tokio::test]
 #[ignore = "needs rootless podman and the OpenTofu image"]
 async fn podman_preview_and_apply() {
-    let (state_url, state) = state_backend().await;
     let dir = tempfile::tempdir().unwrap();
     let cfg = ExecutorConfig {
-        // The container shares the host network so it reaches the test backend
-        // on 127.0.0.1.
-        runtime: ToolRuntime::new(
-            RuntimeKind::Podman,
-            None,
-            "tofu".into(),
-            Some("host".into()),
-        ),
+        runtime: ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None),
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
@@ -161,18 +107,17 @@ output "secret" {
         "stack": "home.korriban.test-vm",
         "root": "modules/opentofu/test-vm",
         "image": IMAGE,
-        "backend": { "type": "http", "config": { "address": state_url } },
         "variables": { "octopushy": { "stack": "home.korriban.test-vm" }, "guest": { "vmid": 4242 } },
-        "env": { "TF_HTTP_USERNAME": "octopushy" },
-        "secretEnv": { "TF_HTTP_PASSWORD": "backend.password" },
+        "env": {},
+        "secretEnv": { "TF_VAR_unused": "test.secret" },
         "destroy": false
     });
-    let secrets = HashMap::from([("backend.password".to_owned(), STATE_PASSWORD.to_owned())]);
+    let secrets = HashMap::from([("test.secret".to_owned(), SECRET.to_owned())]);
 
     let run = |id: &'static str, action: &'static str, artifacts| {
         let ws = dir.path().join("work").join(id);
         std::fs::create_dir_all(&ws).unwrap();
-        let (log, buffer) = logger(&[STATE_PASSWORD]);
+        let (log, buffer) = logger(&[SECRET]);
         let ctx = ExecContext {
             attempt_id: id.into(),
             action: action.into(),
@@ -202,7 +147,7 @@ output "secret" {
     assert_eq!(preview.outputs["toolVersion"], "1.13.1");
     assert_eq!(preview.outputs["counts"]["create"], 1);
     assert_eq!(preview.artifacts.len(), 1);
-    assert!(lines1.iter().all(|l| !l.contains(STATE_PASSWORD)));
+    assert!(lines1.iter().all(|l| !l.contains(SECRET)));
 
     // HOME points into the workspace, so nothing lands in the root itself.
     let root = dir
@@ -220,12 +165,8 @@ output "secret" {
     let apply = apply.expect("apply succeeds");
     assert_eq!(apply.outputs["outputs"]["vmid"], 4242);
     assert_eq!(apply.outputs["sensitiveOutputs"], json!(["secret"]));
-    let stored = state
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("state was written to the backend");
-    assert!(String::from_utf8_lossy(&stored).contains("terraform_data"));
+    let stored = state::read(&dir.path().join("work/smoke-apply")).expect("the built-in state");
+    assert!(String::from_utf8_lossy(&stored.content).contains("terraform_data"));
 
     // Files written in the container belong to the agent's user (keep-id).
     use std::os::unix::fs::MetadataExt;

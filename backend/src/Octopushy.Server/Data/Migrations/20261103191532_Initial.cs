@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -21,6 +22,7 @@ namespace Octopushy.Server.Data.Migrations
                     labels = table.Column<string[]>(type: "text[]", nullable: false),
                     max_concurrency = table.Column<int>(type: "integer", nullable: false),
                     disabled = table.Column<bool>(type: "boolean", nullable: false),
+                    draining = table.Column<bool>(type: "boolean", nullable: false),
                     enrolled_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     last_seen_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     connected_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
@@ -72,6 +74,20 @@ namespace Octopushy.Server.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "installation_trusts",
+                columns: table => new
+                {
+                    address = table.Column<string>(type: "text", nullable: false),
+                    endpoints = table.Column<List<string>>(type: "text[]", nullable: false),
+                    trusted_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    trusted_by = table.Column<string>(type: "text", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_installation_trusts", x => x.address);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "observations",
                 columns: table => new
                 {
@@ -87,12 +103,34 @@ namespace Octopushy.Server.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "repository_drafts",
+                columns: table => new
+                {
+                    id = table.Column<Guid>(type: "uuid", nullable: false),
+                    source_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    title = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
+                    base_commit = table.Column<string>(type: "text", nullable: false),
+                    head_commit = table.Column<string>(type: "text", nullable: false),
+                    conflict_paths = table.Column<List<string>>(type: "text[]", nullable: false),
+                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    published_commit = table.Column<string>(type: "text", nullable: true),
+                    published_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    published_by = table.Column<string>(type: "text", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_repository_drafts", x => x.id);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "repository_settings",
                 columns: table => new
                 {
                     id = table.Column<int>(type: "integer", nullable: false),
                     url = table.Column<string>(type: "text", nullable: true),
                     branch = table.Column<string>(type: "text", nullable: false),
+                    source_id = table.Column<Guid>(type: "uuid", nullable: false),
                     poll_seconds = table.Column<int>(type: "integer", nullable: false),
                     credential_kind = table.Column<string>(type: "text", nullable: false),
                     credential_username = table.Column<string>(type: "text", nullable: true),
@@ -136,7 +174,10 @@ namespace Octopushy.Server.Data.Migrations
                     outputs = table.Column<string>(type: "jsonb", nullable: true),
                     bound_installation = table.Column<string>(type: "text", nullable: true),
                     bound_vmid = table.Column<int>(type: "integer", nullable: true),
-                    bound_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                    bound_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    observe_requested_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    observe_error = table.Column<string>(type: "text", nullable: true),
+                    observe_error_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -148,6 +189,7 @@ namespace Octopushy.Server.Data.Migrations
                 columns: table => new
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
+                    source_id = table.Column<Guid>(type: "uuid", nullable: false),
                     sequence = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityAlwaysColumn),
                     commit = table.Column<string>(type: "text", nullable: false),
@@ -177,6 +219,7 @@ namespace Octopushy.Server.Data.Migrations
                     revision_id = table.Column<Guid>(type: "uuid", nullable: true),
                     commit = table.Column<string>(type: "text", nullable: true),
                     reason = table.Column<string>(type: "text", nullable: false),
+                    reason_detail = table.Column<string>(type: "text", nullable: true),
                     status = table.Column<string>(type: "text", nullable: false),
                     detail = table.Column<string>(type: "text", nullable: true),
                     inputs_hash = table.Column<string>(type: "text", nullable: true),
@@ -215,6 +258,7 @@ namespace Octopushy.Server.Data.Migrations
                     visibility = table.Column<string>(type: "text", nullable: false),
                     description = table.Column<string>(type: "text", nullable: true),
                     current_version = table.Column<int>(type: "integer", nullable: false),
+                    latest_version = table.Column<int>(type: "integer", nullable: false),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
@@ -231,7 +275,13 @@ namespace Octopushy.Server.Data.Migrations
                     version = table.Column<int>(type: "integer", nullable: false),
                     ciphertext = table.Column<byte[]>(type: "bytea", nullable: false),
                     wrapped_key = table.Column<byte[]>(type: "bytea", nullable: false),
-                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
+                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    activated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    activated_by = table.Column<string>(type: "text", nullable: true),
+                    activation_note = table.Column<string>(type: "text", nullable: true),
+                    revoked_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    revoked_by = table.Column<string>(type: "text", nullable: true),
+                    revocation_note = table.Column<string>(type: "text", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -254,12 +304,115 @@ namespace Octopushy.Server.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "guest_access_keys",
+                columns: table => new
+                {
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    version = table.Column<int>(type: "integer", nullable: false),
+                    public_key = table.Column<string>(type: "text", nullable: false),
+                    fingerprint = table.Column<string>(type: "text", nullable: false),
+                    bootstrap = table.Column<bool>(type: "boolean", nullable: false),
+                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    provisioned_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    last_used_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    last_used_run_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    authorized_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    verified_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    verified_run_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    promoted_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    promoted_by = table.Column<string>(type: "text", nullable: true),
+                    promotion_evidence = table.Column<string>(type: "text", nullable: true),
+                    removed_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_guest_access_keys", x => new { x.resource_id, x.version });
+                    table.ForeignKey(
+                        name: "fk_guest_access_keys_resources_resource_id",
+                        column: x => x.resource_id,
+                        principalTable: "resources",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "guest_configurations",
+                columns: table => new
+                {
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    desired_hash = table.Column<string>(type: "text", nullable: true),
+                    desired_revision_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    proposed_hash = table.Column<string>(type: "text", nullable: true),
+                    applied_hash = table.Column<string>(type: "text", nullable: true),
+                    applied_revision_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    applied_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    applied_action = table.Column<string>(type: "text", nullable: true),
+                    snapshot = table.Column<string>(type: "jsonb", nullable: true),
+                    secret_versions = table.Column<string>(type: "jsonb", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_guest_configurations", x => x.resource_id);
+                    table.ForeignKey(
+                        name: "fk_guest_configurations_resources_resource_id",
+                        column: x => x.resource_id,
+                        principalTable: "resources",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "guest_schedules",
+                columns: table => new
+                {
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    action = table.Column<string>(type: "text", nullable: false),
+                    cron = table.Column<string>(type: "text", nullable: false),
+                    last_slot = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    last_run_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    note = table.Column<string>(type: "text", nullable: true),
+                    note_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_guest_schedules", x => new { x.resource_id, x.action, x.cron });
+                    table.ForeignKey(
+                        name: "fk_guest_schedules_resources_resource_id",
+                        column: x => x.resource_id,
+                        principalTable: "resources",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "tofu_states",
+                columns: table => new
+                {
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    stage = table.Column<string>(type: "text", nullable: false, defaultValue: ""),
+                    head_version = table.Column<int>(type: "integer", nullable: false),
+                    lock_attempt_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    locked_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_tofu_states", x => new { x.resource_id, x.stage });
+                    table.ForeignKey(
+                        name: "fk_tofu_states_resources_resource_id",
+                        column: x => x.resource_id,
+                        principalTable: "resources",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "steps",
                 columns: table => new
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     run_id = table.Column<Guid>(type: "uuid", nullable: false),
                     ordinal = table.Column<int>(type: "integer", nullable: false),
+                    stage = table.Column<string>(type: "text", nullable: true),
                     name = table.Column<string>(type: "text", nullable: false),
                     kind = table.Column<string>(type: "text", nullable: false),
                     status = table.Column<string>(type: "text", nullable: false),
@@ -272,7 +425,8 @@ namespace Octopushy.Server.Data.Migrations
                     decided_by = table.Column<string>(type: "text", nullable: true),
                     decided_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     decision_note = table.Column<string>(type: "text", nullable: true),
-                    plan_sha256 = table.Column<string>(type: "text", nullable: true)
+                    plan_sha256 = table.Column<string>(type: "text", nullable: true),
+                    document = table.Column<string>(type: "text", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -286,12 +440,70 @@ namespace Octopushy.Server.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "operator_tokens",
+                columns: table => new
+                {
+                    id = table.Column<Guid>(type: "uuid", nullable: false),
+                    user_id = table.Column<int>(type: "integer", nullable: false),
+                    name = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: false),
+                    token_hash = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    expires_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    revoked_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_operator_tokens", x => x.id);
+                    table.ForeignKey(
+                        name: "fk_operator_tokens_users_user_id",
+                        column: x => x.user_id,
+                        principalTable: "users",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "tofu_state_versions",
+                columns: table => new
+                {
+                    id = table.Column<Guid>(type: "uuid", nullable: false),
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    stage = table.Column<string>(type: "text", nullable: false, defaultValue: ""),
+                    version = table.Column<int>(type: "integer", nullable: false),
+                    serial = table.Column<long>(type: "bigint", nullable: false),
+                    lineage = table.Column<string>(type: "text", nullable: false),
+                    resource_count = table.Column<int>(type: "integer", nullable: false),
+                    sha256 = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    size = table.Column<int>(type: "integer", nullable: false),
+                    ciphertext = table.Column<byte[]>(type: "bytea", nullable: false),
+                    wrapped_key = table.Column<byte[]>(type: "bytea", nullable: false),
+                    attempt_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    restored_from = table.Column<int>(type: "integer", nullable: true),
+                    restored_by = table.Column<string>(type: "text", nullable: true),
+                    created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_tofu_state_versions", x => x.id);
+                    table.ForeignKey(
+                        name: "fk_tofu_state_versions_tofu_states_resource_id_stage",
+                        columns: x => new { x.resource_id, x.stage },
+                        principalTable: "tofu_states",
+                        principalColumns: new[] { "resource_id", "stage" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "attempts",
                 columns: table => new
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
-                    step_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    run_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    step_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    run_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    resource_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    revision_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    context = table.Column<string>(type: "jsonb", nullable: true),
                     number = table.Column<int>(type: "integer", nullable: false),
                     executor = table.Column<string>(type: "text", nullable: false),
                     action = table.Column<string>(type: "text", nullable: false),
@@ -302,6 +514,7 @@ namespace Octopushy.Server.Data.Migrations
                     host_key = table.Column<string>(type: "text", nullable: true),
                     host_limit = table.Column<int>(type: "integer", nullable: true),
                     preferred_agent_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    state_version = table.Column<int>(type: "integer", nullable: true),
                     agent_id = table.Column<Guid>(type: "uuid", nullable: true),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     assigned_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
@@ -342,6 +555,12 @@ namespace Octopushy.Server.Data.Migrations
                 column: "agent_id");
 
             migrationBuilder.CreateIndex(
+                name: "ix_attempts_resource_id_created_at",
+                table: "attempts",
+                columns: new[] { "resource_id", "created_at" },
+                filter: "resource_id IS NOT NULL");
+
+            migrationBuilder.CreateIndex(
                 name: "ix_attempts_status_created_at",
                 table: "attempts",
                 columns: new[] { "status", "created_at" });
@@ -361,6 +580,16 @@ namespace Octopushy.Server.Data.Migrations
                 name: "ix_observations_resource_id_observed_at",
                 table: "observations",
                 columns: new[] { "resource_id", "observed_at" });
+
+            migrationBuilder.CreateIndex(
+                name: "ix_operator_tokens_user_id",
+                table: "operator_tokens",
+                column: "user_id");
+
+            migrationBuilder.CreateIndex(
+                name: "ix_repository_drafts_updated_at",
+                table: "repository_drafts",
+                column: "updated_at");
 
             migrationBuilder.CreateIndex(
                 name: "ix_resources_address",
@@ -415,6 +644,12 @@ namespace Octopushy.Server.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "ix_tofu_state_versions_resource_id_stage_version",
+                table: "tofu_state_versions",
+                columns: new[] { "resource_id", "stage", "version" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "ix_users_username",
                 table: "users",
                 column: "username",
@@ -437,13 +672,28 @@ namespace Octopushy.Server.Data.Migrations
                 name: "enrollment_tokens");
 
             migrationBuilder.DropTable(
+                name: "guest_access_keys");
+
+            migrationBuilder.DropTable(
+                name: "guest_configurations");
+
+            migrationBuilder.DropTable(
+                name: "guest_schedules");
+
+            migrationBuilder.DropTable(
+                name: "installation_trusts");
+
+            migrationBuilder.DropTable(
                 name: "observations");
 
             migrationBuilder.DropTable(
-                name: "repository_settings");
+                name: "operator_tokens");
 
             migrationBuilder.DropTable(
-                name: "resources");
+                name: "repository_drafts");
+
+            migrationBuilder.DropTable(
+                name: "repository_settings");
 
             migrationBuilder.DropTable(
                 name: "revisions");
@@ -458,13 +708,22 @@ namespace Octopushy.Server.Data.Migrations
                 name: "store_versions");
 
             migrationBuilder.DropTable(
-                name: "users");
+                name: "tofu_state_versions");
 
             migrationBuilder.DropTable(
                 name: "steps");
 
             migrationBuilder.DropTable(
+                name: "users");
+
+            migrationBuilder.DropTable(
+                name: "tofu_states");
+
+            migrationBuilder.DropTable(
                 name: "runs");
+
+            migrationBuilder.DropTable(
+                name: "resources");
         }
     }
 }

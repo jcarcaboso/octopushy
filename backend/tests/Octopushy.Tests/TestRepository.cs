@@ -32,16 +32,7 @@ public sealed class TestRepository : IDisposable
     public static TestRepository Minimal()
     {
         var repository = new TestRepository();
-        repository.Write("octopushy.yaml", """
-            schemaVersion: 1
-            stateBackends:
-              postgres:
-                type: pg
-                config: { schema_name: octopushy_state }
-                workspace: "{stack}"
-                env:
-                  PG_CONN_STR: { store: opentofu/pg }
-            """);
+        repository.Write("octopushy.yaml", "schemaVersion: 1");
         repository.Write("labs/home/lab.yaml", """
             schemaVersion: 1
             name: Home
@@ -71,7 +62,6 @@ public sealed class TestRepository : IDisposable
             network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }
             provision:
               recipe: test-vm
-              state: { backend: postgres }
             """);
         repository.Write("recipes/test-vm/recipe.yaml", """
             schemaVersion: 1
@@ -89,16 +79,6 @@ public sealed class TestRepository : IDisposable
               input = var.guest
             }
             """);
-        return repository;
-    }
-
-    /// <summary><see cref="Minimal"/> with no state backend anywhere, so its guest uses the built-in state.</summary>
-    public static TestRepository BuiltInState()
-    {
-        var repository = Minimal();
-        repository.Write("octopushy.yaml", "schemaVersion: 1");
-        var guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
-        repository.Write(guest, File.ReadAllText(Path.Combine(repository.Root, guest)).Replace("  state: { backend: postgres }\n", ""));
         return repository;
     }
 

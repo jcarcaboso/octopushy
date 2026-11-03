@@ -77,7 +77,7 @@ async fn run(
     let ctx = ExecContext {
         attempt_id: id.into(),
         action: action.into(),
-        input_json: json!({ "root": ".", "backend": { "type": "octopushy" } }).to_string(),
+        input_json: json!({ "root": "." }).to_string(),
         secrets: Secrets::new(HashMap::new()),
         files_tar_gz: archive::pack(&[("main.tf", root)]).unwrap(),
         artifacts,

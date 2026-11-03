@@ -14,8 +14,8 @@ namespace Octopushy.Server.Store;
 public sealed class StateBusyException(string message) : Exception(message);
 
 /// <summary>
-/// The OpenTofu state Octopushy keeps for guests without an external backend, and for pipeline
-/// stages, which have one each: <see cref="TofuState.Stage"/> is empty for a guest's own. State
+/// The OpenTofu state Octopushy keeps, which is the only state there is: one per guest, and one
+/// per pipeline stage: <see cref="TofuState.Stage"/> is empty for a guest's own. State
 /// leaves only in the assignment of an attempt on that resource, after the gates that release its
 /// credentials. It comes back only from the apply holding the lock, which it gets after its plan
 /// was approved, so a plan cannot change state. Calls run under the engine's gate.
@@ -33,35 +33,17 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
     public const int RetainedVersions = 50;
 
     /// <summary>
-    /// Prepares an OpenTofu attempt: refuses a state the guest does not have, takes the lock for an
-    /// apply, and returns the state to send. An external backend gets none.
+    /// Prepares an OpenTofu attempt: takes the lock for an apply, and returns the state to send.
     /// </summary>
-    public async Task<Artifact?> CheckOutAsync(Attempt attempt, Run run, RunContext context, bool apply, CancellationToken cancellationToken)
+    public async Task<Artifact> CheckOutAsync(Attempt attempt, Run run, RunContext context, bool apply, CancellationToken cancellationToken)
     {
         var stage = context.Stage ?? "";
         var state = await db.TofuStates.FirstOrDefaultAsync(s => s.ResourceId == run.ResourceId && s.Stage == stage, cancellationToken);
         var head = await HeadAsync(state, cancellationToken);
-        var last = await LastApplyAsync(run.ResourceId, stage, cancellationToken);
-        if (!context.OpenTofu!.Backend.IsBuiltIn)
-        {
-            // An uncertain built-in apply can have created what no stored state records.
-            if (head?.ResourceCount > 0 || last is { BuiltIn: true, StateKnown: false })
-            {
-                throw new AssignmentException("This guest's OpenTofu state is in Octopushy, and an external backend would not include it and could plan to recreate what it tracks. "
-                    + "Remove provision.state; moving state between backends is not automatic.");
-            }
-            return null;
-        }
 
         if (state?.LockAttemptId is { } holder && holder != attempt.Id && await IsRunningAsync(holder, cancellationToken))
         {
             throw new StateBusyException("Waiting for the apply that holds this guest's state lock.");
-        }
-
-        if (last is { BuiltIn: false, Retired: false })
-        {
-            throw new AssignmentException("This guest's last apply used an external state backend, and built-in state would not include what it created and could plan to recreate it. "
-                + "Restore provision.state; moving state between backends is not automatic.");
         }
 
         if (apply)
@@ -314,30 +296,6 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
 
     private Task<bool> IsRunningAsync(Guid attemptId, CancellationToken cancellationToken) =>
         db.Attempts.AnyAsync(a => a.Id == attemptId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), cancellationToken);
-
-    /// <summary>
-    /// The latest apply that ran. A failed or uncertain one counts: it can have created
-    /// resources before it stopped, so its backend may hold them. A failed one returned its
-    /// state, or it would be uncertain, so what the built-in state knows about it is complete.
-    /// </summary>
-    private async Task<(bool BuiltIn, bool StateKnown, bool Retired)?> LastApplyAsync(Guid resourceId, string stage, CancellationToken cancellationToken)
-    {
-        var last = await db.Attempts.AsNoTracking()
-            .Where(a => a.Executor == "opentofu" && a.Action == "apply" && a.StartedAt != null && a.Step!.Run!.ResourceId == resourceId
-                && (a.Step.Stage ?? "") == stage)
-            .OrderByDescending(a => a.StartedAt)
-            .Select(a => new { a.Status, a.Step!.Run!.Operation, a.Step.Run.Context })
-            .FirstOrDefaultAsync(cancellationToken);
-        if (last is null)
-        {
-            return null;
-        }
-
-        var context = RunContext.Parse(last.Context);
-        return ((stage.Length == 0 ? context : context.ForStage(stage)).OpenTofu?.Backend.IsBuiltIn == true,
-            last.Status is AttemptStatuses.Succeeded or AttemptStatuses.Failed,
-            last.Status == AttemptStatuses.Succeeded && last.Operation == Operations.Retire);
-    }
 
     private static (long Serial, string Lineage, int Resources)? Parse(byte[] content)
     {

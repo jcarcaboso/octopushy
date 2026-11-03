@@ -24,9 +24,6 @@
       "required": ["store"],
       "additionalProperties": false
     },
-    "stringOrStoreRef": {
-      "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/storeRef" }]
-    },
     "policy": {
       "type": "object",
       "properties": {

@@ -28,12 +28,11 @@ public class ProvisioningTests(PostgresFixture postgres)
         var input = JsonNode.Parse(plan.InputJson)!;
         Assert.Equal("home.korriban.krb-app-01", input["stack"]!.GetValue<string>());
         Assert.Equal("modules/opentofu/test-vm", input["root"]!.GetValue<string>());
-        Assert.Equal("home.korriban.krb-app-01", input["backend"]!["workspace"]!.GetValue<string>());
-        Assert.Equal("backend.PG_CONN_STR", input["secretEnv"]!["PG_CONN_STR"]!.GetValue<string>());
+        Assert.Null(input["backend"]);
+        Assert.Equal(["PROXMOX_VE_API_TOKEN"], input["secretEnv"]!.AsObject().Select(p => p.Key));
         Assert.Equal("proxmox.token", input["secretEnv"]!["PROXMOX_VE_API_TOKEN"]!.GetValue<string>());
         Assert.Equal("true", input["env"]!["PROXMOX_VE_INSECURE"]!.GetValue<string>());
         Assert.False(input["destroy"]!.GetValue<bool>());
-        Assert.Equal("postgres://state", plan.Secrets["backend.PG_CONN_STR"]);
         Assert.Equal("octopushy@pve!agent=secret-token", plan.Secrets["proxmox.token"]);
         Assert.DoesNotContain("secret-token", plan.InputJson);
         Assert.Contains("modules/opentofu/test-vm/main.tf", BundleEntries(plan.FilesTarGz.ToByteArray()));
@@ -42,7 +41,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         Assert.True(await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: planArtifact));
 
         var apply = await agent.NextAsync("apply");
-        Assert.Equal(planArtifact.Sha256, Assert.Single(apply.Artifacts).Sha256);
+        Assert.Equal(planArtifact.Sha256, Assert.Single(apply.Artifacts, a => a.Name == planArtifact.Name).Sha256);
         await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject { ["vm_id"] = 310 }, ["sensitiveOutputs"] = new JsonArray() });
 
         var verify = await agent.NextAsync("verify-guest");
@@ -176,14 +175,12 @@ public class ProvisioningTests(PostgresFixture postgres)
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains("proxmox/korriban/read-only-token", run.Detail);
-        Assert.Contains("opentofu/pg", run.Detail);
 
         await server.SetSecretAsync("proxmox/korriban/read-only-token", "t");
         await server.SetSecretAsync("proxmox/korriban/privileged-token", "writer");
-        await server.SetSecretAsync("opentofu/pg", "c");
         Assert.Equal("opentofu", (await agent.NextAsync("preview")).Executor);
         var audit = await server.QueryAsync(db => db.SecretResolutions.AsNoTracking().Select(r => r.Key).ToListAsync());
-        Assert.Contains("opentofu/pg", audit);
+        Assert.Equal(["proxmox/korriban/read-only-token"], audit);
     }
 
     [Fact]
@@ -477,7 +474,7 @@ public class ProvisioningTests(PostgresFixture postgres)
         var attemptId = Guid.Parse(plan.AttemptId);
         var logs = server.Services.GetRequiredService<Octopushy.Server.Agents.AttemptLogStore>();
         await logs.AppendAsync(attemptId, 0, [(0, "stdout", "token is octopushy@pve!agent=secret-token")], CancellationToken.None);
-        await agent.ReportAsync(plan, Outcome.Failed, error: "auth failed for postgres://state");
+        await agent.ReportAsync(plan, Outcome.Failed, error: "auth failed for octopushy@pve!agent=secret-token");
 
         var lines = await logs.ReadAsync(attemptId, -1, 10, CancellationToken.None);
         Assert.Equal("token is ***", Assert.Single(lines).Text);

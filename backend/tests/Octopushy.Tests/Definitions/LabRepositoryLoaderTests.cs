@@ -56,7 +56,6 @@ public class LabRepositoryLoaderTests
             vmid: 12
             provision:
               recipe: test-vm
-              state: { backend: postgres }
             """);
         var repository = LabRepositoryLoader.Load(test.Root);
         var issue = Assert.Single(repository.Issues);
@@ -70,7 +69,7 @@ public class LabRepositoryLoaderTests
     public void A_broken_guest_does_not_affect_its_siblings()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: elsewhere\nvmid: 311\nprovision: { recipe: test-vm, state: { backend: postgres } }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: elsewhere\nvmid: 311\nprovision: { recipe: test-vm }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.False(repository.IsValid("home/korriban/krb-app-02"));
         Assert.True(repository.IsValid("home/korriban/krb-app-01"));
@@ -81,7 +80,7 @@ public class LabRepositoryLoaderTests
     public void Duplicate_vmids_in_an_installation_are_errors_on_both_guests()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\nprovision: { recipe: test-vm, state: { backend: postgres } }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\nprovision: { recipe: test-vm }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.False(repository.IsValid("home/korriban/krb-app-01"));
         Assert.False(repository.IsValid("home/korriban/krb-app-02"));
@@ -91,12 +90,11 @@ public class LabRepositoryLoaderTests
     public void References_to_missing_shared_definitions_are_errors()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\ntemplate: nope\nprovision: { recipe: nope, state: { backend: nope } }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\ntemplate: nope\nprovision: { recipe: nope }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         var messages = repository.Issues.Select(i => i.Message).ToList();
         Assert.Contains(messages, m => m.Contains("template 'nope'"));
         Assert.Contains(messages, m => m.Contains("recipe 'nope'"));
-        Assert.Contains(messages, m => m.Contains("state backend 'nope'"));
     }
 
     [Fact]
@@ -173,55 +171,31 @@ public class LabRepositoryLoaderTests
     }
 
     [Fact]
-    public void A_lab_without_state_backends_is_valid_and_uses_the_built_in_state()
-    {
-        using var test = TestRepository.BuiltInState();
-        var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Empty(repository.Issues);
-        Assert.Null(repository.Guests[0].StateBackend);
-        Assert.Null(ProvisionInputs.Build(repository, repository.Guests[0], "abc").Backend);
-    }
-
-    [Fact]
-    public void A_guest_may_stay_built_in_in_a_lab_that_defines_an_external_backend()
-    {
-        using var test = TestRepository.BuiltInState();
-        test.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
-        var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Empty(repository.Issues);
-        Assert.Null(repository.Guests[0].StateBackend);
-    }
-
-    [Fact]
-    public void The_state_backend_only_counts_toward_the_inputs_of_a_guest_that_uses_one()
-    {
-        using var builtIn = TestRepository.BuiltInState();
-        var first = LabRepositoryLoader.Load(builtIn.Root);
-        builtIn.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
-        var second = LabRepositoryLoader.Load(builtIn.Root);
-        Assert.Equal(ProvisionInputs.Build(first, first.Guests[0], "abc").Hash, ProvisionInputs.Build(second, second.Guests[0], "abc").Hash);
-
-        using var external = TestRepository.Minimal();
-        var third = LabRepositoryLoader.Load(external.Root);
-        Assert.NotEqual(ProvisionInputs.Build(first, first.Guests[0], "abc").Hash, ProvisionInputs.Build(third, third.Guests[0], "abc").Hash);
-    }
-
-    [Fact]
-    public void The_built_in_backend_type_cannot_be_declared()
+    public void A_lab_needs_no_state_settings()
     {
         using var test = TestRepository.Minimal();
-        test.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: octopushy }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+    }
+
+    [Fact]
+    public void State_backends_cannot_be_declared()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write("octopushy.yaml", "schemaVersion: 1\nstateBackends:\n  postgres: { type: pg }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Contains(repository.Issues, i => i.File == "octopushy.yaml");
         Assert.False(repository.RepositoryValid);
     }
 
     [Fact]
-    public void A_guest_naming_an_undefined_backend_is_still_an_error()
+    public void A_guest_cannot_name_a_state_backend()
     {
         using var test = TestRepository.Minimal();
-        test.Write("octopushy.yaml", "schemaVersion: 1");
+        var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        test.Write(path, File.ReadAllText(Path.Combine(test.Root, path)).Replace("  recipe: test-vm\n", "  recipe: test-vm\n  state: { backend: postgres }\n"));
         var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Contains(repository.Issues, i => i.Message.Contains("is not defined in octopushy.yaml"));
+        Assert.False(repository.IsValid("home/korriban/krb-app-01"));
+        Assert.Contains(repository.Issues, i => i.File == path);
     }
 }
