@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Octopushy.Definitions/Octopushy.Definitions.csproj" />
     <ProjectReference Include="../../src/Octopushy.Server/Octopushy.Server.csproj" />
+    <ProjectReference Include="../../src/Octopushy.Validate/Octopushy.Validate.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />

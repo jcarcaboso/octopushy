@@ -33,6 +33,11 @@ openapi:
     dotnet build backend/src/Octopushy.Server --no-incremental
     cd frontend && pnpm run gen:api
 
+# Validate a lab repository offline, as Octopushy reads it: its definitions and its own workflows/.
+[no-cd]
+validate dir:
+    dotnet run --project "{{justfile_directory()}}/backend/src/Octopushy.Validate" -- "{{dir}}"
+
 # Run disposable tests only (Testcontainers needs Docker or a Podman API socket).
 test:
     dotnet test backend/Octopushy.slnx
