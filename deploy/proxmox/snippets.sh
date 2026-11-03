@@ -17,10 +17,13 @@
 #      and bind mounts the real directory into it with a systemd mount unit.
 #   4. Adds an sshd drop-in that sorts first, with one block, `Match User <account>` and no other
 #      condition: that account may only log in with the key, only use SFTP, only inside the
-#      chroot, and new files are created mode 0600. sshd takes the first value it finds for these
-#      settings, so the block holds for every connection of that account, and it names no other.
-#   5. Checks the whole sshd configuration with `sshd -t`, and only then reloads sshd. If that or
-#      anything after it fails, sshd's files are put back as they were.
+#      chroot, and new files are created mode 0600. No CA certificate, key or principals command,
+#      password, host-based, GSSAPI or Kerberos login lets it in either. sshd takes the first value
+#      it finds for these settings, so the block holds for every connection of that account, and it
+#      names no other.
+#   5. Copies sshd's files, checks the whole configuration with `sshd -t` and the account's
+#      settings with `sshd -T`, and only then reloads sshd. If that fails, the copies go back,
+#      byte for byte, and sshd is reloaded again if it already had the new files.
 #   6. Prints what it changed, and this host's SSH host key for Octopushy to pin.
 #
 # It changes nothing, and says why, if: the account is root or exists without this script's
@@ -28,8 +31,11 @@
 # drop-in's name is taken by a file this script did not write, or another drop-in sorts before
 # it; or any other sshd file mentions the account.
 #
-# --remove undoes 2 to 5 with the same checks and the same restore, and leaves the datastore's
-# content and any snippets as they are.
+# --remove undoes 2 to 5 with the same checks and the same restore, and also refuses while the
+# account has a process or the chroot holds something it did not make. It leaves the datastore's
+# content and the snippets, which it gives to root first, so a later account with the same UID
+# cannot read them. Once sshd no longer lets the account in, its later steps are not undone if one
+# fails: run --remove again.
 set -euo pipefail
 # Byte order for comparing file names, as sshd's Include sorts them, and plain messages.
 export LC_ALL=C
@@ -46,6 +52,10 @@ keys=$keys_dir/authorized_keys
 # What marks the account and the drop-in as this script's own.
 marker="Octopushy snippet uploads"
 conf_marker="# Octopushy snippet uploads, for the account $user. Written by snippets.sh; remove with --remove."
+
+# A whole connection for sshd -T, so a Match on any of its parts can be evaluated. What the
+# script relies on does not depend on these values: its block holds for every connection.
+tuple() { printf 'user=%s,host=octopushy,addr=127.0.0.1,laddr=127.0.0.1,lport=22,rdomain=default' "$1"; }
 
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
@@ -68,7 +78,7 @@ done
 ((EUID == 0)) || die "run this as root on the Proxmox host"
 [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "not a user name: $user"
 [[ $datastore =~ ^[A-Za-z][A-Za-z0-9_.-]*$ ]] || die "not a datastore name: $datastore"
-for tool in pvesh pvesm sshd ssh-keygen systemctl systemd-escape python3; do
+for tool in pvesh pvesm sshd ssh-keygen systemctl systemd-escape python3 pgrep; do
   command -v "$tool" >/dev/null || die "$tool is missing: is this a Proxmox VE host?"
 done
 
@@ -129,24 +139,29 @@ mentions=$(grep -lE -- "(^|[^A-Za-z0-9_.-])$user([^A-Za-z0-9_.-]|\$)" "$main_con
 
 # ---- sshd's files: written, checked and reloaded, or put back. ----
 
+# Copies of sshd's files as they are, bytes, mode and owner, in a directory only root can read.
+backup=$(mktemp -d /run/octopushy-snippets.XXXXXX)
+chmod 700 "$backup"
 had_conf=0 had_keys=0 old_conf= old_keys=
-if [[ -f $conf ]]; then had_conf=1; old_conf=$(cat "$conf"); fi
-if [[ -f $keys ]]; then had_keys=1; old_keys=$(cat "$keys"); fi
-root_before=$(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1")
+if [[ -f $conf ]]; then had_conf=1; cp -a -- "$conf" "$backup/conf"; old_conf=$(cat "$conf"); fi
+if [[ -f $keys ]]; then had_keys=1; cp -a -- "$keys" "$backup/keys"; old_keys=$(cat "$keys"); fi
+root_before=$(sshd -T -C "$(tuple root)")
 staged=0 reloaded=0
 restore_sshd() {
-  ((staged)) || return 0
-  if ((had_conf)); then printf '%s\n' "$old_conf" >"$conf"; else rm -f -- "$conf"; fi
-  if ((had_keys)); then mkdir -p -- "$keys_dir"; printf '%s\n' "$old_keys" >"$keys"; else rm -f -- "$keys"; fi
-  if ((reloaded)); then systemctl reload "$service" || true; fi
-  printf '\033[31m    sshd: put back as it was\033[0m\n' >&2
+  if ((staged)); then
+    if ((had_conf)); then cp -a -- "$backup/conf" "$conf"; else rm -f -- "$conf"; fi
+    if ((had_keys)); then mkdir -p -- "$keys_dir"; cp -a -- "$backup/keys" "$keys"; else rm -f -- "$keys"; fi
+    if ((reloaded)); then systemctl reload "$service" || true; fi
+    printf '\033[31m    sshd: put back as it was\033[0m\n' >&2
+  fi
+  rm -rf -- "$backup"
 }
 trap restore_sshd EXIT
 
 # Checks what sshd would read, then reloads it. Any failure here leaves restore_sshd to run.
 apply_sshd() {
   sshd -t || die "sshd -t refused the configuration"
-  [[ $(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1") == "$root_before" ]] || die "the configuration would change root's login"
+  [[ $(sshd -T -C "$(tuple root)") == "$root_before" ]] || die "the configuration would change root's login"
   reloaded=1
   systemctl reload "$service"
   note "reloaded sshd"
@@ -154,6 +169,22 @@ apply_sshd() {
 
 if ((remove)); then
   say "Removing the $user account and its SFTP access"
+  # What would stop the removal once access is gone, checked while it can still be refused: a
+  # process of the account, such as an open SFTP session, and anything in the chroot but its
+  # directories and the mounted snippets directory.
+  if id -u "$user" >/dev/null 2>&1 && pgrep -u "$user" >/dev/null; then
+    die "processes of $user are running, such as an SFTP session: $(pgrep -u "$user" -d ' '); nothing was changed"
+  fi
+  if [[ -d $chroot ]]; then
+    stray=()
+    while IFS= read -r found; do
+      # The directories on the way to the snippets directory are the script's; anything else is not.
+      [[ -d $found && ! -L $found && $inner == "$found"/* ]] || stray+=("$found")
+    done < <(find "$chroot" -mindepth 1 -path "$inner" -prune -o -print)
+    ((${#stray[@]} == 0)) || die "$chroot holds more than this script made: ${stray[*]}; nothing was changed"
+  fi
+  # From here on, each step is done or the removal stops. Only sshd's step is put back: once
+  # sshd no longer lets the account in, what follows can be repeated with --remove.
   if ((had_conf || had_keys)); then
     staged=1
     rm -f -- "$conf" "$keys"
@@ -176,9 +207,19 @@ if ((remove)); then
     [[ -e $chroot ]] && die "$chroot still holds files; look before removing it"
     note "removed $chroot"
   fi
+  # The snippets stay, and they hold guests' private host keys. Before the account's UID is free
+  # for another account to get, everything in the directory that the account owns becomes root's,
+  # without following a link anywhere, and keeps its mode.
+  if [[ -d $snippets ]] && id -u "$user" >/dev/null 2>&1; then
+    owned=$(find "$snippets" -xdev -mindepth 1 \( -user "$user" -o -group "$user" \) -print | wc -l)
+    if ((owned > 0)); then
+      find "$snippets" -xdev -mindepth 1 \( -user "$user" -o -group "$user" \) -exec chown -h root:root {} +
+      note "gave root the $owned file(s) of $user in $snippets"
+    fi
+  fi
   if [[ -d $snippets && $(stat -c '%G %a' "$snippets") == "$user 2770" ]]; then
     chgrp root "$snippets"
-    chmod 755 "$snippets"
+    chmod 00755 "$snippets"
     note "gave $snippets back to root, mode 755"
   fi
   if id -u "$user" >/dev/null 2>&1; then userdel "$user"; note "removed the user $user"; fi
@@ -252,9 +293,18 @@ say "sshd"
 conf_text="$conf_marker
 Match User $user
     AuthorizedKeysFile $keys
+    AuthorizedKeysCommand none
+    AuthorizedPrincipalsFile none
+    AuthorizedPrincipalsCommand none
+    TrustedUserCAKeys none
     AuthenticationMethods publickey
     PasswordAuthentication no
     KbdInteractiveAuthentication no
+    HostbasedAuthentication no
+    GSSAPIAuthentication no
+    KerberosAuthentication no
+    PermitEmptyPasswords no
+    DisableForwarding yes
     ChrootDirectory $chroot
     ForceCommand internal-sftp -u 0077
     AllowTcpForwarding no
@@ -281,10 +331,16 @@ if ((!had_conf)) || [[ $old_conf != "$conf_text" ]]; then
   sshd_changed=1
 fi
 if ((sshd_changed)); then
-  # What sshd will do for this account: the block above, whatever the connection.
-  effective=$(sshd -T -C "user=$user,host=octopushy,addr=127.0.0.1")
-  grep -qx "chrootdirectory $chroot" <<<"$effective" || die "sshd would not chroot $user"
-  grep -qx "forcecommand internal-sftp -u 0077" <<<"$effective" || die "sshd would not force SFTP for $user"
+  # What sshd will do for this account: the block above, whatever the connection. Only the key in
+  # its file lets it in: no certificate, no command, no password and no other method.
+  effective=$(sshd -T -C "$(tuple "$user")")
+  for expected in "authorizedkeysfile $keys" "authorizedkeyscommand none" "authorizedprincipalsfile none" \
+    "authorizedprincipalscommand none" "trustedusercakeys none" "authenticationmethods publickey" \
+    "passwordauthentication no" "kbdinteractiveauthentication no" "hostbasedauthentication no" \
+    "gssapiauthentication no" "kerberosauthentication no" "permitemptypasswords no" "disableforwarding yes" \
+    "chrootdirectory $chroot" "forcecommand internal-sftp -u 0077" "permittty no" "allowtcpforwarding no"; do
+    grep -qxF -- "$expected" <<<"$effective" || die "sshd would not apply '$expected' to $user"
+  done
   apply_sshd
 fi
 staged=0

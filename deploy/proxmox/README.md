@@ -188,8 +188,13 @@ Before it changes anything, it refuses:
 - any other sshd file that mentions the account.
 
 Its block sorts first and names only that account, so sshd applies it to every connection of that
-account and to no one else. sshd's files are checked with `sshd -t` and reloaded, or put back if
-anything fails, for setup and `--remove` alike. Then it prints the host's own SSH host key. Store that line in **Variables** as a **plain** value,
+account and to no one else, and it lets the account in with its key alone: no CA certificate,
+key or principals command, password, host-based, GSSAPI or Kerberos login, even where the host
+allows them. sshd's files are copied first, with their modes, checked with `sshd -t` and reloaded,
+or put back byte for byte if anything fails, for setup and `--remove` alike. `--remove` also
+refuses while the account has a process, such as an open SFTP session, or the chroot holds
+something it did not make, and it gives root the snippets it keeps before freeing the account's
+UID. Then it prints the host's own SSH host key. Store that line in **Variables** as a **plain** value,
 under the key the installation's `snippets.hosts.<host>.hostKey` names; uploads connect to that
 key and nothing else. Running the script again changes nothing.
 

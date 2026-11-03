@@ -20,8 +20,8 @@ fail() { printf '\033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
 log() { printf '\033[1m== %s\033[0m\n' "$*"; }
 
-ssh-keygen -q -t ed25519 -N '' -C 'octopushy-snippets@home/pve01' -f "$work/id"
-ssh-keygen -q -t ed25519 -N '' -C 'octopushy-snippets@home/pve01' -f "$work/id2"
+ssh-keygen -q -t ed25519 -N '' -C 'octopushy-snippets@home/pve01' -f "$work/id" </dev/null
+ssh-keygen -q -t ed25519 -N '' -C 'octopushy-snippets@home/pve01' -f "$work/id2" </dev/null
 opts=(-o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$work/known_hosts" -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10)
 sftp_as() { sftp -i "$1" "${opts[@]}" -P "$port" -b - octopushy-snippets@127.0.0.1; }
 in_host() { podman exec "$name" "$@"; }
@@ -37,7 +37,7 @@ start() {
 snapshot() {
   in_host sh -c 'cat /etc/passwd /etc/group; tr -d "\n" < /etc/pve-stub/storage.json; echo; ls -1A /var/lib; stat -c "%n %U %G %a" /var/lib/vz /var/lib/vz/* 2>/dev/null
     find /etc/ssh /etc/systemd/system | sort; for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*; do [ -f "$f" ] && sha256sum "$f"; done
-    for a in 127.0.0.1 192.0.2.1 198.51.100.7; do for u in root alice octopushy-snippets; do echo "== $u $a"; sshd -T -C user=$u,host=x,addr=$a; done; done; true' 2>&1
+    for a in 127.0.0.1 192.0.2.1 198.51.100.7; do for u in root alice octopushy-snippets; do echo "== $u $a"; sshd -T -C user=$u,host=x,addr=$a,laddr=127.0.0.1,lport=22,rdomain=default; done; done; true' 2>&1
 }
 # A run that has to be refused: it fails, says why, and leaves everything as it was.
 refused() {
@@ -59,7 +59,7 @@ run_on() {
   podman build -q --build-arg "DEBIAN=$debian" -t "localhost/octopushy-snippets-host:$debian" "$here" >/dev/null
   start "$debian"
   in_host useradd --create-home --shell /bin/bash alice
-  in_host sshd -T -C user=root,host=x,addr=127.0.0.1 >"$work/root-before"
+  in_host sshd -T -C user=root,host=x,addr=127.0.0.1,laddr=127.0.0.1,lport=22,rdomain=default >"$work/root-before"
   snapshot >"$work/host-before"
 
   # Refused before anything changes: root, and an account this script did not create.
@@ -106,7 +106,7 @@ run_on() {
   grep -q "$(in_host cat /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2)" "$work/first" || fail "the host key was not printed"
   for a in 127.0.0.1 192.0.2.1 198.51.100.7; do for u in root alice; do
     diff <(sed -n "/^== $u $a\$/,/^== /p" "$work/with-restrictions" | sed '1d;$d') \
-      <(in_host sshd -T -C user=$u,host=x,addr=$a) >"$work/settings-diff" || { cat "$work/settings-diff"; fail "$u's effective settings from $a changed"; }
+      <(in_host sshd -T -C user=$u,host=x,addr=$a,laddr=127.0.0.1,lport=22,rdomain=default) >"$work/settings-diff" || { cat "$work/settings-diff"; fail "$u's effective settings from $a changed"; }
   done; done
   [[ $(in_host head -n 1 /etc/ssh/sshd_config.d/00-octopushy-snippets.conf) == '# Octopushy snippet uploads'* ]] || fail "the drop-in has no marker"
   in_host rm /etc/ssh/sshd_config.d/octopushy-snippets.conf /etc/ssh/sshd_config.d/00-root.conf
@@ -132,12 +132,12 @@ run_on() {
     octopushy-snippets@127.0.0.1 true >/dev/null 2>&1 && fail "a password login worked"
   sftp_ok "$work/id2" && fail "another key logged in"
   for a in 192.0.2.1 198.51.100.7; do
-    effective=$(in_host sshd -T -C user=octopushy-snippets,host=x,addr=$a)
+    effective=$(in_host sshd -T -C user=octopushy-snippets,host=x,addr=$a,laddr=127.0.0.1,lport=22,rdomain=default)
     grep -qx 'chrootdirectory /var/lib/octopushy-snippets' <<<"$effective" || fail "the account is not chrooted from $a"
   done
   pass "no command, no forwarding, no password, no other key, and the chroot from every address"
 
-  in_host sshd -T -C user=root,host=x,addr=127.0.0.1 >"$work/root-after"
+  in_host sshd -T -C user=root,host=x,addr=127.0.0.1,laddr=127.0.0.1,lport=22,rdomain=default >"$work/root-after"
   diff "$work/root-before" "$work/root-after" >/dev/null || fail "root's sshd settings changed: $(diff "$work/root-before" "$work/root-after")"
   pass "root's effective sshd settings are unchanged"
 
@@ -157,6 +157,75 @@ run_on() {
   printf 'ls /var/lib/vz/snippets\n' | sftp_as "$work/id2" | grep -q guest-user-data.yaml || fail "the chroot is empty after a restart"
   pass "the bind mount comes back after a restart"
 
+  # Only the key in the account's file lets it in: not a certificate from a CA the host trusts.
+  rm -f -- "$work/ca" "$work/ca.pub" "$work/certified" "$work/certified.pub" "$work/certified-cert.pub"
+  ssh-keygen -q -t ed25519 -N '' -f "$work/ca" </dev/null
+  ssh-keygen -q -t ed25519 -N '' -f "$work/certified" </dev/null
+  ssh-keygen -q -s "$work/ca" -I test -n octopushy-snippets "$work/certified.pub" </dev/null
+  podman cp "$work/ca.pub" "$name:/etc/ssh/user_ca.pub"
+  in_host sh -c 'echo "TrustedUserCAKeys /etc/ssh/user_ca.pub" >> /etc/ssh/sshd_config && systemctl reload ssh'
+  [[ $(in_host sshd -T -C user=root,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default | grep '^trustedusercakeys') == "trustedusercakeys /etc/ssh/user_ca.pub" ]] \
+    || fail "the host does not trust the CA, so this proves nothing"
+  setup "$work/id2.pub" >/dev/null || fail "the run with a host-wide CA failed"
+  printf 'ls /\n' | sftp -i "$work/certified" -o CertificateFile="$work/certified-cert.pub" "${opts[@]}" -P "$port" -b - octopushy-snippets@127.0.0.1 >/dev/null 2>&1 \
+    && fail "a certificate from the host's CA logged in as the account"
+  for expected in "trustedusercakeys none" "authorizedkeyscommand none" "authorizedprincipalsfile none" \
+    "authorizedprincipalscommand none" "hostbasedauthentication no" "gssapiauthentication no" "authenticationmethods publickey"; do
+    in_host sshd -T -C user=octopushy-snippets,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default >"$work/effective"
+    grep -qxF "$expected" "$work/effective" || fail "the account's effective settings lack '$expected'"
+  done
+  in_host sh -c 'sed -i "/^TrustedUserCAKeys/d" /etc/ssh/sshd_config && systemctl reload ssh'
+  sftp_ok "$work/id2" || fail "the account's own key no longer logs in"
+  pass "a certificate signed by a CA the host trusts does not log in as the account; only its own key does"
+
+  # A valid configuration with a Match on the local port: setup and --remove read it.
+  dropin 50-localport.conf 'Match LocalPort 2222\n PasswordAuthentication no\n'
+  setup "$work/id2.pub" >"$work/localport" || { cat "$work/localport"; fail "the run with Match LocalPort failed"; }
+  pass "a Match LocalPort elsewhere does not stop the script"
+
+  # A failure after sshd's files are written, or after sshd reloaded them: the files come back
+  # byte for byte, with their modes, and what sshd does is as it was.
+  in_host sh -c 'chmod 600 /etc/ssh/sshd_config.d/00-octopushy-snippets.conf; echo >> /etc/ssh/octopushy-snippets/authorized_keys; mkdir -p /run/fault'
+  sshd_files() {
+    in_host sh -c 'cd /etc/ssh; stat -c "%n %a %U %G %s" sshd_config.d/00-octopushy-snippets.conf octopushy-snippets/authorized_keys
+      sha256sum sshd_config.d/00-octopushy-snippets.conf octopushy-snippets/authorized_keys
+      for u in root octopushy-snippets; do sshd -T -C user=$u,host=x,addr=192.0.2.1,laddr=127.0.0.1,lport=22,rdomain=default; done'
+  }
+  sshd_files >"$work/files-before"
+  for fault in sshd-t reload; do
+    for mode in setup remove; do
+      # sshd -t's second call is the one after the write; its first is the check before any change.
+      if [[ $fault == reload ]]; then in_host sh -c 'rm -f /run/fault/*; touch /run/fault/reload'; else in_host sh -c 'rm -f /run/fault/*; echo 2 > /run/fault/sshd-t'; fi
+      if [[ $mode == setup ]]; then
+        setup "$work/id.pub" >"$work/faulted" 2>&1 && { cat "$work/faulted"; fail "setup passed with the fault '$fault'"; }
+      else
+        in_host bash /root/snippets.sh --remove >"$work/faulted" 2>&1 && { cat "$work/faulted"; fail "--remove passed with the fault '$fault'"; }
+      fi
+      in_host rm -f /run/fault/sshd-t /run/fault/sshd-t-count /run/fault/reload
+      sshd_files >"$work/files-after"
+      diff "$work/files-before" "$work/files-after" >/dev/null || fail "$mode with the fault '$fault' left sshd's files changed: $(diff "$work/files-before" "$work/files-after" | head -8)"
+      grep -q 'put back as it was' "$work/faulted" || { cat "$work/faulted"; fail "$mode with the fault '$fault' did not say it put sshd back"; }
+      sftp_ok "$work/id2" || fail "after $mode with the fault '$fault', the account's key no longer logs in"
+      sftp_ok "$work/id" && fail "after $mode with the fault '$fault', the new key logs in"
+    done
+  done
+  in_host sh -c 'chmod 644 /etc/ssh/sshd_config.d/00-octopushy-snippets.conf'
+  pass "a failure after the write or after the reload, in setup or --remove, puts sshd's files back byte for byte, modes included"
+
+  # Refused while something --remove cannot undo past sshd: a stray file in the chroot, a session.
+  in_host touch /var/lib/octopushy-snippets/var/stray
+  refused "holds more than this script made" "--remove with a stray file in the chroot" in_host bash /root/snippets.sh --remove
+  in_host rm /var/lib/octopushy-snippets/var/stray
+  # A session that ends by itself: sftp reads its commands from a pipe that closes after 15 seconds.
+  { sleep 15 | sftp -i "$work/id2" "${opts[@]}" -P "$port" octopushy-snippets@127.0.0.1 >/dev/null 2>&1; } &
+  session=$!
+  timeout 10 sh -c "until podman exec $name pgrep -u octopushy-snippets >/dev/null; do sleep 1; done" || fail "the SFTP session did not start"
+  refused "processes of octopushy-snippets are running" "--remove with an open SFTP session" in_host bash /root/snippets.sh --remove
+  wait "$session" || true
+  timeout 30 sh -c "while podman exec $name pgrep -u octopushy-snippets >/dev/null; do sleep 1; done" || fail "the SFTP session did not end"
+  sftp_ok "$work/id2" || fail "the account no longer works after the refused --remove"
+  pass "--remove is refused, changing nothing, while the chroot holds a stray file or the account has a session"
+
   # Refused with sshd broken by something else: --remove changes nothing, and the account still works.
   dropin 50-broken.conf 'NotADirective yes\n'
   refused "refuses the configuration as it is" "--remove with a broken drop-in" in_host bash /root/snippets.sh --remove
@@ -166,12 +235,20 @@ run_on() {
 
   in_host bash /root/snippets.sh --remove >"$work/remove" || { cat "$work/remove"; fail "--remove failed"; }
   sftp_ok "$work/id2" && fail "the account still logs in after --remove"
+  # The removal above ran with the Match LocalPort drop-in in place; it and the CA are the test's.
+  in_host rm /etc/ssh/sshd_config.d/50-localport.conf /etc/ssh/user_ca.pub
   snapshot >"$work/host-after"
   # What --remove keeps on purpose: the datastore's snippets content and its snippets directory.
   kept() { grep -v '^/var/lib/vz/snippets ' "$1" | sed 's/,"snippets"\{0,1\}//; s/,snippets"/"/'; }
   diff <(kept "$work/host-before") <(kept "$work/host-after") >/dev/null \
     || fail "--remove left something: $(diff <(kept "$work/host-before") <(kept "$work/host-after") | head -20)"
   [[ $(in_host cat /var/lib/vz/snippets/guest-user-data.yaml) == "hello: secret" ]] || fail "--remove deleted a snippet"
+  [[ $(in_host stat -c '%U %G %a' /var/lib/vz/snippets/guest-user-data.yaml) == "root root 600" ]] || fail "a kept snippet is not root's, mode 600"
+  [[ $(in_host stat -c '%U %G %a' /var/lib/vz/snippets) == "root root 755" ]] || fail "the snippets directory is not root's, mode 755"
+  in_host useradd --system --no-create-home --shell /usr/sbin/nologin unrelated
+  in_host su -s /bin/sh unrelated -c 'cat /var/lib/vz/snippets/guest-user-data.yaml' >/dev/null 2>&1 && fail "an account made afterwards reads a kept snippet"
+  in_host userdel unrelated
+  pass "after --remove, the kept snippets are root's, mode 600, and an account made afterwards cannot read them"
   in_host bash /root/snippets.sh --remove | grep -q '0 change(s)' || fail "a second --remove changed something"
   pass "--remove undoes the account, chroot, mount and drop-in, keeps the snippets, and changes nothing a second time"
 

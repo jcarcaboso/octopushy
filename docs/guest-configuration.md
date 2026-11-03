@@ -490,7 +490,9 @@ partial file. On a real Fedora 44 VM with SELinux enforcing:
 - **a file cut inside the private key:** sshd does not start, so nothing reaches the guest over SSH;
 - **the whole snippet at the next start:** Octopushy's key is back, alone, and the pin matches.
 
-So it fails closed, and heals at the next start from Proxmox with the whole snippet. The apply
+So Octopushy refuses the guest's unexpected identity, and the next start from Proxmox with the
+whole snippet heals it. That is fail-closed for Octopushy only: other SSH access to the guest,
+such as a person's key, may still work in the meantime. The apply
 itself never starts or reboots the VM in that moment: the VM waits on the snippet, and an upload
 that fails stops the apply before any call for the VM, which homelab-config's test checks. What is
 left is a start by something else, such as a person, HA or the host booting, during the few
@@ -543,13 +545,27 @@ than by testing one connection:
   connection of the account.
 - **It names one account.** The block is `Match User <account>` with no other condition, so no
   other user's settings can change.
+- **Only the key in its file lets the account in.** The block turns off every other way: no CA
+  certificate (`TrustedUserCAKeys none`), no `AuthorizedKeysCommand` or principals, no password,
+  keyboard-interactive, host-based, GSSAPI or Kerberos login, and no forwarding of any kind, even
+  where the host sets them for everyone. Before reloading, it checks each of these with `sshd -T`.
 - **Before it changes anything**, it refuses: root, an account or group that exists and that it did
   not create, a configuration `sshd -t` already rejects, a drop-in of its name that it did not write,
   and any other sshd file that mentions the account, such as a `Match User` block for it on some
-  addresses. This holds for `--remove` too.
-- **sshd's files are written, checked and reloaded, or put back.** After writing, it checks
-  `sshd -t`, and reloads only then. If that or the reload fails, it puts the files back and sshd
-  keeps running what it had, for setup and `--remove` alike.
+  addresses. This holds for `--remove` too, which also refuses while the account has a process,
+  such as an open SFTP session, or the chroot holds anything it did not make.
+- **sshd's files are written, checked and reloaded, or put back.** It copies them first, with
+  their modes, into a directory only root can read. After writing, it checks `sshd -t` and
+  reloads only then. If that or the reload fails, it puts the copies back, reloads again if the
+  first reload went through, and sshd keeps running what it had, for setup and `--remove` alike.
+- **What is not put back.** Setup's earlier steps (the datastore's content, the account, the chroot
+  and its mount) stay if sshd's step fails; a second run or `--remove` deals with them. In
+  `--remove`, once sshd no longer lets the account in, the steps after it are not undone if one
+  fails; `--remove` can be run again.
+- **Kept snippets stay root's.** `--remove` keeps the snippets, which hold guests' private host
+  keys. Before the account's UID is freed, it gives root every file the account owns there,
+  without following links, keeping each file's mode, so an account made later with the same UID
+  reads none of them.
 
 It prints what it changed, and the host's own SSH host key. Store that key as a plain value under the name
 `snippets.hosts.<host>.hostKey` gives. Running it again changes nothing; running it with a new key
