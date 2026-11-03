@@ -17,6 +17,8 @@ public static class GuestStatuses
     public const string InSync = "in-sync";
     public const string Pending = "pending";
     public const string Queued = "queued";
+    /// <summary>A service whose guest is not ready for it yet. Nothing is wrong with the service.</summary>
+    public const string Waiting = "waiting";
     public const string Running = "running";
     public const string AwaitingApproval = "awaiting-approval";
     public const string Blocked = "blocked";
@@ -66,6 +68,12 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         }
 
         var step = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => !StepStatuses.IsDone(s.Status));
+        // Held back before anything was queued: it may not start changing its guest yet.
+        if (step?.Status == StepStatuses.Pending && run.Detail is not null)
+        {
+            return run.Detail;
+        }
+
         if (step?.Status != StepStatuses.Queued)
         {
             return null;
@@ -266,7 +274,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                         state?.AppliedAt,
                         state?.Snapshot is not null,
                         schedules,
-                        followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList());
+                        followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList(),
+                        await GuestWork.OwnKeyRefusedAsync(db, id, guest, cancellationToken));
                 }
             }
 
@@ -297,7 +306,126 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             GuestDiskUsageEndpoints.View(resource,
                 await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
             configure,
-            await ManagedAccessAsync(id, cancellationToken));
+            await ManagedAccessAsync(id, cancellationToken),
+            await ServicesOfAsync(resource, latest, cancellationToken));
+    }
+
+    /// <summary>The services the repository shows on a guest, and those it no longer does until they are dealt with.</summary>
+    private async Task<IReadOnlyList<ServiceSummaryDto>> ServicesOfAsync(Resource guest, DefinitionRevision? latest, CancellationToken cancellationToken)
+    {
+        var services = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == guest.Address && r.RetiredAt == null)
+            .OrderBy(r => r.Address)
+            .ToListAsync(cancellationToken);
+        if (services.Count == 0)
+            return [];
+        var runs = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
+        var ids = services.Select(s => s.Id).ToList();
+        var states = await db.GuestConfigurations.AsNoTracking().Where(c => ids.Contains(c.ResourceId)).ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        var summaries = new List<ServiceSummaryDto>();
+        foreach (var service in services)
+        {
+            var (active, last) = runs.GetValueOrDefault(service.Id);
+            summaries.Add(ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), await ServiceWaitingAsync(guest, service, latest, cancellationToken)));
+        }
+
+        return summaries;
+    }
+
+    /// <summary>What a service waits for on its guest, as <see cref="GuestWork.WaitingForAsync"/> says.</summary>
+    private async Task<string?> ServiceWaitingAsync(Resource? guest, Resource service, DefinitionRevision? latest, CancellationToken cancellationToken)
+    {
+        if (guest is null || latest is null)
+            return "Sync the current repository source first.";
+        var repository = await revisions.GetAsync(latest.Commit, cancellationToken);
+        return await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, repository.Service(service.Address));
+    }
+
+    private static ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting)
+    {
+        var (status, detail) = ServiceStatus(resource, active, last, state, waiting);
+        return new ServiceSummaryDto(resource.Id, resource.Address, resource.Address.Split('/')[^1], status, detail, resource.Valid,
+            active is null ? null : Summary(active, resource.Address, resource.Kind),
+            last is null ? null : Summary(last, resource.Address, resource.Kind));
+    }
+
+    public static (string Status, string? Detail) ServiceStatus(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting)
+    {
+        if (resource.RetiredAt is not null)
+            return (GuestStatuses.Retired, null);
+        if (resource.MissingSince is not null && active is null)
+            return (GuestStatuses.Missing, "The folder was deleted. Nothing was removed: removing a service is not built yet, so what it deployed is still on the guest. Restore the folder to keep managing it.");
+        if (!resource.Valid)
+            return (GuestStatuses.Invalid, "The definition has errors.");
+        if (active is not null && Waiting(active) is { } held)
+            return (GuestStatuses.Queued, held);
+        if (active is not null)
+        {
+            return (active.Status switch
+            {
+                RunStatuses.Queued => GuestStatuses.Queued,
+                RunStatuses.AwaitingApproval => GuestStatuses.AwaitingApproval,
+                RunStatuses.Blocked => GuestStatuses.Blocked,
+                RunStatuses.Uncertain => GuestStatuses.Uncertain,
+                _ => GuestStatuses.Running,
+            }, active.Detail);
+        }
+
+        if (last is { Status: RunStatuses.Failed })
+            return (GuestStatuses.Failed, last.Detail);
+        if (state?.AppliedHash is not null && state.AppliedHash == state.DesiredHash)
+            return (GuestStatuses.InSync, null);
+        return waiting is not null
+            ? (GuestStatuses.Waiting, waiting)
+            : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not deployed from the current definition yet.");
+    }
+
+    public async Task<ServiceDetailDto?> ServiceAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id && r.Kind == ResourceKinds.Service, cancellationToken);
+        if (resource is null)
+            return null;
+
+        var runs = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+            .Where(r => r.ResourceId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(30)
+            .ToListAsync(cancellationToken);
+        var guest = await db.Resources.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Address == resource.ParentAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken);
+        var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
+        var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        var repository = latest is null || !latest.RepositoryValid ? null : await revisions.GetAsync(latest.Commit, cancellationToken);
+        var (definition, owner) = repository?.Service(resource.Address) is { } service && repository.Guest(service.GuestAddress) is { } host
+            ? (service, host) : default;
+        ResolvedSetting<IReadOnlyList<string>>? labels = null;
+        PolicyDto? policy = null;
+        if (definition is not null)
+        {
+            var effective = PolicyResolver.For(repository!, owner!, definition);
+            policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
+            labels = PolicyResolver.AgentLabels(repository!, owner!, definition);
+        }
+
+        var commits = await CommitsAsync([state?.AppliedRevisionId], cancellationToken);
+        var active = runs.Where(r => !RunStatuses.IsTerminal(r.Status)).MinBy(r => r.CreatedAt);
+        var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
+        return new ServiceDetailDto(
+            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken)),
+            guest?.Id,
+            resource.ParentAddress,
+            resource.DefinitionFile,
+            latest is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken),
+            Issues(resource.Issues),
+            policy,
+            labels?.Value ?? [],
+            labels?.SetBy,
+            definition?.Stages.Select(s => new ServiceStageDto(s.Name, s.Recipe, repository!.Recipes.GetValueOrDefault(s.Recipe)?.Executor ?? "?")).ToList() ?? [],
+            commits.GetValueOrDefault(state?.AppliedRevisionId ?? Guid.Empty),
+            state?.AppliedAt,
+            resource.MissingSince,
+            resource.RetiredAt,
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Service)).ToList());
     }
 
     /// <summary>The version runs use: public, and all there is to show. The private half never reaches this layer.</summary>

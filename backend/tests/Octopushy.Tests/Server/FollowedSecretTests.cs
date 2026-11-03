@@ -21,14 +21,14 @@ public class FollowedSecretTests(PostgresFixture postgres)
     private static Task ScheduleAsync(ServerHarness server) =>
         server.Services.GetRequiredService<Planner>().ScheduleConfigurationsAsync(CancellationToken.None);
 
-    private static async Task<int> StageAsync(HttpClient http, string key, string value)
+    internal static async Task<int> StageAsync(HttpClient http, string key, string value)
     {
         var staged = await http.PostAsJsonAsync("/api/variables/candidates", new { key, value });
         staged.EnsureSuccessStatusCode();
         return (await staged.Content.ReadFromJsonAsync<JsonObject>())!["version"]!.GetValue<int>();
     }
 
-    private static async Task PromoteAsync(HttpClient http, string key, int version, int current) =>
+    internal static async Task PromoteAsync(HttpClient http, string key, int version, int current) =>
         (await http.PostAsJsonAsync("/api/variables/promote", new { key, version, expectedCurrentVersion = current, verificationNote = "checked by hand" }))
             .EnsureSuccessStatusCode();
 

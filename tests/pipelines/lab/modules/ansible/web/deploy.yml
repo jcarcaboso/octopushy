@@ -1,0 +1,30 @@
+- name: Deploy the web server
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop here until the test says otherwise
+      ansible.builtin.stat:
+        path: /var/lib/web-may-go
+      register: allowed
+      when: fail_until_allowed | default(false)
+    - name: Refuse
+      ansible.builtin.fail:
+        msg: Not allowed yet
+      when: fail_until_allowed | default(false) and not allowed.stat.exists
+    - name: Write what the stage was given
+      ansible.builtin.copy:
+        content: "{{ port }} {{ octopushy.address }}\n"
+        dest: /var/lib/web-deployed
+        mode: "0644"
+    - name: Write a secret var
+      ansible.builtin.copy:
+        content: "{{ web_password }}"
+        dest: /var/lib/web-password
+        mode: "0600"
+      no_log: true
+    - name: Read a file from the service's folder in the repository
+      ansible.builtin.copy:
+        src: "{{ octopushy.guest_directory }}/site.conf"
+        dest: /var/lib/web-site.conf
+        mode: "0644"

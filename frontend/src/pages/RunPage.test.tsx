@@ -34,6 +34,40 @@ it.each([
   expect(screen.queryByRole("button", { name: "Retry guest step" }) !== null).toBe(offered);
 });
 
+it("retries a failed stage of a pipeline, names its stage, and never offers the guest retry", async () => {
+  const detail = runDetail({ operation: "pipeline", status: "failed", currentStep: null });
+  detail.steps = [{ ...detail.steps[0], name: "playbook", stage: "deploy", kind: "agent", status: "failed", plan: null, approval: null }];
+  const { requests } = mockApi({
+    "GET /api/runs/run-1": () => detail,
+    "POST /api/runs/run-1/retry-stage": () => undefined,
+  });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await userEvent.click(await screen.findByRole("button", { name: "Retry this stage" }));
+  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-stage"]);
+  expect(screen.getByText("deploy")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry guest step" })).toBeNull();
+});
+
+it("offers no stage retry once a change may have been lost", async () => {
+  const detail = runDetail({ operation: "pipeline", status: "failed", currentStep: null });
+  const lost = { ...detail.steps[0].attempts[0], id: "attempt-lost", status: "uncertain", mutating: true };
+  detail.steps = [{ ...detail.steps[0], name: "apply", stage: "expose", kind: "agent", status: "failed", plan: null, approval: null, attempts: [lost] }];
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await screen.findByText("expose");
+  expect(screen.queryByRole("button", { name: "Retry this stage" })).toBeNull();
+});
+
+it("names one document for the whole pipeline when asking for approval", async () => {
+  const detail = runDetail({ operation: "pipeline", status: "awaiting-approval", currentStep: "approval" });
+  detail.steps[0] = { ...detail.steps[0], stage: "expose" };
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  expect(await screen.findByText(/Approving covers every stage/)).toBeInTheDocument();
+  expect(screen.getByText("Pipeline document SHA-256")).toBeInTheDocument();
+});
+
 it("shows what a configure run will do, and approves that preview", async () => {
   const detail = runDetail({ operation: "configure", status: "awaiting-approval", currentStep: "approval" });
   detail.steps[0] = {

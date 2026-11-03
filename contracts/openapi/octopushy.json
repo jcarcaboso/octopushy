@@ -642,6 +642,131 @@
         }
       }
     },
+    "/api/services/{id}": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/services/{id}/deploy": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "deployService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/guests/{id}/access/rotate": {
       "post": {
         "tags": [
@@ -907,6 +1032,13 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "stage",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -967,6 +1099,13 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "stage",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -1923,6 +2062,60 @@
           "Runs"
         ],
         "operationId": "retryFilesystem",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/retry-stage": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "operationId": "retryStage",
         "parameters": [
           {
             "name": "id",
@@ -3966,7 +4159,8 @@
               "null",
               "string"
             ]
-          }
+          },
+          "document": { }
         }
       },
       "AttemptDto": {
@@ -4792,7 +4986,8 @@
           "appliedAt",
           "hasSnapshot",
           "schedules",
-          "secrets"
+          "secrets",
+          "refused"
         ],
         "type": "object",
         "properties": {
@@ -4841,6 +5036,12 @@
             "items": {
               "$ref": "#/components/schemas/FollowedSecretDto"
             }
+          },
+          "refused": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4867,7 +5068,8 @@
           "runs",
           "diskUsage",
           "configuration",
-          "managedAccess"
+          "managedAccess",
+          "services"
         ],
         "type": "object",
         "properties": {
@@ -5018,6 +5220,12 @@
                 "$ref": "#/components/schemas/ManagedAccessDto"
               }
             ]
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSummaryDto"
+            }
           }
         }
       },
@@ -6581,6 +6789,199 @@
           }
         }
       },
+      "ServiceDetailDto": {
+        "required": [
+          "service",
+          "guestId",
+          "guestAddress",
+          "definitionFile",
+          "definitionText",
+          "issues",
+          "policy",
+          "agentLabels",
+          "agentLabelsSetBy",
+          "stages",
+          "appliedCommit",
+          "appliedAt",
+          "missingSince",
+          "retiredAt",
+          "runs"
+        ],
+        "type": "object",
+        "properties": {
+          "service": {
+            "$ref": "#/components/schemas/ServiceSummaryDto"
+          },
+          "guestId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "guestAddress": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "definitionFile": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "definitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PolicyDto"
+              }
+            ]
+          },
+          "agentLabels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agentLabelsSetBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceStageDto"
+            }
+          },
+          "appliedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "missingSince": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "retiredAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          }
+        }
+      },
+      "ServiceStageDto": {
+        "required": [
+          "name",
+          "recipe",
+          "executor"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "executor": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceSummaryDto": {
+        "required": [
+          "id",
+          "address",
+          "name",
+          "status",
+          "statusDetail",
+          "valid",
+          "activeRun",
+          "lastRun"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "statusDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "activeRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          }
+        }
+      },
       "SetupRequest": {
         "required": [
           "setupCode",
@@ -6710,6 +7111,12 @@
               {
                 "$ref": "#/components/schemas/ConfigurePreviewDto"
               }
+            ]
+          },
+          "stage": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }

@@ -31,6 +31,7 @@ const statuses: Record<string, StatusStyle> = {
   succeeded: { label: "Succeeded", tone: "success", icon: "check" },
   pending: { label: "Pending", tone: "neutral", icon: "clock" },
   queued: { label: "Queued", tone: "neutral", icon: "clock" },
+  waiting: { label: "Waiting", tone: "neutral", icon: "clock" },
   assigned: { label: "Assigned", tone: "info", icon: "spinner" },
   running: { label: "Running", tone: "info", icon: "spinner" },
   "awaiting-approval": { label: "Awaiting approval", tone: "attention", icon: "hand" },

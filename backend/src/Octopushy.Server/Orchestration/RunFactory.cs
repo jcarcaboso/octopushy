@@ -8,14 +8,16 @@ using Octopushy.Server.Options;
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>Builds runs and their steps, and observations, from a revision's definitions.</summary>
-public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
+public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
-    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason) =>
-        CreateGuest(repository, guest, resource, revision, reason, null, null);
+    /// <remarks><paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says.</remarks>
+    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued) =>
+        CreateGuest(repository, guest, resource, revision, reason, null, null, keyIssued);
 
+    /// <summary>A managed worker's in-place update. A worker never has Octopushy's guest key.</summary>
     public Run UpdateWorker(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, WorkerUpdateContext update) =>
-        CreateGuest(repository, guest, resource, revision, reason, update, null);
+        CreateGuest(repository, guest, resource, revision, reason, update, null, false);
 
     /// <summary>
     /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
@@ -23,11 +25,11 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
     /// A managed worker is drained first and its enrollment removed once its VM is gone.
     /// </summary>
     public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
-        string removedIn, string reason) =>
-        CreateGuest(repository, guest, resource, lastDefined, reason, null, removedIn);
+        string removedIn, string reason, bool keyIssued) =>
+        CreateGuest(repository, guest, resource, lastDefined, reason, null, removedIn, keyIssued);
 
     private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
-        WorkerUpdateContext? update, string? removedIn)
+        WorkerUpdateContext? update, string? removedIn, bool keyIssued)
     {
         var removal = removedIn is not null;
         if (resource.ManagedWorker is { } bound && (guest.Retired || guest.ManagedWorker?.Generation != bound.Generation
@@ -37,7 +39,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
             throw new RunException("Managed workers are not retired with lifecycle: retired; delete the worker's folder to remove it.");
         if (removal && (update is not null || guest.Retired))
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
-        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit);
+        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
         var connection = inputs.Installation.Connection;
@@ -141,7 +143,7 @@ public sealed class RunFactory(IOptions<OctopushyOptions> options, TimeProvider 
                 worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             WorkerUpdate = update,
             DefinitionRemovedIn = removedIn,
-            ManagedAccess = ManagedAccess.Wanted(guest),
+            ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,

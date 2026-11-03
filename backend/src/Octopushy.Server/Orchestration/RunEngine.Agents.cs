@@ -61,6 +61,8 @@ public sealed partial class RunEngine
                 .ToListAsync(cancellationToken);
             var managed = await db.ManagedWorkers.AsNoTracking().Where(w => w.AgentId != null).ToListAsync(cancellationToken);
             var builder = services.GetRequiredService<AssignmentBuilder>();
+            // Guests something was handed to in this pass: the database does not show them yet.
+            var changing = new HashSet<Guid>();
 
             foreach (var attempt in queued)
             {
@@ -79,8 +81,26 @@ public sealed partial class RunEngine
                     }
                     continue;
                 }
+                // Asked again here, not only when the attempt was queued: others may have started since, and a
+                // service's guest may have stopped being ready for it.
+                var family = run is not null && attempt.Mutating ? await GuestWork.FamilyAsync(db, run.ResourceId, cancellationToken) : [];
+                if (family.Count > 1 && family.Any(changing.Contains))
+                {
+                    attempt.WaitingReason = "Waiting for another run that is changing the same guest.";
+                    continue;
+                }
+
+                if (run is not null && attempt.Mutating && await ChangeHeldAsync(db, run, context, dispatching: true, cancellationToken) is { } held)
+                {
+                    if (context.Stages is not null)
+                        TakeBack(attempt, step!, run, held);
+                    else
+                        attempt.WaitingReason = held;
+                    continue;
+                }
+
                 var resourceId = run?.ResourceId ?? attempt.ResourceId;
-                var needsBuiltInState = attempt.Executor == "opentofu" && context.OpenTofu?.Backend.IsBuiltIn == true;
+                var needsBuiltInState = attempt.Executor == "opentofu" && context.ForStep(step).OpenTofu?.Backend.IsBuiltIn == true;
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
@@ -180,6 +200,7 @@ public sealed partial class RunEngine
                     step.StartedAt ??= now;
                 }
 
+                changing.UnionWith(family);
                 perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
                 if (attempt.HostKey is { } key)
                 {
@@ -365,8 +386,8 @@ public sealed partial class RunEngine
             logs.Close(attempt.Id);
 
             if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
-                && RunContext.Parse(tofuRun.Context).OpenTofu?.Backend.IsBuiltIn == true
-                && await services.GetRequiredService<TofuStateStore>().SettleAsync(attempt, tofuRun.ResourceId, state?.Content.ToByteArray(), cancellationToken) is { } refused)
+                && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu?.Backend.IsBuiltIn == true
+                && await services.GetRequiredService<TofuStateStore>().SettleAsync(attempt, tofuRun.ResourceId, state?.Content.ToByteArray(), cancellationToken, attempt.Step.Stage ?? "") is { } refused)
             {
                 logger.LogError("The state of attempt {Attempt} was refused: {Reason}", attempt.Id, refused);
                 attempt.Status = AttemptStatuses.Uncertain;
@@ -451,7 +472,7 @@ public sealed partial class RunEngine
             var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
             if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || attempt.Action != "apply" || attempt.Executor != "opentofu"
-                || RunContext.Parse(run.Context).OpenTofu?.Backend.IsBuiltIn != true)
+                || RunContext.Parse(run.Context).ForStep(attempt.Step).OpenTofu?.Backend.IsBuiltIn != true)
             {
                 logger.LogWarning("Agent {Agent} sent state for attempt {Attempt}, which may not write any.", agentId, attemptId);
                 return false;
@@ -463,7 +484,7 @@ public sealed partial class RunEngine
                 return false;
             }
 
-            if (await services.GetRequiredService<TofuStateStore>().WriteAsync(attempt.Id, run.ResourceId, state.Content.ToByteArray(), cancellationToken) is { } refused)
+            if (await services.GetRequiredService<TofuStateStore>().WriteAsync(attempt.Id, run.ResourceId, state.Content.ToByteArray(), cancellationToken, attempt.Step.Stage ?? "") is { } refused)
             {
                 logger.LogWarning("A state snapshot of attempt {Attempt} was refused: {Reason}", attemptId, refused);
                 return false;

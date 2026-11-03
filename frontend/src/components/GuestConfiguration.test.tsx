@@ -18,6 +18,7 @@ const configuration: GuestConfiguration = {
   hasSnapshot: false,
   schedules: [],
   secrets: [],
+  refused: null,
 };
 
 it("starts the chosen action", async () => {
@@ -33,6 +34,13 @@ it("shows why an action was refused", async () => {
   renderAt(<GuestConfigurationCard id="guest-1" configuration={configuration} />, { path: "/guests/:id", route: "/guests/guest-1" });
   await userEvent.click(screen.getByRole("button", { name: "configure" }));
   expect(await screen.findByText(/This guest has none yet/)).toBeTruthy();
+});
+
+it("says why setup does not start on a machine without Octopushy's key", () => {
+  const refused = "Octopushy has no record that its own key reached this machine. Name the key to log in with in access.sshKey.";
+  renderAt(<GuestConfigurationCard id="guest-1" configuration={{ ...configuration, refused }} />, { path: "/guests/:id", route: "/guests/guest-1" });
+  expect(screen.getByText("Setup does not start")).toBeTruthy();
+  expect(screen.getByText(/access\.sshKey/)).toBeTruthy();
 });
 
 describe("a guest's schedules", () => {

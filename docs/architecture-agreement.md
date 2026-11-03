@@ -106,13 +106,13 @@ granular split between setup, machine maintenance, tool updates, and service
 deployment. Frequently updated software is still software; update frequency is
 policy, not another level of the resource hierarchy.
 
-Services may need network exposure and DNS. DNS also has operations independent
-of services. **Decided (October 19, 2026):** a service declares its exposure
-generically, and the lab connects it to the systems it uses through integrations.
-For now that means DNS records through Technitium and ports opened in the guest's
-operating system; routes stay with the reverse proxy on each apps machine.
-Application clusters such as Technitium relate service instances on
-several guests; forming one is its own step after its members (section 7).
+Services may need network exposure and DNS. **Decided (November 2, 2026),
+replacing October 19:** Octopushy provides the infra to define the lab and run the
+operations defined, and holds nothing service-specific. A service is an ordered list
+of stages, each a recipe; ports and DNS are inputs to those recipes, not concepts
+Octopushy has. Generic slots such as `dns` are bound to a recipe in the lab, and a
+cluster is a set of guests with stages applied to them. [Pipelines](pipelines.md) is
+the design.
 
 Reusable machine/setup profiles are a working organizing concept. Their contents,
 composition rules, and representation have not been chosen.
@@ -684,34 +684,56 @@ definitions.
   takes the resource's approval setting, so a manual resource never deletes without
   approval; it can be set to manual on its own to hold back only deletes.
 - Recreating a resource counts as a deployment and follows the approval setting.
-- A service declares its own DNS records, because the service does not work if
+- ~~A service declares its own DNS records, because the service does not work if
   they fail. DNS is shared across the lab, so its zones and the systems serving
-  them are defined once on the lab.
+  them are defined once on the lab.~~ *Replaced November 2, 2026; see below.*
+
+**Decided (November 2, 2026),** overriding what is struck through in this section. The
+[pipelines design](pipelines.md) has the detail:
+
+- Octopushy holds nothing service-specific. No code in `backend/src`, `agent/crates`,
+  `contracts` or `frontend/src` names a service or a kind of service.
+- A service is an ordered list of stages, each a recipe, OpenTofu or Ansible. Ports and
+  DNS are only inputs.
+- Every stage is planned and previewed, then approved once, then applied in order.
+  Nothing changes before that approval, with the limit that an OpenTofu plan runs
+  provider code. The approval is bound to one document covering every stage.
+- A service deploys automatically by default, through the policy already resolved
+  down the tree, and adds only its own override.
+- There is no rollback. A failed stage stops the pipeline, and retrying continues from
+  it without a new approval, unless the inputs changed.
+- A later stage cannot use an earlier one's results: every plan is made before
+  anything applies.
+- An interface is a named slot bound to a recipe in the lab, whose schema lives in the
+  repository. A cluster is a set of guests with stages applied to them, member by
+  member, under one approval. Both are later steps.
+- A deleted folder proposes a removal that removes only what recipes declare. That is a
+  later step too: today it is shown as missing and removes nothing.
 
 **Decided (October 19, 2026):**
 
-- Network exposure is declared generically in the service: DNS records, proxy
+- ~~Network exposure is declared generically in the service: DNS records, proxy
   routes, firewall ports, and certificates. The lab connects it to whatever systems
   it uses, such as Pi-hole or Technitium for DNS, through integrations, each with an
-  adapter for its product.
-- Application clusters are supported, starting with Technitium, on a basis other
+  adapter for its product.~~
+- ~~Application clusters are supported, starting with Technitium, on a basis other
   kinds can reuse. Each member is its own service on its own VM; forming the
   cluster is a separate step that sets up one member and joins the others to it.
-  The cluster relates its members.
+  The cluster relates its members.~~
 - Maintenance windows are optional, a resource can have several, and they are not a
   priority.
-- Technitium is the only DNS integration for now; no other adapters are planned
-  yet.
-- Firewall ports are opened in each guest's operating system, probably by a step
-  of their own.
+- ~~Technitium is the only DNS integration for now; no other adapters are planned
+  yet.~~
+- ~~Firewall ports are opened in each guest's operating system, probably by a step
+  of their own.~~
 - Each apps machine runs its own reverse proxy, with no central proxy planned, so a
   zone belongs to one lab. Sharing zones between labs may come later.
 
 **Decided (October 20, 2026):**
 
-- Ports are as permissive as possible: open on every interface and to every source
-  unless the declaration limits them to interfaces, source networks, or both.
-- How the ports step is implemented still needs checking.
+- ~~Ports are as permissive as possible: open on every interface and to every source
+  unless the declaration limits them to interfaces, source networks, or both.~~
+- ~~How the ports step is implemented still needs checking.~~
 
 **Proposed:**
 
@@ -722,29 +744,10 @@ definitions.
 - Shared parts sit at the repository root: `templates/`, `profiles/`, `recipes/`,
   and `modules/`.
 - Agent labels flow down the tree the same way as the approval setting.
-- Destructive means deleting a guest, a service, data such as disks or volumes, or
-  a DNS record. Octopushy decides what a change does from the preview (such as an
-  OpenTofu plan's delete and replace actions), not from the edit, and shows a
-  recreate as a recreate. Retiring a guest retires its services first.
-- Each DNS record has one owner, and creating it is a step of that service's
-  deployment, verified by resolving it. A failure affects only that service:
-  changes to one zone are applied one at a time, but each record has its own
-  outcome.
-- Applying ports is a step on the guest that follows the service's approval. On
-  NixOS it passes the ports into the guest's configuration and rebuilds from the
-  guest's applied revision, so it never applies unapproved guest changes.
-  Interface limits use the NixOS firewall's per-interface ports; source limits
-  need extra rules.
-- Routes and certificates stay in each service's tool-native files (Traefik labels
-  and ACME) and are not managed for now.
-- Every integration adapter reads, applies, removes, and verifies, so previews show
-  exact changes. Octopushy records the entries it creates and touches only those;
-  adopting an existing entry needs approval. Adapters ship with Octopushy and run
-  on an agent.
-- An application cluster is `labs/<lab>/clusters/<id>/cluster.yaml`: a recipe type,
-  member services with roles, and shared settings. The recipe forms, joins,
-  leaves, and verifies; each join has its own outcome. Removing a member is a delete
-  under the cluster's own destructive setting.
+- Destructive means deleting a guest, data such as disks or volumes, or what a recipe
+  declares destructive. Octopushy decides what a change does from the preview (such
+  as an OpenTofu plan's delete and replace actions), not from the edit, and shows a
+  recreate as a recreate.
 - A maintenance window only limits when an automatic change may start; started
   attempts finish, and approving a manual change runs it at once unless the
   approver chooses the next window.

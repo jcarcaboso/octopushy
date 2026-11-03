@@ -1,0 +1,12 @@
+schemaVersion: 1
+description: An Ansible stage, on the guest's connection.
+operation: configure
+executor: ansible
+root: ../../modules/ansible/web
+inputs: inputs.schema.json
+secrets: [web_password]
+actions:
+  deploy:
+    playbook: deploy.yml
+    destructive: false
+    onChange: true

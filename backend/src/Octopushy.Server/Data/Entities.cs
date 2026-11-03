@@ -116,6 +116,7 @@ public static class ResourceKinds
     public const string Lab = "lab";
     public const string Installation = "installation";
     public const string Guest = "guest";
+    public const string Service = "service";
 }
 
 /// <summary>
@@ -328,6 +329,8 @@ public static class Operations
     public const string Provision = "provision";
     public const string Retire = "retire";
     public const string Configure = "configure";
+    /// <summary>A service's stages: everything planned, one approval, then everything applied in order.</summary>
+    public const string Pipeline = "pipeline";
     public const string RotateAccess = "rotate-access";
 }
 
@@ -426,6 +429,9 @@ public sealed class Step
 
     public int Ordinal { get; set; }
 
+    /// <summary>The pipeline stage this step belongs to; null on every other kind of run and on a pipeline's approval.</summary>
+    public string? Stage { get; set; }
+
     /// <summary><c>plan</c>, <c>approval</c>, <c>unprotect</c>, <c>apply</c>, <c>reprotect</c>, <c>verify</c>, or <c>verify-absent</c>.</summary>
     public required string Name { get; set; }
 
@@ -456,6 +462,12 @@ public sealed class Step
 
     /// <summary>For an approval: the SHA-256 of the plan it approves.</summary>
     public string? PlanSha256 { get; set; }
+
+    /// <summary>
+    /// For a pipeline's approval: the document <see cref="PlanSha256"/> names, byte for byte. It is plain text
+    /// because a digest has to survive storage, which <see cref="Outputs"/>, being jsonb, does not promise.
+    /// </summary>
+    public string? Document { get; set; }
 
     public string? WorkerUpdateSha256 { get; set; }
 
@@ -655,6 +667,9 @@ public sealed class TofuState
 {
     public Guid ResourceId { get; set; }
 
+    /// <summary>Which pipeline stage of the resource this state is; empty for a guest's own.</summary>
+    public string Stage { get; set; } = "";
+
     /// <summary>The current <see cref="TofuStateVersion.Version"/>; 0 before the first write.</summary>
     public int HeadVersion { get; set; }
 
@@ -669,6 +684,9 @@ public sealed class TofuStateVersion
     public Guid Id { get; set; }
 
     public Guid ResourceId { get; set; }
+
+    /// <summary>See <see cref="TofuState.Stage"/>.</summary>
+    public string Stage { get; set; } = "";
 
     public int Version { get; set; }
 

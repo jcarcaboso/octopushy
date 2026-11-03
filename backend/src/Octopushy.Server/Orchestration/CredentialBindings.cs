@@ -9,12 +9,16 @@ namespace Octopushy.Server.Orchestration;
 internal static class CredentialBindings
 {
     // CA certificates are public trust material. Other current bindings feed credential channels.
-    internal static bool RequiresSecret(string name) => name is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
+    internal static bool RequiresSecret(string name) => RunContext.BareRole(name) is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
 
     internal static List<string> Validate(RunContext context)
     {
+        if (context.Stages is { } stages)
+            return stages.SelectMany(s => Validate(context.ForStage(s.Name))).ToList();
         if (context.Ansible is not null)
             return ValidateAnsible(context);
+        if (context.Stage is not null)
+            return ValidateOpenTofuStage(context);
 
         if (context.Secrets.ContainsKey(SecretNames.ProxmoxToken)
             || context.SecretVersions.ContainsKey(SecretNames.ProxmoxToken)
@@ -95,6 +99,11 @@ internal static class CredentialBindings
         return problems;
     }
 
+    /// <summary>An OpenTofu stage holds nothing yet: no token, no backend environment, no secret of any kind.</summary>
+    private static List<string> ValidateOpenTofuStage(RunContext context) =>
+        context.Secrets.Count == 0 && context.OpenTofu is { SecretEnv.Count: 0 } tofu && tofu.Env.Keys.All(n => !n.StartsWith("PROXMOX_", StringComparison.Ordinal))
+            ? [] : ["An OpenTofu stage carries no credentials; inspect and replan"];
+
     /// <summary>
     /// Checks and pins the context's credential versions. An observation passes no run: it has
     /// no history to recover, and the caller stores the pinned context on its attempt.
@@ -114,7 +123,7 @@ internal static class CredentialBindings
         var entries = await db.StoreEntries.AsNoTracking().Where(e => keys.Contains(e.Key)).ToDictionaryAsync(e => e.Key, ct);
         var versions = await db.StoreVersions.AsNoTracking().Where(v => keys.Contains(v.Key)).ToListAsync(ct);
         var selected = new Dictionary<string, int>(StringComparer.Ordinal);
-        var refused = context.Ansible is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
+        var refused = context.Ansible is null && context.Stages is null ? [] : await ProxmoxKeysAsync(db, keys, ct);
 
         // Recover old runs from release evidence, never from today's current pointer.
         var audit = context.SecretBindingsPinned || run is null ? [] : await db.SecretResolutions.AsNoTracking()
@@ -126,15 +135,16 @@ internal static class CredentialBindings
 
         foreach (var (name, key) in bindings)
         {
+            var role = RunContext.BareRole(name);
             // A guest's own key is the one thing under system/ a run may bind, and only its own guest's.
-            var ownKey = name == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(run.ResourceId);
+            var ownKey = role == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId);
             if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal) && !ownKey)
             {
                 problems.Add($"{key}: reserved system scope");
                 continue;
             }
 
-            if (name != SecretNames.AnsibleHostKey && refused.Contains(key))
+            if (role != SecretNames.AnsibleHostKey && refused.Contains(key))
             {
                 problems.Add($"{key}: this is a credential of Proxmox or OpenTofu work, so a playbook cannot use it");
                 continue;
@@ -153,7 +163,7 @@ internal static class CredentialBindings
             }
 
             // A pin is public and goes to steps with no secrets, so a secret must not pose as one.
-            if (name == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
+            if (role == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
             {
                 problems.Add($"{key}: a host key is public; store it as plain");
                 continue;

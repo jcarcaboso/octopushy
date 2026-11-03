@@ -7,6 +7,7 @@ public sealed class LabRepository(
     IReadOnlyList<LabDefinition> labs,
     IReadOnlyList<InstallationDefinition> installations,
     IReadOnlyList<GuestDefinition> guests,
+    IReadOnlyList<ServiceDefinition> services,
     IReadOnlyDictionary<string, TemplateDefinition> templates,
     IReadOnlyDictionary<string, RecipeDefinition> recipes,
     IReadOnlyList<ResourceEntry> resources,
@@ -26,11 +27,13 @@ public sealed class LabRepository(
 
     public IReadOnlyList<GuestDefinition> Guests { get; } = guests;
 
+    public IReadOnlyList<ServiceDefinition> Services { get; } = services;
+
     public IReadOnlyDictionary<string, TemplateDefinition> Templates { get; } = templates;
 
     public IReadOnlyDictionary<string, RecipeDefinition> Recipes { get; } = recipes;
 
-    /// <summary>Every lab, installation, and guest found, including those whose definition is invalid.</summary>
+    /// <summary>Every lab, installation, guest, and service found, including those whose definition is invalid.</summary>
     public IReadOnlyList<ResourceEntry> Resources { get; } = resources;
 
     public IReadOnlyList<DefinitionIssue> Issues { get; } = issues;
@@ -46,6 +49,8 @@ public sealed class LabRepository(
 
     public GuestDefinition? Guest(string address) => Guests.FirstOrDefault(g => g.Address == address);
 
+    public ServiceDefinition? Service(string address) => Services.FirstOrDefault(s => s.Address == address);
+
     public ResourceEntry? Resource(string address) => Resources.FirstOrDefault(r => r.Address == address);
 
     public bool IsValid(string address) => Resource(address)?.Valid ?? false;
@@ -54,9 +59,11 @@ public sealed class LabRepository(
     public IEnumerable<DefinitionIssue> IssuesFor(string address)
     {
         var guest = Guest(address);
+        var stages = Service(address)?.Stages.Select(s => $"recipes/{s.Recipe}").ToHashSet(StringComparer.Ordinal);
         return Issues.Where(i =>
             i.Address == address
             || i.Address is null
-            || (guest is not null && (i.Address == $"recipes/{guest.Recipe}" || (guest.Template is { } t && i.Address == $"templates/{t}"))));
+            || (guest is not null && (i.Address == $"recipes/{guest.Recipe}" || (guest.Template is { } t && i.Address == $"templates/{t}")))
+            || (stages is not null && stages.Contains(i.Address)));
     }
 }
