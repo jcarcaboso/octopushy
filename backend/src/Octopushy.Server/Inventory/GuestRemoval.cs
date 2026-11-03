@@ -30,7 +30,7 @@ public static class GuestRemoval
         var lastDefined = await eligible.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.AppliedRevisionId, ct)
             ?? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.LastRevisionId, ct)
             ?? throw new RunException("No revision that defined this guest is known; restore its folder instead.");
-        var repository = await revisions.GetAsync(lastDefined.Commit, ct);
+        var repository = await revisions.GetAsync(lastDefined, ct);
         var guest = repository.Guest(resource.Address);
         if (guest is null || !repository.IsValid(resource.Address))
             throw new RunException($"The guest's definition in {lastDefined.Commit[..10]} is not valid, so its removal cannot be planned; restore its folder instead.");

@@ -23,8 +23,9 @@ public static class RepositoryTrust
     public static IQueryable<DefinitionRevision> EligibleRevisions(OctopushyDb db) =>
         CurrentRevisions(db).Where(r => r.RepositoryValid);
 
+    /// <summary>The head revision: the branch's commit, with what its workflow references resolve to now.</summary>
     public static IQueryable<DefinitionRevision> HeadRevisions(OctopushyDb db) =>
-        CurrentRevisions(db).Where(r => db.RepositorySettings.Any(s => s.Id == 1 && s.HeadCommit == r.Commit));
+        CurrentRevisions(db).Where(r => db.RepositorySettings.Any(s => s.Id == 1 && s.HeadRevisionId == r.Id));
 
     /// <summary>The installation an address belongs to: <c>lab/installation</c> of a guest or of the installation itself.</summary>
     public static string InstallationAddress(string address) => string.Join('/', address.Split('/').Take(2));

@@ -75,6 +75,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         {
             Address = guest.Address,
             Commit = revision.Commit,
+            Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
             HostKey = $"{inputs.Installation.Address}/{inputs.Host.Id}",
@@ -163,6 +164,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         {
             Address = guest.Address,
             Commit = revision.Commit,
+            Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),

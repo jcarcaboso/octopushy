@@ -90,6 +90,7 @@ public sealed partial class RunFactory
         {
             Address = service.Address,
             Commit = revision.Commit,
+            Workflow = WorkflowContext.Of(inputs.Workflow, service.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),

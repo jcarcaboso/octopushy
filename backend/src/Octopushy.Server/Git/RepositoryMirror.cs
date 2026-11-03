@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
+using Octopushy.Definitions;
 using Octopushy.Server.Options;
 
 namespace Octopushy.Server.Git;
@@ -14,9 +15,13 @@ public sealed record GitCredential(string Kind, string? Username, string? Secret
     public static readonly GitCredential None = new("none", null, null);
 }
 
+/// <summary>A tag of a repository and the commit it points to now.</summary>
+public sealed record TagTarget(string Name, string Commit);
+
 /// <summary>
-/// Octopushy's clone of the lab repository: a bare mirror it fetches into, plus one extracted
-/// snapshot directory per commit it has read, and the bundle of that snapshot sent to agents.
+/// Octopushy's clone of a repository: a bare mirror it fetches into, plus one extracted snapshot directory per commit it has
+/// read. The lab repository's mirror also keeps the bundles sent to agents; a workflows repository has a mirror of its own,
+/// next to it, from <see cref="WorkflowsMirrors"/>.
 /// </summary>
 public sealed partial class RepositoryMirror
 {
@@ -26,11 +31,19 @@ public sealed partial class RepositoryMirror
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public RepositoryMirror(GitCli git, IOptions<OctopushyOptions> options)
+        : this(git, Path.Combine(options.Value.DataDirectory, "git"), 0)
+    {
+    }
+
+    private RepositoryMirror(GitCli git, string directory, int _)
     {
         _git = git;
-        _directory = Path.Combine(options.Value.DataDirectory, "git");
+        _directory = directory;
         _mirror = Path.Combine(_directory, "mirror.git");
     }
+
+    /// <summary>A mirror kept in <paramref name="directory"/>, such as a workflows repository's.</summary>
+    public static RepositoryMirror At(GitCli git, string directory) => new(git, directory, 0);
 
     // v3 also invalidates pre-publication v2 caches that honored checkout conversions.
     private string SnapshotsDirectory => Path.Combine(_directory, "snapshots-literal-v3");
@@ -77,6 +90,108 @@ public sealed partial class RepositoryMirror
         }
     }
 
+    /// <summary>
+    /// Fetches every branch's objects and every tag, and returns where each tag points now. Tags that moved are fetched as
+    /// they are; what a release is stays in Octopushy's records, and <see cref="PinAsync"/> keeps its commit here.
+    /// </summary>
+    public async Task<IReadOnlyList<TagTarget>> FetchTagsAsync(string url, GitCredential credential, CancellationToken cancellationToken)
+    {
+        ValidateUrl(url);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!Directory.Exists(_mirror))
+            {
+                Directory.CreateDirectory(_directory);
+                await _git.RunAsync(["init", "--bare", "--quiet", _mirror], cancellationToken: cancellationToken);
+            }
+
+            var (environment, secrets, cleanup) = PrepareCredential(credential);
+            try
+            {
+                await _git.RunAsync(
+                    ["-C", _mirror, "fetch", "--quiet", "--prune", "--no-tags", "--force", url,
+                        "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"],
+                    environment: environment,
+                    secrets: secrets,
+                    cancellationToken: cancellationToken);
+            }
+            finally
+            {
+                cleanup();
+            }
+
+            var output = await _git.RunAsync(
+                ["-C", _mirror, "for-each-ref", "--format=%(refname:strip=2)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)", "refs/tags"],
+                cancellationToken: cancellationToken);
+            var tags = new List<TagTarget>();
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\0');
+                // An annotated tag names a tag object; the commit is what it peels to.
+                var (type, commit) = parts[3].Length > 0 ? (parts[3], parts[4]) : (parts[1], parts[2]);
+                if (type == "commit")
+                    tags.Add(new TagTarget(parts[0], commit));
+            }
+
+            return tags;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Keeps each release's commit in the mirror under a ref of Octopushy's own, <c>refs/octopushy/releases/&lt;tag&gt;</c>,
+    /// whatever happens to the tag it came from. Fetches prune only <c>refs/tags</c> and <c>refs/remotes</c>.
+    /// </summary>
+    public async Task PinAsync(IReadOnlyList<(string Name, string Commit)> releases, CancellationToken cancellationToken)
+    {
+        foreach (var (name, commit) in releases)
+        {
+            CheckCommit(commit);
+            if (!PinPattern().IsMatch(name))
+                throw new GitException($"'{name}' is not a release name.");
+        }
+
+        if (releases.Count == 0)
+            return;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await _git.RunAsync(["-C", _mirror, "update-ref", "--stdin"], cancellationToken: cancellationToken,
+                input: string.Concat(releases.Select(r => $"update refs/octopushy/releases/{r.Name} {r.Commit}\n")));
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Which of <paramref name="commits"/> the mirror does not hold.</summary>
+    public async Task<IReadOnlySet<string>> MissingCommitsAsync(IEnumerable<string> commits, CancellationToken cancellationToken)
+    {
+        var wanted = commits.Distinct(StringComparer.Ordinal).ToList();
+        foreach (var commit in wanted)
+        {
+            CheckCommit(commit);
+        }
+
+        if (wanted.Count == 0)
+            return new HashSet<string>(StringComparer.Ordinal);
+        if (!Directory.Exists(_mirror))
+            return wanted.ToHashSet(StringComparer.Ordinal);
+        var output = await _git.RunAsync(["-C", _mirror, "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            cancellationToken: cancellationToken, input: string.Join('\n', wanted.Select(c => c + "^{commit}")) + "\n");
+        var present = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Split(' '))
+            .Where(parts => parts.Length == 2 && parts[1] == "commit")
+            .Select(parts => parts[0])
+            .ToHashSet(StringComparer.Ordinal);
+        return wanted.Where(c => !present.Contains(c)).ToHashSet(StringComparer.Ordinal);
+    }
+
     public async Task<CommitInfo> CommitInfoAsync(string commit, CancellationToken cancellationToken)
     {
         CheckCommit(commit);
@@ -118,7 +233,7 @@ public sealed partial class RepositoryMirror
             var attributes = Path.Combine(_mirror, "info", "attributes");
             Directory.CreateDirectory(Path.GetDirectoryName(attributes)!);
             await File.WriteAllTextAsync(attributes,
-                "* -export-subst -export-ignore -text -eol -crlf -ident -filter -working-tree-encoding\n",
+                SnapshotArchive.LiteralAttributes,
                 cancellationToken);
             var archive = new MemoryStream();
             var error = await _git.RunToStreamAsync(["-C", _mirror, "archive", "--format=tar", commit], archive, cancellationToken: cancellationToken);
@@ -153,27 +268,47 @@ public sealed partial class RepositoryMirror
         }
     }
 
+    /// <summary>The folders of a workflows repository that a bundle takes, and the lab repository's bundle leaves out.</summary>
+    public static readonly string[] WorkflowFolders = ["workflows", "modules"];
+
+    /// <summary>The name a bundle is cached under: the commit, or with workflows from another repository, both commits.</summary>
+    public static string BundleKey(string commit, string? workflowsCommit) => workflowsCommit is null ? commit : $"{commit}+{workflowsCommit}";
+
     /// <summary>
-    /// The snapshot as a gzip tar for agents, without symbolic links or anything outside it.
-    /// Cached per commit.
+    /// The snapshot as a gzip tar for agents, without symbolic links or anything outside it. With
+    /// <paramref name="workflowsSnapshot"/>, the files of a workflows repository's commit, its <c>workflows/</c> and
+    /// <c>modules/</c> join the lab repository's files at the root, in place of any of the lab repository's own: every
+    /// path stays what it is in its repository. Cached per commit, or per pair of commits.
     /// </summary>
-    public async Task<byte[]> BundleAsync(string commit, CancellationToken cancellationToken)
+    public async Task<byte[]> BundleAsync(string commit, CancellationToken cancellationToken, string? workflowsSnapshot = null, string? workflowsCommit = null)
     {
+        if ((workflowsSnapshot is null) != (workflowsCommit is null))
+            throw new ArgumentException("A workflows snapshot comes with its commit.");
+        if (workflowsCommit is not null)
+            CheckCommit(workflowsCommit);
         var snapshot = await SnapshotAsync(commit, cancellationToken);
-        var path = Path.Combine(BundlesDirectory, commit + ".tar.gz");
+        var path = Path.Combine(BundlesDirectory, BundleKey(commit, workflowsCommit) + ".tar.gz");
         if (File.Exists(path))
         {
             return await File.ReadAllBytesAsync(path, cancellationToken);
         }
 
+        static bool InWorkflowFolders(string name) => WorkflowFolders.Any(f => name.StartsWith(f + "/", StringComparison.Ordinal));
+        var files = Directory.EnumerateFiles(snapshot, "*", SearchOption.AllDirectories)
+            .Select(f => (Name: Path.GetRelativePath(snapshot, f).Replace(Path.DirectorySeparatorChar, '/'), Full: f))
+            .Where(f => workflowsSnapshot is null || !InWorkflowFolders(f.Name))
+            .Concat(workflowsSnapshot is null ? [] : Directory.EnumerateFiles(workflowsSnapshot, "*", SearchOption.AllDirectories)
+                .Select(f => (Name: Path.GetRelativePath(workflowsSnapshot, f).Replace(Path.DirectorySeparatorChar, '/'), Full: f))
+                .Where(f => InWorkflowFolders(f.Name)))
+            .OrderBy(f => f.Name, StringComparer.Ordinal)
+            .ToList();
         Directory.CreateDirectory(BundlesDirectory);
         var buffer = new MemoryStream();
         await using (var gzip = new GZipStream(buffer, CompressionLevel.Optimal, leaveOpen: true))
         await using (var tar = new TarWriter(gzip, TarEntryFormat.Pax, leaveOpen: true))
         {
-            foreach (var file in Directory.EnumerateFiles(snapshot, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            foreach (var (name, file) in files)
             {
-                var name = Path.GetRelativePath(snapshot, file).Replace(Path.DirectorySeparatorChar, '/');
                 if (new FileInfo(file).LinkTarget is not null)
                 {
                     continue;
@@ -197,8 +332,11 @@ public sealed partial class RepositoryMirror
         return bytes;
     }
 
-    /// <summary>Removes snapshots and bundles of commits not in <paramref name="keep"/>.</summary>
-    public void Prune(IReadOnlySet<string> keep)
+    /// <summary>
+    /// Removes snapshots of commits not in <paramref name="keep"/>, and bundles whose key, from <see cref="BundleKey"/>, is not
+    /// in <paramref name="keepBundles"/>, or by default whose commit is not in <paramref name="keep"/>.
+    /// </summary>
+    public void Prune(IReadOnlySet<string> keep, IReadOnlySet<string>? keepBundles = null)
     {
         foreach (var directory in Directory.Exists(SnapshotsDirectory) ? Directory.GetDirectories(SnapshotsDirectory) : [])
         {
@@ -210,7 +348,8 @@ public sealed partial class RepositoryMirror
 
         foreach (var file in Directory.Exists(BundlesDirectory) ? Directory.GetFiles(BundlesDirectory) : [])
         {
-            if (!keep.Contains(Path.GetFileName(file).Split('.')[0]))
+            var key = Path.GetFileName(file).Split('.')[0];
+            if (!(keepBundles?.Contains(key) ?? keep.Contains(key)))
             {
                 File.Delete(file);
             }
@@ -219,35 +358,13 @@ public sealed partial class RepositoryMirror
 
     internal static void ExtractSafely(Stream tarStream, string destination)
     {
-        var root = Path.GetFullPath(destination) + Path.DirectorySeparatorChar;
-        using var reader = new TarReader(tarStream);
-        while (reader.GetNextEntry() is { } entry)
+        try
         {
-            if (entry.EntryType is TarEntryType.GlobalExtendedAttributes or TarEntryType.ExtendedAttributes)
-            {
-                continue;
-            }
-
-            var full = Path.GetFullPath(Path.Combine(destination, entry.Name));
-            if (!full.StartsWith(root, StringComparison.Ordinal) && full + Path.DirectorySeparatorChar != root)
-            {
-                throw new GitException($"The repository contains a path outside itself: {entry.Name}");
-            }
-
-            switch (entry.EntryType)
-            {
-                case TarEntryType.Directory:
-                    Directory.CreateDirectory(full);
-                    break;
-                case TarEntryType.RegularFile or TarEntryType.V7RegularFile:
-                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-                    entry.ExtractToFile(full, overwrite: false);
-                    break;
-                default:
-                    // Symbolic links and other special entries are not extracted, so nothing in
-                    // a snapshot can point outside it.
-                    break;
-            }
+            SnapshotArchive.Extract(tarStream, destination);
+        }
+        catch (InvalidDataException e)
+        {
+            throw new GitException(e.Message);
         }
     }
 
@@ -326,4 +443,7 @@ public sealed partial class RepositoryMirror
 
     [GeneratedRegex("^[0-9a-f]{40}([0-9a-f]{24})?$")]
     private static partial Regex CommitPattern();
+
+    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/v[0-9]+\\.[0-9]+$")]
+    private static partial Regex PinPattern();
 }

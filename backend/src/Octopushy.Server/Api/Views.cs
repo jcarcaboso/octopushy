@@ -30,7 +30,8 @@ public static class GuestStatuses
 }
 
 /// <summary>Builds the read models the API returns.</summary>
-public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, AgentConnections connections, TimeProvider clock)
+public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors, AgentConnections connections,
+    TimeProvider clock)
 {
     private const int DefinitionTextLimit = 256 * 1024;
 
@@ -190,7 +191,84 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     }
 
     public static RevisionDto Revision(DefinitionRevision r, bool isCurrentSource) =>
-        new(r.Id, r.Commit, r.Subject, r.Author, r.CommittedAt, r.LoadedAt, r.RepositoryValid, r.ErrorCount, r.WarningCount, isCurrentSource);
+        new(r.Id, r.Commit, r.Subject, r.Author, r.CommittedAt, r.LoadedAt, r.RepositoryValid, r.ErrorCount, r.WarningCount, isCurrentSource,
+            r.WorkflowsRepository, r.WorkflowsDigest.Length == 0 ? null : r.WorkflowsDigest);
+
+    /// <summary>
+    /// Where the head revision's workflows come from, the releases recorded for a workflows repository with what is wrong
+    /// with any of them, and what each guest and service resolved to.
+    /// </summary>
+    public async Task<WorkflowsSourceDto> WorkflowsAsync(RepositorySettings settings, CancellationToken cancellationToken)
+    {
+        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        LabRepository? repository = null;
+        if (head is not null)
+        {
+            try
+            {
+                repository = await revisions.GetAsync(head, cancellationToken);
+            }
+            catch (GitException)
+            {
+            }
+        }
+
+        var resolutions = head is null ? [] : RevisionCache.Resolutions(head.Resolutions);
+        var uses = new List<WorkflowUseDto>();
+        var url = head?.WorkflowsRepository ?? settings.WorkflowsRepository;
+        if (url is null)
+        {
+            foreach (var (address, kind, reference, workflow) in Uses(repository))
+                uses.Add(new WorkflowUseDto(address, kind, reference.ToString(), workflow?.Version.ToString(), workflow is null ? null : head!.Commit,
+                    workflow is null ? "Not resolved: see the resource's issues." : null, null));
+            var own = (repository?.Workflows ?? []).GroupBy(w => w.Id).OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => new WorkflowReleasesDto(g.Key, g.OrderByDescending(w => w.Version)
+                    .Select(w => new WorkflowReleaseDto(w.Version.ToString(), head!.Commit, null, w.Valid, false, null,
+                        w.Valid ? null : "The workflow has errors: see the revision's issues."))
+                    .ToList()))
+                .ToList();
+            return new WorkflowsSourceDto("local", null, null, null, own, [], uses);
+        }
+
+        var records = await db.WorkflowReleases.AsNoTracking().Where(r => r.Repository == url).ToListAsync(cancellationToken);
+        IReadOnlySet<string> missing;
+        try
+        {
+            missing = await workflowMirrors.For(url).MissingCommitsAsync(records.Select(r => r.Commit), cancellationToken);
+        }
+        catch (GitException)
+        {
+            missing = records.Select(r => r.Commit).ToHashSet(StringComparer.Ordinal);
+        }
+
+        var releases = records.GroupBy(r => r.WorkflowId).OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => new WorkflowReleasesDto(g.Key, g.OrderByDescending(r => r.Major).ThenByDescending(r => r.Minor)
+                .Select(r => new WorkflowReleaseDto(r.Version, r.Commit, r.FirstSeenAt, r.Problem is null && !missing.Contains(r.Commit),
+                    r.DeletedAt is not null, r.MovedTo, WorkflowReleaseBook.IssueOf(r, !missing.Contains(r.Commit))))
+                .ToList()))
+            .ToList();
+        var issues = records.OrderBy(r => r.WorkflowId, StringComparer.Ordinal).ThenBy(r => r.Major).ThenBy(r => r.Minor)
+            .Select(r => WorkflowReleaseBook.IssueOf(r, !missing.Contains(r.Commit)))
+            .Where(i => i is not null && !i.Contains("is still used", StringComparison.Ordinal))
+            .Select(i => i!)
+            .ToList();
+        foreach (var (address, kind, reference, _) in Uses(repository))
+        {
+            var resolved = resolutions.FirstOrDefault(r => r.Reference == reference.ToString());
+            // A newer major is offered, never taken by itself: upgrading is a change to the reference.
+            var newer = records.Where(r => r.WorkflowId == reference.Id && r.Major > reference.Major && r.Problem is null && !missing.Contains(r.Commit))
+                .OrderByDescending(r => r.Major).ThenByDescending(r => r.Minor).FirstOrDefault();
+            uses.Add(new WorkflowUseDto(address, kind, reference.ToString(), resolved?.Version, resolved?.Commit,
+                resolved is null ? "Not resolved in the head revision." : resolved.Problem, newer?.Version));
+        }
+
+        return new WorkflowsSourceDto("repository", url, settings.WorkflowsLastFetchAt, settings.WorkflowsLastFetchError, releases, issues, uses);
+    }
+
+    private static IEnumerable<(string Address, string Kind, WorkflowReference Reference, WorkflowDefinition? Workflow)> Uses(LabRepository? repository) =>
+        repository is null ? [] : repository.Guests.Select(g => (g.Address, ResourceKinds.Guest, g.WorkflowReference, g.Workflow))
+            .Concat(repository.Services.Select(s => (s.Address, ResourceKinds.Service, s.WorkflowReference, s.Workflow)))
+            .OrderBy(u => u.Address, StringComparer.Ordinal);
 
     public static InstallationTrustDto Trust(Resource installation, InstallationTrust? trust)
     {
@@ -253,7 +331,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         GuestConfigurationDto? configure = null;
         if (latest is not null && resource.MissingSince is null)
         {
-            var repository = await revisions.GetAsync(latest.Commit, cancellationToken);
+            var repository = await revisions.GetAsync(latest, cancellationToken);
             if (repository.Guest(resource.Address) is { } guest && repository.RepositoryValid)
             {
                 var effective = PolicyResolver.For(repository, guest);
@@ -338,7 +416,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     {
         if (guest is null || latest is null)
             return "Sync the current repository source first.";
-        var repository = await revisions.GetAsync(latest.Commit, cancellationToken);
+        var repository = await revisions.GetAsync(latest, cancellationToken);
         return await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, repository.Service(service.Address));
     }
 
@@ -403,7 +481,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             .FirstOrDefaultAsync(r => r.Address == resource.ParentAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken);
         var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
         var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-        var repository = latest is null || !latest.RepositoryValid ? null : await revisions.GetAsync(latest.Commit, cancellationToken);
+        var repository = latest is null || !latest.RepositoryValid ? null : await revisions.GetAsync(latest, cancellationToken);
         var (definition, owner) = repository?.Service(resource.Address) is { } service && repository.Guest(service.GuestAddress) is { } host
             ? (service, host) : default;
         ResolvedSetting<IReadOnlyList<string>>? labels = null;

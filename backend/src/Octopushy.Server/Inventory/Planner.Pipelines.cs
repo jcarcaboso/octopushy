@@ -47,7 +47,7 @@ public sealed partial class Planner
                 .ToListAsync(cancellationToken);
             if (due.Count == 0) return 0;
 
-            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var repository = await revisions.GetAsync(revision, cancellationToken);
             var runs = new List<Run>();
             foreach (var item in due.OrderBy(i => i.Resource.Address, StringComparer.Ordinal))
             {

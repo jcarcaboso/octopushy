@@ -134,7 +134,7 @@ public sealed partial class RunEngine
             return "Waiting for the current repository source.";
         try
         {
-            return await GuestWork.WaitingForAsync(db, guest, await revisions.GetAsync(head.Commit, cancellationToken), cancellationToken);
+            return await GuestWork.WaitingForAsync(db, guest, await revisions.GetAsync(head, cancellationToken), cancellationToken);
         }
         catch (Exception e) when (e is GitException or IOException)
         {

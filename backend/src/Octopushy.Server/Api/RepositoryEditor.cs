@@ -193,11 +193,11 @@ public static partial class RepositoryEditor
         }).WithName("updateDraft");
 
         group.MapPost("/{id:guid}/validate", async Task<Results<Ok<DraftValidationDto>, NotFound, ProblemHttpResult>> (Guid id,
-            OctopushyDb db, RepositoryMirror mirror, RevisionCache revisions, CancellationToken ct) =>
+            OctopushyDb db, RepositoryMirror mirror, RevisionCache revisions, WorkflowsMirrors workflows, CancellationToken ct) =>
         {
             var draft = await db.RepositoryDrafts.AsNoTracking().SingleOrDefaultAsync(d => d.Id == id, ct);
             if (draft is null) return TypedResults.NotFound();
-            try { return TypedResults.Ok(await ValidateAsync(mirror, revisions, draft.BaseCommit, draft.HeadCommit, ct)); }
+            try { return TypedResults.Ok(await ValidateAsync(mirror, revisions, WorkflowReleaseBook.Of(db, workflows), draft.BaseCommit, draft.HeadCommit, ct)); }
             catch (GitException e) { return TypedResults.Problem(statusCode: 409, title: e.Message); }
         }).WithName("validateDraft");
 
@@ -231,6 +231,7 @@ public static partial class RepositoryEditor
                     }
                     var author = new CommitAuthor(actor, $"{EmailUnsafe().Replace(actor.ToLowerInvariant(), "-")}@octopushy.invalid");
                     var revisions = services.GetRequiredService<RevisionCache>();
+                    var releases = WorkflowReleaseBook.Of(db, services.GetRequiredService<WorkflowsMirrors>());
                     // ponytail: one bounded fetch/merge/validate/push loop under the engine gate; a branch
                     // that keeps moving fails after a few attempts and keeps the draft.
                     for (var attempt = 1; ; attempt++)
@@ -240,7 +241,7 @@ public static partial class RepositoryEditor
                         if (candidate.Conflicts.Count > 0)
                             throw new GitException($"The branch changed and {candidate.Conflicts.Count} file(s) conflict with the draft: "
                                 + $"{string.Join(", ", candidate.Conflicts.Take(5))}. Sync the repository, then update the draft to resolve them.");
-                        var validation = await ValidateAsync(mirror, revisions, candidate.Remote, candidate.Commit!, ct);
+                        var validation = await ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
                         if (!validation.Valid)
                         {
                             var first = validation.NewIssues.Concat(validation.FormatIssues).Where(i => i.Severity == "error")
@@ -335,15 +336,17 @@ public static partial class RepositoryEditor
         content.Split('\n').Any(line => line.StartsWith("<<<<<<< ", StringComparison.Ordinal) || line.StartsWith(">>>>>>> ", StringComparison.Ordinal));
 
     /// <summary>
-    /// Compares the definitions of <paramref name="candidate"/> with those of <paramref name="baseCommit"/>.
-    /// Only new errors fail validation, so an existing problem elsewhere never blocks an unrelated edit.
-    /// Changed JSON and YAML files that are not definitions are checked for well-formedness.
+    /// Compares the definitions of <paramref name="candidate"/> with those of <paramref name="baseCommit"/>, both with their
+    /// workflow references resolved against the releases recorded now, as a sync would read them: a draft that changes a
+    /// version is validated against the workflow it would get. Only new errors fail validation, so an existing problem
+    /// elsewhere never blocks an unrelated edit. Changed JSON and YAML files that are not definitions are checked for
+    /// well-formedness.
     /// </summary>
     internal static async Task<DraftValidationDto> ValidateAsync(RepositoryMirror mirror, RevisionCache revisions,
-        string baseCommit, string candidate, CancellationToken ct)
+        Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, string baseCommit, string candidate, CancellationToken ct)
     {
-        var before = await revisions.GetAsync(baseCommit, ct);
-        var after = await revisions.GetAsync(candidate, ct);
+        var before = (await revisions.ResolveAsync(baseCommit, releases, ct)).Repository;
+        var after = (await revisions.ResolveAsync(candidate, releases, ct)).Repository;
         var known = before.Issues.Select(i => (i.Severity, i.File, i.Message, i.Address)).ToHashSet();
         var newIssues = after.Issues.Where(i => !known.Contains((i.Severity, i.File, i.Message, i.Address)))
             .Select(i => new IssueDto(i.Severity == IssueSeverity.Error ? "error" : "warning", i.File, i.Line, i.Message, i.Address))

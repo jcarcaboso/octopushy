@@ -5705,6 +5705,16 @@
                 "$ref": "#/components/schemas/RevisionDto"
               }
             ]
+          },
+          "workflows": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowsSourceDto"
+              }
+            ]
           }
         }
       },
@@ -5825,6 +5835,18 @@
           },
           "isCurrentSource": {
             "type": "boolean"
+          },
+          "workflowsRepository": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflowsDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -5873,6 +5895,16 @@
           },
           "canClose": {
             "type": "boolean"
+          },
+          "workflow": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWorkflowDto"
+              }
+            ]
           }
         }
       },
@@ -5989,6 +6021,36 @@
             ]
           },
           "reasonDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RunWorkflowDto": {
+        "required": [
+          "id",
+          "version",
+          "reference",
+          "commit",
+          "repository"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "repository": {
             "type": [
               "null",
               "string"
@@ -6863,6 +6925,170 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "WorkflowReleaseDto": {
+        "required": [
+          "version",
+          "commit",
+          "firstSeenAt",
+          "usable",
+          "tagDeleted",
+          "movedTo",
+          "issue"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "firstSeenAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "usable": {
+            "type": "boolean"
+          },
+          "tagDeleted": {
+            "type": "boolean"
+          },
+          "movedTo": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "issue": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "WorkflowReleasesDto": {
+        "required": [
+          "id",
+          "releases"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowReleaseDto"
+            }
+          }
+        }
+      },
+      "WorkflowUseDto": {
+        "required": [
+          "address",
+          "kind",
+          "reference",
+          "version",
+          "commit",
+          "problem",
+          "newerMajor"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "problem": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "newerMajor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "WorkflowsSourceDto": {
+        "required": [
+          "source",
+          "repository",
+          "lastFetchAt",
+          "lastFetchError",
+          "workflows",
+          "issues",
+          "uses"
+        ],
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "repository": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "lastFetchAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastFetchError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowReleasesDto"
+            }
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowUseDto"
+            }
           }
         }
       }

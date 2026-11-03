@@ -10,7 +10,8 @@ using Octopushy.Server.Store;
 namespace Octopushy.Server.Inventory;
 
 /// <summary>Starts runs and observations on request ("plan now", "observe now"), and observes installations on a schedule.</summary>
-public sealed partial class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, RepositoryMirror mirror, IOptions<OctopushyOptions> options, TimeProvider clock)
+public sealed partial class Planner(RunEngine engine, RunFactory factory, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors,
+    IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>
     /// Plans a guest at the latest revision, or retires it when its definition says so. A guest
@@ -148,7 +149,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 .ToListAsync(cancellationToken);
             if (due.Count == 0 && following.Count == 0) return 0;
 
-            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var repository = await revisions.GetAsync(revision, cancellationToken);
             // Nothing that would log in with Octopushy's key starts where there is no record it reached the machine,
             // as GuestWork.OwnKeyRefusedAsync says. Such a guest stays due, so it is configured once that changes.
             var delivered = await GuestAccessCredentials.DeliveredAmongAsync(db,
@@ -232,7 +233,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().Where(r => r.RepositoryValid)
                 .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
             if (revision is null) return [];
-            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var repository = await revisions.GetAsync(revision, cancellationToken);
             var states = await db.GuestSchedules.ToListAsync(cancellationToken);
             var resources = await db.Resources.AsNoTracking()
                 .Where(r => r.Kind == ResourceKinds.Guest && r.Valid && r.RetiredAt == null && r.MissingSince == null)
@@ -338,13 +339,42 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         string action, string reason, CancellationToken cancellationToken, DateTimeOffset? scheduledFor = null)
     {
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
-        var workflow = guest.Workflow!;
         var applied = configuration?.AppliedRevisionId is { } id
-            ? await db.Revisions.AsNoTracking().Where(r => r.Id == id).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken)
+            ? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, cancellationToken)
             : null;
-        var changed = applied is null ? null
-            : await mirror.ChangedFilesAsync(applied, revision.Commit, [workflow.Directory, workflow.Setup!.Root, guest.Directory], cancellationToken);
+        var changed = applied is null ? null : await ChangedSinceAsync(applied, revision, guest, cancellationToken);
         return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed, scheduledFor);
+    }
+
+    /// <summary>
+    /// What changed under the guest's folder, its workflow's folder and its setup stage's root since <paramref name="applied"/>,
+    /// each in the repository it lives in: the guest's folder in the lab repository, between the two config commits, and the
+    /// workflow between the commits it resolved to in each revision. A new release with no new config commit shows as what
+    /// changed in the workflow.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ChangedSinceAsync(DefinitionRevision applied, DefinitionRevision revision, GuestDefinition guest,
+        CancellationToken cancellationToken)
+    {
+        var workflow = guest.Workflow!;
+        string[] paths = [workflow.Directory, workflow.Setup!.Root];
+        if (workflow.Repository is null && applied.WorkflowsRepository is null)
+            return await mirror.ChangedFilesAsync(applied.Commit, revision.Commit, [.. paths, guest.Directory], cancellationToken);
+
+        var changed = (await mirror.ChangedFilesAsync(applied.Commit, revision.Commit, [guest.Directory], cancellationToken)).ToList();
+        var resolutions = RevisionCache.Resolutions(applied.Resolutions);
+        var before = (resolutions.FirstOrDefault(r => r.Reference == guest.WorkflowReference.ToString() && r.Commit is not null)
+            ?? resolutions.FirstOrDefault(r => r.WorkflowId == workflow.Id && r.Commit is not null))?.Commit;
+        if (workflow.Repository is { } repository && applied.WorkflowsRepository == repository && before is not null)
+        {
+            if (before != workflow.Commit)
+                changed.AddRange(await workflowMirrors.For(repository).ChangedFilesAsync(before, workflow.Commit!, paths, cancellationToken));
+        }
+        else
+        {
+            changed.Add($"M {workflow.Directory} (now {workflow.Label} from {workflow.Repository ?? "this repository"})");
+        }
+
+        return changed.Take(200).ToList();
     }
 
     /// <summary>Observes an installation now, in the background, unless an observation of it is under way.</summary>
@@ -372,7 +402,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 .ToListAsync(cancellationToken);
             if (due.Count == 0) return 0;
 
-            var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            var repository = await revisions.GetAsync(revision, cancellationToken);
             var observed = 0;
             foreach (var resource in due)
             {
@@ -421,7 +451,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
 
         var revision = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
             ?? throw new RunException("Sync the current repository source before planning.");
-        var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+        var repository = await revisions.GetAsync(revision, cancellationToken);
         return (resource, revision, repository);
     }
 }

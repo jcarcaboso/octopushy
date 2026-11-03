@@ -26,6 +26,19 @@ public sealed class RepositorySettings
 
     public string? HeadCommit { get; set; }
 
+    /// <summary>
+    /// The revision the head is: its commit together with what its workflow references resolved to. A new release tag can
+    /// make a new head revision with the same commit.
+    /// </summary>
+    public Guid? HeadRevisionId { get; set; }
+
+    /// <summary>The workflows repository the head's <c>octopushy.yaml</c> names, when it names one.</summary>
+    public string? WorkflowsRepository { get; set; }
+
+    public DateTimeOffset? WorkflowsLastFetchAt { get; set; }
+
+    public string? WorkflowsLastFetchError { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
@@ -62,7 +75,11 @@ public sealed class RepositoryDraft
     public string? PublishedBy { get; set; }
 }
 
-/// <summary>A commit of the lab repository as Octopushy read it.</summary>
+/// <summary>
+/// A commit of the lab repository as Octopushy read it, with what each workflow reference resolved to. Its identity is the
+/// source, the commit and <see cref="WorkflowsDigest"/>: a new release tag that changes a resolution is a new revision of the
+/// same commit.
+/// </summary>
 public sealed class DefinitionRevision
 {
     public Guid Id { get; set; }
@@ -74,6 +91,15 @@ public sealed class DefinitionRevision
     public long Sequence { get; set; }
 
     public required string Commit { get; set; }
+
+    /// <summary>The workflows repository its references were resolved in; null when workflows are the repository's own.</summary>
+    public string? WorkflowsRepository { get; set; }
+
+    /// <summary>The digest of <see cref="Resolutions"/>; empty when workflows are the repository's own.</summary>
+    public string WorkflowsDigest { get; set; } = "";
+
+    /// <summary>JSON array: each reference, and the workflow, version and commit it resolved to, or why none.</summary>
+    public string Resolutions { get; set; } = "[]";
 
     public string? Subject { get; set; }
 
@@ -91,6 +117,41 @@ public sealed class DefinitionRevision
 
     /// <summary>JSON array of issues.</summary>
     public string Issues { get; set; } = "[]";
+}
+
+/// <summary>
+/// A release of a workflow in a workflows repository, from its tag <c>&lt;id&gt;/v&lt;M&gt;.&lt;m&gt;</c>. The commit is the one the tag
+/// pointed to the first time Octopushy saw it, and it never changes: a tag that later points elsewhere is recorded in
+/// <see cref="MovedTo"/> and not followed, and a deleted tag stays a release while its commit is in the mirror.
+/// </summary>
+public sealed class WorkflowReleaseRecord
+{
+    public required string Repository { get; set; }
+
+    public required string WorkflowId { get; set; }
+
+    public int Major { get; set; }
+
+    public int Minor { get; set; }
+
+    public required string Commit { get; set; }
+
+    public DateTimeOffset FirstSeenAt { get; set; }
+
+    /// <summary>Why the release cannot be used, such as a workflow.yaml that declares another version. Fixed with its commit.</summary>
+    public string? Problem { get; set; }
+
+    /// <summary>Where the tag points now when that is not <see cref="Commit"/>.</summary>
+    public string? MovedTo { get; set; }
+
+    public DateTimeOffset? MovedAt { get; set; }
+
+    /// <summary>When the tag was last found missing from the repository; null while it is there.</summary>
+    public DateTimeOffset? DeletedAt { get; set; }
+
+    public string Version => $"{Major}.{Minor}";
+
+    public string Tag => $"{WorkflowId}/v{Version}";
 }
 
 /// <summary>
