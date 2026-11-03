@@ -145,30 +145,67 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 
 var app = builder.Build();
 
+// A database from an earlier release is refused before anything touches it.
+static async Task<bool> RefusedAsync(OctopushyDb db, ILogger logger)
+{
+    try
+    {
+        await SchemaHistory.RefuseUnknownMigrationsAsync(db.Database, CancellationToken.None);
+        return false;
+    }
+    catch (FreshDatabaseRequiredException e)
+    {
+        logger.LogCritical("{Reason}", e.Message);
+        return true;
+    }
+}
+
+var refused = false;
 if (args is ["migrate", ..])
 {
-    await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Database.MigrateAsync();
-    app.Logger.LogInformation("The database schema is up to date.");
+    await using (var scope = app.Services.CreateAsyncScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        refused = await RefusedAsync(db, app.Logger);
+        if (!refused)
+        {
+            await db.Database.MigrateAsync();
+            app.Logger.LogInformation("The database schema is up to date.");
+        }
+    }
+
+    await StopAsync(refused);
     return;
 }
 
 if (!generatingDocument)
 {
-    await using var scope = app.Services.CreateAsyncScope();
-    var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
-    if (settings.MigrateOnStart)
+    await using (var scope = app.Services.CreateAsyncScope())
     {
-        await db.Database.MigrateAsync();
-    }
-    else if ((await db.Database.GetPendingMigrationsAsync()).Any())
-    {
-        throw new InvalidOperationException("The database schema is out of date; run 'octopushy-server migrate' first.");
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        refused = await RefusedAsync(db, app.Logger);
+        if (!refused)
+        {
+            if (settings.MigrateOnStart)
+            {
+                await db.Database.MigrateAsync();
+            }
+            else if ((await db.Database.GetPendingMigrationsAsync()).Any())
+            {
+                throw new InvalidOperationException("The database schema is out of date; run 'octopushy-server migrate' first.");
+            }
+
+            await KeyEncryptionKey.InitializeAsync(db, settings, app.Logger, CancellationToken.None);
+            await app.Services.GetRequiredService<AgentCertificateAuthority>().InitializeAsync(CancellationToken.None);
+            await app.Services.GetRequiredService<SetupCode>().EnsureAsync(db, CancellationToken.None);
+        }
     }
 
-    await KeyEncryptionKey.InitializeAsync(db, settings, app.Logger, CancellationToken.None);
-    await app.Services.GetRequiredService<AgentCertificateAuthority>().InitializeAsync(CancellationToken.None);
-    await app.Services.GetRequiredService<SetupCode>().EnsureAsync(db, CancellationToken.None);
+    if (refused)
+    {
+        await StopAsync(refused);
+        return;
+    }
 }
 
 app.UseForwardedHeaders();
@@ -204,6 +241,16 @@ app.MapGet("/agent/ca.pem", (AgentCertificateAuthority ca) => Results.Text(ca.Ce
     .ExcludeFromDescription();
 
 await app.RunAsync();
+
+// Disposing the application flushes the log before the process exits.
+async Task StopAsync(bool failed)
+{
+    await app.DisposeAsync();
+    if (failed)
+    {
+        Environment.ExitCode = 1;
+    }
+}
 
 /// <summary>Exposed for integration tests.</summary>
 public partial class Program;
