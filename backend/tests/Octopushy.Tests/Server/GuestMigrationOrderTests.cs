@@ -74,7 +74,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var migrator = db.GetService<IMigrator>();
 
         await migrator.MigrateAsync(Schedules);
-        Assert.Equal([Rotation, FollowedSecrets, Pipelines], await db.Database.GetPendingMigrationsAsync());
+        Assert.Equal([Rotation, FollowedSecrets, Pipelines], (await db.Database.GetPendingMigrationsAsync()).Take(3));
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO guest_access_keys (resource_id, version, public_key, fingerprint, bootstrap, created_at)
             VALUES ({guest}, 1, 'ssh-ed25519 AAAA', 'SHA256:old', TRUE, {DateTimeOffset.UtcNow});

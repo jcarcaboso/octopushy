@@ -25,27 +25,16 @@ struct Input {
     vmid: u32,
     name: String,
     reporter: Reporter,
-    address: Option<String>,
-    generation: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reporter {
-    #[serde(default = "fhs_mode")]
-    installation_mode: String,
-    image_sha256: Option<String>,
     endpoint: String,
-    #[serde(default)]
     binary_url: String,
-    #[serde(default)]
     binary_sha256: String,
     interval_seconds: u32,
     ca_certificate_pem: Option<String>,
-}
-
-fn fhs_mode() -> String {
-    "fhs-download-v1".into()
 }
 
 pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
@@ -55,59 +44,10 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         ));
     }
     let input: Input = ctx.input()?;
-    let native = match input.reporter.installation_mode.as_str() {
-        "managed-nixos-v1" => true,
-        "fhs-download-v1" if input.generation.is_none() => false,
-        _ => {
-            return Err(Failure::msg(
-                "unsupported reporter installation mode; no FHS fallback for managed workers",
-            ));
-        }
-    };
-    let (command, payload) = if native {
-        if input
-            .reporter
-            .image_sha256
-            .as_deref()
-            .is_none_or(|v| !hex64(v))
-            || input.address.as_deref().is_none_or(str::is_empty)
-            || !input.reporter.binary_url.is_empty()
-            || !input.reporter.binary_sha256.is_empty()
-        {
-            return Err(Failure::msg(
-                "missing native reporter provenance/ownership expectations",
-            ));
-        }
-        let config = crate::managed_reporting::Configuration {
-            protocol_version: 1,
-            generation: input.generation.clone().unwrap_or_default(),
-            endpoint: input.reporter.endpoint.clone(),
-            interval_seconds: input.reporter.interval_seconds,
-            ca_certificate_pem: input.reporter.ca_certificate_pem.clone(),
-            token: ctx.secrets.get(TOKEN)?.to_owned(),
-        };
-        config
-            .validate()
-            .map_err(|_| Failure::msg("invalid native reporter configuration"))?;
-        let payload = serde_json::to_string(&config)
-            .map_err(|_| Failure::msg("invalid native reporter configuration"))?;
-        if payload.len() as u64 > crate::managed_reporting::LIMIT {
-            return Err(Failure::msg(
-                "native reporter configuration exceeds the stdin limit",
-            ));
-        }
-        (
-            vec!["/run/current-system/sw/bin/octopushy-worker-reporting".to_owned()],
-            payload,
-        )
-    } else {
-        (
-            ["/usr/bin/timeout", "--kill-after=5s", "240s", "/bin/sh"]
-                .map(String::from)
-                .to_vec(),
-            installation_script(&input.reporter, ctx.secrets.get(TOKEN)?)?,
-        )
-    };
+    let command = ["/usr/bin/timeout", "--kill-after=5s", "240s", "/bin/sh"]
+        .map(String::from)
+        .to_vec();
+    let payload = installation_script(&input.reporter, ctx.secrets.get(TOKEN)?)?;
     let client = proxmox::client(cfg, ctx, &input.connection)?;
     let vm = client
         .find_vm(input.vmid)
@@ -122,28 +62,6 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         return Err(Failure::msg(
             "refusing guest setup: VM identity, placement, or running state changed",
         ));
-    }
-
-    if native {
-        let config = client.vm_config(&input.node, input.vmid).await?;
-        let expected = format!(
-            "Managed by Octopushy as {}.\nworker-generation: {}",
-            input.address.as_deref().unwrap(),
-            input.generation.as_deref().unwrap(),
-        );
-        if config.name.as_deref() != Some(&input.name)
-            || config.template
-            || !config.tags.iter().any(|tag| tag == "octopushy")
-            || config
-                .other
-                .get("description")
-                .and_then(serde_json::Value::as_str)
-                != Some(&expected)
-        {
-            return Err(Failure::msg(
-                "VM ownership/generation does not match; no guest command was sent",
-            ));
-        }
     }
 
     // Proxmox 9 uses the dedicated privilege; older releases require VM.Monitor.
@@ -177,27 +95,12 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                 .map_err(|_| Failure::Uncertain("lost guest execution status; installation may still be running. Wait at least 245s before recovery.".into()))?;
             if status.exited {
                 if status.exitcode == Some(0) && status.signal.is_none() {
-                    if native {
-                        return Ok(Success::outputs(json!({
-                            "installed": true, "firstReportSent": true,
-                            "installationMode": input.reporter.installation_mode,
-                            "imageSha256": input.reporter.image_sha256,
-                            "intervalSeconds": input.reporter.interval_seconds,
-                        })));
-                    }
                     return Ok(Success::outputs(json!({
                         "installed": true,
                         "firstReportSent": true,
                         "binarySha256": input.reporter.binary_sha256,
                         "intervalSeconds": input.reporter.interval_seconds,
                     })));
-                }
-                if native
-                    && (status.signal.is_some()
-                        || status.exitcode.is_none()
-                        || matches!(status.exitcode, Some(124 | 137)))
-                {
-                    return Err(Failure::Uncertain("native helper timed out or was interrupted; inspect the guest before recovery".into()));
                 }
                 // Never forward guest stdout/stderr: a failing command may echo a
                 // secret or its encoded form, which the normal masker cannot cover.
@@ -340,8 +243,6 @@ mod tests {
 
     fn reporter() -> Reporter {
         Reporter {
-            installation_mode: fhs_mode(),
-            image_sha256: None,
             endpoint: "https://octopushy.test/api/guests/id/disk-usage".into(),
             binary_url: "https://releases.test/reporter".into(),
             binary_sha256: "a".repeat(64),

@@ -8,11 +8,6 @@ works.
 To run it in a Proxmox LXC container with Docker, created and updated by script, see
 [`proxmox/`](proxmox/README.md).
 
-For repository-backed NixOS worker VMs, see the
-[managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
-It reuses an independent control worker; publishing a definition does not grant
-infrastructure approval.
-
 ## First start
 
 ```sh

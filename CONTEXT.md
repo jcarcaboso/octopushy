@@ -260,13 +260,7 @@ appropriate network access; it is not required on every managed machine.
 _Avoid_: Node, runner when naming the Octopushy worker
 
 **Bootstrap image**:
-The immutable base image used to create a guest's boot disk. Its declaration
-does not identify later in-place OS releases.
-
-**Verified worker OS release**:
-A worker OS release whose activation and preserved identity and state have been
-verified, followed by authentication from the same enrollment. It does not reset
-the guest's generation or replace its bootstrap image.
+The immutable base image used to create a guest's boot disk.
 
 **Enrollment revocation**:
 Removal of an agent's authority to connect and execute work. It does not remove

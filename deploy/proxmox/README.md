@@ -117,9 +117,8 @@ and the `tmpfs` on `/tmp` that `compose.yaml` gives it. It shares only a private
 reach PostgreSQL, and it gets neither the key nor the database password. The state it
 works on is decrypted for one attempt of the guest it was assigned. It still runs
 on the same machine as the server. Once you manage more than this lab, or want a
-stronger boundary, add agents on their own VMs (the
-[managed worker wizard](../../docs/worker-deployment-wizard.md) builds them with this
-one) and give the internal agent's labels only to what should run here.
+stronger boundary, add agents on their own VMs, enrolled by hand with a token from
+**Agents**, and give the internal agent's labels only to what should run here.
 
 To enroll it again, for example under another name, remove it under **Agents** and run
 `pct exec <ctid> -- sh -c 'octopushy-compose rm -sf agent && docker volume rm octopushy_agent'`

@@ -25,9 +25,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Octopushy.Tests" />
-    <EmbeddedResource Include="../../../deploy/worker-template-v1/**/*"
-                      Exclude="../../../deploy/worker-template-v1/**/.terraform/**/*"
-                      LogicalName="WorkerTemplate/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Orchestration/GuestAccess/*.yml;Orchestration/GuestAccess/*.py" LogicalName="guest-access/%(Filename)%(Extension)" />

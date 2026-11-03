@@ -25,14 +25,6 @@ const stepNames: Record<string, string> = {
   "verify-absent": "Verify absent",
   "grow-root": "Expand guest root filesystem",
   "verify-root": "Verify guest capacity",
-  "prepare-worker": "Create worker identity",
-  "install-worker": "Install public worker identity",
-  "wait-worker": "Wait for authenticated worker",
-  "update-worker-os": "Switch worker OS",
-  "verify-worker-os": "Verify updated OS and preserved identity",
-  "wait-updated-worker": "Wait for the original worker to reconnect",
-  "drain-worker": "Drain the worker",
-  "revoke-worker": "Remove the worker's enrollment",
   preview: "Preview",
   playbook: "Run the playbook",
   "outcome-approval": "Decide on the outcome",
@@ -73,16 +65,6 @@ function describe(step: Step, operation: string): string | null {
       return "Checks the supported NixOS layout and expands its root partition and ext4 filesystem online if needed.";
     case "verify-root":
       return "Independently measures guest disk, partition, and filesystem capacity.";
-    case "prepare-worker":
-      return "The fixed guest helper creates a private key on its state disk and returns only a public signing request.";
-    case "install-worker":
-      return "Installs the controller-issued public certificate and pinned CA for this exact worker generation.";
-    case "wait-worker":
-      return "Waits for this worker's authenticated mTLS connection and runtime capabilities. VM existence is not enrollment.";
-    case "drain-worker":
-      return "Stops the worker taking new work and waits for its current work to finish. Another worker removes its VM.";
-    case "revoke-worker":
-      return "Once the VM is verified absent, removes the worker's enrollment; its identity stays in history.";
     default:
       return null;
   }
@@ -95,7 +77,7 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const canRetryStage = detail.run.operation === "pipeline" && detail.run.status === "failed" && step.status === "failed"
     && Boolean(step.stage) && ["apply", "playbook"].includes(step.name) && !lostChange;
   const canRetry = detail.run.status === "failed" && step.status === "failed"
-    && ["verify", "grow-root", "verify-root", "prepare-worker", "install-worker", "wait-worker"].includes(step.name)
+    && ["verify", "grow-root", "verify-root"].includes(step.name)
     && !lostChange;
   const plan = step.plan ? summarizePlan(step.plan) : null;
   if (step.kind === "approval") {
@@ -105,7 +87,6 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
         runId={detail.run.id}
         step={step}
         plan={planStep?.plan && detail.run.operation !== "pipeline" ? summarizePlan(planStep.plan) : null}
-        workerUpdate={detail.workerUpdate}
         configure={detail.run.operation === "configure" || detail.run.operation === "rotate-access"}
         pipeline={detail.run.operation === "pipeline"}
         rotation={detail.run.operation === "rotate-access"}

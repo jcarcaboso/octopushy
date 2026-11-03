@@ -31,11 +31,7 @@ public sealed class OctopushyOptions
 
     public SchedulingOptions Scheduling { get; set; } = new();
 
-    public WorkerDeploymentOptions WorkerDeployment { get; set; } = new();
-
     public DiskReporterOptions DiskReporter { get; set; } = new();
-
-    public WorkerUpdateOptions WorkerUpdates { get; set; } = new();
 
     public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
 }
@@ -47,36 +43,10 @@ public sealed class RepositoryEditorOptions
     public bool PublishEnabled { get; set; }
 }
 
-/// <summary>One operator-published NixOS closure export. Disabled until image/boot qualification.</summary>
-public sealed class WorkerUpdateOptions
-{
-    public bool Enabled { get; set; }
-    public string? ArchiveUrl { get; set; }
-    public string? ArchiveSha256 { get; set; }
-    public string? SystemPath { get; set; }
-    public string? ImageSha256 { get; set; }
-    public string? CaCertificatePem { get; set; }
-}
-
-/// <summary>Operator-published, tested worker image. Never selected from an untrusted request.</summary>
-public sealed class WorkerDeploymentOptions
-{
-    public string? ImageUrl { get; set; }
-    public string? ImageSha256 { get; set; }
-    /// <summary>Explicitly enable authenticated Git additions using the configured repository credential.</summary>
-    public bool RepositoryWritesEnabled { get; set; }
-}
-
 /// <summary>One pinned Linux reporter release, installed on guests after provisioning.</summary>
 public sealed class DiskReporterOptions
 {
     public bool Enabled { get; set; }
-
-    /// <summary>Explicit capability attestation for one qualified native-v1 worker image, not the downloadable reporter hash.</summary>
-    public string? ManagedNixosImageSha256 { get; set; }
-
-    public bool SupportsManagedNixosImage(string? hash) => hash is { Length: 64 }
-        && hash.All(char.IsAsciiHexDigit) && string.Equals(hash, ManagedNixosImageSha256, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Web/API origin reachable from the VM, not the execution-agent endpoint. Over http:// the reporting token is unencrypted.</summary>
     public string PublicUrl { get; set; } = "";
@@ -100,7 +70,6 @@ public sealed class DiskReporterOptions
 
         if (!WebUrl(PublicUrl) || new Uri(PublicUrl).AbsolutePath != "/" || !WebUrl(BinaryUrl)
             || BinarySha256.Length != 64 || BinarySha256.AsSpan().IndexOfAnyExcept("0123456789abcdefABCDEF") >= 0
-            || ManagedNixosImageSha256 is not null && (ManagedNixosImageSha256.Length != 64 || !ManagedNixosImageSha256.All(char.IsAsciiHexDigit))
             || IntervalSeconds is < 60 or > 604800 || CaCertificatePem?.Length > 16384
             || CaCertificatePem?.Contains("PRIVATE KEY", StringComparison.Ordinal) == true
             // A CA verifies TLS, so one on a plain HTTP origin would promise a check that never runs.

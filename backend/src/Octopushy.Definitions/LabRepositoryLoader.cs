@@ -98,13 +98,6 @@ public sealed partial class LabRepositoryLoader
             if (guests.FirstOrDefault(g => g.Address == service.GuestAddress) is { } guest)
                 CheckService(service, guest, recipes, installations);
         }
-        foreach (var duplicate in guests.Where(g => g.ManagedWorker is not null)
-                     .GroupBy(g => g.ManagedWorker!.Generation).Where(g => g.Count() > 1))
-        {
-            foreach (var guest in duplicate)
-                Error(guest.File, LineOf(guest.File, "/worker/generation"),
-                    "A worker generation must belong to exactly one guest.", guest.Address);
-        }
 
         var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, settings) }).ToList();
         return new LabRepository(
@@ -771,27 +764,6 @@ public sealed partial class LabRepositoryLoader
         {
             Error(guest.File, LineOf(guest.File, "/provision/state/backend"), $"The state backend '{backend}' is not defined in octopushy.yaml.", guest.Address);
         }
-
-        if (guest.ManagedWorker is not null)
-        {
-            if (guest.Retired || guest.RenamedFrom is not null)
-                Error(guest.File, null, "Managed worker retirement, replacement and rename are not supported. Preserve the current generation and its state disk.", guest.Address);
-            if (guest.Template != "octopushy-worker-v1" || guest.Recipe != "octopushy-worker-v1"
-                || recipe?.GuestFilesystem != "nixos-ext4-root" || recipe.Verify != "proxmox")
-                Error(guest.File, null, "A managed worker requires the version 1 worker image, recipe, Proxmox verification and NixOS root checks.", guest.Address);
-            if (guest.Policy?.Approval != "manual" || guest.Policy?.Destructive != "manual")
-                Error(guest.File, null, "Managed workers require explicit manual approval and destructive policies.", guest.Address);
-            var hardware = guest.Json["hardware"];
-            if (hardware?["disks"] is not JsonArray workerDisks || workerDisks.Count != 2
-                || !IntegerBetween((workerDisks[0] as JsonObject)?["size"], 8, 65536)
-                || !IntegerBetween((workerDisks[1] as JsonObject)?["size"], 16, 65536))
-                Error(guest.File, null, "A managed worker requires exactly two disks: boot (at least 8 GiB) and persistent agent state (at least 16 GiB).", guest.Address);
-            if (!IntegerBetween(hardware?["sockets"], 1, 16)
-                || !IntegerBetween(hardware?["cores"], 1, 128)
-                || !IntegerBetween(hardware?["memory"], 512, 1048576)
-                || hardware!["sockets"]!.GetValue<int>() * hardware["cores"]!.GetValue<int>() > 128)
-                Error(guest.File, null, "A managed worker requires bounded CPU sockets, cores and RAM.", guest.Address);
-        }
     }
 
     private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations, string? timezone)
@@ -805,8 +777,6 @@ public sealed partial class LabRepositoryLoader
 
         void Invalid(string pointer, string message) => Error(guest.File, LineOf(guest.File, pointer), message, guest.Address);
 
-        if (guest.ManagedWorker is not null)
-            Invalid("/setup/recipe", "A managed worker is configured by its image; it cannot have a setup recipe.");
         if (!recipes.TryGetValue(id, out var recipe))
         {
             Invalid("/setup/recipe", $"The recipe '{id}' does not exist under recipes/.");
@@ -888,8 +858,6 @@ public sealed partial class LabRepositoryLoader
     {
         void Invalid(string pointer, string message) => Error(service.File, LineOf(service.File, pointer), message, service.Address);
 
-        if (guest.ManagedWorker is not null)
-            Invalid("", "A managed worker is configured by its image; it cannot have services.");
         foreach (var name in service.Stages.GroupBy(s => s.Name).Where(g => g.Count() > 1).Select(g => g.Key))
         {
             Invalid("/stages", $"The stage name '{name}' is used more than once.");
@@ -959,9 +927,6 @@ public sealed partial class LabRepositoryLoader
             }
         }
     }
-
-    private static bool IntegerBetween(JsonNode? node, int minimum, int maximum) =>
-        node is JsonValue value && value.TryGetValue<int>(out var number) && number >= minimum && number <= maximum;
 
     private (JsonObject? Json, YamlDocument? Document) ReadDefinition(string file, DefinitionKind kind, string? address)
     {

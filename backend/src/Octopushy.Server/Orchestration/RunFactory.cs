@@ -13,31 +13,21 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
     /// <remarks><paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says.</remarks>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, revision, reason, null, null, keyIssued);
-
-    /// <summary>A managed worker's in-place update. A worker never has Octopushy's guest key.</summary>
-    public Run UpdateWorker(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, WorkerUpdateContext update) =>
-        CreateGuest(repository, guest, resource, revision, reason, update, null, false);
+        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued);
 
     /// <summary>
     /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
     /// the last revision that defined it, so it destroys exactly what that definition created.
-    /// A managed worker is drained first and its enrollment removed once its VM is gone.
     /// </summary>
     public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
         string removedIn, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, lastDefined, reason, null, removedIn, keyIssued);
+        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued);
 
     private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
-        WorkerUpdateContext? update, string? removedIn, bool keyIssued)
+        string? removedIn, bool keyIssued)
     {
         var removal = removedIn is not null;
-        if (resource.ManagedWorker is { } bound && (guest.Retired || guest.ManagedWorker?.Generation != bound.Generation
-            || guest.Host != bound.Host || guest.Vmid != bound.Vmid || guest.InstallationAddress != bound.Installation))
-            throw new RunException("Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding. To remove a worker, delete its folder.");
-        if (guest.ManagedWorker is not null && guest.Retired)
-            throw new RunException("Managed workers are not retired with lifecycle: retired; delete the worker's folder to remove it.");
-        if (removal && (update is not null || guest.Retired))
+        if (removal && guest.Retired)
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
         var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued);
         var policy = PolicyResolver.For(repository, guest);
@@ -111,24 +101,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         reporter.Validate();
         var guestReporter = guest.Json["setup"]?["diskReporter"];
         var installReporter = !retire && reporter.Enabled && guestReporter?["enabled"]?.GetValue<bool>() != false;
-        var nativeReporter = guest.ManagedWorker is not null;
-        var image = inputs.Template?.Image;
-        var verifiedImageHash = resource.ManagedWorker?.VerifiedOsUpdateRunId is not null
-            ? resource.ManagedWorker.VerifiedOsImageSha256 : null;
-        var nativeImageHash = update?.ImageSha256 ?? verifiedImageHash
-            ?? (image?.ChecksumAlgorithm == "sha256" ? image.Checksum : null);
-        var qualifiedNativeImage = reporter.SupportsManagedNixosImage(nativeImageHash);
-        // An old immutable boot image cannot gain a helper by changing controller settings.
-        // Never route a managed NixOS guest through the unrelated FHS downloader.
-        if (installReporter && nativeReporter && !qualifiedNativeImage)
-        {
-            if (guestReporter?["enabled"]?.GetValue<bool>() == true)
-                throw new RunException("Disk reporting requires a qualified native worker image pin; no FHS fallback is supported.");
-            installReporter = false;
-        }
         var reporterInterval = guestReporter?["intervalSeconds"]?.GetValue<int>() ?? reporter.IntervalSeconds;
-        if (installReporter && nativeReporter && reporterInterval != 3600)
-            throw new RunException("Native worker image v1 supports only a 3600-second disk reporting interval.");
         var context = new RunContext
         {
             Address = guest.Address,
@@ -137,11 +110,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             AgentLabelsSetBy = labels.SetBy,
             HostKey = $"{inputs.Installation.Address}/{inputs.Host.Id}",
             HostLimit = inputs.Host.ConcurrentOperations,
-            Policy = new PolicyContext(guest.ManagedWorker is null ? policy.Approval.Value : "manual",
-                guest.ManagedWorker is null ? policy.Approval.SetBy : "managed-worker safety", policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
-            ManagedWorker = guest.ManagedWorker is { } worker ? new ManagedWorkerContext(worker.Generation, worker.Labels,
-                worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
-            WorkerUpdate = update,
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
             OpenTofu = new OpenTofuContext(
@@ -160,12 +129,10 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),
             DiskReporter = installReporter ? new DiskReporterContext(
                 $"{reporter.PublicUrl.TrimEnd('/')}/api/guests/{resource.Id}/disk-usage",
-                nativeReporter ? null : reporter.BinaryUrl,
-                nativeReporter ? null : reporter.BinarySha256.ToLowerInvariant(),
+                reporter.BinaryUrl,
+                reporter.BinarySha256.ToLowerInvariant(),
                 reporterInterval,
-                string.IsNullOrWhiteSpace(reporter.CaCertificatePem) ? null : reporter.CaCertificatePem,
-                nativeReporter ? "managed-nixos-v1" : "fhs-download-v1",
-                nativeReporter ? nativeImageHash!.ToLowerInvariant() : null) : null,
+                string.IsNullOrWhiteSpace(reporter.CaCertificatePem) ? null : reporter.CaCertificatePem) : null,
         };
 
         var run = NewRun(resource, retire ? Operations.Retire : Operations.Provision, revision, reason, context);
@@ -175,31 +142,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             : context.RootDiskBytes is not null
                 ? [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
                 : [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify];
-        if (context.ManagedWorker is not null && retire)
-            // Another worker destroys the VM; this one stops taking work first and loses its
-            // enrollment only once the VM is verified absent.
-            steps = [StepNames.Plan, StepNames.Approval, StepNames.DrainWorker, StepNames.Unprotect, StepNames.Apply,
-                StepNames.VerifyAbsent, StepNames.RevokeWorker];
-        else if (context.ManagedWorker is not null)
-            // A worker's VM is never replaced, so its provision runs never touch protection.
-            steps = [.. steps.Where(s => s != StepNames.Unprotect), StepNames.PrepareWorker, StepNames.InstallWorker, StepNames.WaitWorker];
-        if (update is not null)
-        {
-            var beforeRoot = Array.IndexOf(steps, StepNames.GrowRoot);
-            if (context.ManagedWorker is null || resource.ManagedWorker?.ReadyAt is null || beforeRoot < 0)
-                throw new RunException("An in-place OS update requires an enrolled, Ready NixOS worker with its existing state disk.");
-            steps = [.. steps.Take(beforeRoot), StepNames.UpdateWorkerOs, StepNames.VerifyWorkerOs, .. steps.Skip(beforeRoot), StepNames.WaitUpdatedWorker];
-        }
         AddSteps(run, steps);
-        if (update is not null)
-            run.Steps.Single(s => s.Name == StepNames.UpdateWorkerOs).Detail =
-                $"Switch this existing VM to {update.SystemPath}; approved closure archive SHA-256 {update.ArchiveSha256}. Preserve identity/state and retain the previous system generation.";
-        if (resource.ManagedWorker?.ReadyAt is not null && !retire)
-            foreach (var step in run.Steps.Where(s => s.Name is StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.WaitWorker))
-            {
-                step.Status = StepStatuses.Skipped;
-                step.Detail = "This generation already completed authenticated bootstrap.";
-            }
         if (context.DiskReporter is { } setup)
         {
             run.Steps.Add(new Step
@@ -209,9 +152,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 Ordinal = run.Steps.Count,
                 Name = StepNames.InstallDiskReporter,
                 Kind = StepKinds.Agent,
-                Detail = setup.InstallationMode == "managed-nixos-v1"
-                    ? $"Configure image-native disk reporter (image SHA-256 {setup.ImageSha256}); report every {setup.IntervalSeconds}s."
-                    : $"Install disk reporter SHA-256 {setup.BinarySha256}; report every {setup.IntervalSeconds}s.",
+                Detail = $"Install disk reporter SHA-256 {setup.BinarySha256}; report every {setup.IntervalSeconds}s.",
             });
         }
         if (context.Verify == "none" && !installReporter)
@@ -404,32 +345,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
         };
-    }
-
-    /// <summary>Verify an explicitly removed worker; never plans, unprotects or destroys infrastructure.</summary>
-    public Run VerifyWorkerRetirement(LabRepository repository, InstallationDefinition installation, Resource resource,
-        DefinitionRevision revision, Run original, string reason)
-    {
-        var binding = resource.ManagedWorker!;
-        if (!installation.Hosts.TryGetValue(binding.Host, out var host))
-            throw new RunException("Restore the worker's original Proxmox host before verifying retirement.");
-        var previous = RunContext.Parse(original.Context);
-        var endpoint = ProvisionInputs.EndpointFor(installation, host);
-        if (endpoint != previous.Proxmox.Endpoint || previous.ManagedWorker?.Generation != binding.Generation)
-            throw new RunException("The worker's original endpoint or generation is unavailable; retirement cannot be inferred from another installation.");
-        // A read-only check with the installation's observation credentials.
-        var context = Observation(repository, installation, revision);
-        var run = NewRun(resource, Operations.Retire, revision, reason, context with
-        {
-            Address = resource.Address,
-            HostKey = $"{installation.Address}/{host.Id}",
-            HostLimit = host.ConcurrentOperations,
-            Proxmox = context.Proxmox with { Endpoint = endpoint, Node = binding.Host, Vmid = binding.Vmid, Name = previous.Proxmox.Name },
-            ManagedWorker = previous.ManagedWorker,
-        });
-        run.InputsHash = RetireHash(resource.DesiredInputsHash ?? InstallationHash(installation));
-        AddSteps(run, [StepNames.VerifyAbsent]);
-        return run;
     }
 
     public static string RetireHash(string inputsHash) => "retire:" + inputsHash;

@@ -209,8 +209,7 @@ download or a publicly trusted certificate.
 
 A reporter built before plain HTTP was allowed refuses an `http://` endpoint. Build
 and publish a new binary, update `BinarySha256`, and upgrade the execution agents,
-then run **Plan now** on each guest. Managed NixOS workers carry the reporter in
-their image, so they need a worker image built from this version.
+then run **Plan now** on each guest.
 
 A request has a ten-second timeout. Failures exit nonzero and are recorded in
 the journal; the next timer run sends a fresh value. There are no immediate

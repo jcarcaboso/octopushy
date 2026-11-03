@@ -231,8 +231,8 @@ public static partial class RepositoryEditor
                     }
                     var author = new CommitAuthor(actor, $"{EmailUnsafe().Replace(actor.ToLowerInvariant(), "-")}@octopushy.invalid");
                     var revisions = services.GetRequiredService<RevisionCache>();
-                    // ponytail: one bounded fetch/merge/validate/push loop under the engine gate, like the
-                    // worker wizard; a branch that keeps moving fails after a few attempts and keeps the draft.
+                    // ponytail: one bounded fetch/merge/validate/push loop under the engine gate; a branch
+                    // that keeps moving fails after a few attempts and keeps the draft.
                     for (var attempt = 1; ; attempt++)
                     {
                         var candidate = await mirror.PreparePublishAsync(settings.Url!, settings.Branch, credential,

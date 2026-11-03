@@ -197,8 +197,6 @@ public sealed class Resource
     public string? ObserveError { get; set; }
 
     public DateTimeOffset? ObserveErrorAt { get; set; }
-
-    public ManagedWorkerBinding? ManagedWorker { get; set; }
 }
 
 /// <summary>One scoped reporting credential and the latest root-filesystem reading per guest.</summary>
@@ -468,8 +466,6 @@ public sealed class Step
     /// because a digest has to survive storage, which <see cref="Outputs"/>, being jsonb, does not promise.
     /// </summary>
     public string? Document { get; set; }
-
-    public string? WorkerUpdateSha256 { get; set; }
 
     public List<Attempt> Attempts { get; set; } = [];
 }
@@ -796,30 +792,4 @@ public sealed class OperatorToken
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
-}
-
-/// <summary>Immutable guest/generation ownership and public bootstrap evidence. Never stores a private key or enrollment token.</summary>
-public sealed class ManagedWorkerBinding
-{
-    public Guid ResourceId { get; set; }
-    public Guid Generation { get; set; }
-    public required string Installation { get; set; }
-    public required string Host { get; set; }
-    public int Vmid { get; set; }
-    public Guid RevisionId { get; set; }
-    public Guid RunId { get; set; }
-    public Guid? PrepareAttemptId { get; set; }
-    public Guid? AgentId { get; set; }
-    public string? CsrDer { get; set; }
-    public string? CertificatePem { get; set; }
-    public string? CaCertificatePem { get; set; }
-    public required string ServerUrl { get; set; }
-    public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset? PreparedAt { get; set; }
-    public DateTimeOffset? InstalledAt { get; set; }
-    public DateTimeOffset? AuthenticatedAt { get; set; }
-    public DateTimeOffset? ReadyAt { get; set; }
-    /// <summary>Release provenance recorded only after verified activation and fresh authentication, not a boot-disk checksum.</summary>
-    public string? VerifiedOsImageSha256 { get; set; }
-    public Guid? VerifiedOsUpdateRunId { get; set; }
 }

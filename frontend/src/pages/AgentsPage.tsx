@@ -1,6 +1,5 @@
 import { Bot, Plus } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
 import { useAgents } from "../api/queries";
 import { Card } from "../components/Card";
 import { PageHeader } from "../components/PageHeader";
@@ -26,13 +25,8 @@ export function AgentsPage() {
     <>
       <PageHeader
         title="Agents"
-        meta={data && data.length > 0 ? `${connected} of ${data.length} connected · ${running} running ${running === 1 ? "attempt" : "attempts"}` : "Workers that observe Proxmox and run plans and applies."}
-        actions={
-          <>
-            <Link className="button" to="/agents/prepare">Prepare worker deployment</Link>
-            {enroll}
-          </>
-        }
+        meta={data && data.length > 0 ? `${connected} of ${data.length} connected · ${running} running ${running === 1 ? "attempt" : "attempts"}` : "Agents that observe Proxmox and run plans and applies."}
+        actions={enroll}
       />
       <div className="stack stack--large">
         {isPending ? (

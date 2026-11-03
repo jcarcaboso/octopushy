@@ -121,12 +121,6 @@ public sealed record GuestDefinition(
 
     /// <summary>The configure recipe of <c>setup.recipe</c>, if the guest has one.</summary>
     public string? SetupRecipe => Json["setup"]?["recipe"]?.GetValue<string>();
-
-    public ManagedWorkerSettings? ManagedWorker => Json["worker"] is JsonObject worker
-        ? new(worker["templateVersion"]!.GetValue<int>(), Guid.Parse(worker["generation"]!.GetValue<string>()),
-            worker["labels"]!.AsArray().Select(label => label!.GetValue<string>()).ToArray(),
-            worker["maxConcurrency"]!.GetValue<int>())
-        : null;
 }
 
 /// <summary>
@@ -153,8 +147,6 @@ public sealed record StageDefinition(
     JsonObject Inputs,
     IReadOnlyDictionary<string, StoreReference> Secrets,
     IReadOnlyDictionary<string, StoreReference> SecretFiles);
-
-public sealed record ManagedWorkerSettings(int TemplateVersion, Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency);
 
 public sealed record ImageSource(string Url, string ChecksumAlgorithm, string Checksum, string FileName);
 

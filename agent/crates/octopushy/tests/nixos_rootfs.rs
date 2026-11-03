@@ -27,20 +27,7 @@ async fn exercise(
     response: Value,
     expected_ok: bool,
 ) -> (Result<executors::Success, Failure>, usize) {
-    exercise_generation(action, name, response, expected_ok, None).await
-}
-async fn exercise_generation(
-    action: &str,
-    name: &str,
-    response: Value,
-    expected_ok: bool,
-    generation: Option<&str>,
-) -> (Result<executors::Success, Failure>, usize) {
-    let description = if generation.is_some() {
-        "Managed by Octopushy as home/umbrel/opy-service-01.\nworker-generation: 884d09b4-0934-43a4-bffb-d2f7977bc01c"
-    } else {
-        "Managed by Octopushy as home/umbrel/opy-service-01."
-    };
+    let description = "Managed by Octopushy as home/umbrel/opy-service-01.";
     let posts = Arc::new(AtomicUsize::new(0));
     let counter = posts.clone();
     let name = name.to_string();
@@ -88,7 +75,7 @@ async fn exercise_generation(
         attempt_id: "rootfs-test".into(), action: action.into(),
         input_json: json!({"connection":{"endpoint":format!("http://{address}"),"verifyTls":true},
             "node":"umbrel","vmid":9210,"name":"opy-service-01","address":"home/umbrel/opy-service-01",
-            "diskBytes":27917287424u64,"waitSeconds":1,"workerGeneration":generation}).to_string(),
+            "diskBytes":27917287424u64,"waitSeconds":1}).to_string(),
         secrets: Secrets::new(HashMap::from([("proxmox.token".into(),"test@pve!test=secret".into())])),
         files_tar_gz: vec![], artifacts: vec![], workspace: work.path().into(),
         log: AttemptLogger::new(Arc::new(LogBuffer::default()), Arc::new(Masker::new(["secret"])), Arc::new(Notify::new())),
@@ -145,26 +132,4 @@ async fn lost_status_after_mutation_is_uncertain_and_never_resubmits() {
     let (r, count) = exercise("grow", "opy-service-01", json!({"exited":0}), false).await;
     assert!(matches!(r, Err(Failure::Uncertain(_))));
     assert_eq!(count, 1);
-}
-
-#[tokio::test]
-async fn managed_root_growth_checks_the_exact_generation_marker() {
-    let (_, count) = exercise_generation(
-        "grow",
-        "opy-service-01",
-        report(27647782912),
-        true,
-        Some("884d09b4-0934-43a4-bffb-d2f7977bc01c"),
-    )
-    .await;
-    assert_eq!(count, 1);
-    let (_, count) = exercise_generation(
-        "grow",
-        "opy-service-01",
-        report(27647782912),
-        false,
-        Some("884d09b4-0934-43a4-bffb-d2f7977bc01d"),
-    )
-    .await;
-    assert_eq!(count, 0);
 }

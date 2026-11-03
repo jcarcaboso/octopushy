@@ -26,11 +26,6 @@ public static class GuestRemoval
             && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, ct))
             return null;
 
-        // A worker whose enrollment was removed by hand is on the verify-only retirement path;
-        // it is destroyed only when its removal is requested explicitly.
-        if (!force && resource.ManagedWorker is { AgentId: { } agentId } && !await db.Agents.AnyAsync(a => a.Id == agentId, ct))
-            return null;
-
         var eligible = RepositoryTrust.EligibleRevisions(db);
         var lastDefined = await eligible.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.AppliedRevisionId, ct)
             ?? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == resource.LastRevisionId, ct)

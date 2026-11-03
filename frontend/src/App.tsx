@@ -19,7 +19,6 @@ import { RunPage } from "./pages/RunPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
-import { WorkerPreparationPage } from "./pages/WorkerPreparationPage";
 import { OperatorAccessPage } from "./pages/OperatorAccessPage";
 import { EditorPage } from "./pages/EditorPage";
 import { PageSkeleton } from "./components/States";
@@ -47,7 +46,6 @@ export function AppRoutes() {
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunPage />} />
         <Route path="agents" element={<AgentsPage />} />
-        <Route path="agents/prepare" element={<WorkerPreparationPage />} />
         <Route path="operator-access" element={<OperatorAccessPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="repository" element={<RepositoryPage />} />

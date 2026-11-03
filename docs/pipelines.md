@@ -168,8 +168,7 @@ Services are read from the repository, from `services/<id>/pipeline.yaml` in the
 last run, and each has a page with its stages, policy and history. `GET /api/services/{id}` has the same.
 
 An invalid `pipeline.yaml` marks only that service. An invalid `guest.yaml` marks the guest's services invalid, and they are
-not treated as gone. A renamed guest keeps its services and their state. A managed worker cannot have services, because it is
-configured by its image.
+not treated as gone. A renamed guest keeps its services and their state.
 
 **The key follows who manages the machine, not what kind of Ansible work runs.** Decided by the owner on November 3, 2026:
 

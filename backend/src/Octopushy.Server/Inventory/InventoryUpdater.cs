@@ -28,7 +28,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         {
             var previous = $"{guest.InstallationAddress}/{guest.RenamedFrom}";
             if (!byAddress.ContainsKey(guest.Address) && byAddress.TryGetValue(previous, out var renamed)
-                && renamed.ManagedWorker is null && repository.Resource(previous) is null)
+                && repository.Resource(previous) is null)
             {
                 logger.LogInformation("{Previous} was renamed to {Address}.", previous, guest.Address);
                 byAddress.Remove(previous);
@@ -45,10 +45,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             {
                 if (!entry.Valid && repository.Guest(entry.Address)?.RenamedFrom is { } renamedFrom
                     && repository.Resource($"{entry.ParentAddress}/{renamedFrom}") is null
-                    && byAddress.TryGetValue($"{entry.ParentAddress}/{renamedFrom}", out var pendingRename)
-                    && pendingRename.ManagedWorker is null)
+                    && byAddress.TryGetValue($"{entry.ParentAddress}/{renamedFrom}", out var pendingRename))
                 {
-                    // Keep an ordinary guest's identity at its old address while
+                    // Keep a guest's identity at its old address while
                     // displaying the invalid proposed definition. Do not create a
                     // competing row that would block the rename after correction.
                     resource = pendingRename;
@@ -97,7 +96,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         foreach (var resource in guests.Where(r => r.Valid))
         {
             // Missing definitions still retain durable ownership. In particular,
-            // an invalid rename must not let a second row claim a worker's VM.
+            // an invalid rename must not let a second row claim a guest's VM.
             var problem = IdentityProblem(resource, repository.Guest(resource.Address)!, byAddress.Values);
             if (problem is not null)
             {
@@ -254,17 +253,6 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
     /// </summary>
     private static string? IdentityProblem(Resource resource, GuestDefinition guest, IEnumerable<Resource> guests)
     {
-        if (resource.ManagedWorker is { } worker && (guest.Retired || guest.ManagedWorker?.Generation != worker.Generation
-            || guest.Host != worker.Host || guest.Vmid != worker.Vmid || guest.InstallationAddress != worker.Installation))
-            return "Managed workers cannot be retired, replaced, moved or have their worker role removed; retain the existing binding.";
-
-        var managedOwner = guests.FirstOrDefault(r => r.Id != resource.Id && r.ManagedWorker is { } bound
-            && (bound.Installation == guest.InstallationAddress && bound.Vmid == guest.Vmid
-                || bound.Generation == guest.ManagedWorker?.Generation
-                || guest.RenamedFrom is not null && r.Address == $"{guest.InstallationAddress}/{guest.RenamedFrom}"));
-        if (managedOwner is not null)
-            return $"Managed worker identity is bound to {managedOwner.Address}; renaming or adopting its generation/VM is not supported.";
-
         if (resource.BoundVmid is { } bound && (bound != guest.Vmid || resource.BoundInstallation != guest.InstallationAddress))
         {
             return $"This guest is bound to VMID {bound} on {resource.BoundInstallation}. Changing it would make a different VM; retire this guest and add a new one instead.";

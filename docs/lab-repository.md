@@ -177,9 +177,7 @@ lab-repo/
       the guest was last applied from, so it destroys what that definition created.
       It follows that definition's approval and `destructive` policy. **Plan removal**
       on the guest page proposes it again after it was cancelled. Restoring the
-      folder cancels a removal that has not started changing anything. Managed
-      workers are drained first and lose their enrollment once their VM is verified
-      absent; their removal always needs approval.
+      folder cancels a removal that has not started changing anything.
 
     Either way, the history is kept.
     *Decided October 28, 2026: deleting a folder removes the guest. Before, it only

@@ -43,7 +43,6 @@ const BLOCK_SIZE: u64 = 4096;
 
 const VM_NAME: &str = "opy-worker-01";
 const VM_ADDRESS: &str = "home/umbrel/opy-worker-01";
-const GENERATION: &str = "884d09b4-0934-43a4-bffb-d2f7977bc01c";
 
 /// Answers as util-linux, e2fsprogs, coreutils and systemd do for the devices in `$GUEST`.
 /// Anything else is recorded as unexpected, and every test fails on that.
@@ -352,9 +351,7 @@ GPT_TAIL={GPT_TAIL} BLOCK_SIZE={BLOCK_SIZE}",
                     Json(json!({"data":{
                         "name": VM_NAME,
                         "tags": "octopushy",
-                        "description": format!(
-                            "Managed by Octopushy as {VM_ADDRESS}.\nworker-generation: {GENERATION}"
-                        ),
+                        "description": format!("Managed by Octopushy as {VM_ADDRESS}."),
                     }}))
                 }),
             )
@@ -393,7 +390,6 @@ GPT_TAIL={GPT_TAIL} BLOCK_SIZE={BLOCK_SIZE}",
                 "name": VM_NAME,
                 "address": VM_ADDRESS,
                 "diskBytes": disk_bytes,
-                "workerGeneration": GENERATION,
                 "waitSeconds": 1,
             })
             .to_string(),

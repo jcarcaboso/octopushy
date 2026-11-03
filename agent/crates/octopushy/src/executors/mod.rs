@@ -4,8 +4,6 @@
 
 pub mod ansible;
 pub mod guest;
-mod managed_update;
-pub mod managed_worker;
 pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
@@ -28,7 +26,6 @@ pub const EXECUTORS: &[&str] = &[
     "proxmox",
     "nixos-rootfs",
     "guest",
-    "managed-worker",
     "ansible",
 ];
 
@@ -41,7 +38,6 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
             | ("proxmox", "set-protection")
             | ("nixos-rootfs", "grow")
             | ("guest", "install-disk-reporter")
-            | ("managed-worker", "prepare" | "install" | "update-os")
             | ("ansible", "run")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
@@ -197,7 +193,6 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
         "proxmox" => proxmox::run(cfg, ctx).await,
         "guest" => guest::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
-        "managed-worker" => managed_worker::run(cfg, ctx).await,
         "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         "ansible" => ansible::run(cfg, ctx).await,
         #[cfg(test)]

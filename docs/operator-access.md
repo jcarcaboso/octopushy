@@ -76,7 +76,6 @@ falls back to plain HTTP.
 
 ```sh
 octopushy operator request /api/inventory
-octopushy operator request /api/managed-worker-preparation
 printf '%s\n' '{"draining":true}' |
   octopushy operator request /api/agents/AGENT_UUID --method PATCH --json-stdin
 ```
@@ -98,5 +97,3 @@ Logout revokes the server grant before deleting its local copy. If the grant
 has already expired or been revoked, logout removes the unusable local copy.
 Use the console to revoke lost credentials. `login --replace` explicitly
 replaces the local file but does not revoke a displaced server grant.
-
-See [managed worker OS updates](managed-worker-updates.md) for the update flow.
