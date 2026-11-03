@@ -86,6 +86,9 @@ public sealed partial class AssignmentBuilder
             ?? throw new AssignmentException("The stage has no saved plan or preview.");
         if (string.IsNullOrWhiteSpace(record.Sha256) || PipelineDocument.ArtifactOf(document, step.Stage!) != record.Sha256)
             throw new AssignmentException("The saved plan or preview is not the one that was approved.");
+        if (source.Name == StepNames.Plan
+            && GuestVmPlan.ForeignChange(source.Outputs is null ? null : JsonNode.Parse(source.Outputs), RunContext.Parse(run.Context).ForStep(step)) is { } foreign)
+            throw new AssignmentException(foreign);
         var content = await artifacts.LoadAsync(sourceAttempt.Id, name, cancellationToken);
         if (ArtifactStore.Sha256(content) != record.Sha256)
             throw new AssignmentException("The saved plan or preview does not match its recorded checksum.");

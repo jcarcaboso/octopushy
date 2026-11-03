@@ -78,9 +78,13 @@ public sealed partial class RunEngine(
     /// <summary>Adds runs built elsewhere and starts them.</summary>
     public async Task AddRunsAsync(OctopushyDb db, IEnumerable<Run> runs, CancellationToken cancellationToken)
     {
+        var observedOnly = await SafetyBoundary.ObservedOnlyInstallationsAsync(db, cancellationToken);
         foreach (var run in runs)
         {
-            if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+            // Refused, not held: a run in an installation Octopushy only observes never waits to go.
+            if (await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, RunContext.Parse(run.Context), cancellationToken, observedOnly) is { } refused)
+                Finish(run, RunStatuses.Failed, refused);
+            else if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
             {
                 run.Status = RunStatuses.Blocked;
                 run.Detail = reason;
@@ -223,6 +227,21 @@ public sealed partial class RunEngine(
         // uncertain mutation behind a trust wait: it must retain its serialization lock
         // and the explicit close workflow. Known failures/completion also settle normally.
         var reconcilingOutcome = next is null || next.Status is StepStatuses.Uncertain or StepStatuses.Failed or StepStatuses.Cancelled;
+        var context = RunContext.Parse(run.Context);
+        // Asked before anything that would make it wait: such a run fails. See docs/safety-boundary.md.
+        if (!inFlight && !reconcilingOutcome && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken) is { } observedOnly)
+        {
+            foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
+            {
+                attempt.Status = AttemptStatuses.Cancelled;
+                attempt.Error = observedOnly;
+                attempt.FinishedAt = clock.GetUtcNow();
+            }
+            Finish(run, RunStatuses.Failed, observedOnly);
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
         if (!inFlight && !reconcilingOutcome && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
         {
             run.Status = RunStatuses.Blocked;
@@ -255,7 +274,6 @@ public sealed partial class RunEngine(
             run.Detail = null;
         }
 
-        var context = RunContext.Parse(run.Context);
         if (!inFlight && !reconcilingOutcome && CredentialBindings.Validate(context) is { Count: > 0 } invalid)
         {
             run.Status = RunStatuses.Blocked;
@@ -368,6 +386,15 @@ public sealed partial class RunEngine(
     {
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
+        // The plan's effects refuse this already; asked again so no path offers it for approval.
+        if (GuestVmPlan.ForeignChange(outputs, context) is { } foreign)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = foreign;
+            Finish(run, RunStatuses.Failed, foreign);
+            return false;
+        }
+
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
         // Output-only plans can still need privileged apply. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
@@ -483,6 +510,14 @@ public sealed partial class RunEngine(
             return;
         }
 
+        // Refused before anything else is recorded, and before any approval is offered: see docs/safety-boundary.md.
+        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context)) is { } foreign)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = foreign;
+            return;
+        }
+
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
         switch (step.Name)
@@ -505,29 +540,36 @@ public sealed partial class RunEngine(
                     }
                 }
 
-                if (run.Operation == Operations.Provision
-                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect
-                    && !GuestVmPlan.RemovesGuestVm(outputs, RunContext.Parse(run.Context)))
+                if (run.Operation is Operations.Provision or Operations.Retire
+                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect)
                 {
-                    unprotect.Status = StepStatuses.Skipped;
-                    unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                    var planned = RunContext.Parse(run.Context);
+                    if (!GuestVmPlan.RemovesGuestVm(outputs, planned))
+                    {
+                        unprotect.Status = StepStatuses.Skipped;
+                        unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                    }
+                    else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
+                             || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
+                    {
+                        // Only a VM the guest owns loses its protection: one it is bound to, or its own create that did not finish.
+                        unprotect.Status = StepStatuses.Skipped;
+                        unprotect.Detail = $"This guest does not own VM {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
+                    }
                 }
 
                 break;
             case StepNames.Apply when run.Operation == Operations.Provision:
-                var context = RunContext.Parse(run.Context);
                 resource.AppliedInputsHash = run.InputsHash;
                 resource.AppliedRevisionId = run.RevisionId;
                 resource.AppliedAt = now;
                 resource.SyncedInputsHash = run.InputsHash;
                 resource.Outputs = outputs?["outputs"]?.ToJsonString();
-                if (resource.BoundVmid is null)
-                {
-                    resource.BoundInstallation = resource.ParentAddress;
-                    resource.BoundVmid = context.Proxmox.Vmid;
-                    resource.BoundAt = now;
-                }
-
+                // Not bound here: a guest owns a VM once verify-guest confirms the create; see the verify step.
+                if (resource.BoundVmid is null && SafetyBoundary.Reserves(resource, RunContext.Parse(run.Context))
+                    && run.Steps.Single(s => s.Name == StepNames.Plan).Outputs is { } planText
+                    && GuestVmPlan.MakesGuestMachine(JsonNode.Parse(planText), RunContext.Parse(run.Context)))
+                    resource.ReservationAppliedAt = now;
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
                 await ProposeServicesAgainAsync(db, run, cancellationToken);
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
@@ -536,6 +578,30 @@ public sealed partial class RunEngine(
                 resource.Outputs = null;
                 break;
             case StepNames.Verify:
+                // Ownership comes only from a confirmed creation: an apply of an approved plan of this guest created
+                // its VMID on its node, and the VM verified now carries Octopushy's marks. Nothing else binds.
+                if (resource.BoundVmid is null)
+                {
+                    var verifying = RunContext.Parse(run.Context);
+                    if (!SafetyBoundary.Reserves(resource, verifying) || resource.ReservationAppliedAt is null)
+                    {
+                        step.Detail = $"VM {verifying.Proxmox.Vmid} on {verifying.Proxmox.Node} is not recorded as this guest's: "
+                            + "no apply of an approved plan of this guest has created it.";
+                    }
+                    else if (SafetyBoundary.MarksMissing(outputs, verifying) is { } missing)
+                    {
+                        step.Status = StepStatuses.Failed;
+                        step.Detail = missing;
+                        break;
+                    }
+                    else
+                    {
+                        resource.BoundInstallation = resource.ParentAddress;
+                        resource.BoundVmid = verifying.Proxmox.Vmid;
+                        resource.BoundAt = now;
+                    }
+                }
+
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:
@@ -543,6 +609,11 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
+                resource.ReservedVmid = null;
+                resource.ReservedNode = null;
+                resource.ReservedInstallation = null;
+                resource.ReservedAt = null;
+                resource.ReservationAppliedAt = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;

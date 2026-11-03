@@ -110,6 +110,7 @@ Output:
 ```json
 {
   "present": true, "node": "korriban", "status": "running", "name": "krb-crt-01",
+  "tags": ["octopushy", "home"], "description": "Managed by Octopushy as home/korriban/krb-crt-01.",
   "ipv4Addresses": ["10.1.0.21"],
   "checks": [
     { "name": "present", "ok": true, "detail": "VM 210 exists" },
@@ -117,6 +118,11 @@ Output:
   ]
 }
 ```
+
+`tags` and `description` are the VM's own (`description` from its QEMU config; absent for a
+container). They are reported, not checked: the controller records a guest as owning its VM only
+when a verified VM its approved plan created carries the tag `octopushy` and a description naming
+the guest's address; see [the safety boundary](../../../docs/safety-boundary.md).
 
 Succeeds when every check passes, fails otherwise (with the outputs still set). With
 `expectRunning: false` and the VM stopped, the address check is reported as passed
@@ -246,6 +252,34 @@ one, such as `replace_because_tainted`. A change to a
 `node_name` its state holds. The controller lifts a provision run's protection only for
 a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
 them out never gets that VM's protection lifted, and the apply fails on it as before.
+
+Every change carries `importing`: true when OpenTofu adopts an existing object into the
+state (`change.importing` in the JSON plan). An import is listed even when its actions
+are `["no-op"]`; it is not counted. The controller refuses any plan with an import.
+
+A change to a resource of a Proxmox provider, one whose type starts with `proxmox_` or
+whose `provider_name` ends in `/proxmox`, carries `proxmox: true` and, in `targets`,
+every VM and node it names, from both `before` and `after`. A target has `vmId`, `node`,
+or both. They come from the top-level attributes `vm_id`, `vmid` and `container_id`
+(each a target of its own), `node_name`, `node` and `target_node`, and from guests named
+inside `resource_id` or `path` (`vm:100`, `ct:100`, `qemu/100`, `lxc/100`, `/vms/100`).
+`targetUnknown: true` says one of those attributes is not known until apply. Absent
+fields stay off the wire.
+
+```json
+{
+  "address": "proxmox_virtual_environment_firewall_options.vm",
+  "type": "proxmox_virtual_environment_firewall_options", "name": "vm",
+  "actions": ["create"], "importing": false, "proxmox": true,
+  "targets": [{ "vmId": 310, "node": "korriban" }]
+}
+```
+
+The controller refuses, before approval, a plan whose Proxmox change with a `create`,
+`update` or `delete` action names a VM other than the run's own, names none and is not
+of a type that never acts on a VM, or has `targetUnknown`; see
+[the safety boundary](../../../docs/safety-boundary.md). So a summary that leaves
+targets out fails closed.
 
 When `hasChanges` is true, the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers

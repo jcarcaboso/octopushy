@@ -1088,6 +1088,7 @@ export interface components {
             type: null | string;
             endpoint: null | string;
             valid: boolean;
+            managed: boolean;
             /** Format: int32 */
             issueCount: number;
             /** Format: date-time */
@@ -1110,6 +1111,7 @@ export interface components {
             /** Format: date-time */
             trustedAt: null | string;
             trustedBy: null | string;
+            managementChanged: boolean;
         };
         InventoryDto: {
             revision: null | components["schemas"]["RevisionDto"];

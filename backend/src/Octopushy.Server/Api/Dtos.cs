@@ -190,15 +190,18 @@ public sealed record GuestSummaryDto(
 /// The endpoints an installation declares now, and those not trusted yet. Credentials are sent
 /// only to trusted endpoints, so an installation with untrusted ones waits for an operator.
 /// </summary>
+/// <param name="ManagementChanged">Trusted while observed only, and now asking to be managed, so it has to be trusted again.</param>
 public sealed record InstallationTrustDto(
     IReadOnlyList<string> Endpoints,
     IReadOnlyList<string> Untrusted,
     DateTimeOffset? TrustedAt,
-    string? TrustedBy);
+    string? TrustedBy,
+    bool ManagementChanged);
 
 /// <summary>The endpoints the operator was shown; trust is refused when the installation declares others by now.</summary>
 public sealed record TrustInstallationRequest(IReadOnlyList<string> Endpoints);
 
+/// <param name="Managed">False for <c>manage: false</c>: Octopushy only observes the installation. See docs/safety-boundary.md.</param>
 public sealed record InstallationSummaryDto(
     Guid Id,
     string Address,
@@ -206,6 +209,7 @@ public sealed record InstallationSummaryDto(
     string? Type,
     string? Endpoint,
     bool Valid,
+    bool Managed,
     int IssueCount,
     DateTimeOffset? ObservedAt,
     string? ObserveError,

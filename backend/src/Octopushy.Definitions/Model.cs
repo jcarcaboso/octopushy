@@ -64,6 +64,10 @@ public sealed record HostDefinition(
     int? ConcurrentOperations,
     JsonObject Json);
 
+/// <summary>
+/// A Proxmox installation. <paramref name="Managed"/> is false for <c>manage: false</c>: Octopushy only observes
+/// it, and no guest or service may be defined under it. See docs/safety-boundary.md.
+/// </summary>
 public sealed record InstallationDefinition(
     string Id,
     string Lab,
@@ -73,7 +77,8 @@ public sealed record InstallationDefinition(
     ConnectionDefinition Connection,
     IReadOnlyDictionary<string, HostDefinition> Hosts,
     PolicySettings? Policy,
-    IReadOnlyList<string>? AgentLabels)
+    IReadOnlyList<string>? AgentLabels,
+    bool Managed = true)
 {
     public string Address => $"{Lab}/{Id}";
 

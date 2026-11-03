@@ -7,6 +7,11 @@
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "name": { "type": "string" },
     "description": { "type": "string" },
+    "manage": {
+      "description": "Whether Octopushy may change anything in this installation. false makes it observed only: no guest or service may be defined under it, no run is ever created for it, and its token goes only to observations.",
+      "type": "boolean",
+      "default": true
+    },
     "type": { "enum": ["standalone", "cluster"] },
     "connection": {
       "type": "object",

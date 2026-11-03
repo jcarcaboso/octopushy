@@ -62,12 +62,26 @@ public sealed partial class RunEngine
             var builder = services.GetRequiredService<AssignmentBuilder>();
             // Guests something was handed to in this pass: the database does not show them yet.
             var changing = new HashSet<Guid>();
+            var observedOnly = await SafetyBoundary.ObservedOnlyInstallationsAsync(db, cancellationToken);
 
             foreach (var attempt in queued)
             {
                 var step = attempt.Step;
                 var run = step?.Run;
                 var context = RunContext.Parse(run?.Context ?? attempt.Context!);
+                // Before anything that would make it wait: work in an installation Octopushy only observes fails.
+                if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken, observedOnly) is { } refused)
+                {
+                    attempt.Status = AttemptStatuses.Failed;
+                    attempt.Error = refused;
+                    attempt.FinishedAt = clock.GetUtcNow();
+                    attempt.WaitingReason = null;
+                    step!.Status = StepStatuses.Failed;
+                    step.Detail = refused;
+                    signal.Wake();
+                    continue;
+                }
+
                 if (await (run is null
                         ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
                         : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)

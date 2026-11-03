@@ -76,6 +76,9 @@ pub struct FixtureVm {
     pub tags: Vec<String>,
     #[serde(default)]
     pub protection: bool,
+    /// The VM's description, as its config holds it.
+    #[serde(default)]
+    pub description: Option<String>,
     /// Addresses the guest agent reports, or null when the agent is not running.
     #[serde(default)]
     pub ipv4: Option<Vec<String>>,

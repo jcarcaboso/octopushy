@@ -14,6 +14,7 @@ public sealed partial class RunFactory
     /// </summary>
     public Run Pipeline(LabRepository repository, ServiceDefinition service, Resource resource, Resource guestResource, DefinitionRevision revision, string reason)
     {
+        Managed(repository, repository.Guest(service.GuestAddress)?.InstallationAddress ?? string.Join('/', service.GuestAddress.Split('/').Take(2)));
         var inputs = PipelineInputs.Build(repository, service);
         var guest = inputs.Guest;
         if (guest.Retired)

@@ -109,6 +109,12 @@ public sealed class InstallationTrust
     public DateTimeOffset TrustedAt { get; set; }
 
     public required string TrustedBy { get; set; }
+
+    /// <summary>
+    /// The installation was observed only (<c>manage: false</c>) when it was trusted. Such trust covers
+    /// observations alone: once the installation asks to be managed, it has to be trusted again.
+    /// </summary>
+    public bool ObservedOnly { get; set; }
 }
 
 public static class ResourceKinds
@@ -197,6 +203,43 @@ public sealed class Resource
     public string? ObserveError { get; set; }
 
     public DateTimeOffset? ObserveErrorAt { get; set; }
+
+    /// <summary>
+    /// An installation that said <c>manage: false</c> in its last definition that could be read. It stays
+    /// so while its definition is invalid or missing; only a valid definition that asks to be managed ends it.
+    /// </summary>
+    public bool ObservedOnly { get; set; }
+
+    /// <summary>
+    /// The store keys of the tokens an observed-only installation has declared. They stay refused to every
+    /// other installation's work while it is observed only, and until it is trusted again as managed.
+    /// </summary>
+    public List<string> ObservedOnlyStoreKeys { get; set; } = [];
+
+    /// <summary>The endpoints an observed-only installation has declared, held like <see cref="ObservedOnlyStoreKeys"/>.</summary>
+    public List<string> ObservedOnlyEndpoints { get; set; } = [];
+
+    /// <summary>
+    /// A reservation: the installation, node and VMID of the machine an approved provision plan of this guest
+    /// creates, recorded when its apply is sent, and when it was first sent. It grants nothing by itself.
+    /// Ownership is <see cref="BoundVmid"/>, given only when a verified VM shows that create worked. Until
+    /// then the reservation lets this guest try its create again after an apply that did not finish, unless
+    /// an observation from before <see cref="ReservedAt"/> already showed a VM at that VMID; see SafetyBoundary.
+    /// It is cleared when the guest's VMID or node changes while it is unbound.
+    /// </summary>
+    public string? ReservedInstallation { get; set; }
+
+    public string? ReservedNode { get; set; }
+
+    public int? ReservedVmid { get; set; }
+
+    public DateTimeOffset? ReservedAt { get; set; }
+
+    /// <summary>
+    /// When an apply of an approved plan that creates the reserved machine succeeded. Only with this, and a
+    /// verified VM that carries Octopushy's tag and description, is the guest bound to it.
+    /// </summary>
+    public DateTimeOffset? ReservationAppliedAt { get; set; }
 }
 
 /// <summary>Where one of a guest's schedules stands. The definition itself stays in Git.</summary>

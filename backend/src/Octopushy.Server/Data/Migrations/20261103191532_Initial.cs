@@ -80,7 +80,8 @@ namespace Octopushy.Server.Data.Migrations
                     address = table.Column<string>(type: "text", nullable: false),
                     endpoints = table.Column<List<string>>(type: "text[]", nullable: false),
                     trusted_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    trusted_by = table.Column<string>(type: "text", nullable: false)
+                    trusted_by = table.Column<string>(type: "text", nullable: false),
+                    observed_only = table.Column<bool>(type: "boolean", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -177,7 +178,15 @@ namespace Octopushy.Server.Data.Migrations
                     bound_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     observe_requested_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     observe_error = table.Column<string>(type: "text", nullable: true),
-                    observe_error_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                    observe_error_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    observed_only = table.Column<bool>(type: "boolean", nullable: false),
+                    observed_only_store_keys = table.Column<List<string>>(type: "text[]", nullable: false),
+                    observed_only_endpoints = table.Column<List<string>>(type: "text[]", nullable: false),
+                    reserved_installation = table.Column<string>(type: "text", nullable: true),
+                    reserved_node = table.Column<string>(type: "text", nullable: true),
+                    reserved_vmid = table.Column<int>(type: "integer", nullable: true),
+                    reserved_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    reservation_applied_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {

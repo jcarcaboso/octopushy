@@ -156,6 +156,12 @@ async fn verify_guest_checks() {
     assert_eq!(out["node"], "korriban");
     assert_eq!(out["status"], "running");
     assert_eq!(out["ipv4Addresses"], json!(["10.1.0.21"]));
+    // What the controller tells a VM its guest's module made by.
+    assert_eq!(out["tags"], json!(["nixos", "opentofu"]));
+    assert_eq!(
+        out["description"],
+        "Managed by Octopushy as home/korriban/krb-crt-01."
+    );
     assert_eq!(
         out["checks"][0],
         json!({ "name": "present", "ok": true, "detail": "VM 210 exists" })

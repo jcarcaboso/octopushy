@@ -16,6 +16,7 @@
     {
       "vmid": 210, "name": "krb-crt-01", "node": "korriban", "status": "running",
       "tags": ["nixos", "opentofu"], "protection": true, "ipv4": ["10.1.0.21"],
+      "description": "Managed by Octopushy as home/korriban/krb-crt-01.",
       "maxCpu": 4, "maxMemoryBytes": 8589934592, "uptimeSeconds": 3600
     },
     {

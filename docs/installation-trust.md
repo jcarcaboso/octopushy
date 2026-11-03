@@ -4,7 +4,9 @@ Octopushy sends Proxmox credentials only to API endpoints an operator trusted.
 Trust belongs to a Proxmox installation, not to a commit: once an installation
 is trusted, every later revision of the repository runs without another click,
 unless it points that installation at a new endpoint. Trust is separate from
-**apply approval**, which each guest's policy still decides.
+**apply approval**, which each guest's policy still decides. What Octopushy refuses
+even with trust and approval, such as work in an installation set to `manage: false`,
+is in the [safety boundary](safety-boundary.md).
 
 ## Operator workflow
 
@@ -19,6 +21,11 @@ unless it points that installation at a new endpoint. Trust is separate from
 4. If a later commit changes the installation's endpoint, or gives a host its own
    endpoint, work for that installation waits again until you trust the new
    endpoints. Other installations are unaffected.
+5. Trust is bound to the management mode as well as the endpoints. Trust given while an
+   installation is observed only (`manage: false`) covers its observations alone, and a
+   commit that makes an installation observed only turns a grant given while it was
+   managed into one for observations. When a commit makes it managed again, all of its
+   work waits until you trust it as managed; see the [safety boundary](safety-boundary.md).
 
 ## What is bound
 
@@ -39,8 +46,9 @@ running mutations cannot be recalled.
 ## API
 
 - `GET /api/inventory` and `GET /api/installations/{id}`: each installation has
-  `trust` with its declared `endpoints`, the `untrusted` ones, `trustedAt` and
-  `trustedBy`.
+  `trust` with its declared `endpoints`, the `untrusted` ones, `trustedAt`,
+  `trustedBy`, and `managementChanged` when it was trusted in another management mode
+  than it is in now (then every endpoint is `untrusted`).
 - `POST /api/installations/{id}/trust` with `{ "endpoints": [...] }`: trusts the
   declared endpoints when they match the request. The actor comes from the session.
 

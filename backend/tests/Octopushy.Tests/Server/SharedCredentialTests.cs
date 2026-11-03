@@ -289,6 +289,13 @@ public class SharedCredentialTests(PostgresFixture postgres)
         using var http = await LoginAsync(server);
         var worker = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync(http);
+        // A guest whose VM Octopushy created: only a VM the guest owns has its protection lifted.
+        await server.WithDbAsync(async db =>
+        {
+            var resource = await db.Resources.FirstAsync(r => r.Address == Guest);
+            (resource.BoundInstallation, resource.BoundVmid, resource.BoundAt) = ("home/korriban", 310, DateTimeOffset.UtcNow);
+            await db.SaveChangesAsync();
+        });
         var preview = await worker.NextAsync("preview");
         Assert.True(JsonNode.Parse(preview.InputJson)!["destroy"]!.GetValue<bool>());
         Assert.Equal("shared-v1", preview.Secrets["proxmox.token"]);

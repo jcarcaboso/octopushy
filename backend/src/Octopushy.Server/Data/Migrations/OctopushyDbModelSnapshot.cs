@@ -562,6 +562,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("endpoints");
 
+                    b.Property<bool>("ObservedOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("observed_only");
+
                     b.Property<DateTimeOffset>("TrustedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("trusted_at");
@@ -872,6 +876,20 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("observe_requested_at");
 
+                    b.Property<bool>("ObservedOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("observed_only");
+
+                    b.PrimitiveCollection<List<string>>("ObservedOnlyEndpoints")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("observed_only_endpoints");
+
+                    b.PrimitiveCollection<List<string>>("ObservedOnlyStoreKeys")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("observed_only_store_keys");
+
                     b.Property<string>("Outputs")
                         .HasColumnType("jsonb")
                         .HasColumnName("outputs");
@@ -879,6 +897,26 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("ParentAddress")
                         .HasColumnType("text")
                         .HasColumnName("parent_address");
+
+                    b.Property<DateTimeOffset?>("ReservationAppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reservation_applied_at");
+
+                    b.Property<DateTimeOffset?>("ReservedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reserved_at");
+
+                    b.Property<string>("ReservedInstallation")
+                        .HasColumnType("text")
+                        .HasColumnName("reserved_installation");
+
+                    b.Property<string>("ReservedNode")
+                        .HasColumnType("text")
+                        .HasColumnName("reserved_node");
+
+                    b.Property<int?>("ReservedVmid")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_vmid");
 
                     b.Property<DateTimeOffset?>("RetiredAt")
                         .HasColumnType("timestamp with time zone")

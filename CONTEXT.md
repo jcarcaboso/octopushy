@@ -197,6 +197,21 @@ _Avoid_: Failure isolation when referring only to limiting simultaneous work
 **Definition revision**:
 An immutable snapshot of the homelab's declared configuration at a Git revision.
 
+**Observed-only installation**:
+A Proxmox installation set to `manage: false`: Octopushy observes its hosts and VMs
+and changes nothing there, so it holds no guests and gets no runs. The server keeps
+that state while its definition is invalid or missing, and it takes trust again to
+become managed. See the
+[safety boundary](docs/safety-boundary.md).
+_Avoid_: Unmanaged installation when meaning one Octopushy simply has no guests in
+
+**Foreign machine**:
+A Proxmox VM or container that is not the run's own: for a provision or retire run,
+anything but the guest's VMID on its host; for a pipeline stage, any machine. A plan
+that changes, deletes or replaces one, through any Proxmox resource, or that imports
+anything, is refused, whatever the policy says.
+_Avoid_: Unmanaged VM when meaning only that no guest declares it
+
 **Installation trust**:
 An operator's decision to let a Proxmox installation's credentials be sent to the
 API endpoints it declares, given once when the installation is added or an

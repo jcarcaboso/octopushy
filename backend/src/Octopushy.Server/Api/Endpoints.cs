@@ -194,6 +194,13 @@ public static partial class Endpoints
                 trust.Endpoints = endpoints;
                 trust.TrustedAt = clock.GetUtcNow();
                 trust.TrustedBy = actor;
+                // Trust while observed only covers observations alone. Trust as managed ends what it still reserved.
+                trust.ObservedOnly = resource.ObservedOnly;
+                if (!resource.ObservedOnly)
+                {
+                    resource.ObservedOnlyStoreKeys = [];
+                    resource.ObservedOnlyEndpoints = [];
+                }
                 foreach (var run in await db.Runs.Where(r => r.Status == RunStatuses.Blocked && r.Detail != null
                     && r.Detail.StartsWith(RepositoryTrust.WaitingForInstallation)).ToListAsync(ct))
                 {

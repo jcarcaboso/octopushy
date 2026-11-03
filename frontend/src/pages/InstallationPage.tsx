@@ -77,13 +77,13 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
 /** Asks for trust while the installation declares an endpoint its credentials were never sent to. */
 function TrustCallout({ installation }: { installation: InstallationSummary }) {
   const trust = useTrustInstallation();
-  const { endpoints, untrusted, trustedAt } = installation.trust;
+  const { endpoints, untrusted, trustedAt, managementChanged } = installation.trust;
   if (!installation.valid || untrusted.length === 0) return null;
   return (
     <div id="trust">
       <Callout
         kind="warning"
-        title={trustedAt ? "New Proxmox endpoint" : "New Proxmox installation"}
+        title={managementChanged ? "Now asks to be managed" : trustedAt ? "New Proxmox endpoint" : "New Proxmox installation"}
         actions={
           <button
             type="button"
@@ -97,7 +97,12 @@ function TrustCallout({ installation }: { installation: InstallationSummary }) {
         }
       >
         <p>
-          Plans, applies, and observations wait until you trust{" "}
+          {managementChanged
+            ? "It was trusted while it was observed only. Now that it asks to be managed, plans, applies, and observations wait"
+            : installation.managed
+              ? "Plans, applies, and observations wait"
+              : "Observations wait"}{" "}
+          until you trust{" "}
           {untrusted.map((endpoint, i) => (
             <span key={endpoint}>
               {i > 0 ? ", " : null}
@@ -140,6 +145,7 @@ export function InstallationPage() {
           <span className="inline-group">
             <span className="mono">{installation.address}</span>
             {installation.valid ? null : <StatusBadge status="invalid" />}
+            {installation.managed ? null : <Badge tone="info">Observed only</Badge>}
             {installation.observedAt ? (
               <span>
                 Observed <RelativeTime value={installation.observedAt} />
@@ -164,6 +170,14 @@ export function InstallationPage() {
         }
       />
       <div className="stack stack--large">
+        {installation.managed ? null : (
+          <Callout kind="info" title="Observed only">
+            <p>
+              This installation sets <span className="mono">manage: false</span>. Octopushy observes its hosts and VMs and changes nothing
+              here: it defines no guests or services, starts no runs, and sends its Proxmox token only to observations.
+            </p>
+          </Callout>
+        )}
         <TrustCallout installation={installation} />
         <ErrorMessage error={observe.error} />
         <WaitingNote text={installation.observeWaiting} />
@@ -193,12 +207,22 @@ export function InstallationPage() {
               <KeyValue
                 items={[
                   { term: "Type", value: installation.type ? humanize(installation.type) : "—" },
+                  {
+                    term: "Management",
+                    value: installation.managed ? "Managed" : <Badge tone="info">Observed only</Badge>,
+                  },
                   { term: "Endpoint", value: <span className="mono break">{installation.endpoint ?? "—"}</span> },
                   {
                     term: "Trust",
                     value: installation.trust.trustedAt ? (
                       <>
-                        {installation.trust.untrusted.length > 0 ? <Badge tone="warning">New endpoint</Badge> : <Badge tone="success">Trusted</Badge>}{" "}
+                        {installation.trust.managementChanged ? (
+                          <Badge tone="warning">Trusted as observed only</Badge>
+                        ) : installation.trust.untrusted.length > 0 ? (
+                          <Badge tone="warning">New endpoint</Badge>
+                        ) : (
+                          <Badge tone="success">Trusted</Badge>
+                        )}{" "}
                         by {installation.trust.trustedBy} · <RelativeTime value={installation.trust.trustedAt} />
                       </>
                     ) : (
