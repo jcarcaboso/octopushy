@@ -73,24 +73,23 @@ public static class GuestWork
                 return "Waiting for the guest's setup to be applied.";
         }
 
-        return service is null ? null : await OwnKeyRefusedAsync(db, guest, definition, service, repository, cancellationToken);
+        var runsOnGuest = service?.Stages.Any(s => repository.Recipes.GetValueOrDefault(s.Recipe)?.Configure is not null) ?? false;
+        return runsOnGuest ? await OwnKeyRefusedAsync(db, guest.Id, definition, cancellationToken) : null;
     }
 
-    /// <summary>What a service is told when its guest's machine does not have Octopushy's key and names none of its own.</summary>
-    public const string OwnKeyNotDelivered = "This service has a stage that runs on the guest, and Octopushy has never put its own key on the machine: "
-        + "no apply of the guest's provisioning has carried one. Octopushy does not force its key onto a machine it did not create, "
-        + "so name the key to log in with in access.sshKey.";
+    /// <summary>What a run that would log in with Octopushy's key is told when there is no record the key reached the machine.</summary>
+    public const string OwnKeyNotDelivered = "Octopushy has no record that its own key reached this machine: no successful apply of the guest's "
+        + "provisioning has carried the public key, and no login with it has worked. Octopushy puts its key on a machine only that way, "
+        + "so nothing that would log in with it starts. For a machine Octopushy did not create, name the key to log in with in access.sshKey.";
 
     /// <summary>
-    /// The managed key follows who manages the machine. Octopushy puts it on a machine through an apply of the guest's
-    /// provisioning, so a stage that would log in with it on a machine no such apply reached is refused, not tried.
+    /// Why Ansible work on this guest, from its setup recipe or a service's stage alike, may not log in with Octopushy's key,
+    /// or null. The key follows who manages the machine: Octopushy puts it on one only through an apply of the guest's
+    /// provisioning, so where nothing shows that happened, a login with it is not tried. A key the guest names wins.
     /// </summary>
-    private static async Task<string?> OwnKeyRefusedAsync(OctopushyDb db, Resource guest, GuestDefinition definition, ServiceDefinition service,
-        LabRepository repository, CancellationToken cancellationToken)
-    {
-        var runsOnGuest = service.Stages.Any(s => repository.Recipes.GetValueOrDefault(s.Recipe)?.Configure is not null);
-        if (!runsOnGuest || !ManagedAccess.Wanted(repository, definition))
-            return null;
-        return await GuestAccessCredentials.DeliveredAsync(db, guest.Id, cancellationToken) ? null : OwnKeyNotDelivered;
-    }
+    public static async Task<string?> OwnKeyRefusedAsync(OctopushyDb db, Guid guestId, GuestDefinition definition, CancellationToken cancellationToken) =>
+        !NamesOwnKey(definition) && !await GuestAccessCredentials.DeliveredAsync(db, guestId, cancellationToken) ? OwnKeyNotDelivered : null;
+
+    /// <summary>Whether the guest names the key its Ansible work logs in with, so Octopushy's is not used.</summary>
+    public static bool NamesOwnKey(GuestDefinition definition) => definition.Json["access"]?["sshKey"] is not null;
 }

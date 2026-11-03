@@ -4986,7 +4986,8 @@
           "appliedAt",
           "hasSnapshot",
           "schedules",
-          "secrets"
+          "secrets",
+          "refused"
         ],
         "type": "object",
         "properties": {
@@ -5035,6 +5036,12 @@
             "items": {
               "$ref": "#/components/schemas/FollowedSecretDto"
             }
+          },
+          "refused": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

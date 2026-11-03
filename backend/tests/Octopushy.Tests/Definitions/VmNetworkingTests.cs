@@ -44,7 +44,8 @@ public class VmNetworkingTests
             guest,
             new Resource { Kind = ResourceKinds.Guest, Address = guest.Address, Lab = guest.Lab },
             new DefinitionRevision { Commit = "rev" },
-            "test");
+            "test",
+            false);
         var context = RunContext.Parse(run.Context);
         Assert.Equal("proxmox", context.Verify);
         Assert.Equal(expectedIpv4, context.Proxmox.ExpectIpv4);

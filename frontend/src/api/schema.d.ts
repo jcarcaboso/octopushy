@@ -1154,6 +1154,7 @@ export interface components {
             hasSnapshot: boolean;
             schedules: components["schemas"]["GuestScheduleDto"][];
             secrets: components["schemas"]["FollowedSecretDto"][];
+            refused: null | string;
         };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];

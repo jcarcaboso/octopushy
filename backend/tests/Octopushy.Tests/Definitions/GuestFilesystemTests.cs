@@ -18,7 +18,7 @@ public class GuestFilesystemTests
         var factory = new RunFactory(Options.Create(new OctopushyOptions()), TimeProvider.System);
         Run Build(GuestDefinition g) => factory.Guest(repository, g,
             new Resource { Kind = ResourceKinds.Guest, Address = g.Address, Lab = g.Lab },
-            new DefinitionRevision { Commit = "rev" }, "test");
+            new DefinitionRevision { Commit = "rev" }, "test", false);
         Assert.Equal(new[] { "plan", "approval", "unprotect", "apply", "verify", "grow-root", "verify-root" },
             Build(guest).Steps.Select(s => s.Name));
         Assert.DoesNotContain(Build(guest with { Lifecycle = "retired" }).Steps,

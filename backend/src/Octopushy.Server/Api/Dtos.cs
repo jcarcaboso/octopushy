@@ -244,7 +244,9 @@ public sealed record GuestConfigurationDto(
     DateTimeOffset? AppliedAt,
     bool HasSnapshot,
     IReadOnlyList<GuestScheduleDto> Schedules,
-    IReadOnlyList<FollowedSecretDto> Secrets);
+    IReadOnlyList<FollowedSecretDto> Secrets,
+    /// <summary>Why no setup run starts, automatically or by hand, when it would log in with a key nothing shows reached the machine.</summary>
+    string? Refused);
 
 /// <summary>
 /// A store value the guest's setup takes at its active version. <see cref="Pending"/> means a

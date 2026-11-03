@@ -274,7 +274,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                         state?.AppliedAt,
                         state?.Snapshot is not null,
                         schedules,
-                        followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList());
+                        followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList(),
+                        await GuestWork.OwnKeyRefusedAsync(db, id, guest, cancellationToken));
                 }
             }
 

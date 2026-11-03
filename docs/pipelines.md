@@ -179,13 +179,23 @@ configured by its image.
   never a preview or an OpenTofu stage, and a run binds only its own guest's key.
 - **An explicit `access.sshKey` still wins**, and a guest that names one gets no key of Octopushy's.
 - **A machine Octopushy does not manage has to name `access.sshKey`.** Octopushy puts its key on a machine only through an
-  apply of that guest's provisioning, and never forces it on otherwise. A service whose stage would log in with Octopushy's
-  key, on a machine no such apply has carried it to, is refused and told to name one, on Deploy and on the service's page,
-  and no automatic run starts. That is what a guest whose provisioning caught up without an apply looks like, such as one
-  whose recipe does not put `sshAuthorizedKeys` on the machine.
+  apply of that guest's provisioning, and never forces it on otherwise. What it checks is a record, not ownership: **a
+  successful provisioning apply carried the public key, or a login with it alone worked.** That does not prove who owns the
+  machine, or that the key is still installed. Where neither is recorded, nothing that would log in with Octopushy's key
+  starts, for setup and services alike: no automatic run, including one for a changed store value the setup follows, and
+  Deploy, Configure and a schedule are refused with a message saying to name `access.sshKey`. The guest's and the service's
+  pages say the same, and the key is checked once more before it is released to a step. This is what a guest whose
+  provisioning caught up without an apply looks like, such as one whose recipe does not put `sshAuthorizedKeys` on the
+  machine. A 0.4.0 guest whose provisioning carried the key has the record already.
 
-**Adding a service with an Ansible stage to an existing guest delivers the key the way a setup recipe does.** It changes the
-guest's provisioning hash, so the guest is provisioned again first, and the service waits for that. For a VM that is an
+**Only a valid service gives its guest Octopushy's key.** An invalid `pipeline.yaml` affects only its service, so it does not
+count toward the guest's key, and it does not take away a key the guest already has either: while Octopushy holds a key for the
+guest, an invalid service with an Ansible stage keeps counting. Either change would otherwise reach the guest's provisioning,
+which reboots a VM and replaces a container, before the pipeline is valid or approved. Removing a service, or its last Ansible
+stage, does change what the guest wants, as removing a setup recipe does.
+
+**Adding a valid service with an Ansible stage to an existing guest delivers the key the way a setup recipe does.** It changes
+the guest's provisioning hash, so the guest is provisioned again first, and the service waits for that. For a VM that is an
 in-place update and one reboot. A container's keys are `ForceNew`, so for a container it is a replacement. Existing guests
 are rebuilt rather than migrated, so nothing more is built for them.
 

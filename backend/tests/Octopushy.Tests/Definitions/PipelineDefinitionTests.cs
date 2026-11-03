@@ -216,13 +216,31 @@ public class PipelineDefinitionTests
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.DoesNotContain(repository.Issues, i => i.Severity == IssueSeverity.Error);
         Assert.True(repository.IsValid(Address));
-        Assert.True(ManagedAccess.Wanted(repository, repository.Guest(Guest)!));
+        Assert.True(ManagedAccess.Wanted(repository, repository.Guest(Guest)!, false));
 
         // The key reaches the machine through its provisioning, so the guest is provisioned again to carry it.
         using var tofuOnly = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
         var plain = LabRepositoryLoader.Load(tofuOnly.Root);
-        Assert.False(ManagedAccess.Wanted(plain, plain.Guest(Guest)!));
+        Assert.False(ManagedAccess.Wanted(plain, plain.Guest(Guest)!, false));
         Assert.NotEqual(ProvisionHash(tofuOnly), ProvisionHash(test));
+    }
+
+    [Fact]
+    public void Only_a_valid_service_gives_its_guest_octopushys_key_and_an_invalid_one_keeps_what_there_is()
+    {
+        // The recipe needs web_password, which this stage does not give: the service is invalid, its guest is not.
+        using var test = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: deploy, recipe: web, inputs: { port: 1 } }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.False(repository.IsValid(Address));
+        Assert.True(repository.IsValid(Guest));
+        var guest = repository.Guest(Guest)!;
+        Assert.False(ManagedAccess.Wanted(repository, guest, keyIssued: false));
+        Assert.True(ManagedAccess.Wanted(repository, guest, keyIssued: true));
+
+        using var tofuOnly = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
+        var plain = LabRepositoryLoader.Load(tofuOnly.Root);
+        Assert.Equal(ProvisionInputs.Build(plain, plain.Guest(Guest)!, "c").Hash, ProvisionInputs.Build(repository, guest, "c", keyIssued: false).Hash);
+        Assert.False(ManagedAccess.Wanted(plain, plain.Guest(Guest)!, keyIssued: true));
     }
 
     [Fact]
@@ -231,12 +249,12 @@ public class PipelineDefinitionTests
         using var test = WithoutSetup(declaredKey: true);
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.True(repository.IsValid(Address));
-        Assert.False(ManagedAccess.Wanted(repository, repository.Guest(Guest)!));
+        Assert.False(ManagedAccess.Wanted(repository, repository.Guest(Guest)!, false));
 
         // The same beside a setup recipe, with a service whose stage runs on the guest.
         using var withSetup = Repository();
         var both = LabRepositoryLoader.Load(withSetup.Root);
-        Assert.False(ManagedAccess.Wanted(both, both.Guest(Guest)!));
+        Assert.False(ManagedAccess.Wanted(both, both.Guest(Guest)!, false));
     }
 
     [Fact]

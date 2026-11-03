@@ -33,7 +33,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
 
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            var run = factory.Guest(repository, guest, resource, revision, "manual");
+            var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken));
             await engine.AddRunsAsync(db, [run], cancellationToken);
             return run.Id;
         }, cancellationToken);
@@ -60,6 +60,9 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
             if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
                 throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
+            // By hand or on a schedule alike: a schedule's refusal is noted on the guest, and nothing starts.
+            if (await GuestWork.OwnKeyRefusedAsync(db, resource.Id, guest, cancellationToken) is { } refused)
+                throw new RunException(refused);
             var inputs = ConfigureInputs.Build(repository, guest);
             var chosen = action ?? inputs.Configure.OnChange?.Id
                 ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
@@ -85,7 +88,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            if (!ManagedAccess.Wanted(repository, guest))
+            if (!ManagedAccess.Wanted(repository, guest, await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken)))
                 throw new RunException("This guest has no key of Octopushy's to rotate.");
             if (await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
                         && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
@@ -143,10 +146,16 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             if (due.Count == 0 && following.Count == 0) return 0;
 
             var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
+            // Nothing that would log in with Octopushy's key starts where there is no record it reached the machine,
+            // as GuestWork.OwnKeyRefusedAsync says. Such a guest stays due, so it is configured once that changes.
+            var delivered = await GuestAccessCredentials.DeliveredAmongAsync(db,
+                due.Select(i => i.Resource.Id).Concat(following.Select(i => i.Resource.Id)).ToList(), cancellationToken);
+            bool Refused(Resource resource, GuestDefinition guest) => !GuestWork.NamesOwnKey(guest) && !delivered.Contains(resource.Id);
             var runs = new List<Run>();
             foreach (var item in due)
             {
-                if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Guest(item.Resource.Address) is not { SetupRecipe: not null } guest)
+                if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Guest(item.Resource.Address) is not { SetupRecipe: not null } guest
+                    || Refused(item.Resource, guest))
                     continue;
                 var inputs = ConfigureInputs.Build(repository, guest);
                 item.Configuration.DesiredHash = inputs.Hash;
@@ -161,7 +170,9 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             var followed = new List<(GuestConfiguration Configuration, Resource Resource, GuestDefinition Guest, IReadOnlyList<string> Keys)>();
             foreach (var item in following)
             {
-                if (repository.Resource(item.Resource.Address)?.Valid == true && repository.Guest(item.Resource.Address) is { SetupRecipe: not null } guest)
+                // A refused guest's change of a followed value stays owed, as its other changes do.
+                if (repository.Resource(item.Resource.Address)?.Valid == true && repository.Guest(item.Resource.Address) is { SetupRecipe: not null } guest
+                    && !Refused(item.Resource, guest))
                     followed.Add((item.Configuration, item.Resource, guest, ConfigureInputs.FollowedSecretsOf(guest)));
             }
 

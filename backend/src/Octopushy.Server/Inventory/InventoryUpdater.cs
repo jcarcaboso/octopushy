@@ -139,6 +139,10 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         }
 
         var changedInstallations = new List<(Resource Resource, RunContext Context)>();
+        // Whether Octopushy holds a key for a guest is part of whether it wants one; see ManagedAccess.Wanted.
+        var guestIds = guests.Select(g => g.Id).ToList();
+        var issued = (await db.GuestAccessKeys.AsNoTracking().Where(k => guestIds.Contains(k.ResourceId)).Select(k => k.ResourceId).Distinct()
+            .ToListAsync(cancellationToken)).ToHashSet();
         foreach (var resource in guests)
         {
             if (!resource.Valid)
@@ -148,7 +152,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             }
 
             var guest = repository.Guest(resource.Address)!;
-            var inputs = ProvisionInputs.Build(repository, guest, revision.Commit);
+            var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id));
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
             if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
             {
@@ -162,7 +166,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             Run proposed;
             try
             {
-                proposed = factory.Guest(repository, guest, resource, revision, "revision");
+                proposed = factory.Guest(repository, guest, resource, revision, "revision", issued.Contains(resource.Id));
             }
             catch (RunException error)
             {

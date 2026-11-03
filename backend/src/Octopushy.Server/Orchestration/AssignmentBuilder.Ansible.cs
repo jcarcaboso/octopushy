@@ -45,6 +45,11 @@ public sealed partial class AssignmentBuilder
         // A pipeline run's resource is the service: the key is its guest's.
         var guestId = context.GuestResourceId ?? run.ResourceId;
         var ownKey = names.Contains(SecretNames.AnsibleSshKey) && context.Secrets[SecretNames.AnsibleSshKey] == GuestAccessCredentials.Key(guestId);
+        // Checked again here, before anything is resolved, for a run started before the record changed or by a path
+        // that did not check: the private half never goes out for a login nothing shows can work.
+        if ((ownKey || (rotation is not null && step.Name != StepNames.Preview))
+            && !await GuestAccessCredentials.DeliveredAsync(db, guestId, cancellationToken))
+            throw new AssignmentException(GuestWork.OwnKeyNotDelivered);
         var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
             stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),

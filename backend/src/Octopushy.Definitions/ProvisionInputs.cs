@@ -24,7 +24,8 @@ public sealed record ProvisionInputs(
     private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
-    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision)
+    /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>
+    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision, bool keyIssued = false)
     {
         var installation = repository.Installation(guest.InstallationAddress)
             ?? throw new InvalidOperationException($"{guest.Address} has no installation.");
@@ -120,7 +121,7 @@ public sealed record ProvisionInputs(
         }
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
-        if (ManagedAccess.Wanted(repository, guest))
+        if (ManagedAccess.Wanted(repository, guest, keyIssued))
         {
             hashed["managedAccess"] = true;
         }
