@@ -25,6 +25,20 @@ public sealed record ConfigureInputs(
     /// <summary>Fields of <c>access</c> that only configure runs use. None of them reaches OpenTofu.</summary>
     public static readonly string[] AccessOnly = ["address", "port", "user", "sshKey", "hostKey"];
 
+    /// <summary>
+    /// The store keys <c>setup.secrets</c> and <c>setup.secretFiles</c> name without a version, so
+    /// a run takes whichever version is active. A new active version of one of them starts the
+    /// onChange action. A key pinned to a version in Git changes only with a commit, and a
+    /// <c>system/</c> key, which validation refuses here anyway, rotates on its own terms.
+    /// </summary>
+    public IReadOnlyList<string> FollowedSecrets => FollowedSecretsOf(Guest);
+
+    /// <inheritdoc cref="FollowedSecrets"/>
+    public static IReadOnlyList<string> FollowedSecretsOf(GuestDefinition guest) =>
+        Secrets(guest, "secrets").Values.Concat(Secrets(guest, "secretFiles").Values)
+            .Where(r => r.Version is null && !r.Key.StartsWith(LabRepositoryLoader.SystemScope, StringComparison.Ordinal))
+            .Select(r => r.Key).Distinct().Order(StringComparer.Ordinal).ToList();
+
     /// <summary>Where a configure run connects: the declared address, or the guest's own.</summary>
     public static string? AddressOf(GuestDefinition guest) =>
         guest.Json["access"]?["address"]?.GetValue<string>() ?? ProvisionInputs.ExpectedIpv4(guest);

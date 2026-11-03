@@ -1135,6 +1135,14 @@ export interface components {
             newIssues: components["schemas"]["IssueDto"][];
             formatIssues: components["schemas"]["IssueDto"][];
         };
+        FollowedSecretDto: {
+            key: string;
+            /** Format: int32 */
+            activeVersion: null | number;
+            /** Format: int32 */
+            startedVersion: null | number;
+            pending: boolean;
+        };
         GuestConfigurationDto: {
             recipe: string;
             actions: components["schemas"]["ConfigureActionDto"][];
@@ -1145,6 +1153,7 @@ export interface components {
             appliedAt: null | string;
             hasSnapshot: boolean;
             schedules: components["schemas"]["GuestScheduleDto"][];
+            secrets: components["schemas"]["FollowedSecretDto"][];
         };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];
@@ -1548,6 +1557,7 @@ export interface components {
             finishedAt: null | string;
             currentStep: null | string;
             waiting: null | string;
+            reasonDetail?: null | string;
         };
         ServiceDetailDto: {
             service: components["schemas"]["ServiceSummaryDto"];

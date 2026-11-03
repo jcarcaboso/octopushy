@@ -65,7 +65,9 @@ export function RunTable({ runs, label, showAddress = true, emptyText = "No runs
                   <span className="muted num">{formatDuration(duration)}</span>
                 ) : null}
               </td>
-              <td className="nowrap muted">{reasonLabel(run.reason)}</td>
+              <td className="nowrap muted" title={run.reasonDetail ?? undefined}>
+                {reasonLabel(run.reason)}
+              </td>
               <td>
                 <Commit commit={run.commit} />
               </td>

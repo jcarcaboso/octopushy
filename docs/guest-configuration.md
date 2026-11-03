@@ -83,15 +83,59 @@ connection, and they are refused in `setup.inputs`, `setup.secrets`, `setup.secr
 | The first time a provisioned, verified guest has a `setup.recipe` | the `onChange` action | Implemented |
 | A change to `setup`, `access`, the recipe, its `root`, or the guest's folder | the `onChange` action | Implemented |
 | A provision run that creates or replaces something, such as a new VM | the `onChange` action | Implemented |
+| A new active version of a store value `setup.secrets` or `setup.secretFiles` names | the `onChange` action | Implemented, [below](#shared-store-values) |
 | **Configure** on the guest page, or `POST /api/guests/{id}/configure` | the one chosen | Implemented |
 | A schedule declared on the guest | the one it names | Implemented, [below](#schedules) |
 
-Each input hash gets one automatic run. A failure is not retried by itself: it waits for a
-new commit or a person. A guest that is not in sync with its provisioning waits for that
+Each input hash gets one automatic run, and so does each active version of a store value the
+setup follows. A failure is not retried by itself: it waits for a new commit, a new version or
+a person. A guest that is not in sync with its provisioning waits for that
 first, so one commit that changes both runs them in order. A guest whose recipe declares no
 `onChange` action is only ever run by hand. Automatic runs use the head of the branch, so a
 rollback configures the commit it returned to. A person cannot start a run on a guest whose
 provisioning has not caught up either.
+
+### Shared store values
+
+**Decided November 3, 2026.** One store key can hold a credential many guests use, such as a Git
+SSH key, a GitHub CLI `hosts.yml` or a GitLab CLI config. Promoting a new version of it reaches
+every guest that names it:
+
+```yaml
+setup:
+  secrets:
+    machine_gh_hosts: { store: shared/gh-hosts }
+  secretFiles:
+    machine_git_ssh_key: { store: shared/git-ssh-key }
+```
+
+Octopushy records, for each guest, the active version of each key its setup names without a
+`version`, at the moment its `onChange` action starts. When a key's active version later differs,
+the guest gets one run of that action, with the reason **Store value changed** and a detail naming
+the key and both versions, such as `shared/git-ssh-key v2 to v3`. Its guest page lists the keys it
+follows, the version active now, the one it was last attempted with, and **Run pending** while a
+run is owed. "Attempted" is deliberate: a run that failed still counts, because a failure is not
+repeated for the same version, so the machine may still hold the older value. Before revoking the
+old credential upstream, check that each guest's newest run with the new version succeeded. Each guest's own `policy.approval` applies, so a guest with manual approval waits
+for a person, as for a commit. A promotion configures every guest that follows the key, each
+independently: one failing does not hold back another.
+
+| Case | What happens |
+|---|---|
+| **Staged candidate.** | Nothing. Only the active version counts, so a candidate starts nothing until it is promoted |
+| **Rollback.** An older version is promoted again | A change like any other: one run, with that older version. As a commit rollback configures the commit it returned to, the value that is active is the one delivered |
+| **Revoked or deleted.** The active version is revoked, or the key is removed | Nothing. There is nothing to deliver, and a run would only block. The record keeps the version it had, so promoting a working version afterwards starts the run |
+| **Failure.** | Each version gets one automatic run. A failed run is not repeated for the same version: it waits for the next promotion, a commit, or a person |
+| **Active run.** Any run is active or waiting on the guest | The change waits, like a commit's. If that run is of the `onChange` action and pinned the new version, because the promotion came before its first step went out, it delivered it, and nothing more is owed. Otherwise the run starts once the guest is free |
+| **Uncertain run.** | Holds the change with everything else until a person closes it |
+| **Schedule.** | A scheduled run, or one a person starts, of the `onChange` action delivers what is active and is recorded the same way, so nothing is owed after it. A schedule of another action does not count, even though it takes the new version too: the `onChange` action is the one that converges a guest. A firing while the store's run is active is skipped, as with any overlap |
+| **A commit too.** | A commit that changes the guest's configure inputs runs the action once, recording the store's versions at the same time, so one change of each makes one run |
+| **Pinned in Git.** `{ store: …, version: 2 }` | Not followed. That version changes only with a commit, which the configure hash already covers |
+| **`system/` keys.** | Not followed. Validation refuses them in `setup`, and the guest's own access key keeps its [own rotation](#rotating-the-key), whose stages prove a login. `access.sshKey` and `access.hostKey` are not followed either: they decide how a run connects, not what it configures |
+| **Upgrade.** | A guest configured before this was built records what is active at its first check and starts nothing, so upgrading runs no guest |
+
+A plan of the guest's provisioning is not affected: OpenTofu receives no setup secret, and the
+provisioning hash does not include store versions.
 
 ### Schedules
 

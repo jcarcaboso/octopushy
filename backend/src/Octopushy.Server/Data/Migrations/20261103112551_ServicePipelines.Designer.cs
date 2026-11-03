@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261103102343_ServicePipelines")]
+    [Migration("20261103112551_ServicePipelines")]
     partial class ServicePipelines
     {
         /// <inheritdoc />
@@ -503,6 +503,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("ProposedHash")
                         .HasColumnType("text")
                         .HasColumnName("proposed_hash");
+
+                    b.Property<string>("SecretVersions")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("secret_versions");
 
                     b.Property<string>("Snapshot")
                         .HasColumnType("jsonb")
@@ -1088,6 +1092,10 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("reason");
+
+                    b.Property<string>("ReasonDetail")
+                        .HasColumnType("text")
+                        .HasColumnName("reason_detail");
 
                     b.Property<Guid>("ResourceId")
                         .HasColumnType("uuid")

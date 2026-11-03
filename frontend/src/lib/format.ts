@@ -47,6 +47,7 @@ const reasons: Record<string, string> = {
   revision: "New revision",
   manual: "Started by hand",
   schedule: "Scheduled",
+  secret: "Store value changed",
 };
 
 export function reasonLabel(reason: string): string {

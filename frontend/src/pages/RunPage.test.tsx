@@ -327,6 +327,21 @@ describe("RunPage", () => {
     expect(await screen.findByText(/Waiting for a connected agent with the labels home/)).toBeInTheDocument();
   });
 
+  it("says which store value started a run", async () => {
+    mockApi({
+      "GET /api/runs/run-1": () =>
+        runDetail({
+          operation: "configure",
+          reason: "secret",
+          reasonDetail: "A store value this guest's setup uses changed: shared/git-ssh-key v2 to v3.",
+        }),
+    });
+
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    expect(await screen.findByText("Store value changed")).toBeInTheDocument();
+    expect(screen.getByText(/shared\/git-ssh-key v2 to v3/)).toBeInTheDocument();
+  });
+
   it("explains an uncertain outcome and offers to close the run", async () => {
     const detail = runDetail({ status: "uncertain", detail: "The agent stopped reporting." });
     detail.canCancel = false;

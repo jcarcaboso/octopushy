@@ -314,6 +314,14 @@ public sealed class GuestConfiguration
 
     /// <summary>What the last successful run prepared, as JSON, for an action that reuses it.</summary>
     public string? Snapshot { get; set; }
+
+    /// <summary>
+    /// JSON: each store key the guest's <c>setup.secrets</c> and <c>setup.secretFiles</c> name
+    /// without a version, and the active version its onChange action was last started with, or
+    /// null when the key had none. A different active version starts that action once. Null
+    /// until first recorded.
+    /// </summary>
+    public string? SecretVersions { get; set; }
 }
 
 public static class Operations
@@ -330,6 +338,9 @@ public static class Operations
 public static class RunReasons
 {
     public const string Schedule = "schedule";
+
+    /// <summary>A store value the guest's setup names changed its active version.</summary>
+    public const string Secret = "secret";
 }
 
 public static class RunStatuses
@@ -361,8 +372,11 @@ public sealed class Run
 
     public string? Commit { get; set; }
 
-    /// <summary><c>revision</c>, <c>manual</c>, or <c>schedule</c>.</summary>
+    /// <summary><c>revision</c>, <c>manual</c>, <c>schedule</c>, or <c>secret</c>.</summary>
     public required string Reason { get; set; }
+
+    /// <summary>What exactly started the run, such as which store values changed. Fixed when it is created.</summary>
+    public string? ReasonDetail { get; set; }
 
     public string Status { get; set; } = RunStatuses.Queued;
 
