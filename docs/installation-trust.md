@@ -21,9 +21,11 @@ is in the [safety boundary](safety-boundary.md).
 4. If a later commit changes the installation's endpoint, or gives a host its own
    endpoint, work for that installation waits again until you trust the new
    endpoints. Other installations are unaffected.
-5. Trust given while an installation is observed only (`manage: false`) covers its
-   observations alone. When a commit makes it managed, all of its work waits again
-   until you trust it as managed; see the [safety boundary](safety-boundary.md).
+5. Trust is bound to the management mode as well as the endpoints. Trust given while an
+   installation is observed only (`manage: false`) covers its observations alone, and a
+   commit that makes an installation observed only turns a grant given while it was
+   managed into one for observations. When a commit makes it managed again, all of its
+   work waits until you trust it as managed; see the [safety boundary](safety-boundary.md).
 
 ## What is bound
 
@@ -45,8 +47,8 @@ running mutations cannot be recalled.
 
 - `GET /api/inventory` and `GET /api/installations/{id}`: each installation has
   `trust` with its declared `endpoints`, the `untrusted` ones, `trustedAt`,
-  `trustedBy`, and `managementChanged` when it was trusted while observed only and now
-  asks to be managed (then every endpoint is `untrusted`).
+  `trustedBy`, and `managementChanged` when it was trusted in another management mode
+  than it is in now (then every endpoint is `untrusted`).
 - `POST /api/installations/{id}/trust` with `{ "endpoints": [...] }`: trusts the
   declared endpoints when they match the request. The actor comes from the session.
 
