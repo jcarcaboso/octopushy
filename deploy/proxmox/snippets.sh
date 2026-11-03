@@ -8,30 +8,44 @@
 # The key is the public half Octopushy shows on the installation's page. Running it again
 # with the same settings changes nothing, and with a new key it replaces the old one.
 #
-# What it does:
+# What it does, once every check below has passed and before anything else:
 #   1. Adds `snippets` to the content of a directory datastore (OCTOPUSHY_SNIPPETS_DATASTORE,
 #      default `local`).
 #   2. Creates a system account (OCTOPUSHY_SNIPPETS_USER, default `octopushy-snippets`) with
 #      no password and no shell.
 #   3. Builds a chroot holding only that datastore's snippets directory, at the same path,
 #      and bind mounts the real directory into it with a systemd mount unit.
-#   4. Adds an sshd `Match User` block: that account may only log in with the key, only use
-#      SFTP, only inside the chroot, and new files are created mode 0600.
-#   5. Installs the key, checks the whole sshd configuration with `sshd -t`, and only then
-#      reloads sshd. A configuration that does not pass is put back as it was.
+#   4. Adds an sshd drop-in that sorts first, with one block, `Match User <account>` and no other
+#      condition: that account may only log in with the key, only use SFTP, only inside the
+#      chroot, and new files are created mode 0600. sshd takes the first value it finds for these
+#      settings, so the block holds for every connection of that account, and it names no other.
+#   5. Checks the whole sshd configuration with `sshd -t`, and only then reloads sshd. If that or
+#      anything after it fails, sshd's files are put back as they were.
 #   6. Prints what it changed, and this host's SSH host key for Octopushy to pin.
 #
-# --remove undoes 2 to 5, and leaves the datastore's content and any snippets as they are.
+# It changes nothing, and says why, if: the account is root or exists without this script's
+# marker; sshd_config does not include sshd_config.d at its top; sshd -t already fails; the
+# drop-in's name is taken by a file this script did not write, or another drop-in sorts before
+# it; or any other sshd file mentions the account.
+#
+# --remove undoes 2 to 5 with the same checks and the same restore, and leaves the datastore's
+# content and any snippets as they are.
 set -euo pipefail
+# Byte order for comparing file names, as sshd's Include sorts them, and plain messages.
+export LC_ALL=C
 
 user=${OCTOPUSHY_SNIPPETS_USER:-octopushy-snippets}
 datastore=${OCTOPUSHY_SNIPPETS_DATASTORE:-local}
 key=${OCTOPUSHY_SNIPPETS_KEY:-}
 chroot=/var/lib/$user
+main_conf=/etc/ssh/sshd_config
 conf_dir=/etc/ssh/sshd_config.d
-conf=$conf_dir/$user.conf
+conf=$conf_dir/00-$user.conf
 keys_dir=/etc/ssh/$user
 keys=$keys_dir/authorized_keys
+# What marks the account and the drop-in as this script's own.
+marker="Octopushy snippet uploads"
+conf_marker="# Octopushy snippet uploads, for the account $user. Written by snippets.sh; remove with --remove."
 
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
@@ -49,12 +63,16 @@ while (($#)); do
   shift
 done
 
+# ---- Checks. Nothing on the host changes until all of them have passed. ----
+
 ((EUID == 0)) || die "run this as root on the Proxmox host"
 [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "not a user name: $user"
-# The account is this script's own. It never takes over one that exists, root least of all: the
-# sshd block it writes would make that account's logins SFTP-only, in a chroot. Checked before
-# anything changes, for --remove as well.
-marker="Octopushy snippet uploads"
+[[ $datastore =~ ^[A-Za-z][A-Za-z0-9_.-]*$ ]] || die "not a datastore name: $datastore"
+for tool in pvesh pvesm sshd ssh-keygen systemctl systemd-escape python3; do
+  command -v "$tool" >/dev/null || die "$tool is missing: is this a Proxmox VE host?"
+done
+
+# The account is this script's own. It never takes over one that exists, root least of all.
 [[ $user != root ]] || die "the account cannot be root"
 if entry=$(getent passwd "$user"); then
   IFS=: read -r _ _ uid _ gecos _ <<<"$entry"
@@ -63,19 +81,19 @@ if entry=$(getent passwd "$user"); then
 elif getent group "$user" >/dev/null; then
   die "a group $user exists without this script's account; choose another OCTOPUSHY_SNIPPETS_USER"
 fi
-[[ $datastore =~ ^[A-Za-z][A-Za-z0-9_.-]*$ ]] || die "not a datastore name: $datastore"
-for tool in pvesh pvesm sshd ssh-keygen systemctl systemd-escape; do
-  command -v "$tool" >/dev/null || die "$tool is missing: is this a Proxmox VE host?"
-done
+
+if ((!remove)); then
+  [[ -n $key ]] || die "set OCTOPUSHY_SNIPPETS_KEY to the public key Octopushy shows for this installation"
+  [[ $key != *$'\n'* ]] || die "OCTOPUSHY_SNIPPETS_KEY must be one line"
+  read -r key_type key_blob key_comment <<<"$key"
+  [[ $key_type == ssh-ed25519 ]] || die "expected an ssh-ed25519 public key"
+  fingerprint=$(ssh-keygen -l -f /dev/stdin <<<"$key_type $key_blob" 2>/dev/null) || die "that is not a valid public key"
+  key_line="restrict $key_type $key_blob ${key_comment:-$user}"
+fi
 
 # sshd's service is `ssh` on Debian, and so on Proxmox.
 service=ssh
 systemctl list-unit-files ssh.service >/dev/null 2>&1 || service=sshd
-
-reload_sshd() {
-  sshd -t || return 1
-  systemctl reload "$service"
-}
 
 # The datastore's directory, from Proxmox itself.
 storage_json=$(pvesh get "/storage/$datastore" --output-format json) || die "there is no datastore $datastore"
@@ -86,14 +104,65 @@ snippets=$path/snippets
 inner=$chroot$snippets
 unit=$(systemd-escape -p --suffix=mount "$inner")
 
+# The drop-in is read before anything else in sshd's configuration: Debian's sshd_config includes
+# sshd_config.d at its top, and the drop-in sorts first there.
+first=$(grep -Ev '^[[:space:]]*(#|$)' "$main_conf" | head -n 1)
+[[ $first =~ ^[[:space:]]*[Ii][Nn][Cc][Ll][Uu][Dd][Ee][[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf[[:space:]]*$ ]] \
+  || die "$main_conf must start with 'Include $conf_dir/*.conf', as Debian's does; its first setting is: $first"
+sshd -t || die "sshd -t refuses the configuration as it is; fix that first"
+if [[ -e $conf ]]; then
+  [[ -f $conf && $(head -n 1 "$conf") == "$conf_marker" ]] || die "$conf exists and this script did not write it; nothing was changed"
+fi
+# sshd expands the Include in byte order, as the C locale sorts.
+earlier=()
+shopt -s nullglob
+for file in "$conf_dir"/*.conf; do
+  name=${file##*/}
+  if [[ $name < ${conf##*/} ]]; then earlier+=("$name"); fi
+done
+shopt -u nullglob
+((${#earlier[@]} == 0)) || die "these drop-ins sort before ${conf##*/} and would be read first: ${earlier[*]}"
+# Any other mention of the account, such as a Match block for it on some addresses, could set its
+# settings before this script's block does, or after it for what sshd reads last.
+mentions=$(grep -lE -- "(^|[^A-Za-z0-9_.-])$user([^A-Za-z0-9_.-]|\$)" "$main_conf" "$conf_dir"/* 2>/dev/null | grep -vxF -- "$conf" || true)
+[[ -z $mentions ]] || die "other sshd files mention $user: $(tr '\n' ' ' <<<"$mentions")nothing was changed"
+
+# ---- sshd's files: written, checked and reloaded, or put back. ----
+
+had_conf=0 had_keys=0 old_conf= old_keys=
+if [[ -f $conf ]]; then had_conf=1; old_conf=$(cat "$conf"); fi
+if [[ -f $keys ]]; then had_keys=1; old_keys=$(cat "$keys"); fi
+root_before=$(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1")
+staged=0 reloaded=0
+restore_sshd() {
+  ((staged)) || return 0
+  if ((had_conf)); then printf '%s\n' "$old_conf" >"$conf"; else rm -f -- "$conf"; fi
+  if ((had_keys)); then mkdir -p -- "$keys_dir"; printf '%s\n' "$old_keys" >"$keys"; else rm -f -- "$keys"; fi
+  if ((reloaded)); then systemctl reload "$service" || true; fi
+  printf '\033[31m    sshd: put back as it was\033[0m\n' >&2
+}
+trap restore_sshd EXIT
+
+# Checks what sshd would read, then reloads it. Any failure here leaves restore_sshd to run.
+apply_sshd() {
+  sshd -t || die "sshd -t refused the configuration"
+  [[ $(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1") == "$root_before" ]] || die "the configuration would change root's login"
+  reloaded=1
+  systemctl reload "$service"
+  note "reloaded sshd"
+}
+
 if ((remove)); then
   say "Removing the $user account and its SFTP access"
-  if [[ -f $conf ]]; then
-    rm -f -- "$conf"
-    reload_sshd || die "sshd -t failed after removing $conf; fix the configuration, then reload ssh"
-    note "removed $conf and reloaded sshd"
+  if ((had_conf || had_keys)); then
+    staged=1
+    rm -f -- "$conf" "$keys"
+    ((had_conf)) && note "removed $conf"
+    ((had_keys)) && note "removed $keys"
+    apply_sshd
+    staged=0
   fi
-  if [[ -e $keys_dir ]]; then rm -rf -- "$keys_dir"; note "removed $keys_dir"; fi
+  [[ -d $keys_dir ]] && rmdir -- "$keys_dir" && note "removed $keys_dir"
   if [[ -f /etc/systemd/system/$unit ]]; then
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
     rm -f -- "/etc/systemd/system/$unit"
@@ -120,12 +189,7 @@ if ((remove)); then
   exit 0
 fi
 
-[[ -n $key ]] || die "set OCTOPUSHY_SNIPPETS_KEY to the public key Octopushy shows for this installation"
-[[ $key != *$'\n'* ]] || die "OCTOPUSHY_SNIPPETS_KEY must be one line"
-read -r key_type key_blob key_comment <<<"$key"
-[[ $key_type == ssh-ed25519 ]] || die "expected an ssh-ed25519 public key"
-fingerprint=$(ssh-keygen -l -f /dev/stdin <<<"$key_type $key_blob" 2>/dev/null) || die "that is not a valid public key"
-key_line="restrict $key_type $key_blob ${key_comment:-$user}"
+# ---- Changes. ----
 
 say "Datastore $datastore ($path)"
 if [[ ,$content, == *,snippets,* ]]; then
@@ -185,9 +249,7 @@ if ! mountpoint -q -- "$inner"; then systemctl start "$unit"; note "mounted $sni
 mountpoint -q -- "$inner" || die "$inner is not mounted"
 
 say "sshd"
-grep -Eqi '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config \
-  || die "/etc/ssh/sshd_config does not include $conf_dir/*.conf; add that Include line first"
-conf_text="# Written by Octopushy's snippets.sh. Remove with: bash snippets.sh --remove
+conf_text="$conf_marker
 Match User $user
     AuthorizedKeysFile $keys
     AuthenticationMethods publickey
@@ -202,23 +264,7 @@ Match User $user
     PermitTTY no
     PermitUserRC no
     X11Forwarding no"
-# Written, checked as sshd will read it, and reloaded only then. If anything fails, the files are
-# put back as they were, and sshd is reloaded again if it already had them, so it keeps running
-# what it had. What came before this stage is left for a second run or --remove.
-had_conf=0 had_keys=0 old_conf= old_keys=
-if [[ -f $conf ]]; then had_conf=1; old_conf=$(cat "$conf"); fi
-if [[ -f $keys ]]; then had_keys=1; old_keys=$(cat "$keys"); fi
-sshd -t || die "sshd -t refuses the configuration as it is, before any change of this script's; fix that first"
-root_before=$(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1")
-staged=0 reloaded=0 sshd_changed=0
-restore_sshd() {
-  ((staged)) || return 0
-  if ((had_conf)); then printf '%s\n' "$old_conf" >"$conf"; else rm -f -- "$conf"; fi
-  if ((had_keys)); then printf '%s\n' "$old_keys" >"$keys"; else rm -f -- "$keys"; fi
-  if ((reloaded)); then systemctl reload "$service"; fi
-  printf '\033[31m    sshd: put back as it was\033[0m\n' >&2
-}
-trap restore_sshd EXIT
+sshd_changed=0
 staged=1
 mkdir -p -- "$keys_dir"
 chmod 755 "$keys_dir"
@@ -234,16 +280,12 @@ if ((!had_conf)) || [[ $old_conf != "$conf_text" ]]; then
   note "wrote $conf"
   sshd_changed=1
 fi
-sshd -t || die "sshd -t refused the configuration"
-# What sshd will do for this account, and that root's login is exactly as it was.
-effective=$(sshd -T -C "user=$user,host=octopushy,addr=127.0.0.1")
-grep -qx "chrootdirectory $chroot" <<<"$effective" || die "sshd would not chroot $user; another Match block may take precedence"
-grep -qx "forcecommand internal-sftp -u 0077" <<<"$effective" || die "sshd would not force SFTP for $user"
-[[ $(sshd -T -C "user=root,host=octopushy,addr=127.0.0.1") == "$root_before" ]] || die "the configuration would change root's login"
 if ((sshd_changed)); then
-  reloaded=1
-  systemctl reload "$service"
-  note "reloaded sshd"
+  # What sshd will do for this account: the block above, whatever the connection.
+  effective=$(sshd -T -C "user=$user,host=octopushy,addr=127.0.0.1")
+  grep -qx "chrootdirectory $chroot" <<<"$effective" || die "sshd would not chroot $user"
+  grep -qx "forcecommand internal-sftp -u 0077" <<<"$effective" || die "sshd would not force SFTP for $user"
+  apply_sshd
 fi
 staged=0
 
