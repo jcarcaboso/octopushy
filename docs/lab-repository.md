@@ -304,7 +304,7 @@ Holds repository-wide defaults and any external OpenTofu state backends. Most la
 none: a guest that names no backend has its state kept by Octopushy, with nothing to
 configure ([how it works](opentofu-state.md)). Server settings (provider routing, agents, sign-in) stay out of Git. The
 state backend format, the provisioning recipe file, and template images are the shapes
-[milestone 1](milestone-1.md#definitions) implements.
+[milestone 1](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/milestone-1.md#definitions) implements.
 
 ### Lab
 

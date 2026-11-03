@@ -152,7 +152,7 @@ re-enrollment is a separate disaster-recovery project, not an in-place key fix.
 
 Only after reconciliation, reconnect one selected worker and verify its identity
 and status without dispatching a mutation. Review the remaining trust/secret-
-release prerequisites in the [foundations plan](review/foundations-plan.md)
+release prerequisites in the [foundations plan](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/review/foundations-plan.md)
 before enabling infrastructure access. Then authorize one bounded test target;
 do not release a fleet backlog at once.
 

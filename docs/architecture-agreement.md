@@ -6,30 +6,34 @@ Recorded October 14, 2026.
 document distinguishes user-confirmed direction from working proposals. It does
 not authorize infrastructure changes or imply that the described product exists.
 
-**Working drawings:** [Architecture draft 01](diagrams/architecture-draft-01.excalidraw)
+**Working drawings:** [Architecture draft 01](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/diagrams/architecture-draft-01.excalidraw)
 is an editable Excalidraw board with four views: system responsibilities, resource
 relationships, independent progress, and a proposed operation lifecycle.
-[Architecture draft 02](diagrams/architecture-draft-02.excalidraw) adds the server
+[Architecture draft 02](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/diagrams/architecture-draft-02.excalidraw) adds the server
 building blocks from section 5: system shape, variable store and secrets, secrets
 as service prerequisites, and changes, drafts, and Git write-back. Solid borders
 mark confirmed decisions; dashed borders mark working proposals. These are rough
 discussion sketches, not additional commitments or a fixed design.
 
-The Python PoC was an experiment, **not the required foundation**; it is archived in
-[`old/`](../old/README.md) (October 20, 2026). Designing Octopushy from scratch does not
+The Python PoC was an experiment, **not the required foundation**; it was archived in
+[`old/`](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/old/README.md) (October 20, 2026) and later removed. Designing Octopushy from scratch does not
 mean recreating existing VMs, abandoning their state, or replacing their native
 automation without a separate decision.
 
 **Implementation started October 20, 2026.** At the user's request, the backend,
 frontend, and agent projects exist, and the first milestone is Proxmox and virtual
-machine management before anything else. [Milestone 1](milestone-1.md) records its scope
+machine management before anything else. [Milestone 1](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/milestone-1.md) records its scope
 and the contracts between the projects.
 
-The [nodes comparison](nodes-comparison.md) checks this discussion against real
+The [nodes comparison](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/nodes-comparison.md) checks this discussion against real
 automation. It is a source of cases and constraints, **not a one-to-one Jenkins
 migration plan**. Finding something there does not add it to Octopushy's scope.
-The older [architecture proposal](architecture-and-poc.md) is historical reference;
+The older [architecture proposal](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/architecture-and-poc.md) is historical reference;
 it must not override the decisions here.
+
+The drawings, milestone scope, comparison, proposal and research notes this document links
+to were deleted as superseded in November 2026 ([workflows migration](workflows-migration.md),
+D4). Their links point at the last commit that had them.
 
 ## 1. Confirmed product direction
 
@@ -315,7 +319,7 @@ decisions; everything after it is a working proposal awaiting confirmation.
   and plain form.
 - **The store is a key/value dictionary.** Octopushy does not attach meaning to
   entries; each entry carries a setting that conceals it (hidden/encrypted).
-  [Research on Jenkins' approach](research/secret-storage.md) informs the
+  [Research on Jenkins' approach](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/secret-storage.md) informs the
   proposal below.
 - **Secrets a service needs are prerequisites of its deployment**, not merely
   variables passed to it.
@@ -443,7 +447,7 @@ an order only for secrets that need one.
 ### Integrated editor
 
 The editor is Monaco, VS Code's editor component, embedded in Octopushy's UI
-([options review](research/integrated-editor.md)). It saves into drafts; only
+([options review](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/integrated-editor.md)). It saves into drafts; only
 Octopushy's publish path pushes to Git. A self-built VS Code for the Web and
 code-server/OpenVSCode Server are not planned. Monaco provides a two-way diff
 editor, so the three-way conflict view is Octopushy's to build.
@@ -455,7 +459,7 @@ SignalR where needed; a Rust agent; a Vite + React + TypeScript UI. Everything
 should be self-contained enough to deploy on one node, and both the server and its
 agents should update themselves and stay in sync with each other. Octopushy should
 not need its own Proxmox client: VMs are managed by running OpenTofu. The
-[stack review](research/stack-review.md) checks this proposal; everything below is
+[stack review](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/stack-review.md) checks this proposal; everything below is
 a working proposal awaiting confirmation unless marked as decided or accepted.
 
 **Decided (October 20, 2026):**
@@ -531,9 +535,9 @@ a working proposal awaiting confirmation unless marked as decided or accepted.
 
 **Generic packaging (October 15, 2026):** the user wants Octopushy to be generic
 rather than tied to NixOS. The single Compose project stays set aside (its analysis
-is in the [stack review](research/stack-review.md)), and so does NixOS as the base
+is in the [stack review](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/stack-review.md)), and so does NixOS as the base
 packaging proposed by the
-[deployment alternatives review](research/deployment-alternatives.md). That
+[deployment alternatives review](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/deployment-alternatives.md). That
 review's other findings still apply: separate placement is what protects the server
 and its key, and no packaging makes an update safe by itself. **The user accepted
 this generic direction on October 16, 2026.** Release publishing is deferred: for
@@ -761,7 +765,7 @@ definitions.
 
 ## 8. Decisions to make before implementation
 
-Use the concrete cases in [the comparison](nodes-comparison.md) to answer:
+Use the concrete cases in [the comparison](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/nodes-comparison.md) to answer:
 
 - What native guest-management path proves the first journey, and what is the
   authoritative configuration owner for each component?

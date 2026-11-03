@@ -501,7 +501,7 @@ not the older aspirational deployment descriptions.
    rights to the RO role, retry with writer credentials or turn refresh off.
    A provider/module repair must also be checked for this worker's EFI and
    extra state disk. The pinned-source analysis is in
-   [research/proxmox-credential-split.md](research/proxmox-credential-split.md).
+   [proxmox-credential-split.md](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md).
 2. **Credential routing is necessary, not sufficient.** Reuse
    `AssignmentBuilder.TokenFor`, `SecretsFor`, `ApprovedPlanAsync` and
    `CredentialBindings`: RO for plan/observe/VM verify/absence; writer only for

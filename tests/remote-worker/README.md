@@ -18,7 +18,7 @@ refresh/update/destroy planning is therefore not universally possible. Fresh
 create planning does not exercise that refresh. Do not add mutation permissions
 to read-only credentials, retry with privileged credentials or use
 `-refresh=false`. See the [credential roles guide](../../docs/proxmox-credentials.md)
-and [pinned research](../../docs/research/proxmox-credential-split.md).
+and [pinned research](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md).
 This mode has not been validated against a live remote topology. Resolving the
 provider blocker and a separately authorized topology acceptance run remain required.
 Do not run it against a production controller, retained service fixture, or VM.

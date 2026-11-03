@@ -223,4 +223,4 @@ scheduler is included.
 - **[T2] Technitium native web service/configuration source:** https://github.com/TechnitiumSoftware/DnsServer/blob/v15.6.0/DnsServerCore/DnsWebService.cs
 - **[T3] Technitium documented settings/recursion ACL:** https://github.com/TechnitiumSoftware/DnsServer/blob/v15.6.0/APIDOCS.md
 - **[T4] Reviewed upstream 15.6.2 fixes:** https://github.com/TechnitiumSoftware/DnsServer/blob/0dd592aad21eced4221a9a46204cb1a299972ca0/CHANGELOG.md
-- **[R1] Local cited preparation research:** [nixos-technitium-preparation.md](../../../../../docs/research/nixos-technitium-preparation.md)
+- **[R1] Local cited preparation research:** [nixos-technitium-preparation.md](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/nixos-technitium-preparation.md)

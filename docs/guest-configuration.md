@@ -344,7 +344,7 @@ in Proxmox's `Cloudinit.pm`, and on a real Fedora 44 VM:
 shows `delete, create`, naming `keys` as a reason. That is
 why the version OpenTofu carries, marked `Bootstrap`, stays fixed while the machine exists. A
 later change of key goes through the machine's own configuration instead, which is how
-[rotation](progress-and-next-steps.md) is built, and that is also why the provisioning hash holds
+[rotation](#rotating-the-key) is built, and that is also why the provisioning hash holds
 no key. PR 21's containers take keys through the same `sshAuthorizedKeys` variable, so they need
 nothing further.
 

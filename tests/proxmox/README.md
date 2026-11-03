@@ -13,7 +13,7 @@ planning has no existing VM to refresh; it does not establish full-lifecycle
 support. Do not add mutation permissions to the read-only identity, fall back to
 privileged credentials, or use `-refresh=false` to bypass this blocker. See the
 [credential roles guide](../../docs/proxmox-credentials.md) and
-[pinned research](../../docs/research/proxmox-credential-split.md).
+[pinned research](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md).
 
 The split fixtures and offline preflight checks below are readiness work, not
 live acceptance. The intended `run.sh` lifecycle on a disposable Proxmox host is:

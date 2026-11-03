@@ -17,8 +17,7 @@ node_modules/
 # OpenTofu working directories
 .terraform/
 
-# The archived PoC
+# Python
 __pycache__/
 *.pyc
-/old/.octopushy/
 .venv/
