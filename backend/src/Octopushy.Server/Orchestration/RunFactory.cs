@@ -141,7 +141,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 worker.MaxConcurrency, ManagedWorkerSafety.PublicUrl(options.Value.AgentChannel.PublicUrl)) : null,
             WorkerUpdate = update,
             DefinitionRemovedIn = removedIn,
-            ManagedAccess = ManagedAccess.Wanted(guest),
+            ManagedAccess = ManagedAccess.Wanted(repository, guest),
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Recipe.Root,

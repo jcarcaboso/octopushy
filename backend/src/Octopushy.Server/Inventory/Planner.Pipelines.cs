@@ -17,7 +17,7 @@ public sealed partial class Planner
             var service = repository.Service(resource.Address) ?? throw new RunException("The service is not in the latest revision.");
             var guest = await db.Resources.FirstOrDefaultAsync(r => r.Address == service.GuestAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken)
                 ?? throw new RunException("The service's guest is not known yet.");
-            if (await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken) is { } waiting)
+            if (await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, service) is { } waiting)
                 throw new RunException(waiting);
             var run = factory.Pipeline(repository, service, resource, guest, revision, "manual");
             if (await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } state)
@@ -54,7 +54,7 @@ public sealed partial class Planner
                 if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Service(item.Resource.Address) is not { } service)
                     continue;
                 var guest = await db.Resources.FirstOrDefaultAsync(r => r.Address == service.GuestAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken);
-                if (guest is null || await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken) is not null)
+                if (guest is null || await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, service) is not null)
                     continue;
                 var run = factory.Pipeline(repository, service, item.Resource, guest, revision, "revision");
                 item.State.DesiredHash = run.InputsHash;

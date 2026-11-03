@@ -315,20 +315,23 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var runs = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
         var ids = services.Select(s => s.Id).ToList();
         var states = await db.GuestConfigurations.AsNoTracking().Where(c => ids.Contains(c.ResourceId)).ToDictionaryAsync(c => c.ResourceId, cancellationToken);
-        var waiting = await GuestWaitingAsync(guest, latest, cancellationToken);
-        return services.Select(service =>
+        var summaries = new List<ServiceSummaryDto>();
+        foreach (var service in services)
         {
             var (active, last) = runs.GetValueOrDefault(service.Id);
-            return ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), waiting);
-        }).ToList();
+            summaries.Add(ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), await ServiceWaitingAsync(guest, service, latest, cancellationToken)));
+        }
+
+        return summaries;
     }
 
-    /// <summary>What a guest's services wait for, as <see cref="GuestWork.WaitingForAsync"/> says.</summary>
-    private async Task<string?> GuestWaitingAsync(Resource? guest, DefinitionRevision? latest, CancellationToken cancellationToken)
+    /// <summary>What a service waits for on its guest, as <see cref="GuestWork.WaitingForAsync"/> says.</summary>
+    private async Task<string?> ServiceWaitingAsync(Resource? guest, Resource service, DefinitionRevision? latest, CancellationToken cancellationToken)
     {
         if (guest is null || latest is null)
             return "Sync the current repository source first.";
-        return await GuestWork.WaitingForAsync(db, guest, await revisions.GetAsync(latest.Commit, cancellationToken), cancellationToken);
+        var repository = await revisions.GetAsync(latest.Commit, cancellationToken);
+        return await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, repository.Service(service.Address));
     }
 
     private static ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting)
@@ -401,7 +404,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var active = runs.Where(r => !RunStatuses.IsTerminal(r.Status)).MinBy(r => r.CreatedAt);
         var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
         return new ServiceDetailDto(
-            ServiceSummary(resource, active, last, state, await GuestWaitingAsync(guest, latest, cancellationToken)),
+            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken)),
             guest?.Id,
             resource.ParentAddress,
             resource.DefinitionFile,

@@ -6,9 +6,9 @@ using Octopushy.Server.Data;
 namespace Octopushy.Tests.Server;
 
 /// <summary>
-/// The last migration of 0.3.0 is the guest configuration. After it the keys, the schedules and
-/// the rotation run in that order, so a database reaches this version straight from 0.3.0, or
-/// through a main that stopped at the schedules.
+/// The last migration of 0.3.0 is the guest configuration. After it the keys, the schedules,
+/// the rotation and the service pipelines run in that order, so a database reaches this version
+/// straight from 0.3.0, or through a main that stopped at the schedules.
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public class GuestMigrationOrderTests(PostgresFixture postgres)
@@ -17,6 +17,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
     private const string AccessKeys = "20261102121056_GuestAccessKeys";
     private const string Schedules = "20261102164720_GuestSchedules";
     private const string Rotation = "20261102173935_GuestAccessRotation";
+    private const string Pipelines = "20261103102343_ServicePipelines";
 
     private static async Task<Guid> ReleasedGuestAsync(OctopushyDb db)
     {
@@ -38,6 +39,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         Assert.Contains(AccessKeys, applied);
         Assert.Contains(Rotation, applied);
         Assert.Contains(Schedules, applied);
+        Assert.Contains(Pipelines, applied);
     }
 
     /// <summary>Both tables, with every column the running server reads and writes.</summary>
@@ -69,7 +71,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var migrator = db.GetService<IMigrator>();
 
         await migrator.MigrateAsync(Schedules);
-        Assert.Equal([Rotation], await db.Database.GetPendingMigrationsAsync());
+        Assert.Equal([Rotation, Pipelines], await db.Database.GetPendingMigrationsAsync());
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO guest_access_keys (resource_id, version, public_key, fingerprint, bootstrap, created_at)
             VALUES ({guest}, 1, 'ssh-ed25519 AAAA', 'SHA256:old', TRUE, {DateTimeOffset.UtcNow});

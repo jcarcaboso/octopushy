@@ -80,7 +80,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            if (!ManagedAccess.Wanted(guest))
+            if (!ManagedAccess.Wanted(repository, guest))
                 throw new RunException("This guest has no key of Octopushy's to rotate.");
             if (await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
                         && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)

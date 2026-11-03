@@ -891,6 +891,101 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_provisioned_guest_whose_only_ansible_is_a_service_stage_gets_octopushys_key()
+    {
+        var test = Repository.WithoutSetup();
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("web/password", Password);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        var guest = await server.ResourceAsync(Guest);
+        // The provision apply carried the public half to the machine, as it does for a guest with a setup recipe.
+        var key = await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().SingleAsync(k => k.ResourceId == guest.Id));
+        Assert.NotNull(key.ProvisionedAt);
+
+        await ScheduleAsync(server);
+        var (_, preview) = await PlanStagesAsync(agent);
+        Assert.Empty(preview.Secrets);
+        Assert.Null(JsonNode.Parse(preview.InputJson)!["sshKey"]);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject(), artifacts: State(1));
+        var playbook = await agent.NextAsync("run");
+        Assert.Contains("OPENSSH PRIVATE KEY", playbook.Secrets[SecretNames.AnsibleSshKey]);
+        Assert.NotEqual(ConfigureRunTests.SshKey, playbook.Secrets[SecretNames.AnsibleSshKey]);
+        // Only this guest's key, and only to the playbook.
+        var released = await server.QueryAsync(db => db.SecretResolutions.AsNoTracking()
+            .Where(r => r.Key.StartsWith("system/guest-access/")).Select(r => r.Key).Distinct().ToListAsync());
+        Assert.Equal([GuestAccessCredentials.Key(guest.Id)], released);
+        await agent.ReportAsync(playbook, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
+    }
+
+    [Fact]
+    public async Task A_machine_octopushys_provisioning_never_put_its_key_on_is_refused_and_told_to_name_one()
+    {
+        // Provisioned when nothing ran on it, so Octopushy kept no key for it.
+        var test = Repository.WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("web/password", Password);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal(0, await server.QueryAsync(db => db.GuestAccessKeys.CountAsync(k => k.ResourceId == guest.Id)));
+        await ScheduleAsync(server);
+        var planned = await agent.NextAsync("preview");
+        await agent.ReportAsync(planned, Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
+
+        // A stage that runs on the guest arrives. The provisioning that should carry Octopushy's key plans no change,
+        // as for a machine whose recipe does not put the key on it, so it catches up with no apply.
+        test.Write(PipelineFile, Repository.Pipeline);
+        server.Commit("Run something on the guest");
+        await server.SyncAsync();
+        await server.TickAsync();
+        var provision = await agent.NextAsync("preview");
+        Assert.Equal("opentofu", provision.Executor);
+        await agent.ReportAsync(provision, Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        guest = await server.ResourceAsync(Guest);
+        Assert.Equal(guest.DesiredInputsHash, guest.SyncedInputsHash);
+        Assert.Null(await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == guest.Id).Select(k => k.ProvisionedAt).SingleAsync()));
+
+        var service = await server.ResourceAsync(Service);
+        var runs = await RunCountAsync(server, service.Id);
+        var refused = await Assert.ThrowsAsync<RunException>(() => DeployAsync(server, service.Id));
+        Assert.Equal(GuestWork.OwnKeyNotDelivered, refused.Message);
+        Assert.Contains("access.sshKey", refused.Message);
+        await ScheduleAsync(server);
+        Assert.Equal(runs, await RunCountAsync(server, service.Id));
+        var view = await ServiceViewAsync(http, service.Id);
+        Assert.Equal(Octopushy.Server.Api.GuestStatuses.Waiting, Status(view));
+        Assert.Equal(GuestWork.OwnKeyNotDelivered, view["service"]!["statusDetail"]!.GetValue<string>());
+        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key.StartsWith("system/guest-access/"))));
+    }
+
+    [Fact]
+    public async Task A_key_the_guest_names_wins_and_octopushy_keeps_none_for_it()
+    {
+        var test = Repository.WithoutSetup(declaredKey: true);
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("web/password", Password);
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal(0, await server.QueryAsync(db => db.GuestAccessKeys.CountAsync(k => k.ResourceId == guest.Id)));
+
+        await ScheduleAsync(server);
+        await PlanStagesAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject(), artifacts: State(1));
+        var playbook = await agent.NextAsync("run");
+        Assert.Equal(ConfigureRunTests.SshKey, playbook.Secrets[SecretNames.AnsibleSshKey]);
+        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key.StartsWith("system/guest-access/"))));
+    }
+
+    [Fact]
     public async Task Deleting_a_folder_shows_the_service_as_missing_and_removes_nothing()
     {
         var test = Repository.Repository();

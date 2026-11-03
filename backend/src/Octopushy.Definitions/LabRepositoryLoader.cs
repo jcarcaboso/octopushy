@@ -921,8 +921,7 @@ public sealed partial class LabRepositoryLoader
                         Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.{field}.");
                 }
 
-                if (guest.SetupRecipe is null && ConfigureInputs.Reference(guest, "sshKey") is null)
-                    Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.sshKey, or a setup recipe so that Octopushy gives it a key of its own.");
+                // No access.sshKey means Octopushy's own key, as for a setup recipe: see ManagedAccess.
 
                 foreach (var name in configure.Secrets.Where(n => !stage.Secrets.ContainsKey(n) && !stage.SecretFiles.ContainsKey(n)))
                 {

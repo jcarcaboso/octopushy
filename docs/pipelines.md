@@ -171,8 +171,23 @@ An invalid `pipeline.yaml` marks only that service. An invalid `guest.yaml` mark
 not treated as gone. A renamed guest keeps its services and their state. A managed worker cannot have services, because it is
 configured by its image.
 
-**A guest with an Ansible stage and no setup recipe has to name `access.sshKey`.** Octopushy gives a guest a key of its own
-only when it has a setup recipe, and that rule stays as it is for this slice.
+**The key follows who manages the machine, not what kind of Ansible work runs.** Decided by the owner on November 3, 2026:
+
+- **On a machine Octopushy provisions, any Ansible stage logs in with Octopushy's own key.** A service's Ansible stage counts
+  exactly as a `setup.recipe` does, so a guest whose only Ansible work is a service gets a key of its own, as described in
+  [guest-configuration.md](guest-configuration.md#ssh-identity). The private half reaches only that guest's `playbook` steps,
+  never a preview or an OpenTofu stage, and a run binds only its own guest's key.
+- **An explicit `access.sshKey` still wins**, and a guest that names one gets no key of Octopushy's.
+- **A machine Octopushy does not manage has to name `access.sshKey`.** Octopushy puts its key on a machine only through an
+  apply of that guest's provisioning, and never forces it on otherwise. A service whose stage would log in with Octopushy's
+  key, on a machine no such apply has carried it to, is refused and told to name one, on Deploy and on the service's page,
+  and no automatic run starts. That is what a guest whose provisioning caught up without an apply looks like, such as one
+  whose recipe does not put `sshAuthorizedKeys` on the machine.
+
+**Adding a service with an Ansible stage to an existing guest delivers the key the way a setup recipe does.** It changes the
+guest's provisioning hash, so the guest is provisioned again first, and the service waits for that. For a VM that is an
+in-place update and one reboot. A container's keys are `ForceNew`, so for a container it is a replacement. Existing guests
+are rebuilt rather than migrated, so nothing more is built for them.
 
 ### Removal
 

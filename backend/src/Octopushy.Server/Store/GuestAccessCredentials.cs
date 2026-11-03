@@ -132,6 +132,13 @@ public static class GuestAccessCredentials
         return true;
     }
 
+    /// <summary>
+    /// Whether an apply of the guest's provisioning has carried a key of Octopushy's to its machine. That is
+    /// how Octopushy puts its key on a machine it manages, and the only way: it never forces one on otherwise.
+    /// </summary>
+    public static Task<bool> DeliveredAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken) =>
+        db.GuestAccessKeys.AnyAsync(k => k.ResourceId == resourceId && k.ProvisionedAt != null, cancellationToken);
+
     /// <summary>What Octopushy's own key can no longer be needed for: the guest is gone.</summary>
     public static async Task RemoveAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
     {

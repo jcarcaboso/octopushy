@@ -120,7 +120,7 @@ public sealed record ProvisionInputs(
         }
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
-        if (ManagedAccess.Wanted(guest))
+        if (ManagedAccess.Wanted(repository, guest))
         {
             hashed["managedAccess"] = true;
         }

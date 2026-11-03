@@ -193,14 +193,50 @@ public class PipelineDefinitionTests
         Assert.Contains(expected, Errors(test));
     }
 
-    [Fact]
-    public void A_guest_without_a_setup_recipe_has_to_name_the_key_a_stage_logs_in_with()
+    /// <summary>The guest with no setup recipe, so a service is all that runs on it, and with or without a key of its own.</summary>
+    internal static TestRepository WithoutSetup(bool declaredKey = false, string pipeline = Pipeline)
     {
-        using var test = Repository();
+        var test = Repository(pipeline);
         var text = File.ReadAllText(Path.Combine(test.Root, GuestFile));
         test.Write(GuestFile, text[..text.IndexOf("setup:", StringComparison.Ordinal)]
-            + "access:\n  user: ops\n  hostKey: { store: access/app/host-key }\n");
-        Assert.Contains("needs access.sshKey, or a setup recipe", Errors(test));
+            + "access:\n  user: ops\n" + (declaredKey ? "  sshKey: { store: access/app/ssh-key }\n" : "") + "  hostKey: { store: access/app/host-key }\n");
+        return test;
+    }
+
+    private static string ProvisionHash(TestRepository test)
+    {
+        var repository = LabRepositoryLoader.Load(test.Root);
+        return ProvisionInputs.Build(repository, repository.Guest(Guest)!, "c").Hash;
+    }
+
+    [Fact]
+    public void A_guest_whose_only_ansible_is_a_service_stage_gets_octopushys_key()
+    {
+        using var test = WithoutSetup();
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.DoesNotContain(repository.Issues, i => i.Severity == IssueSeverity.Error);
+        Assert.True(repository.IsValid(Address));
+        Assert.True(ManagedAccess.Wanted(repository, repository.Guest(Guest)!));
+
+        // The key reaches the machine through its provisioning, so the guest is provisioned again to carry it.
+        using var tofuOnly = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
+        var plain = LabRepositoryLoader.Load(tofuOnly.Root);
+        Assert.False(ManagedAccess.Wanted(plain, plain.Guest(Guest)!));
+        Assert.NotEqual(ProvisionHash(tofuOnly), ProvisionHash(test));
+    }
+
+    [Fact]
+    public void A_key_the_guest_names_wins_over_octopushys()
+    {
+        using var test = WithoutSetup(declaredKey: true);
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Address));
+        Assert.False(ManagedAccess.Wanted(repository, repository.Guest(Guest)!));
+
+        // The same beside a setup recipe, with a service whose stage runs on the guest.
+        using var withSetup = Repository();
+        var both = LabRepositoryLoader.Load(withSetup.Root);
+        Assert.False(ManagedAccess.Wanted(both, both.Guest(Guest)!));
     }
 
     [Fact]
