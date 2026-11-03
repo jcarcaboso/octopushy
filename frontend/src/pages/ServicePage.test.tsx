@@ -7,18 +7,19 @@ import { ServicePage } from "./ServicePage";
 
 function detail(overrides: Partial<ServiceDetail> = {}, status = "in-sync", statusDetail: string | null = null): ServiceDetail {
   return {
-    service: { id: "svc-1", address: "home/korriban/krb-app-01/app", name: "app", status, statusDetail, valid: true, activeRun: null, lastRun: null },
+    service: { id: "svc-1", address: "home/korriban/krb-app-01/app", name: "app", status, statusDetail, valid: true, activeRun: null, lastRun: null,
+      workflow: { reference: "web@1", resolved: "web@1.2" } },
     guestId: "guest-1",
     guestAddress: "home/korriban/krb-app-01",
-    definitionFile: "labs/home/proxmox/korriban/guests/krb-app-01/services/app/pipeline.yaml",
+    definitionFile: "labs/home/proxmox/korriban/guests/krb-app-01/services/app/service.yaml",
     definitionText: "schemaVersion: 1\n",
     issues: [],
     policy: { approval: "automatic", approvalSetBy: "default", destructive: "automatic", destructiveSetBy: "default, following approval" },
     agentLabels: [],
     agentLabelsSetBy: null,
     stages: [
-      { name: "expose", recipe: "web-firewall", executor: "opentofu" },
-      { name: "deploy", recipe: "app", executor: "ansible" },
+      { name: "expose", executor: "opentofu" },
+      { name: "deploy", executor: "ansible" },
     ],
     appliedCommit: "e6b1282aa4d1c0ffee",
     appliedAt: "2026-11-02T08:00:00Z",
@@ -32,15 +33,17 @@ function detail(overrides: Partial<ServiceDetail> = {}, status = "in-sync", stat
 const route = { path: "/services/:id", route: "/services/svc-1" };
 
 describe("ServicePage", () => {
-  it("shows the stages the repository declares and deploys on request", async () => {
+  it("shows the workflow and its stages and deploys on request", async () => {
     const { requests } = mockApi({
       "GET /api/services/svc-1": () => detail(),
       "POST /api/services/svc-1/deploy": () => ({ runId: "run-2" }),
       "GET /api/runs/run-2": () => new Response(null, { status: 404 }),
     });
     renderAt(<ServicePage />, route);
-    expect(await screen.findByText("web-firewall (opentofu)")).toBeInTheDocument();
-    expect(screen.getByText("app (ansible)")).toBeInTheDocument();
+    expect(await screen.findByText("web@1.2")).toBeInTheDocument();
+    expect(screen.getByText("from @1")).toBeInTheDocument();
+    expect(screen.getByText("opentofu")).toBeInTheDocument();
+    expect(screen.getByText("ansible")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Deploy" }));
     await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   });

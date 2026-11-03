@@ -14,6 +14,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
+import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 
 /** One service: its status, what it waits for, its stages, and its history. Its definition is read from the repository. */
@@ -83,17 +84,20 @@ export function ServicePage() {
             </Card>
           </div>
           <div className="stack stack--large">
-            <Card title="Stages" meta={data.stages.length || undefined}>
-              {data.stages.length === 0 ? (
-                <p className="muted">The repository shows no stages for this service now.</p>
-              ) : (
-                <KeyValue
-                  items={data.stages.map((stage) => ({
-                    term: stage.name,
-                    value: <span className="mono small">{stage.recipe} ({stage.executor})</span>,
-                  }))}
-                />
-              )}
+            <Card title="Workflow">
+              <div className="stack stack--small">
+                <WorkflowLabel workflow={service.workflow} />
+                {data.stages.length === 0 ? (
+                  <p className="muted">The repository shows no stages for this service now.</p>
+                ) : (
+                  <KeyValue
+                    items={data.stages.map((stage) => ({
+                      term: stage.name,
+                      value: <span className="mono small">{stage.executor}</span>,
+                    }))}
+                  />
+                )}
+              </div>
             </Card>
             <Card title="Last success">
               {data.appliedAt ? (

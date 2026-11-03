@@ -3,6 +3,7 @@ import type { ServiceSummary } from "../api/types";
 import { StatusBadge } from "./Badge";
 import { Card } from "./Card";
 import { Table } from "./Table";
+import { WorkflowLabel } from "./WorkflowLabel";
 
 /** The services on a guest, read from the repository. Each has its own status: a failure of one says nothing about the guest or the others. */
 export function ServicesCard({ services }: { services: ServiceSummary[] }) {
@@ -12,6 +13,7 @@ export function ServicesCard({ services }: { services: ServiceSummary[] }) {
         <thead>
           <tr>
             <th scope="col">Service</th>
+            <th scope="col">Workflow</th>
             <th scope="col">Status</th>
             <th scope="col">Last run</th>
           </tr>
@@ -26,6 +28,9 @@ export function ServicesCard({ services }: { services: ServiceSummary[] }) {
                     {service.name}
                   </Link>
                 </th>
+                <td className="small">
+                  <WorkflowLabel workflow={service.workflow} />
+                </td>
                 <td className="cell-status">
                   <StatusBadge status={service.status} />
                   {service.statusDetail ? <div className="muted small cell-status__detail">{service.statusDetail}</div> : null}

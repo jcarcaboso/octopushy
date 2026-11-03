@@ -33,7 +33,7 @@ export function ConfigurePreviewView({ preview }: { preview: ConfigurePreview })
           { term: "Image", value: <span className="mono break small">{preview.image ?? "—"}</span> },
           {
             term: "Destructive",
-            value: preview.destructive ? <Badge tone="danger">Declared by the recipe</Badge> : <Badge tone="neutral">Not declared</Badge>,
+            value: preview.destructive ? <Badge tone="danger">Declared by the workflow</Badge> : <Badge tone="neutral">Not declared</Badge>,
           },
         ]}
       />
@@ -41,7 +41,7 @@ export function ConfigurePreviewView({ preview }: { preview: ConfigurePreview })
         <details className="outputs" open={preview.changedFiles.length > 0}>
           <summary>Changed since the last successful run ({preview.changedFiles.length})</summary>
           {preview.changedFiles.length === 0 ? (
-            <p className="muted small">No files of this recipe changed.</p>
+            <p className="muted small">No files of this workflow changed.</p>
           ) : (
             <pre className="mono small">{preview.changedFiles.join("\n")}</pre>
           )}
