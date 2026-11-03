@@ -17,7 +17,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
     /// whose folder was deleted is planned for removal.
     /// </summary>
     public Task<Guid> PlanGuestAsync(Guid resourceId, CancellationToken cancellationToken) =>
-        engine.ExecuteAsync(async (db, services) =>
+        engine.ExecuteAsync(async (db, _) =>
         {
             var missing = await db.Resources.FirstOrDefaultAsync(r => r.Id == resourceId && r.Kind == ResourceKinds.Guest
                 && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
@@ -34,8 +34,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
             // The latest observation may be newer than the sync that found this guest valid.
-            if (!guest.Retired && await SafetyBoundary.VmidCollisionAsync(db, services.GetRequiredService<TofuStateStore>(), resource,
-                    guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
+            if (!guest.Retired && await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
                 throw new RunException(collision);
             var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken));
             await engine.AddRunsAsync(db, [run], cancellationToken);

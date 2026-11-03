@@ -578,6 +578,9 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
+                resource.ClaimedVmid = null;
+                resource.ClaimedNode = null;
+                resource.ClaimedInstallation = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;

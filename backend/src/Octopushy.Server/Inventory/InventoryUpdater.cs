@@ -4,7 +4,6 @@ using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
-using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Inventory;
 
@@ -14,8 +13,7 @@ namespace Octopushy.Server.Inventory;
 /// retired, and a retire run for each guest whose folder was deleted. Each installation whose
 /// definition changed is observed again.
 /// </summary>
-public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TofuStateStore states, TimeProvider clock,
-    ILogger<InventoryUpdater> logger)
+public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
@@ -92,6 +90,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             resource.Definition = entry.Json?.ToJsonString();
             resource.DefinitionFile = entry.File;
             resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(entry.Address).ToList(), IssueJson);
+            if (entry.Kind == ResourceKind.Installation)
+                RecordObservedOnly(resource, entry);
         }
 
         var guests = byAddress.Values.Where(r => r.Kind == ResourceKinds.Guest && seen.Contains(r.Id) && r.RetiredAt is null).ToList();
@@ -105,7 +105,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             // Observations are runtime data, so the dispatch of the plan asks again. A retired guest's
             // removal destroys only what its own state holds, so it is not asked.
             if (problem is null && !definition.Retired)
-                problem = await SafetyBoundary.VmidCollisionAsync(db, states, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
+                problem = await SafetyBoundary.VmidCollisionAsync(db, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
             if (problem is not null)
             {
                 resource.Valid = false;
@@ -252,6 +252,29 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 await engine.CancelInternalAsync(db, run.Id, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
                 activeRuns.Remove(run);
             }
+        }
+    }
+
+    /// <summary>
+    /// Keeps the denylist on the installation itself, so it does not depend on its definition being readable:
+    /// a definition that says <c>manage: false</c>, even one with other errors, puts the installation, its
+    /// token keys and its endpoints on it. Only a valid definition that asks to be managed takes the
+    /// installation off, and its keys and endpoints stay refused to other installations' work until an
+    /// operator trusts it again as managed. An invalid or missing definition changes nothing.
+    /// </summary>
+    private static void RecordObservedOnly(Resource resource, ResourceEntry entry)
+    {
+        if (entry.Json is { } json && SafetyBoundary.ObservedOnly(json))
+        {
+            resource.ObservedOnly = true;
+            resource.ObservedOnlyStoreKeys = resource.ObservedOnlyStoreKeys.Union(SafetyBoundary.TokenKeys(json), StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal).ToList();
+            resource.ObservedOnlyEndpoints = resource.ObservedOnlyEndpoints.Union(SafetyBoundary.Endpoints(json), StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.Ordinal).ToList();
+        }
+        else if (entry.Valid && entry.Json is not null)
+        {
+            resource.ObservedOnly = false;
         }
     }
 

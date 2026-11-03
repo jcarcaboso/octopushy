@@ -565,6 +565,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("endpoints");
 
+                    b.Property<bool>("ObservedOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("observed_only");
+
                     b.Property<DateTimeOffset>("TrustedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("trusted_at");
@@ -820,6 +824,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("checked_revision_id");
 
+                    b.Property<string>("ClaimedInstallation")
+                        .HasColumnType("text")
+                        .HasColumnName("claimed_installation");
+
+                    b.Property<string>("ClaimedNode")
+                        .HasColumnType("text")
+                        .HasColumnName("claimed_node");
+
+                    b.Property<int?>("ClaimedVmid")
+                        .HasColumnType("integer")
+                        .HasColumnName("claimed_vmid");
+
                     b.Property<string>("Definition")
                         .HasColumnType("jsonb")
                         .HasColumnName("definition");
@@ -874,6 +890,20 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("ObserveRequestedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("observe_requested_at");
+
+                    b.Property<bool>("ObservedOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("observed_only");
+
+                    b.PrimitiveCollection<List<string>>("ObservedOnlyEndpoints")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("observed_only_endpoints");
+
+                    b.PrimitiveCollection<List<string>>("ObservedOnlyStoreKeys")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("observed_only_store_keys");
 
                     b.Property<string>("Outputs")
                         .HasColumnType("jsonb")

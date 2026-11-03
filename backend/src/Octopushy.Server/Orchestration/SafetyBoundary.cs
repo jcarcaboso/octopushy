@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
-using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Orchestration;
 
@@ -12,8 +11,13 @@ namespace Octopushy.Server.Orchestration;
 /// </summary>
 public static class SafetyBoundary
 {
-    /// <summary>An installation that says <c>manage: false</c>, with what would let a run reach it.</summary>
-    public sealed record ObservedOnlyInstallation(string Address, IReadOnlySet<string> StoreKeys, IReadOnlySet<string> Endpoints);
+    /// <summary>
+    /// An installation on the denylist, with what would let work reach it. <paramref name="ObservedOnly"/> is
+    /// true while it is observed only: nothing but its own observations may touch it. It is false for one that
+    /// asks to be managed and has not been trusted again since: then its keys and endpoints are still refused
+    /// to every other installation's work, and its own work waits for that trust.
+    /// </summary>
+    public sealed record ObservedOnlyInstallation(string Address, bool ObservedOnly, IReadOnlySet<string> StoreKeys, IReadOnlySet<string> Endpoints);
 
     /// <summary>Whether an installation's definition, as JSON, says <c>manage: false</c>.</summary>
     public static bool ObservedOnly(JsonNode? definition) =>
@@ -22,43 +26,43 @@ public static class SafetyBoundary
     public static string ObservedOnlyReason(string installation) =>
         $"{installation} is observed only (manage: false): Octopushy runs nothing against it and releases its credentials only to observe it.";
 
+    private static string ReservedReason(string installation) =>
+        $"This work names a credential or endpoint of {installation}, which is observed only, or was and has not been trusted "
+        + "again as managed. Octopushy releases them to nothing but that installation's own observations.";
+
+    /// <summary>The store keys of the Proxmox tokens an installation definition declares. A CA certificate is no credential, and installations may share one.</summary>
+    public static IEnumerable<string> TokenKeys(JsonNode? definition) =>
+        new[] { "token", "readOnlyToken", "privilegedToken" }
+            .Select(role => definition?["connection"]?[role]?["store"]?.ToString())
+            .OfType<string>();
+
+    /// <summary>The endpoints an installation definition declares, as they are compared.</summary>
+    public static IEnumerable<string> Endpoints(JsonNode? definition) =>
+        Git.RepositoryTrust.DeclaredEndpoints(definition).Select(NormalEndpoint);
+
     /// <summary>
-    /// The installations that say <c>manage: false</c> in the latest revision synced, with the store keys
-    /// of their Proxmox tokens and their endpoints, so that a run naming any of them is refused too. A CA
-    /// certificate is no credential, and installations may share one, so it does not count.
+    /// The denylist, as the server has recorded it on the installations: it outlives a definition that is
+    /// invalid or missing, so breaking ziost's file does not take it off. See <see cref="Resource.ObservedOnly"/>.
     /// </summary>
     public static async Task<List<ObservedOnlyInstallation>> ObservedOnlyInstallationsAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
         var installations = await db.Resources.AsNoTracking()
-            .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null && r.Definition != null)
-            .Select(r => new { r.Address, r.Definition })
+            .Where(r => r.Kind == ResourceKinds.Installation && (r.ObservedOnly || r.ObservedOnlyStoreKeys.Count > 0 || r.ObservedOnlyEndpoints.Count > 0))
+            .Select(r => new { r.Address, r.ObservedOnly, r.ObservedOnlyStoreKeys, r.ObservedOnlyEndpoints })
             .ToListAsync(cancellationToken);
-        var result = new List<ObservedOnlyInstallation>();
-        foreach (var installation in installations)
-        {
-            var definition = JsonNode.Parse(installation.Definition!);
-            if (!ObservedOnly(definition))
-                continue;
-            var connection = definition!["connection"];
-            var keys = new[] { "token", "readOnlyToken", "privilegedToken" }
-                .Select(role => connection?[role]?["store"]?.ToString())
-                .OfType<string>()
-                .ToHashSet(StringComparer.Ordinal);
-            var endpoints = (definition["hosts"] as JsonObject ?? []).Select(h => h.Value?["endpoint"]?.ToString())
-                .Append(connection?["endpoint"]?.ToString())
-                .OfType<string>()
-                .Select(NormalEndpoint)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            result.Add(new ObservedOnlyInstallation(installation.Address, keys, endpoints));
-        }
-
-        return result;
+        return installations.Select(i => new ObservedOnlyInstallation(
+                i.Address,
+                i.ObservedOnly,
+                i.ObservedOnlyStoreKeys.ToHashSet(StringComparer.Ordinal),
+                i.ObservedOnlyEndpoints.Select(NormalEndpoint).ToHashSet(StringComparer.OrdinalIgnoreCase)))
+            .ToList();
     }
 
     /// <summary>
-    /// Why this run may not exist or go on because it would work in an installation Octopushy only observes,
-    /// or null. Its resource, its context's address and host, the store keys it names and the endpoint it
-    /// reaches each count, so a run with a context that was altered after it was made is refused too.
+    /// Why this run may not exist or go on because it would reach an installation on the denylist, or null.
+    /// Its resource, its context's address and host, the store keys it names and the endpoint it reaches each
+    /// count, so a run with a context that was altered after it was made is refused too, and so is a run of
+    /// another installation that names an observed-only one's token.
     /// </summary>
     public static async Task<string?> ObservedOnlyRefusalAsync(OctopushyDb db, Run run, RunContext context, CancellationToken cancellationToken,
         IReadOnlyList<ObservedOnlyInstallation>? observedOnly = null)
@@ -67,32 +71,53 @@ public static class SafetyBoundary
         if (observedOnly.Count == 0)
             return null;
         var resource = await db.Resources.AsNoTracking().Where(r => r.Id == run.ResourceId).Select(r => r.Address).FirstOrDefaultAsync(cancellationToken);
-        var endpoint = context.Proxmox.Endpoint is { } e ? NormalEndpoint(e) : null;
         foreach (var installation in observedOnly)
         {
             bool Under(string? address) => address is not null
                 && (address == installation.Address || address.StartsWith(installation.Address + "/", StringComparison.Ordinal));
-            if (Under(resource) || Under(context.Address) || Under(context.HostKey)
-                || context.Secrets.Values.Any(installation.StoreKeys.Contains)
-                || endpoint is not null && installation.Endpoints.Contains(endpoint))
+            var own = Under(resource) || Under(context.Address) || Under(context.HostKey);
+            if (installation.ObservedOnly && own)
                 return ObservedOnlyReason(installation.Address);
+            // An installation's own work may use its own keys once it is managed; trust holds it until then.
+            if ((installation.ObservedOnly || !(Under(resource) && Under(context.Address))) && Names(installation, context))
+                return installation.ObservedOnly ? ObservedOnlyReason(installation.Address) : ReservedReason(installation.Address);
         }
 
         return null;
     }
 
     /// <summary>
+    /// Why an observation of the installation at <paramref name="address"/> may not be sent, or null: it names
+    /// a credential or endpoint of another installation on the denylist. Its own observation always may.
+    /// </summary>
+    public static async Task<string?> ObservationRefusalAsync(OctopushyDb db, string? address, RunContext context, CancellationToken cancellationToken)
+    {
+        foreach (var installation in await ObservedOnlyInstallationsAsync(db, cancellationToken))
+        {
+            if ((address != installation.Address || context.Address != installation.Address) && Names(installation, context))
+                return ReservedReason(installation.Address);
+        }
+
+        return null;
+    }
+
+    private static bool Names(ObservedOnlyInstallation installation, RunContext context) =>
+        context.Secrets.Values.Any(installation.StoreKeys.Contains)
+        || context.Proxmox.Endpoint is { } endpoint && installation.Endpoints.Contains(NormalEndpoint(endpoint));
+
+    /// <summary>
     /// Why a guest may not be provisioned at <paramref name="vmid"/>, or null: the installation's latest
-    /// observation shows a VM there that is not this guest's. A VM bound to the guest is its own, and so is
-    /// one the guest's own OpenTofu state records, which an apply of it made but did not finish.
+    /// observation shows a VM there that is not this guest's. A VM is the guest's own when the guest is bound
+    /// to it, or when the server recorded that it sent an approved apply of this guest's plan creating that
+    /// VMID on that node (<see cref="Resource.ClaimedVmid"/>). What a state says is never read as ownership.
     /// </summary>
     /// <remarks>
     /// Without an observation of the installation yet, nothing is refused here: there is nothing to compare
-    /// with. Creating a VM at a VMID that exists fails at the provider anyway, and the removal of a machine
-    /// that is not the guest's own is refused by <see cref="GuestVmPlan.ForeignChange"/> whatever is observed.
+    /// with. Creating a VM at a VMID that exists fails at the provider anyway, and changing a machine that is
+    /// not the guest's own is refused by <see cref="GuestVmPlan.ForeignChange"/> whatever is observed.
     /// </remarks>
-    public static async Task<string?> VmidCollisionAsync(OctopushyDb db, TofuStateStore states, Resource guest, string installationAddress, int vmid,
-        CancellationToken cancellationToken, Guid? exceptRun = null)
+    public static async Task<string?> VmidCollisionAsync(OctopushyDb db, Resource guest, string installationAddress, int vmid,
+        CancellationToken cancellationToken)
     {
         if (guest.BoundVmid == vmid && guest.BoundInstallation == installationAddress)
             return null;
@@ -111,20 +136,15 @@ public static class SafetyBoundary
         if (observed is null)
             return null;
 
-        // Work of this guest's that may have made the VM and not reported yet: its result binds it.
-        if (await db.Attempts.AsNoTracking().AnyAsync(a => a.Mutating && a.RunId != exceptRun
-                && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running || a.Status == AttemptStatuses.Uncertain)
-                && db.Runs.Any(r => r.Id == a.RunId && r.ResourceId == guest.Id), cancellationToken))
+        var host = observed["host"]?.ToString() is { Length: > 0 } h ? h : null;
+        if (host is not null && guest.ClaimedVmid == vmid && guest.ClaimedInstallation == installationAddress && guest.ClaimedNode == host)
             return null;
-
-        var node = observed["host"]?.ToString() is { Length: > 0 } host ? host : "an unknown node";
+        var node = host ?? "an unknown node";
         var holder = await db.Resources.AsNoTracking()
             .Where(r => r.Id != guest.Id && r.Kind == ResourceKinds.Guest && r.RetiredAt == null && r.BoundVmid == vmid && r.BoundInstallation == installationAddress)
             .Select(r => r.Address).FirstOrDefaultAsync(cancellationToken);
         if (holder is not null)
             return $"VMID {vmid} on {node} is the VM of {holder}, not of this guest.";
-        if (await states.RecordsMachineAsync(guest.Id, vmid, cancellationToken))
-            return null;
         var name = observed["name"]?.ToString() is { Length: > 0 } n ? $" ({n})" : "";
         return $"VMID {vmid} on {node} is an existing VM Octopushy does not manage{name}. Give this guest a free VMID: "
             + "Octopushy plans nothing against a machine it did not create.";

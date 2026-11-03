@@ -195,7 +195,10 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     public static InstallationTrustDto Trust(Resource installation, InstallationTrust? trust)
     {
         var endpoints = RepositoryTrust.DeclaredEndpoints(installation.Definition is null ? null : JsonNode.Parse(installation.Definition));
-        return new InstallationTrustDto(endpoints, endpoints.Where(e => trust?.Endpoints.Contains(e) != true).ToList(), trust?.TrustedAt, trust?.TrustedBy);
+        // Trusted while observed only, and now asking to be managed: every endpoint needs trust again.
+        var managementChanged = trust is { ObservedOnly: true } && !installation.ObservedOnly;
+        return new InstallationTrustDto(endpoints, endpoints.Where(e => managementChanged || trust?.Endpoints.Contains(e) != true).ToList(),
+            trust?.TrustedAt, trust?.TrustedBy, managementChanged);
     }
 
     public static IReadOnlyList<IssueDto> Issues(string json) =>
@@ -594,7 +597,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             definition?["type"]?.GetValue<string>(),
             definition?["connection"]?["endpoint"]?.GetValue<string>(),
             installation.Valid,
-            !SafetyBoundary.ObservedOnly(definition),
+            !installation.ObservedOnly,
             Issues(installation.Issues).Count(i => i.Severity == "error"),
             observation?["observedAt"]?.GetValue<DateTimeOffset>(),
             installation.ObserveError,

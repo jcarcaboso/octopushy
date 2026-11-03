@@ -153,38 +153,6 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
         return refused;
     }
 
-    /// <summary>
-    /// Whether the guest's own state records a Proxmox VM or container with this VMID: an apply of this guest
-    /// made it, even one that did not finish. A state that cannot be read records nothing.
-    /// </summary>
-    public async Task<bool> RecordsMachineAsync(Guid resourceId, int vmid, CancellationToken cancellationToken)
-    {
-        var state = await db.TofuStates.AsNoTracking().FirstOrDefaultAsync(s => s.ResourceId == resourceId && s.Stage == "", cancellationToken);
-        if (await HeadAsync(state, cancellationToken) is not { ResourceCount: > 0 } head)
-            return false;
-        byte[] content;
-        try
-        {
-            content = Open(head);
-        }
-        catch (AssignmentException)
-        {
-            return false;
-        }
-
-        try
-        {
-            return (JsonNode.Parse(content)?["resources"] as JsonArray ?? []).OfType<JsonNode>()
-                .Where(r => r["type"]?.ToString() is GuestVmPlan.VmResourceType or GuestVmPlan.ContainerResourceType)
-                .SelectMany(r => r["instances"] as JsonArray ?? []).OfType<JsonNode>()
-                .Any(i => i["attributes"]?["vm_id"] is JsonValue id && id.TryGetValue<int>(out var recorded) && recorded == vmid);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
     /// <summary>What the API may show about a guest's state: everything but its content.</summary>
     public async Task<(TofuState? State, bool LockHeld, List<TofuStateVersion> Versions)> DescribeAsync(Guid resourceId, CancellationToken cancellationToken, string stage = "")
     {

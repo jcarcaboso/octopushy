@@ -84,15 +84,59 @@ public class VmidCollisionTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
-        // The VM was made, starting it was not: its state holds it, and nothing bound it.
-        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "bridge 'lab' does not exist", artifacts: StateWithVm(Vmid));
+        // An approved plan that creates the guest's own VM: sending its apply records the claim.
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal((Installation, "korriban", (int?)Vmid), (guest.ClaimedInstallation, guest.ClaimedNode, guest.ClaimedVmid));
+        // The VM was made, starting it was not, and nothing bound it.
+        await agent.ReportAsync(apply, Outcome.Failed, error: "bridge 'lab' does not exist");
         await server.TickAsync();
         Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
         await ObserveAsync(server, (Vmid, "krb-app-01"));
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
         Assert.Equal("preview", (await agent.NextAsync("preview")).Action);
+    }
+
+    [Theory]
+    [InlineData("data", false)]
+    [InlineData("managed", true)]
+    public async Task What_a_state_holds_does_not_make_a_vm_the_guests(string mode, bool imported)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        // A plan that creates no machine of the guest's, whose apply leaves VM 310 in the state: read as data, or adopted.
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "boom", artifacts: StateWithVm(Vmid, mode, imported));
+        await server.TickAsync();
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal(((int?)null, (int?)null), (guest.BoundVmid, guest.ClaimedVmid));
+        await ObserveAsync(server, (Vmid, "c-fedora-01"));
+
+        var refused = await Assert.ThrowsAsync<RunException>(() =>
+            server.Services.GetRequiredService<Planner>().PlanGuestAsync(guest.Id, CancellationToken.None));
+        Assert.Contains("VMID 310 on korriban is an existing VM Octopushy does not manage (c-fedora-01)", refused.Message);
+    }
+
+    [Fact]
+    public async Task A_claim_on_another_node_is_not_the_observed_vm()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAndTrustAsync();
+        await server.WithDbAsync(async db =>
+        {
+            var resource = await db.Resources.FirstAsync(r => r.Address == Guest);
+            (resource.ClaimedInstallation, resource.ClaimedNode, resource.ClaimedVmid) = (Installation, "dromund", Vmid);
+            await db.SaveChangesAsync();
+        });
+        await ObserveAsync(server, (Vmid, "c-fedora-01"));
+
+        var id = (await server.ResourceAsync(Guest)).Id;
+        await server.Engine.CancelAsync((await server.LatestRunAsync(Guest)).Id, "test", CancellationToken.None);
+        await Assert.ThrowsAsync<RunException>(() => server.Services.GetRequiredService<Planner>().PlanGuestAsync(id, CancellationToken.None));
     }
 
     /// <summary>Records an observation of korriban that shows these VMs, as an agent would have reported it.</summary>
@@ -118,7 +162,7 @@ public class VmidCollisionTests(PostgresFixture postgres)
         });
 
     /// <summary>An OpenTofu state that records one Proxmox VM.</summary>
-    private static Artifact StateWithVm(int vmid)
+    private static Artifact StateWithVm(int vmid, string mode = "managed", bool imported = false)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -130,9 +174,9 @@ public class VmidCollisionTests(PostgresFixture postgres)
             {
                 new
                 {
-                    mode = "managed",
+                    mode,
                     type = GuestVmPlan.VmResourceType,
-                    name = "guest",
+                    name = imported ? "adopted" : "guest",
                     instances = new[] { new { attributes = new { vm_id = vmid, node_name = "korriban" } } },
                 },
             },

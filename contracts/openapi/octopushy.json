@@ -4810,7 +4810,8 @@
           "endpoints",
           "untrusted",
           "trustedAt",
-          "trustedBy"
+          "trustedBy",
+          "managementChanged"
         ],
         "type": "object",
         "properties": {
@@ -4838,6 +4839,9 @@
               "null",
               "string"
             ]
+          },
+          "managementChanged": {
+            "type": "boolean"
           }
         }
       },

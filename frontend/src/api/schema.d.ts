@@ -1111,6 +1111,7 @@ export interface components {
             /** Format: date-time */
             trustedAt: null | string;
             trustedBy: null | string;
+            managementChanged: boolean;
         };
         InventoryDto: {
             revision: null | components["schemas"]["RevisionDto"];

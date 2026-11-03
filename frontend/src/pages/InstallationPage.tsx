@@ -77,13 +77,13 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
 /** Asks for trust while the installation declares an endpoint its credentials were never sent to. */
 function TrustCallout({ installation }: { installation: InstallationSummary }) {
   const trust = useTrustInstallation();
-  const { endpoints, untrusted, trustedAt } = installation.trust;
+  const { endpoints, untrusted, trustedAt, managementChanged } = installation.trust;
   if (!installation.valid || untrusted.length === 0) return null;
   return (
     <div id="trust">
       <Callout
         kind="warning"
-        title={trustedAt ? "New Proxmox endpoint" : "New Proxmox installation"}
+        title={managementChanged ? "Now asks to be managed" : trustedAt ? "New Proxmox endpoint" : "New Proxmox installation"}
         actions={
           <button
             type="button"
@@ -97,7 +97,12 @@ function TrustCallout({ installation }: { installation: InstallationSummary }) {
         }
       >
         <p>
-          {installation.managed ? "Plans, applies, and observations wait" : "Observations wait"} until you trust{" "}
+          {managementChanged
+            ? "It was trusted while it was observed only. Now that it asks to be managed, plans, applies, and observations wait"
+            : installation.managed
+              ? "Plans, applies, and observations wait"
+              : "Observations wait"}{" "}
+          until you trust{" "}
           {untrusted.map((endpoint, i) => (
             <span key={endpoint}>
               {i > 0 ? ", " : null}
@@ -211,7 +216,13 @@ export function InstallationPage() {
                     term: "Trust",
                     value: installation.trust.trustedAt ? (
                       <>
-                        {installation.trust.untrusted.length > 0 ? <Badge tone="warning">New endpoint</Badge> : <Badge tone="success">Trusted</Badge>}{" "}
+                        {installation.trust.managementChanged ? (
+                          <Badge tone="warning">Trusted as observed only</Badge>
+                        ) : installation.trust.untrusted.length > 0 ? (
+                          <Badge tone="warning">New endpoint</Badge>
+                        ) : (
+                          <Badge tone="success">Trusted</Badge>
+                        )}{" "}
                         by {installation.trust.trustedBy} · <RelativeTime value={installation.trust.trustedAt} />
                       </>
                     ) : (

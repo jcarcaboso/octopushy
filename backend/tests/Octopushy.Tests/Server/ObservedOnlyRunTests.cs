@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
+using Octopushy.Agent.V1;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
@@ -18,6 +19,129 @@ namespace Octopushy.Tests.Server;
 public class ObservedOnlyRunTests(PostgresFixture postgres)
 {
     private const string ZiostToken = "ziost-root-token";
+    private const string ZiostFile = "labs/home/proxmox/ziost/installation.yaml";
+    private const string KorribanFile = "labs/home/proxmox/korriban/installation.yaml";
+
+    private const string Ziost = """
+        schemaVersion: 1
+        manage: false
+        type: standalone
+        connection:
+          endpoint: https://10.9.0.100:8006/
+          tls: { verify: false }
+          token: { store: proxmox/ziost/token }
+        hosts:
+          ziost: {}
+        """;
+
+    /// <summary>The minimal repository with ziost beside korriban, observed only, and both trusted.</summary>
+    private async Task<ServerHarness> WithZiostAsync()
+    {
+        var test = TestRepository.Minimal();
+        test.Write(ZiostFile, Ziost);
+        var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("proxmox/ziost/token", ZiostToken);
+        await server.SyncAndTrustAsync();
+        return server;
+    }
+
+    [Fact]
+    public async Task An_invalid_definition_keeps_the_installation_observed_only()
+    {
+        await using var server = await WithZiostAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await server.TickAsync();
+        // The first observations finish, so the next revision observes again.
+        foreach (var observe in agent.TakeAssignments().Where(a => a.Action == "observe"))
+            await agent.ReportAsync(observe, Outcome.Succeeded, new JsonObject { ["hosts"] = new JsonArray(), ["guests"] = new JsonArray() });
+
+        // One commit breaks ziost's file and points korriban's read-only token at ziost's key.
+        server.Repository.Write(ZiostFile, Ziost + "\nbogus: true\n");
+        var korriban = File.ReadAllText(Path.Combine(server.Repository.Root, KorribanFile));
+        server.Repository.Write(KorribanFile, korriban.Replace("proxmox/korriban/read-only-token", "proxmox/ziost/token"));
+        server.Commit("Break ziost and borrow its token");
+        await server.SyncAndTrustAsync();
+
+        var ziost = await server.ResourceAsync("home/ziost");
+        Assert.False(ziost.Valid);
+        Assert.Null(ziost.Definition);
+        Assert.True(ziost.ObservedOnly);
+        Assert.Equal(["proxmox/ziost/token"], ziost.ObservedOnlyStoreKeys);
+        Assert.Equal(["https://10.9.0.100:8006"], ziost.ObservedOnlyEndpoints);
+
+        // Korriban's own work names ziost's key now: its run fails, its observation fails, and the token goes nowhere.
+        await server.TickAsync();
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Contains("proxmox/ziost/token", RunContext.Parse(run.Context).Secrets.Values);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("home/ziost is observed only", run.Detail);
+        var sent = agent.TakeAssignments();
+        Assert.DoesNotContain(sent, a => a.Secrets.Values.Contains(ZiostToken));
+        Assert.Contains("credential or endpoint of home/ziost", (await server.ResourceAsync(Installation)).ObserveError);
+    }
+
+    [Fact]
+    public async Task A_missing_definition_keeps_the_installation_observed_only()
+    {
+        await using var server = await WithZiostAsync();
+        server.Repository.Delete("labs/home/proxmox/ziost");
+        server.Commit("Remove ziost");
+        await server.SyncAsync();
+
+        var ziost = await server.ResourceAsync("home/ziost");
+        Assert.NotNull(ziost.MissingSince);
+        Assert.True(ziost.ObservedOnly);
+        var list = await server.QueryAsync(db => SafetyBoundary.ObservedOnlyInstallationsAsync(db, CancellationToken.None));
+        Assert.Contains(list, i => i.Address == "home/ziost" && i.ObservedOnly && i.StoreKeys.Contains("proxmox/ziost/token"));
+    }
+
+    [Fact]
+    public async Task An_installation_that_asks_to_be_managed_waits_to_be_trusted_again()
+    {
+        await using var server = await WithZiostAsync();
+        var trustedAsObservedOnly = await server.QueryAsync(db => db.InstallationTrusts.AsNoTracking().FirstAsync(t => t.Address == "home/ziost"));
+        Assert.True(trustedAsObservedOnly.ObservedOnly);
+
+        server.Repository.Write(ZiostFile, Ziost.Replace("manage: false", "manage: true"));
+        server.Repository.Write("labs/home/proxmox/ziost/guests/zst-app-01/guest.yaml", """
+            schemaVersion: 1
+            type: vm
+            host: ziost
+            vmid: 400
+            hardware: { cores: 2, memory: 2048 }
+            network: { bridge: vmbr0, mode: static, address: 10.9.0.40/24, gateway: 10.9.0.1 }
+            provision:
+              recipe: test-vm
+            """);
+        server.Commit("Manage ziost");
+        await server.SyncAsync();
+
+        var ziost = await server.ResourceAsync("home/ziost");
+        Assert.False(ziost.ObservedOnly);
+        // Until it is trusted as managed, its keys stay refused to other installations' work.
+        Assert.Equal(["proxmox/ziost/token"], ziost.ObservedOnlyStoreKeys);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.TickAsync();
+        var run = await server.LatestRunAsync("home/ziost/zst-app-01", Operations.Provision);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+        Assert.Contains("was trusted while it was observed only", run.Detail);
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Secrets.Values.Contains(ZiostToken));
+
+        await using (var scope = server.Services.CreateAsyncScope())
+        {
+            var view = await scope.ServiceProvider.GetRequiredService<Views>().InstallationAsync(ziost.Id, CancellationToken.None);
+            Assert.True(view!.Installation.Trust.ManagementChanged);
+            Assert.Equal(["https://10.9.0.100:8006/"], view.Installation.Trust.Untrusted);
+        }
+
+        await server.SyncAndTrustAsync();
+        ziost = await server.ResourceAsync("home/ziost");
+        Assert.Empty(ziost.ObservedOnlyStoreKeys);
+        Assert.False((await server.QueryAsync(db => db.InstallationTrusts.AsNoTracking().FirstAsync(t => t.Address == "home/ziost"))).ObservedOnly);
+        var preview = await agent.NextAsync("preview");
+        Assert.Equal(ZiostToken, Assert.Single(preview.Secrets).Value);
+    }
 
     [Fact]
     public async Task An_observed_only_installation_is_observed_and_its_guest_gets_no_run()
@@ -160,7 +284,7 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action != "observe");
     }
 
-    /// <summary>Sets <c>manage: false</c> on an installation as the engine last read it, without a new revision.</summary>
+    /// <summary>Records an installation as observed only, as a sync of <c>manage: false</c> does, without a new revision.</summary>
     private static Task ObserveOnlyInDatabaseAsync(ServerHarness server, string address) =>
         server.WithDbAsync(async db =>
         {
@@ -168,6 +292,9 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
             var definition = JsonNode.Parse(installation.Definition!)!.AsObject();
             definition["manage"] = false;
             installation.Definition = definition.ToJsonString();
+            installation.ObservedOnly = true;
+            installation.ObservedOnlyStoreKeys = SafetyBoundary.TokenKeys(definition).ToList();
+            installation.ObservedOnlyEndpoints = SafetyBoundary.Endpoints(definition).ToList();
             await db.SaveChangesAsync();
         });
 }

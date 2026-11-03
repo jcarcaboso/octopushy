@@ -72,6 +72,11 @@ public sealed partial class AssignmentBuilder(
         // Only an observation reaches an installation Octopushy only observes. Asked first, so this fails and never waits.
         if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken) is { } observedOnly)
             throw new AssignmentException(observedOnly);
+        // An observation of one installation may not carry another's denied token or reach its endpoint.
+        if (run is null && await SafetyBoundary.ObservationRefusalAsync(db,
+                await db.Resources.AsNoTracking().Where(r => r.Id == attempt.ResourceId).Select(r => r.Address).FirstOrDefaultAsync(cancellationToken),
+                context, cancellationToken) is { } observation)
+            throw new AssignmentException(observation);
         var blocked = run is null
             ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
             : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);
@@ -97,7 +102,7 @@ public sealed partial class AssignmentBuilder(
         // Observations are runtime data, so what was valid when the run was made is asked again here.
         if (run is { Operation: Operations.Provision } && stepName == StepNames.Plan && context.Proxmox.Vmid is { } vmid
             && await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is { ParentAddress: { } installation } guest
-            && await SafetyBoundary.VmidCollisionAsync(db, states, guest, installation, vmid, cancellationToken, run.Id) is { } collision)
+            && await SafetyBoundary.VmidCollisionAsync(db, guest, installation, vmid, cancellationToken) is { } collision)
             throw new AssignmentException(collision);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
@@ -180,6 +185,8 @@ public sealed partial class AssignmentBuilder(
             };
         }
 
+        if (stepName == StepNames.Apply && run!.Operation == Operations.Provision)
+            await ClaimAsync(run, cancellationToken);
         assignment.InputJson = input.ToJsonString();
         foreach (var (name, value) in values)
         {
@@ -187,6 +194,23 @@ public sealed partial class AssignmentBuilder(
         }
 
         return assignment;
+    }
+
+    /// <summary>
+    /// Records, as this approved apply is sent, that it creates the guest's own machine: its VMID on its node,
+    /// in its installation. Until the guest is bound, that is what makes such a VM its own when an apply that
+    /// made it did not finish. The plan has to say so; a state's contents never count. See SafetyBoundary.
+    /// </summary>
+    private async Task ClaimAsync(Run run, CancellationToken cancellationToken)
+    {
+        var context = RunContext.Parse(run.Context);
+        var plan = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == StepNames.Plan).Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
+        if (plan is null || !GuestVmPlan.MakesGuestMachine(JsonNode.Parse(plan), context))
+            return;
+        var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
+        resource.ClaimedInstallation = resource.ParentAddress;
+        resource.ClaimedNode = context.Proxmox.Node;
+        resource.ClaimedVmid = context.Proxmox.Vmid;
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>

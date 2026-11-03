@@ -28,7 +28,7 @@ function summary(trust: Partial<InstallationTrust> = {}): InstallationSummary {
     hosts: [],
     guests: [],
     unmanagedCount: 0,
-    trust: { endpoints: [endpoint], untrusted: [endpoint], trustedAt: null, trustedBy: null, ...trust },
+    trust: { endpoints: [endpoint], untrusted: [endpoint], trustedAt: null, trustedBy: null, managementChanged: false, ...trust },
   };
 }
 
@@ -99,6 +99,19 @@ describe("installation trust", () => {
     // In the header, the callout's title and the connection's facts.
     expect(screen.getAllByText("Observed only")).toHaveLength(3);
     expect(screen.getByText(/^Observations wait until you trust/)).toBeInTheDocument();
+  });
+
+  it("asks to trust again an installation that was trusted as observed only and now asks to be managed", async () => {
+    mockApi({
+      [`GET /api/installations/${id}`]: () =>
+        detail(summary({ trustedAt: "2026-10-27T10:00:00Z", trustedBy: "ops", managementChanged: true })),
+    });
+    renderPage();
+
+    expect(await screen.findByText("Now asks to be managed")).toBeInTheDocument();
+    expect(screen.getByText("Trusted as observed only")).toBeInTheDocument();
+    expect(screen.getByText(/It was trusted while it was observed only/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Trust installation" })).toBeInTheDocument();
   });
 
   it("marks observed-only installations in the inventory", async () => {
