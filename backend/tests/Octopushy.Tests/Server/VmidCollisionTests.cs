@@ -4,6 +4,7 @@ using Google.Protobuf;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
@@ -84,20 +85,143 @@ public class VmidCollisionTests(PostgresFixture postgres)
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
-        // An approved plan that creates the guest's own VM: sending its apply records the claim.
+        // An approved plan that creates the guest's own VM: sending its apply records a reservation, which grants nothing.
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
             MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
         var apply = await agent.NextAsync("apply");
         var guest = await server.ResourceAsync(Guest);
-        Assert.Equal((Installation, "korriban", (int?)Vmid), (guest.ClaimedInstallation, guest.ClaimedNode, guest.ClaimedVmid));
+        Assert.Equal((Installation, "korriban", (int?)Vmid), (guest.ReservedInstallation, guest.ReservedNode, guest.ReservedVmid));
+        Assert.NotNull(guest.ReservedAt);
         // The VM was made, starting it was not, and nothing bound it.
         await agent.ReportAsync(apply, Outcome.Failed, error: "bridge 'lab' does not exist");
         await server.TickAsync();
         Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
+        // Observed only after the reservation: it may be the VM that apply made.
         await ObserveAsync(server, (Vmid, "krb-app-01"));
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
         Assert.Equal("preview", (await agent.NextAsync("preview")).Action);
+    }
+
+    [Fact]
+    public async Task A_create_that_failed_on_a_vm_that_was_there_first_grants_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "unable to create VM 310: config file already exists");
+        await server.TickAsync();
+        // An observation from before the reservation already showed VM 310: it was someone else's all along.
+        var reservedAt = (await server.ResourceAsync(Guest)).ReservedAt!.Value;
+        await ObserveAsync(server, reservedAt.AddMinutes(-5), (Vmid, "c-fedora-01"));
+        await ObserveAsync(server, reservedAt.AddMinutes(1), (Vmid, "c-fedora-01"));
+
+        var id = (await server.ResourceAsync(Guest)).Id;
+        var refused = await Assert.ThrowsAsync<RunException>(() => server.Services.GetRequiredService<Planner>().PlanGuestAsync(id, CancellationToken.None));
+        Assert.Contains("VMID 310 on korriban is an existing VM Octopushy does not manage (c-fedora-01)", refused.Message);
+    }
+
+    [Fact]
+    public async Task A_successful_apply_that_made_something_else_binds_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1, machine: false), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        await server.TickAsync();
+
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal(((int?)null, (int?)null), (guest.BoundVmid, guest.ReservedVmid));
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Contains("no apply of an approved plan of this guest has created it", run.Steps.Single(s => s.Name == StepNames.Verify).Detail);
+        // Nothing waits on the guest as if it were provisioned.
+        Assert.Contains("provisioning", await server.QueryAsync(async db =>
+            await GuestWork.WaitingForAsync(db, await db.Resources.FirstAsync(r => r.Address == Guest), LabRepositoryLoader.Load(server.Repository.Root), CancellationToken.None)));
+    }
+
+    [Fact]
+    public async Task A_verified_vm_without_octopushys_marks_binds_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded,
+            new JsonObject { ["node"] = "korriban", ["tags"] = new JsonArray("fedora"), ["description"] = "Home lab desktop" });
+        await server.TickAsync();
+
+        Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("does not carry Octopushy's tag 'octopushy'", run.Detail);
+    }
+
+    [Fact]
+    public async Task A_confirmed_creation_binds_the_guest()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject
+        {
+            ["node"] = "korriban", ["tags"] = new JsonArray("home", "octopushy"),
+            ["description"] = "Managed by Octopushy as home/korriban/krb-app-01.",
+        });
+
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal((Installation, (int?)Vmid), (guest.BoundInstallation, guest.BoundVmid));
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+    }
+
+    [Fact]
+    public async Task A_create_that_applied_is_confirmed_by_a_later_verification()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        // The VM came up without an address in time; the create itself worked.
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "no address");
+        await server.TickAsync();
+        Assert.NotNull((await server.ResourceAsync(Guest)).ReservationAppliedAt);
+        Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
+
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        await server.TickAsync();
+        Assert.Equal(Vmid, (await server.ResourceAsync(Guest)).BoundVmid);
+    }
+
+    [Fact]
+    public async Task A_reservation_goes_when_an_unbound_guest_names_another_vmid()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded,
+            MachinePlan(Change(GuestVmPlan.VmResourceType, ["create"], Vmid, "korriban")), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "boom");
+        await server.TickAsync();
+        Assert.Equal(Vmid, (await server.ResourceAsync(Guest)).ReservedVmid);
+
+        server.Repository.Write(GuestFile, File.ReadAllText(Path.Combine(server.Repository.Root, GuestFile)).Replace("vmid: 310", "vmid: 312"));
+        server.Commit("Another VMID");
+        await server.SyncAndTrustAsync();
+        var guest = await server.ResourceAsync(Guest);
+        Assert.Equal(((int?)null, (string?)null, (DateTimeOffset?)null), (guest.ReservedVmid, guest.ReservedNode, guest.ReservedAt));
     }
 
     [Theory]
@@ -109,11 +233,11 @@ public class VmidCollisionTests(PostgresFixture postgres)
         var agent = await server.ConnectAgentAsync("home");
         await server.SyncAndTrustAsync();
         // A plan that creates no machine of the guest's, whose apply leaves VM 310 in the state: read as data, or adopted.
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1, machine: false), artifacts: FakeAgent.PlanArtifact());
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "boom", artifacts: StateWithVm(Vmid, mode, imported));
         await server.TickAsync();
         var guest = await server.ResourceAsync(Guest);
-        Assert.Equal(((int?)null, (int?)null), (guest.BoundVmid, guest.ClaimedVmid));
+        Assert.Equal(((int?)null, (int?)null), (guest.BoundVmid, guest.ReservedVmid));
         await ObserveAsync(server, (Vmid, "c-fedora-01"));
 
         var refused = await Assert.ThrowsAsync<RunException>(() =>
@@ -122,14 +246,14 @@ public class VmidCollisionTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_claim_on_another_node_is_not_the_observed_vm()
+    public async Task A_reservation_on_another_node_is_not_the_observed_vm()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAndTrustAsync();
         await server.WithDbAsync(async db =>
         {
             var resource = await db.Resources.FirstAsync(r => r.Address == Guest);
-            (resource.ClaimedInstallation, resource.ClaimedNode, resource.ClaimedVmid) = (Installation, "dromund", Vmid);
+            (resource.ReservedInstallation, resource.ReservedNode, resource.ReservedVmid, resource.ReservedAt) = (Installation, "dromund", Vmid, DateTimeOffset.UtcNow);
             await db.SaveChangesAsync();
         });
         await ObserveAsync(server, (Vmid, "c-fedora-01"));
@@ -139,8 +263,57 @@ public class VmidCollisionTests(PostgresFixture postgres)
         await Assert.ThrowsAsync<RunException>(() => server.Services.GetRequiredService<Planner>().PlanGuestAsync(id, CancellationToken.None));
     }
 
+    /// <summary>The reported case: a non-VM apply leaves the guest unbound, then it is retired at VMID 100.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Retiring_a_guest_that_owns_nothing_lifts_no_protection(bool planDeletesTheVm)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Policy("policy: { approval: automatic, destructive: automatic }"));
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1, machine: false), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "boom");
+        await server.TickAsync();
+
+        server.Repository.Write(GuestFile, File.ReadAllText(Path.Combine(server.Repository.Root, GuestFile)).Replace("vmid: 310", "vmid: 100") + "lifecycle: retired\n");
+        server.Commit("Retire at VMID 100");
+        await server.SyncAndTrustAsync();
+        var plan = planDeletesTheVm
+            ? MachinePlan(Change(GuestVmPlan.VmResourceType, ["delete"], 100, "korriban"))
+            : FakeAgent.Plan(delete: 1, machine: false);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, plan, artifacts: FakeAgent.PlanArtifact("destroy"));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Retire);
+        var unprotect = run.Steps.Single(s => s.Name == StepNames.Unprotect);
+        Assert.Equal(StepStatuses.Skipped, unprotect.Status);
+        Assert.Contains(planDeletesTheVm ? "does not own VM 100" : "does not replace or delete this guest's VM", unprotect.Detail);
+        Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
+        Assert.Equal(0, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.Action == "set-protection")));
+    }
+
+    [Fact]
+    public async Task A_retired_guest_whose_vmid_is_an_observed_unmanaged_vm_is_invalid()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAndTrustAsync();
+        await ObserveAsync(server, (100, "homeassistant"));
+
+        server.Repository.Write(GuestFile, File.ReadAllText(Path.Combine(server.Repository.Root, GuestFile)).Replace("vmid: 310", "vmid: 100") + "lifecycle: retired\n");
+        server.Commit("Retire at VMID 100");
+        await server.SyncAndTrustAsync();
+
+        var guest = await server.ResourceAsync(Guest);
+        Assert.False(guest.Valid);
+        Assert.Contains("VMID 100 on korriban is an existing VM Octopushy does not manage (homeassistant)", guest.Issues);
+        Assert.Equal(0, await server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == guest.Id && r.Operation == Operations.Retire)));
+    }
+
     /// <summary>Records an observation of korriban that shows these VMs, as an agent would have reported it.</summary>
-    private static Task ObserveAsync(ServerHarness server, params (int Vmid, string Name)[] vms) =>
+    private static Task ObserveAsync(ServerHarness server, params (int Vmid, string Name)[] vms) => ObserveAsync(server, DateTimeOffset.UtcNow, vms);
+
+    private static Task ObserveAsync(ServerHarness server, DateTimeOffset at, params (int Vmid, string Name)[] vms) =>
         server.WithDbAsync(async db =>
         {
             var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
@@ -148,7 +321,7 @@ public class VmidCollisionTests(PostgresFixture postgres)
             {
                 Id = Guid.CreateVersion7(),
                 ResourceId = installation.Id,
-                ObservedAt = DateTimeOffset.UtcNow,
+                ObservedAt = at,
                 Data = new JsonObject
                 {
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),

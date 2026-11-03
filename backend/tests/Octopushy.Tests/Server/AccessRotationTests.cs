@@ -416,7 +416,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         await server.TickAsync();
 
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource, CancellationToken.None);
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1, machine: false), artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
 
         Assert.True((await KeysAsync(server))[0].Bootstrap);

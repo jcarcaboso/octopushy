@@ -392,13 +392,70 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
     /// state it was given unless the test passes one, as an agent always returns the state; use
     /// the overload that takes an attempt ID to report an apply without it.
     /// </summary>
-    public Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
+    public async Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
     {
         if (assignment is { Executor: "opentofu", Action: "apply" } && outcome is Outcome.Succeeded or Outcome.Failed
             && artifacts.All(a => a.Name != TofuStateStore.ArtifactName)
             && assignment.Artifacts.FirstOrDefault(a => a.Name == TofuStateStore.ArtifactName) is { } state)
             artifacts = [.. artifacts, state];
-        return ReportAsync(assignment.AttemptId, outcome, outputs, error, artifacts);
+        return await ReportAsync(assignment.AttemptId, outcome, await AsTheModuleWouldAsync(assignment, outcome, outputs), error, artifacts);
+    }
+
+    /// <summary>Plan outputs that make the guest's own machine nowhere, for a test that needs a provision plan that does not.</summary>
+    public const string NoMachine = "fakeNoMachine";
+
+    /// <summary>
+    /// What the example provision module reports, filled in where a test leaves it out. A provision plan that
+    /// creates something and names no Proxmox resource makes the guest's own VM with its first create, as the
+    /// module does, and a retire plan's first delete is of that VM, unless the outputs say <see cref="NoMachine"/>. A verified VM carries the module's tag and
+    /// description unless the test says what it carries. Explicit outputs are left as they are.
+    /// </summary>
+    /// <summary>A create, as <see cref="Plan"/> lists one: its actions name create and not delete.</summary>
+    private static bool IsCreate(JsonNode? change) =>
+        change?["actions"] is JsonArray a && a.Any(x => x?.ToString() == "create") && a.All(x => x?.ToString() != "delete");
+
+    /// <summary>A delete, as <see cref="Plan"/> lists one, which a destroy plan of the module makes of the guest's VM.</summary>
+    private static bool IsDelete(JsonNode? change) => change?["actions"] is JsonArray a && a.Any(x => x?.ToString() == "delete");
+
+    private async Task<JsonObject?> AsTheModuleWouldAsync(Assignment assignment, Outcome outcome, JsonObject? outputs)
+    {
+        if (outcome != Outcome.Succeeded || !Guid.TryParse(assignment.AttemptId, out var attemptId))
+            return outputs;
+        if (outputs?.Remove(NoMachine) == true)
+            return outputs;
+        var preview = assignment is { Executor: "opentofu", Action: "preview" } && outputs?["changes"] is JsonArray listed
+            && listed.All(c => c?["type"]?.ToString()?.StartsWith("proxmox_", StringComparison.Ordinal) != true)
+            && listed.Any(c => IsCreate(c) || IsDelete(c));
+        var verify = assignment.Action == "verify-guest" && outputs?.ContainsKey("description") != true;
+        if (!preview && !verify)
+            return outputs;
+        var run = await harness.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == attemptId)
+            .Select(a => new { a.Step!.Stage, a.Step.Run!.Operation, a.Step.Run.Context }).FirstOrDefaultAsync());
+        if (run is null || run.Stage is not null)
+            return outputs;
+        var context = RunContext.Parse(run.Context);
+        var retire = run.Operation == Operations.Retire;
+        if (preview && (run.Operation == Operations.Provision && outputs!["changes"]!.AsArray().Any(IsCreate)
+                        || retire && outputs!["changes"]!.AsArray().Any(IsDelete)))
+        {
+            outputs = outputs!.DeepClone().AsObject();
+            var first = outputs["changes"]!.AsArray().OfType<JsonObject>().First(c => retire ? IsDelete(c) : IsCreate(c));
+            first["actions"] = new JsonArray(retire ? "delete" : "create");
+            first["address"] = $"{GuestVmPlan.VmResourceType}.guest";
+            first["type"] = GuestVmPlan.VmResourceType;
+            first["name"] = "guest";
+            first["vmId"] = context.Proxmox.Vmid;
+            first["node"] = context.Proxmox.Node;
+        }
+        else if (verify)
+        {
+            outputs = outputs?.DeepClone().AsObject() ?? [];
+            outputs["node"] ??= context.Proxmox.Node;
+            outputs["tags"] = new JsonArray(SafetyBoundary.OwnerTag, context.Address.Split('/')[0]);
+            outputs["description"] = SafetyBoundary.OwnerDescription(context.Address);
+        }
+
+        return outputs;
     }
 
     public async Task<bool> ReportAsync(string attemptId, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
@@ -409,7 +466,15 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         return await harness.Engine.OnResultAsync(Id, result, CancellationToken.None);
     }
 
-    public static JsonObject Plan(int create = 0, int update = 0, int delete = 0, int replace = 0, bool? hasChanges = null) => new()
+    public static JsonObject Plan(int create = 0, int update = 0, int delete = 0, int replace = 0, bool? hasChanges = null, bool machine = true)
+    {
+        var plan = PlanOf(create, update, delete, replace, hasChanges);
+        if (!machine)
+            plan[NoMachine] = true;
+        return plan;
+    }
+
+    private static JsonObject PlanOf(int create, int update, int delete, int replace, bool? hasChanges) => new()
     {
         ["hasChanges"] = hasChanges ?? create + update + delete + replace > 0,
         ["changes"] = new JsonArray(Enumerable.Range(0, create + update + delete + replace)

@@ -220,14 +220,26 @@ public sealed class Resource
     public List<string> ObservedOnlyEndpoints { get; set; } = [];
 
     /// <summary>
-    /// The installation, node and VMID of the machine an approved provision plan of this guest creates, recorded
-    /// when its apply is sent. Until the guest is bound, that VM is the guest's own; see SafetyBoundary.
+    /// A reservation: the installation, node and VMID of the machine an approved provision plan of this guest
+    /// creates, recorded when its apply is sent, and when it was first sent. It grants nothing by itself.
+    /// Ownership is <see cref="BoundVmid"/>, given only when a verified VM shows that create worked. Until
+    /// then the reservation lets this guest try its create again after an apply that did not finish, unless
+    /// an observation from before <see cref="ReservedAt"/> already showed a VM at that VMID; see SafetyBoundary.
+    /// It is cleared when the guest's VMID or node changes while it is unbound.
     /// </summary>
-    public string? ClaimedInstallation { get; set; }
+    public string? ReservedInstallation { get; set; }
 
-    public string? ClaimedNode { get; set; }
+    public string? ReservedNode { get; set; }
 
-    public int? ClaimedVmid { get; set; }
+    public int? ReservedVmid { get; set; }
+
+    public DateTimeOffset? ReservedAt { get; set; }
+
+    /// <summary>
+    /// When an apply of an approved plan that creates the reserved machine succeeded. Only with this, and a
+    /// verified VM that carries Octopushy's tag and description, is the guest bound to it.
+    /// </summary>
+    public DateTimeOffset? ReservationAppliedAt { get; set; }
 }
 
 /// <summary>Where one of a guest's schedules stands. The definition itself stays in Git.</summary>

@@ -105,11 +105,65 @@ public static class SafetyBoundary
         context.Secrets.Values.Any(installation.StoreKeys.Contains)
         || context.Proxmox.Endpoint is { } endpoint && installation.Endpoints.Contains(NormalEndpoint(endpoint));
 
+    /// <summary>The tag a provision module puts on the VMs it makes, as the example module does.</summary>
+    public const string OwnerTag = "octopushy";
+
+    /// <summary>What the description of a VM made for the guest at <paramref name="address"/> contains.</summary>
+    public static string OwnerDescription(string address) => $"Managed by Octopushy as {address}.";
+
     /// <summary>
-    /// Why a guest may not be provisioned at <paramref name="vmid"/>, or null: the installation's latest
-    /// observation shows a VM there that is not this guest's. A VM is the guest's own when the guest is bound
-    /// to it, or when the server recorded that it sent an approved apply of this guest's plan creating that
-    /// VMID on that node (<see cref="Resource.ClaimedVmid"/>). What a state says is never read as ownership.
+    /// Whether the guest owns the VM at this VMID on this node: it is bound to it, after a confirmed creation, or
+    /// it holds a reservation for exactly that machine that is still recoverable. Lifting protection and the
+    /// VMID check both ask this. See docs/safety-boundary.md.
+    /// </summary>
+    public static async Task<bool> OwnsAsync(OctopushyDb db, Resource guest, string installation, string? node, int vmid, CancellationToken cancellationToken) =>
+        guest.BoundVmid == vmid && guest.BoundInstallation == installation
+        || node is not null && await RecoverableReservationAsync(db, guest, installation, node, vmid, cancellationToken);
+
+    /// <summary>
+    /// A reservation grants nothing on its own. It lets the guest try its own create again after an apply that
+    /// did not finish, unless an observation from before the reservation already showed a VM at that VMID: then
+    /// the create failed on a VM that was there first, and that VM is someone else's.
+    /// </summary>
+    public static async Task<bool> RecoverableReservationAsync(OctopushyDb db, Resource guest, string installation, string node, int vmid,
+        CancellationToken cancellationToken)
+    {
+        if (guest.ReservedVmid != vmid || guest.ReservedInstallation != installation || guest.ReservedNode != node || guest.ReservedAt is not { } reservedAt)
+            return false;
+        var installationId = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null)
+            .Select(r => (Guid?)r.Id).FirstOrDefaultAsync(cancellationToken);
+        var earlier = await db.Observations.AsNoTracking()
+            .Where(o => o.ResourceId == installationId && o.ObservedAt < reservedAt)
+            .Select(o => o.Data)
+            .ToListAsync(cancellationToken);
+        return !earlier.Any(data => Observed(data, vmid) is not null);
+    }
+
+    /// <summary>Whether the guest's reservation is for this run's machine. A reservation for any other grants nothing here.</summary>
+    public static bool Reserves(Resource guest, RunContext context) =>
+        guest.ReservedVmid is { } vmid && vmid == context.Proxmox.Vmid && guest.ReservedNode == context.Proxmox.Node
+        && guest.ReservedInstallation == guest.ParentAddress;
+
+    /// <summary>
+    /// Why a verified VM does not confirm the creation an apply of this guest's reported, or null when it does:
+    /// the VM verify-guest saw is on the guest's node, with Octopushy's tag and a description naming this guest.
+    /// </summary>
+    public static string? MarksMissing(JsonNode? verified, RunContext context)
+    {
+        var tags = (verified?["tags"] as JsonArray ?? []).Select(t => t?.ToString()).ToList();
+        var description = verified?["description"]?.ToString() ?? "";
+        return verified?["node"]?.ToString() == context.Proxmox.Node && tags.Contains(OwnerTag)
+               && description.Contains(OwnerDescription(context.Address), StringComparison.Ordinal)
+            ? null
+            : $"VM {context.Proxmox.Vmid} on {context.Proxmox.Node} does not carry Octopushy's tag '{OwnerTag}' and the description "
+              + $"'{OwnerDescription(context.Address)}', so Octopushy does not record it as this guest's. Its provision module has to set both.";
+    }
+
+    /// <summary>
+    /// Why a guest may not be provisioned or retired at <paramref name="vmid"/>, or null: the installation's latest
+    /// observation shows a VM there that the guest does not own (<see cref="OwnsAsync"/>). What a state says is
+    /// never read as ownership, and neither is a reservation an earlier observation contradicts.
     /// </summary>
     /// <remarks>
     /// Without an observation of the installation yet, nothing is refused here: there is nothing to compare
@@ -129,15 +183,11 @@ public static class SafetyBoundary
             .OrderByDescending(o => o.ObservedAt)
             .Select(o => o.Data)
             .FirstOrDefaultAsync(cancellationToken);
-        if (data is null)
-            return null;
-        var observed = (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>()
-            .FirstOrDefault(g => g["vmid"] is JsonValue id && id.TryGetValue<int>(out var observedVmid) && observedVmid == vmid);
-        if (observed is null)
+        if (data is null || Observed(data, vmid) is not { } observed)
             return null;
 
         var host = observed["host"]?.ToString() is { Length: > 0 } h ? h : null;
-        if (host is not null && guest.ClaimedVmid == vmid && guest.ClaimedInstallation == installationAddress && guest.ClaimedNode == host)
+        if (host is not null && await RecoverableReservationAsync(db, guest, installationAddress, host, vmid, cancellationToken))
             return null;
         var node = host ?? "an unknown node";
         var holder = await db.Resources.AsNoTracking()
@@ -149,6 +199,11 @@ public static class SafetyBoundary
         return $"VMID {vmid} on {node} is an existing VM Octopushy does not manage{name}. Give this guest a free VMID: "
             + "Octopushy plans nothing against a machine it did not create.";
     }
+
+    /// <summary>The VM an observation shows at this VMID, or null.</summary>
+    private static JsonObject? Observed(string data, int vmid) =>
+        (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(g => g["vmid"] is JsonValue id && id.TryGetValue<int>(out var observedVmid) && observedVmid == vmid);
 
     private static string NormalEndpoint(string endpoint) => endpoint.Trim().TrimEnd('/');
 }

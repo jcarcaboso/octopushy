@@ -100,7 +100,7 @@ public sealed partial class AssignmentBuilder(
         if (action.Executor == "ansible")
             return await BuildAnsibleAsync(attempt, step!, run!, context, agentId, cancellationToken);
         // Observations are runtime data, so what was valid when the run was made is asked again here.
-        if (run is { Operation: Operations.Provision } && stepName == StepNames.Plan && context.Proxmox.Vmid is { } vmid
+        if (run is { Operation: Operations.Provision or Operations.Retire } && stepName == StepNames.Plan && context.Proxmox.Vmid is { } vmid
             && await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is { ParentAddress: { } installation } guest
             && await SafetyBoundary.VmidCollisionAsync(db, guest, installation, vmid, cancellationToken) is { } collision)
             throw new AssignmentException(collision);
@@ -186,7 +186,7 @@ public sealed partial class AssignmentBuilder(
         }
 
         if (stepName == StepNames.Apply && run!.Operation == Operations.Provision)
-            await ClaimAsync(run, cancellationToken);
+            await ReserveAsync(run, cancellationToken);
         assignment.InputJson = input.ToJsonString();
         foreach (var (name, value) in values)
         {
@@ -197,20 +197,26 @@ public sealed partial class AssignmentBuilder(
     }
 
     /// <summary>
-    /// Records, as this approved apply is sent, that it creates the guest's own machine: its VMID on its node,
-    /// in its installation. Until the guest is bound, that is what makes such a VM its own when an apply that
-    /// made it did not finish. The plan has to say so; a state's contents never count. See SafetyBoundary.
+    /// Records a reservation as this approved apply, whose plan creates the guest's own machine, is sent: its VMID
+    /// on its node, in its installation, and the time it was first sent for that machine. It grants nothing; see
+    /// <see cref="Resource.ReservedVmid"/>. The plan has to say so; a state's contents never count.
     /// </summary>
-    private async Task ClaimAsync(Run run, CancellationToken cancellationToken)
+    private async Task ReserveAsync(Run run, CancellationToken cancellationToken)
     {
         var context = RunContext.Parse(run.Context);
         var plan = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == StepNames.Plan).Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
         if (plan is null || !GuestVmPlan.MakesGuestMachine(JsonNode.Parse(plan), context))
             return;
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
-        resource.ClaimedInstallation = resource.ParentAddress;
-        resource.ClaimedNode = context.Proxmox.Node;
-        resource.ClaimedVmid = context.Proxmox.Vmid;
+        if (resource.BoundVmid is not null)
+            return;
+        // A retry of the same create keeps the first time: what was observed since may be the VM it made.
+        if (resource.ReservedAt is null || resource.ReservedInstallation != resource.ParentAddress
+            || resource.ReservedNode != context.Proxmox.Node || resource.ReservedVmid != context.Proxmox.Vmid)
+            (resource.ReservedAt, resource.ReservationAppliedAt) = (clock.GetUtcNow(), null);
+        resource.ReservedInstallation = resource.ParentAddress;
+        resource.ReservedNode = context.Proxmox.Node;
+        resource.ReservedVmid = context.Proxmox.Vmid;
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>
@@ -226,9 +232,14 @@ public sealed partial class AssignmentBuilder(
         var runContext = RunContext.Parse(run.Context);
         if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext) is { } foreign)
             throw new AssignmentException(foreign);
-        if (stepName == StepNames.Unprotect && run.Operation == Operations.Provision
+        if (stepName == StepNames.Unprotect && run.Operation is Operations.Provision or Operations.Retire
             && !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
             throw new AssignmentException("Protection is lifted only for an approved plan that replaces or deletes this guest's VM.");
+        if (stepName == StepNames.Unprotect
+            && (await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is not { ParentAddress: { } installation } guest
+                || runContext.Proxmox.Vmid is not { } vmid
+                || !await SafetyBoundary.OwnsAsync(db, guest, installation, runContext.Proxmox.Node, vmid, cancellationToken)))
+            throw new AssignmentException($"Protection is lifted only from a VM this guest owns, and VM {runContext.Proxmox.Vmid} on {runContext.Proxmox.Node} is not shown to be its own.");
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)

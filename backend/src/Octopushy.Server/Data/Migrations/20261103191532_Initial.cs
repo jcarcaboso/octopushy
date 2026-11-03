@@ -182,9 +182,11 @@ namespace Octopushy.Server.Data.Migrations
                     observed_only = table.Column<bool>(type: "boolean", nullable: false),
                     observed_only_store_keys = table.Column<List<string>>(type: "text[]", nullable: false),
                     observed_only_endpoints = table.Column<List<string>>(type: "text[]", nullable: false),
-                    claimed_installation = table.Column<string>(type: "text", nullable: true),
-                    claimed_node = table.Column<string>(type: "text", nullable: true),
-                    claimed_vmid = table.Column<int>(type: "integer", nullable: true)
+                    reserved_installation = table.Column<string>(type: "text", nullable: true),
+                    reserved_node = table.Column<string>(type: "text", nullable: true),
+                    reserved_vmid = table.Column<int>(type: "integer", nullable: true),
+                    reserved_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    reservation_applied_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {

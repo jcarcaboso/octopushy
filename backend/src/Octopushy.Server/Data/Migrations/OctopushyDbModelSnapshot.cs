@@ -821,18 +821,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("checked_revision_id");
 
-                    b.Property<string>("ClaimedInstallation")
-                        .HasColumnType("text")
-                        .HasColumnName("claimed_installation");
-
-                    b.Property<string>("ClaimedNode")
-                        .HasColumnType("text")
-                        .HasColumnName("claimed_node");
-
-                    b.Property<int?>("ClaimedVmid")
-                        .HasColumnType("integer")
-                        .HasColumnName("claimed_vmid");
-
                     b.Property<string>("Definition")
                         .HasColumnType("jsonb")
                         .HasColumnName("definition");
@@ -909,6 +897,26 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("ParentAddress")
                         .HasColumnType("text")
                         .HasColumnName("parent_address");
+
+                    b.Property<DateTimeOffset?>("ReservationAppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reservation_applied_at");
+
+                    b.Property<DateTimeOffset?>("ReservedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reserved_at");
+
+                    b.Property<string>("ReservedInstallation")
+                        .HasColumnType("text")
+                        .HasColumnName("reserved_installation");
+
+                    b.Property<string>("ReservedNode")
+                        .HasColumnType("text")
+                        .HasColumnName("reserved_node");
+
+                    b.Property<int?>("ReservedVmid")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_vmid");
 
                     b.Property<DateTimeOffset?>("RetiredAt")
                         .HasColumnType("timestamp with time zone")

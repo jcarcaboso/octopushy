@@ -540,29 +540,36 @@ public sealed partial class RunEngine(
                     }
                 }
 
-                if (run.Operation == Operations.Provision
-                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect
-                    && !GuestVmPlan.RemovesGuestVm(outputs, RunContext.Parse(run.Context)))
+                if (run.Operation is Operations.Provision or Operations.Retire
+                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect)
                 {
-                    unprotect.Status = StepStatuses.Skipped;
-                    unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                    var planned = RunContext.Parse(run.Context);
+                    if (!GuestVmPlan.RemovesGuestVm(outputs, planned))
+                    {
+                        unprotect.Status = StepStatuses.Skipped;
+                        unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                    }
+                    else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
+                             || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
+                    {
+                        // Only a VM the guest owns loses its protection: one it is bound to, or its own create that did not finish.
+                        unprotect.Status = StepStatuses.Skipped;
+                        unprotect.Detail = $"This guest does not own VM {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
+                    }
                 }
 
                 break;
             case StepNames.Apply when run.Operation == Operations.Provision:
-                var context = RunContext.Parse(run.Context);
                 resource.AppliedInputsHash = run.InputsHash;
                 resource.AppliedRevisionId = run.RevisionId;
                 resource.AppliedAt = now;
                 resource.SyncedInputsHash = run.InputsHash;
                 resource.Outputs = outputs?["outputs"]?.ToJsonString();
-                if (resource.BoundVmid is null)
-                {
-                    resource.BoundInstallation = resource.ParentAddress;
-                    resource.BoundVmid = context.Proxmox.Vmid;
-                    resource.BoundAt = now;
-                }
-
+                // Not bound here: a guest owns a VM once verify-guest confirms the create; see the verify step.
+                if (resource.BoundVmid is null && SafetyBoundary.Reserves(resource, RunContext.Parse(run.Context))
+                    && run.Steps.Single(s => s.Name == StepNames.Plan).Outputs is { } planText
+                    && GuestVmPlan.MakesGuestMachine(JsonNode.Parse(planText), RunContext.Parse(run.Context)))
+                    resource.ReservationAppliedAt = now;
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
                 await ProposeServicesAgainAsync(db, run, cancellationToken);
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
@@ -571,6 +578,30 @@ public sealed partial class RunEngine(
                 resource.Outputs = null;
                 break;
             case StepNames.Verify:
+                // Ownership comes only from a confirmed creation: an apply of an approved plan of this guest created
+                // its VMID on its node, and the VM verified now carries Octopushy's marks. Nothing else binds.
+                if (resource.BoundVmid is null)
+                {
+                    var verifying = RunContext.Parse(run.Context);
+                    if (!SafetyBoundary.Reserves(resource, verifying) || resource.ReservationAppliedAt is null)
+                    {
+                        step.Detail = $"VM {verifying.Proxmox.Vmid} on {verifying.Proxmox.Node} is not recorded as this guest's: "
+                            + "no apply of an approved plan of this guest has created it.";
+                    }
+                    else if (SafetyBoundary.MarksMissing(outputs, verifying) is { } missing)
+                    {
+                        step.Status = StepStatuses.Failed;
+                        step.Detail = missing;
+                        break;
+                    }
+                    else
+                    {
+                        resource.BoundInstallation = resource.ParentAddress;
+                        resource.BoundVmid = verifying.Proxmox.Vmid;
+                        resource.BoundAt = now;
+                    }
+                }
+
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:
@@ -578,9 +609,11 @@ public sealed partial class RunEngine(
                 resource.VerifiedAt = now;
                 resource.BoundVmid = null;
                 resource.BoundInstallation = null;
-                resource.ClaimedVmid = null;
-                resource.ClaimedNode = null;
-                resource.ClaimedInstallation = null;
+                resource.ReservedVmid = null;
+                resource.ReservedNode = null;
+                resource.ReservedInstallation = null;
+                resource.ReservedAt = null;
+                resource.ReservationAppliedAt = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;

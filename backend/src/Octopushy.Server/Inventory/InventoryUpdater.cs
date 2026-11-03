@@ -101,10 +101,13 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             // an invalid rename must not let a second row claim a guest's VM.
             var definition = repository.Guest(resource.Address)!;
             var problem = IdentityProblem(resource, definition, byAddress.Values);
-            // A VM the installation's latest observation shows at this VMID, and that is not this guest's.
-            // Observations are runtime data, so the dispatch of the plan asks again. A retired guest's
-            // removal destroys only what its own state holds, so it is not asked.
-            if (problem is null && !definition.Retired)
+            // A reservation is for one machine: a guest that is not bound yet and now names another lets it go.
+            if (resource.BoundVmid is null && resource.ReservedVmid is not null
+                && (resource.ReservedVmid != definition.Vmid || resource.ReservedNode != definition.Host || resource.ReservedInstallation != definition.InstallationAddress))
+                (resource.ReservedInstallation, resource.ReservedNode, resource.ReservedVmid, resource.ReservedAt, resource.ReservationAppliedAt) = (null, null, null, null, null);
+            // A VM the installation's latest observation shows at this VMID, and that is not this guest's, for a
+            // provision and a retire alike. Observations are runtime data, so the dispatch of the plan asks again.
+            if (problem is null)
                 problem = await SafetyBoundary.VmidCollisionAsync(db, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
             if (problem is not null)
             {
