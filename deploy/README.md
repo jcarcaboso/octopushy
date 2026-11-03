@@ -50,6 +50,34 @@ podman compose up -d                      # or: docker compose up -d
   server refuses to start rather than create a new CA, which would leave every enrolled
   agent untrusted. Restore the entries from a database backup.
 
+## Starting again with a fresh database
+
+This release starts its database schema again from one migration. It cannot upgrade a
+database created by an earlier release: `migrate` and the backend find the older migration
+history, log that this release requires a fresh database, change nothing, and exit with a
+non-zero status. Nothing in the old database is carried over, so before you start, write
+down the store keys your lab repository references (the Proxmox tokens and any `shared/*`
+values) and retire the guests you want removed while the old release still runs.
+
+Then, from `deploy/`:
+
+1. Stop everything: `podman compose down` (or `docker compose down`).
+2. Drop the database and the data that belongs to it, by removing the volumes:
+   `podman volume rm octopushy_postgres octopushy_data`, and `octopushy_agent` too if the
+   `agent` profile is in use. With your own PostgreSQL instead, run
+   `DROP DATABASE octopushy;` and `CREATE DATABASE octopushy OWNER octopushy;`, and empty
+   the backend's data directory. `secrets/kek` can stay: an empty database holds nothing
+   it encrypted.
+3. Set the new image tags in `.env` and start: `podman compose up -d`. `migrate` creates
+   the schema on the empty database.
+4. Run setup again: read the new setup code
+   (`podman compose exec backend cat /var/lib/octopushy/setup-code`) and create the account.
+5. Connect the lab repository again and re-enter its variables under **Variables**.
+6. Re-enroll every agent. The agent CA is new, so an agent enrolled before cannot connect:
+   remove its state directory (the `octopushy_agent` volume for the internal agent) and
+   enroll it with a new token from **Agents**.
+7. Trust each installation again when Octopushy asks for it.
+
 ## Updating
 
 Before updating a retained installation, follow the
@@ -57,11 +85,11 @@ Before updating a retained installation, follow the
 Quiesce writers and resolve the disposition of worker mutations; preserve a
 matched database/data snapshot and separately escrowed original KEK. Rehearse
 recovery in an isolated destination. A database dump alone does not include
-artifact files, session keys, worker journals, or external OpenTofu state.
+artifact files, session keys, or worker journals.
 
-The credential-lifecycle migration is forward-only. An old binary cannot safely
-interpret the new candidate/revocation state; rollback requires a matched
-pre-upgrade backup and binary, not a schema downgrade or regenerated KEK.
+Migrations are forward-only. An old binary cannot safely interpret a newer schema;
+rollback requires a matched pre-upgrade backup and binary, not a schema downgrade or
+regenerated KEK.
 
 After those gates and explicit upgrade approval, build/pin the new images, set
 `OCTOPUSHY_BACKEND_IMAGE` and `OCTOPUSHY_FRONTEND_IMAGE` in `.env`, and start the

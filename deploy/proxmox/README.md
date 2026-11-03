@@ -172,7 +172,24 @@ back to the snapshot: database, data volume, and configuration together. It keep
 three newest update snapshots (`--keep N`) and the five newest dumps.
 
 Wait for running provision runs to finish before you update; there is no automatic drain
-yet. Migrations are forward-only: to go back after a successful update, roll back to its
+yet.
+
+**Updating from a release that predates the fresh start.** This release cannot use a
+database created by an earlier one: its `migrate` refuses it, logs that a fresh database is
+required, and `octopushy-update` rolls the container back. Start again with an empty
+database instead ([what that means](../README.md#starting-again-with-a-fresh-database)):
+
+```sh
+pct exec <ctid> -- octopushy-compose down
+pct exec <ctid> -- docker volume rm octopushy_postgres octopushy_data octopushy_agent
+pct exec <ctid> -- octopushy-compose up -d postgres   # an empty database for the update to dump
+octopushy-update <ctid> <version>
+```
+
+Then run setup with the new setup code, connect the lab repository, re-enter its variables,
+re-enroll the internal agent with a new token (`pct exec <ctid> -- octopushy-agent-enroll 'opy1.…'`,
+as on the first start) and any other agent, and trust each installation again. The key on
+`mp0` stays. Migrations are forward-only: to go back after a successful update, roll back to its
 snapshot (`pct rollback <ctid> octopushy-<time> --start 1`, then
 `pct exec <ctid> -- octopushy-compose up -d`) rather than starting older images.
 
