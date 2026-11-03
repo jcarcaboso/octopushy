@@ -23,7 +23,7 @@ on the owning VM, or broad `Datastore.Allocate` on storage. Fresh create plannin
 does not prove refresh/update/destroy support. Do not grant mutation permissions
 to read-only credentials, fall back to privileged credentials, or use
 `-refresh=false`. See the [credential guide](../../docs/proxmox-credentials.md)
-and [pinned research](../../docs/research/proxmox-credential-split.md).
+and [pinned research](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md).
 
 `run.sh` keeps the guest's state in the backend and needs no state database or host
 networking. Set `E2E_TOOL_RUNTIME=docker` or `local` to run OpenTofu without podman, and

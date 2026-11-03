@@ -13,7 +13,7 @@ planning has no existing VM to refresh; it does not establish full-lifecycle
 support. Do not add mutation permissions to the read-only identity, fall back to
 privileged credentials, or use `-refresh=false` to bypass this blocker. See the
 [credential roles guide](../../docs/proxmox-credentials.md) and
-[pinned research](../../docs/research/proxmox-credential-split.md).
+[pinned research](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md).
 
 The split fixtures and offline preflight checks below are readiness work, not
 live acceptance. The intended `run.sh` lifecycle on a disposable Proxmox host is:
@@ -125,31 +125,13 @@ refused, not replaced. The default local mode still binds to loopback; remote mo
 does not open listeners or change deployment settings. This is readiness work,
 **not a claim of live remote-topology validation**.
 
-## Optional Fedora service workflow
+## Optional Portainer helper
 
-`FEDORA_WORKFLOW=1 TEST_SSH_KNOWN_HOSTS=/private/verified-known-hosts tests/proxmox/run.sh`
-also exercises the reusable native
-[Fedora workflow](../../examples/lab/modules/ansible/fedora/README.md) on the fresh
-VM after resizing it, before retiring it. Install its pinned Ansible requirement
-into `.dev/ansible` first.
+`PORTAINER_WORKFLOW=1` runs the [Portainer test](../portainer/README.md) on an isolated
+NixOS service-node fixture instead of resizing. Its helper uses guest-agent execution
+and receives the privileged file through its existing `PVE_TOKEN_FILE` interface only
+when that workflow is selected. The surrounding real lifecycle remains blocked as
+described above.
 
-The unchanged Fedora helper's `PVE_TOKEN_FILE` interface receives the explicit
-read-only file for its GET/config/network checks. The opt-in Portainer helper
-uses guest-agent execution and receives the privileged file through that same
-existing interface only when its workflow is selected. Neither helper was
-converted to a new credential interface; the surrounding real lifecycle remains
-blocked as described above.
-
-This checks reusable setup, two independent rootless Compose projects and owned
-firewall bindings, external HTTP verification, reboot persistence, source
-restrictions, no-op reruns, an isolated
-verification failure, an update, and service removal without breaking its sibling.
-Supply independently verified SSH host trust. For the disposable trusted-LAN
-test only, `ALLOW_TEST_SSH_TOFU=1` can replace `TEST_SSH_KNOWN_HOSTS`: it captures
-an unauthenticated first key and pins it for subsequent connections. This does
-not disable SELinux and does not validate production host enrollment. No existing
-guest's keys are read or changed.
-
-The Ansible steps are launched by the test harness, not the current Octopushy
-controller/agent. They have no service UI, controller approvals, or automatic
-Git reconciliation yet.
+The native Fedora service workflow and its `FEDORA_WORKFLOW=1` option moved to the
+`jcarcaboso/octopushy-lab` workflows repository.

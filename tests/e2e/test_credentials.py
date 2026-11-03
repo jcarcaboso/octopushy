@@ -43,7 +43,6 @@ class CredentialFixtureTests(unittest.TestCase):
         source = (ROOT / "tests/proxmox/run.sh").read_text()
         self.assertIn('readOnlyToken: { store: proxmox/$node/read-only-token }', source)
         self.assertIn('privilegedToken: { store: proxmox/$node/privileged-token }', source)
-        self.assertRegex(source, r'PVE_TOKEN_FILE=\$read_only_token_file TEST_NAME=\$name \\\n\s+"\$root/tests/fedora/run.sh"')
         self.assertRegex(source, r'PVE_TOKEN_FILE=\$privileged_token_file TEST_NAME=\$name \\\n\s+python3 "\$root/tests/portainer/live.py"')
 
 

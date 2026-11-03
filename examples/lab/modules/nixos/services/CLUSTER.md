@@ -68,7 +68,7 @@ The minimum is not a claim that a release is otherwise safe.
 Run only after separate authorization, package review, and isolated guest
 packet-path verification. Follow the [single-node bootstrap safeguards](README.md)
 for each guest, without its client-exposure step. The
-[upstream findings](../../../../../docs/research/technitium-cluster.md) describe
+[upstream findings](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/technitium-cluster.md) describe
 the native semantics and source references.
 
 1. **Prepare each VM separately, closed.** Use protected console or authenticated

@@ -57,7 +57,7 @@ through a Proxmox GET requiring **`Datastore.Audit` plus `VM.Config.Disk`** on
 the owning VM, or broad **`Datastore.Allocate`**. Strictly read-only update and
 destroy planning therefore cannot be assumed to work. Fresh-create planning
 does not exercise the same refresh. See the
-[pinned primary-source analysis](research/proxmox-credential-split.md) for the
+[pinned primary-source analysis](https://github.com/jcarcaboso/octopushy/blob/1446f1b6e7866992df64306d4b0b23d08edaae0e/docs/research/proxmox-credential-split.md) for the
 exact conditional paths, candidate scopes, and version limits.
 
 **In split mode, do not silently widen the reader, retry with the writer, or disable
