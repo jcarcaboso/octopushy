@@ -1,8 +1,8 @@
 # Workflows migration
 
 **Draft, November 3, 2026, after review by two independent agents.** This plan takes Octopushy from "an engine that
-knows every kind of run" to "a generic runner for workflows kept in their own repository". Open decisions are marked
-**D1**–**D5**.
+knows every kind of run" to "a generic runner for workflows kept in their own repository". Decisions are marked
+**D1**–**D6**.
 
 **Fresh start.** The owner decided on November 3 that `pve01-ai` and `umbrel-worker-01` are test guests, to be removed and
 redone. Nothing in the live lab has to survive the migration:
@@ -38,7 +38,7 @@ Three repositories, each with one job.
 | Repository | Holds | Never holds |
 |---|---|---|
 | `octopushy` | The engine: API, run engine, agent, UI, its own contract tests with minimal fixtures | Recipes, modules, anything that names a service |
-| `octopushy-lab` (**workflows**) | `recipes/`, `modules/` (OpenTofu, Ansible, NixOS), `templates/`, their tests and CI | Installations, guests, endpoints, secrets |
+| `octopushy-lab` (**workflows**) | `blueprints/`, `recipes/`, `modules/` (OpenTofu, Ansible, NixOS), `templates/`, their tests and CI | Installations, guests, endpoints, secrets |
 | `homelab-config` (**config**) | `octopushy.yaml`, `labs/**`: installations, guests, services, policies, schedules | Code: no `recipes/`, `modules/`, `templates/` |
 
 `homelab-config/octopushy.yaml` pins the workflows **by commit**. Only a config PR can change what runs:
@@ -53,12 +53,65 @@ defaults:
   policy: { approval: manual }
 ```
 
+### Changing things from the UI
+
+**Decided by the owner on November 3:** any change can be made in the UI. Behind the scenes it follows the same process
+as a change made in Git:
+
+1. **The UI is a way of writing the commit.** A form edit, such as a VM's memory, disks or setup inputs, or a wizard,
+   becomes a commit that Octopushy writes to `homelab-config` itself. The commit is compare-and-swap against the commit
+   the form was loaded from, and the person who made it is its author.
+2. **Octopushy syncs that revision at once.** It does not wait for the poll interval.
+3. **The normal process runs:** validation, plan, approval as the policy says, apply, verify. A form edit that does not
+   validate is refused before anything is committed.
+4. **The UI follows it through.** The page shows the commit, then the run, step by step, until the change is applied or
+   fails. A change that waits for approval can be approved from the same page.
+
+Git stays the one source of truth. Nothing the UI changes exists only in the database, and there is no drift to
+reconcile.
+
+**Forms come from schemas, not from code.** A guest's form is rendered from its recipe's `inputs` schema, plus optional
+UI hints in the recipe. A new field in a recipe appears in the UI without an engine change.
+
+**Operations that are not desired state** do not go through Git:
+
+- start, stop, shutdown and reboot;
+- snapshot, rollback and delete snapshot;
+- run a recipe action;
+- retry;
+- open the console.
+
+They still go through the run engine: each is a run with steps, an agent attempt and a log, so it is recorded like any
+other run. They are refused on an installation with `manage: false`.
+
+### One-click deployment: blueprints
+
+A **blueprint** in `octopushy-lab` (`blueprints/<id>/blueprint.yaml`) describes something to deploy in one go. Examples
+are a Fedora AI machine, an Octopushy worker and a Technitium node. A blueprint names:
+
+- its provision recipe;
+- its setup recipes;
+- its services;
+- their default inputs;
+- a form, as JSON Schema with UI hints;
+- **generated values**, which the engine fills in. These are the next free VMID on the chosen host, an agent enrollment
+  token put in the store, and guest keys.
+
+The wizard is generic: choose a blueprint, then an installation and host, fill in the form, review the files it will
+commit, then **Deploy**. Deploy commits, syncs and runs, and can include the approval in the same click. An Octopushy
+worker is just a blueprint whose setup installs the agent with a generated enrollment token. One click gives a worker,
+with no worker-specific code in the engine.
+
 ### What the engine keeps
 
 - Agents, enrollment, mTLS and the CA.
 - The variable store and its versions.
 - Built-in OpenTofu state.
 - Git sync and the repository editor. The editor stays config-only.
+- UI changes as commits: forms rendered from schemas, the compare-and-swap commit, immediate sync, and following the run
+  to the end.
+- The blueprint wizard and generated values.
+- VM operations (power, snapshots, actions), as recorded runs.
 - Approvals and policy.
 - Proxmox observation, inventory, `verify-guest`/`verify-absent` and VM protection.
 - Guest access keys and rotation, with their embedded playbooks.
@@ -68,8 +121,8 @@ defaults:
 
 ### What the engine loses
 
-- Managed workers: their steps, the wizard, the `worker` field, the `managed-worker` executor, and
-  `deploy/worker-template-v1`.
+- Managed workers: their steps, the worker-only wizard, the `worker` field, the `managed-worker` executor, and
+  `deploy/worker-template-v1`. One-click workers come back as a blueprint.
 - The disk reporter: the step, its tokens and ingest endpoint, the `guest` executor, and the `disk-reporter` crate.
 - NixOS root growth: `guestFilesystem`, the `nixos-rootfs` executor, and the `grow-root`/`verify-root` steps.
 - External OpenTofu state backends (`stateBackends`, `provision.state`).
@@ -169,14 +222,26 @@ The phases ship in this order. Phase 4 can run beside any of them.
   for `homelab-config` (against the pinned commit) and for `octopushy-lab` (against a fixture config).
 - **Cut over:** pin `octopushy-lab` in `homelab-config` and delete `recipes/`, `modules/` and `templates/` there.
 
-### Phase 3: rebuild the lab on the new shape
+### Phase 3: change from the UI, and one-click deployment
 
-- Redefine `pve01-ai` in `homelab-config`, using recipes from the pinned `octopushy-lab`.
-- Redefine a worker as an ordinary guest, enrolled by the `octopushy-agent` recipe.
-- This is the acceptance test of Phases 1 and 2 on real Proxmox.
+- **UI changes as commits.**
+  - Form editing for guests and services, rendered from recipe `inputs` schemas.
+  - A compare-and-swap commit through the existing `RepositoryMirror.Write` path, with immediate sync.
+  - A change page that follows commit → revision → run → applied, with approval inline.
+  - Octopushy needs a repository-scoped deploy key with write access to `homelab-config`.
+- **Blueprints.**
+  - The `blueprint.yaml` schema, with the next free VMID, an enrollment token and keys as generated values.
+  - The generic wizard: blueprint, then installation and host, then form, then review, then Deploy. Deploy can include
+    the approval.
+  - First blueprints in `octopushy-lab`: `fedora-machine`, `octopushy-worker` and `proxmox-vm`.
+- **Acceptance on real Proxmox:** rebuild `pve01-ai` and a worker **through the wizard**, then resize one from its form.
+  Each change shows as a commit in `homelab-config` and is applied through the normal process.
 
-### Phase 4: live panel and notifications (independent)
+### Phase 4: live panel, VM operations and notifications (independent)
 
+- **VM operations as recorded runs.** New `proxmox` executor actions: `start`, `shutdown`, `stop`, `reboot`,
+  `snapshot`, `rollback` and `delete-snapshot`. They are offered from the guest page, recorded with a log, and refused on
+  `manage: false`. A rollback or a stop waits for confirmation in the UI.
 - **Live updates.** `GET /api/events` (SSE) streams run, step, attempt and resource changes. The UI invalidates queries on
   events, and polling stays as the fallback.
 - **Disk usage from observation** (**D2**). The agent calls the QEMU guest agent's `get-fsinfo` per VM, bounded and with
@@ -213,8 +278,9 @@ Specified in its own document before any code is written. It covers:
 
 ## Decisions
 
-- **D1: managed workers.** **Recommended:** delete them. A worker is an ordinary guest with an `octopushy-agent` setup
-  recipe and manual enrollment. Keep the drain safeguard when a worker is retired.
+- **D1: managed workers.** **Recommended:** delete the engine machinery. A worker is an ordinary guest deployed from
+  the `octopushy-worker` blueprint, whose generated enrollment token keeps it one click. Keep the drain safeguard when
+  a worker is retired. Between Phase 1 and Phase 3 a worker is enrolled by hand.
 - **D2: disk usage.** **Recommended:** read it from the QEMU guest agent during observation (Phase 4). Until then, no
   disk meter.
 - **D3: pinning.** **Recommended:** by commit, with the release tag for display only. Tracking a branch is not offered.
@@ -224,3 +290,6 @@ Specified in its own document before any code is written. It covers:
   - **Rewrite** `lab-repository.md` and `pipelines.md` into one `workflows.md`.
 - **D5: trusting a workflows bump.** **Recommended:** no extra gate, since the pin is a commit in a reviewed config PR.
   Apply approval and the destructive policy still apply to every change, and approval does not sandbox planning.
+- **D6: UI changes.** **Decided by the owner, November 3:** the UI may change anything, and every change is a commit to
+  `homelab-config` that then goes through the normal process. Operations that are not desired state, such as power and
+  snapshots, are recorded runs with no commit.
