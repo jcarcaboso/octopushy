@@ -37,8 +37,6 @@ public sealed record RunContext
 
     public required ProxmoxContext Proxmox { get; init; }
 
-    public DiskReporterContext? DiskReporter { get; init; }
-
     /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
@@ -186,13 +184,6 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4);
 
-public sealed record DiskReporterContext(
-    string Endpoint,
-    string? BinaryUrl,
-    string? BinarySha256,
-    int IntervalSeconds,
-    string? CaCertificatePem);
-
 /// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames
 {
@@ -205,7 +196,6 @@ public static class StepNames
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";
-    public const string InstallDiskReporter = "install-disk-reporter";
     /// <summary>Shows what a configure run will do, with no secrets and no contact with the guest.</summary>
     public const string Preview = "preview";
     public const string Playbook = "playbook";
@@ -242,7 +232,6 @@ public static class SecretNames
     /// <summary>Executor wire alias only; never a persisted role in new runs.</summary>
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
-    public const string DiskReporterToken = "disk-reporter.token";
 
     public const string AnsibleSshKey = "ansible.ssh-key";
     public const string AnsibleRefusedKeys = "ansible.refused-keys";

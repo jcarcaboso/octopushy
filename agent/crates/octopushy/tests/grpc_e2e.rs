@@ -129,9 +129,9 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             })
             .await;
         let expected = if available {
-            vec!["opentofu", "proxmox", "guest"]
+            vec!["opentofu", "proxmox"]
         } else {
-            vec!["proxmox", "guest"]
+            vec!["proxmox"]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
         let capabilities: &[&str] = if available {
@@ -208,7 +208,7 @@ async fn enroll_connect_observe_ack() {
         })
         .await;
     // /bin/false fails the runtime probe; native executors remain available.
-    assert_eq!(hello.executors, ["proxmox", "guest"]);
+    assert_eq!(hello.executors, ["proxmox"]);
     assert_eq!(hello.tool_runtime, "local");
     assert!(hello.running_attempt_ids.is_empty());
     assert_eq!(hello.agent_version, octopushy::VERSION);

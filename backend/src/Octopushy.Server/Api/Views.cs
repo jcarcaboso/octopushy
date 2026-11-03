@@ -303,8 +303,6 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.MissingSince,
             resource.RetiredAt,
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
-            GuestDiskUsageEndpoints.View(resource,
-                await db.GuestDiskUsages.AsNoTracking().FirstOrDefaultAsync(d => d.ResourceId == id, cancellationToken)),
             configure,
             await ManagedAccessAsync(id, cancellationToken),
             await ServicesOfAsync(resource, latest, cancellationToken));

@@ -31,7 +31,7 @@
       "additionalProperties": false
     },
     "setup": {
-      "description": "Post-provision guest setup: disk reporting, and a configure recipe.",
+      "description": "Post-provision guest setup: a configure recipe.",
       "type": "object",
       "properties": {
         "recipe": { "description": "A recipe with operation: configure.", "$ref": "common.schema.json#/$defs/id" },
@@ -64,15 +64,6 @@
           "type": "object",
           "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
           "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
-        },
-        "diskReporter": {
-          "description": "Overrides automatic disk reporting when it is enabled on the control plane.",
-          "type": "object",
-          "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "intervalSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 }
-          },
-          "additionalProperties": false
         }
       }
     },

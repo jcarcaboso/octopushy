@@ -1,7 +1,7 @@
 # Operator CLI access
 
 The `octopushy operator` commands use a named operator grant. They do not use a
-worker certificate, guest reporting token, enrollment token or Proxmox token.
+agent certificate, enrollment token or Proxmox token.
 The controller keeps only a SHA-256 hash of the grant secret.
 
 ## Authorize once

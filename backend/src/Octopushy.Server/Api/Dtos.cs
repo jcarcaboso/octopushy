@@ -310,7 +310,6 @@ public sealed record GuestDetailDto(
     DateTimeOffset? MissingSince,
     DateTimeOffset? RetiredAt,
     IReadOnlyList<RunSummaryDto> Runs,
-    GuestDiskUsageDto DiskUsage,
     GuestConfigurationDto? Configuration,
     ManagedAccessDto? ManagedAccess,
     IReadOnlyList<ServiceSummaryDto> Services);

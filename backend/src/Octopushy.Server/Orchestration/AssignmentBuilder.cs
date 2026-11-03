@@ -40,7 +40,6 @@ public sealed partial class AssignmentBuilder(
         StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
         StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
         StepNames.Observe => new StepAction("proxmox", "observe", false),
-        StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         StepNames.Preview => new StepAction("ansible", "preview", false),
         StepNames.Playbook or StepNames.PlaybookApproved or StepNames.AuthorizeKey or StepNames.RemoveKey => new StepAction("ansible", "run", true),
         StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval or StepNames.ConfirmRefused => new StepAction("ansible", "run", false),
@@ -62,7 +61,6 @@ public sealed partial class AssignmentBuilder(
 
     public static string TokenFor(string stepName) => stepName is
         StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect
-        or StepNames.InstallDiskReporter
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
@@ -97,21 +95,6 @@ public sealed partial class AssignmentBuilder(
         // for native actions or callers that bypass normal engine advancement.
         var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
             ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), stepName, cancellationToken) : null;
-        if (stepName == StepNames.InstallDiskReporter)
-        {
-            if (run is null || step is null)
-                throw new AssignmentException("Reporter setup requires a run.");
-            if (run.Status == RunStatuses.Uncertain || step.Status == StepStatuses.Uncertain)
-                throw new AssignmentException("An uncertain guest mutation cannot be replayed; inspect before recovery.");
-            if (context.DiskReporter is null)
-                throw new AssignmentException("Missing reporting configuration.");
-            if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
-                throw new AssignmentException("The guest is missing or retired.");
-            // Approval alone does not establish root/guest readiness. Do not resolve
-            // even Proxmox plaintext when a direct builder caller skips these gates.
-            if (!await db.Steps.AsNoTracking().AnyAsync(s => s.RunId == run.Id && s.Name == StepNames.Verify && s.Status == StepStatuses.Succeeded, cancellationToken))
-                throw new AssignmentException("Reporter setup requires successful guest verification.");
-        }
         var names = SecretsFor(stepName, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
         if (problems.Count > 0)
@@ -166,9 +149,6 @@ public sealed partial class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
-            if (run.Operation == Operations.Provision
-                && context.DiskReporter is not null)
-                input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (stepName == StepNames.Apply)
             {
@@ -199,33 +179,6 @@ public sealed partial class AssignmentBuilder(
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = stepName == StepNames.Reprotect,
             };
-            if (stepName == StepNames.InstallDiskReporter && run is not null)
-            {
-                var reporter = context.DiskReporter
-                    ?? throw new AssignmentException("The run has no disk reporter configuration.");
-                if (!await db.Resources.AnyAsync(r => r.Id == run.ResourceId && r.RetiredAt == null && r.MissingSince == null, cancellationToken))
-                {
-                    throw new AssignmentException("The guest is missing or retired.");
-                }
-                await GuestReporterCredentials.EnsureAsync(
-                    db, store, run.ResourceId, reporter.IntervalSeconds, rotate: false, cancellationToken);
-                // Only this server-owned credential may leave system/. The general
-                // variable resolver must keep rejecting internal keys from definitions.
-                var key = GuestReporterCredentials.Key(run.ResourceId);
-                var credential = await store.GetAsync(key, cancellationToken)
-                    ?? throw new AssignmentException("The reporting credential is unavailable.");
-                db.SecretResolutions.Add(new SecretResolution
-                {
-                    Key = key,
-                    Version = credential.Version,
-                    AttemptId = attempt.Id,
-                    AgentId = agentId,
-                    ResolvedAt = clock.GetUtcNow(),
-                });
-                await db.SaveChangesAsync(cancellationToken);
-                values[SecretNames.DiskReporterToken] = credential.Value;
-                input["reporter"] = System.Text.Json.JsonSerializer.SerializeToNode(reporter, RunContext.Json);
-            }
         }
 
         assignment.InputJson = input.ToJsonString();

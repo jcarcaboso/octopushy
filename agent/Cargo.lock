@@ -1265,22 +1265,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "octopushy-disk-reporter"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "libc",
- "rcgen",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-rustls",
-]
-
-[[package]]
 name = "octopushy-proto"
 version = "0.4.0"
 dependencies = [

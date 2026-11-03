@@ -18,7 +18,6 @@ export type GuestSchedule = Schemas["GuestScheduleDto"];
 export type FollowedSecret = Schemas["FollowedSecretDto"];
 export type ManagedAccess = Schemas["ManagedAccessDto"];
 export type ConfigurePreview = Schemas["ConfigurePreviewDto"];
-export type GuestDiskUsage = Schemas["GuestDiskUsageDto"];
 export type ObservedHost = Schemas["ObservedHostDto"];
 export type ObservedGuest = Schemas["ObservedGuestDto"];
 export type ObserveFailure = Schemas["ObserveErrorDto"];

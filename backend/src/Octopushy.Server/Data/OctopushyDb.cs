@@ -14,7 +14,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<Resource> Resources => Set<Resource>();
 
-    public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
 
     public DbSet<GuestConfiguration> GuestConfigurations => Set<GuestConfiguration>();
     public DbSet<GuestScheduleState> GuestSchedules => Set<GuestScheduleState>();
@@ -116,13 +115,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.HasKey(x => new { x.ResourceId, x.Version });
             e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
-        });
-
-        model.Entity<GuestDiskUsage>(e =>
-        {
-            e.HasKey(x => x.ResourceId);
-            e.HasOne<Resource>().WithOne().HasForeignKey<GuestDiskUsage>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
-            e.Property(x => x.TokenHash).HasMaxLength(64);
         });
 
         model.Entity<Step>(e =>

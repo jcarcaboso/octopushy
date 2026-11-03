@@ -43,7 +43,7 @@ outcomes:
       vars: { ai_server_allow_busy: true }
 ```
 
-A guest points at it from `setup`, next to the existing `diskReporter`:
+A guest points at it from `setup`:
 
 ```yaml
 # guest.yaml

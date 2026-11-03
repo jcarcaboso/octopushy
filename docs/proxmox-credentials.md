@@ -73,12 +73,6 @@ in this milestone is a tested, universally sufficient role, including in shared 
 | `plan` / OpenTofu `preview`, including retire preview | Shared | Read-only |
 | `observe`, `verify`, `verify-absent` | Shared | Read-only |
 | `apply`, `unprotect`, `reprotect` | Shared, after approval | Privileged, after approval |
-| `install-disk-reporter` | Shared, after approval | Privileged, after approval |
-
-Reporter setup runs a QEMU guest-agent command as guest root, so it is
-privileged work.
-Older Proxmox `VM.Monitor` is also execution-capable, not a safe substitute for
-granular guest-agent audit permission.
 
 The worker protocol retains the single `proxmox.token` alias. The controller
 selects exactly one pinned role for each assignment; the worker does not choose
@@ -89,16 +83,9 @@ bindings. Revocation blocks subsequent relevant releases without replacing the v
 
 A token is released only to an endpoint its [installation trust](installation-trust.md) covers.
 Privileged **actions**, in either configuration, additionally check approval and saved
-plan's identity before decrypting credentials, including native guest actions.
+plan's identity before decrypting credentials.
 The existing manual/automatic policy still applies: **this is not T3's proposed
 controller-owned approval floor**, and automatic policy is not human approval.
-
-For provisioning with root filesystem work or disk reporter installation, a
-no-change infrastructure plan still retains a saved artifact for the approval
-gate. Manual approval is not skipped just because `hasChanges` is false when
-privileged guest work remains. OpenTofu
-apply remains skipped for that no-op plan. An older worker that omits the required
-artifact cannot advance the privileged guest work.
 
 Backend environment entries cannot override reserved `PROXMOX_VE_*` variables
 or alias a configured shared/privileged token into another role. This bounded check

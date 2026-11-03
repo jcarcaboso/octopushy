@@ -59,9 +59,7 @@ public sealed record ConfigureInputs(
     {
         var recipe = repository.Recipes[guest.SetupRecipe!];
         var setup = guest.Json["setup"]!.DeepClone().AsObject();
-        // Reporter settings have their own place in the provisioning hash, and a schedule says
-        // when an action runs, not what it does, so changing one configures nothing.
-        setup.Remove("diskReporter");
+        // A schedule says when an action runs, not what it does, so changing one configures nothing.
         setup.Remove("schedules");
         var hashed = new JsonObject
         {

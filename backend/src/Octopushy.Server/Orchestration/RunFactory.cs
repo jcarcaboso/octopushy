@@ -97,11 +97,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             : BackendContext.BuiltIn;
 
         var retire = guest.Retired || removal;
-        var reporter = options.Value.DiskReporter;
-        reporter.Validate();
-        var guestReporter = guest.Json["setup"]?["diskReporter"];
-        var installReporter = !retire && reporter.Enabled && guestReporter?["enabled"]?.GetValue<bool>() != false;
-        var reporterInterval = guestReporter?["intervalSeconds"]?.GetValue<int>() ?? reporter.IntervalSeconds;
         var context = new RunContext
         {
             Address = guest.Address,
@@ -125,12 +120,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
-            DiskReporter = installReporter ? new DiskReporterContext(
-                $"{reporter.PublicUrl.TrimEnd('/')}/api/guests/{resource.Id}/disk-usage",
-                reporter.BinaryUrl,
-                reporter.BinarySha256.ToLowerInvariant(),
-                reporterInterval,
-                string.IsNullOrWhiteSpace(reporter.CaCertificatePem) ? null : reporter.CaCertificatePem) : null,
         };
 
         var run = NewRun(resource, retire ? Operations.Retire : Operations.Provision, revision, reason, context);
@@ -139,19 +128,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ? new[] { StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.VerifyAbsent }
             : [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify];
         AddSteps(run, steps);
-        if (context.DiskReporter is { } setup)
-        {
-            run.Steps.Add(new Step
-            {
-                Id = Guid.CreateVersion7(),
-                RunId = run.Id,
-                Ordinal = run.Steps.Count,
-                Name = StepNames.InstallDiskReporter,
-                Kind = StepKinds.Agent,
-                Detail = $"Install disk reporter SHA-256 {setup.BinarySha256}; report every {setup.IntervalSeconds}s.",
-            });
-        }
-        if (context.Verify == "none" && !installReporter)
+        if (context.Verify == "none")
         {
             foreach (var step in run.Steps.Where(s => s.Name is StepNames.Verify or StepNames.VerifyAbsent))
             {

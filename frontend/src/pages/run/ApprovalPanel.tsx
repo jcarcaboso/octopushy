@@ -21,11 +21,11 @@ interface Props {
   rotation?: boolean;
 }
 
-function fingerprintLabel(setupOnly: boolean, configure: boolean, pipeline: boolean) {
-  return pipeline ? "Pipeline document SHA-256" : configure ? "Preview SHA-256" : setupOnly ? "Setup approval fingerprint" : "Plan SHA-256";
+function fingerprintLabel(configure: boolean, pipeline: boolean) {
+  return pipeline ? "Pipeline document SHA-256" : configure ? "Preview SHA-256" : "Plan SHA-256";
 }
 
-function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOnly: boolean; configure: boolean; pipeline: boolean }) {
+function Decided({ step, configure, pipeline }: { step: Step; configure: boolean; pipeline: boolean }) {
   const approval = step.approval!;
   const byPolicy = approval.decidedBy === "policy";
   const rejected = approval.decision === "rejected";
@@ -44,7 +44,7 @@ function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOn
       {approval.note ? <p className="decision__note">{approval.note}</p> : null}
       {approval.planSha256 ? (
         <div className="small muted inline-group">
-          {fingerprintLabel(setupOnly, configure, pipeline)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
+          {fingerprintLabel(configure, pipeline)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
         </div>
       ) : null}
     </div>
@@ -57,9 +57,8 @@ export function ApprovalPanel({ runId, step, plan, configure = false, pipeline =
   const [note, setNote] = useState("");
   const noteId = useId();
   const approval = step.approval;
-  const setupOnly = plan?.hasChanges === false;
 
-  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} configure={configure} pipeline={pipeline} />;
+  if (approval?.decision) return <Decided step={step} configure={configure} pipeline={pipeline} />;
   if (step.status !== "awaiting-approval") return null;
 
   const planSha256 = approval?.planSha256 ?? null;
@@ -85,13 +84,11 @@ export function ApprovalPanel({ runId, step, plan, configure = false, pipeline =
           ? "Approving does this stage of the rotation and nothing else. It only ever chooses Octopushy's own keys on the guest."
           : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
-          : setupOnly
-          ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."
-          : "Approving applies exactly this saved plan and any guest setup recorded in this run; if anything changes, a new plan needs a new approval."}
+          : "Approving applies exactly this saved plan; if anything changes, a new plan needs a new approval."}
       </Callout>
       {plan ? <PlanCountsLine counts={plan.counts} /> : null}
       <div className="inline-group">
-        <span className="muted">{fingerprintLabel(setupOnly, configure, pipeline)}</span>
+        <span className="muted">{fingerprintLabel(configure, pipeline)}</span>
         {planSha256 ? <Hash value={planSha256} label="Copy the approval fingerprint" /> : <span className="muted">not recorded</span>}
       </div>
       <div className="field">

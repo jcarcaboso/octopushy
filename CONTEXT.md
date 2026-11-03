@@ -271,11 +271,6 @@ _Avoid_: Guest retirement when only execution authority has been removed
 The intentional end of a guest's managed lifecycle, completed after the guest's
 absence has been verified. Revoking its agent enrollment alone is not retirement.
 
-**Guest reporter**:
-A guest-local source of resource-usage measurements for its own machine, without
-permission to execute operations against targets.
-_Avoid_: Agent when referring to the execution worker
-
 **Operation**:
 A supported action on explicitly selected resources, such as provisioning,
 setup, maintenance, tool updates, service deployment, or verification.

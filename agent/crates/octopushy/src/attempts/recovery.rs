@@ -4,8 +4,8 @@
 //! - A workspace with an outbox result is waiting for its acknowledgement.
 //! - A `queued` marker without a result never started: failed.
 //! - A `running` marker without a result died mid-attempt: uncertain for
-//!   mutations (`opentofu/apply`, `proxmox/set-protection`,
-//!   `guest/install-disk-reporter`, `ansible/run`), failed otherwise.
+//!   mutations (`opentofu/apply`, `proxmox/set-protection`, `ansible/run`),
+//!   failed otherwise.
 //! - A workspace without a marker never got past setup and is removed.
 //! - A marker that exists but cannot be read says nothing about what the
 //!   attempt was doing: uncertain, never failed.
@@ -136,8 +136,6 @@ mod tests {
         let cases = [
             ("opentofu", "apply", Phase::Running, Uncertain),
             ("proxmox", "set-protection", Phase::Running, Uncertain),
-            ("guest", "install-disk-reporter", Phase::Running, Uncertain),
-            ("guest", "install-disk-reporter", Phase::Queued, Failed),
             ("ansible", "run", Phase::Running, Uncertain),
             ("ansible", "run", Phase::Queued, Failed),
             ("ansible", "preview", Phase::Running, Failed),
