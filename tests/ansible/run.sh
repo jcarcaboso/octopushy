@@ -343,4 +343,108 @@ call "$api/api/variables" >>"$work/own-key.log"
 if grep -q 'PRIVATE KEY' "$work/own-key.log"; then fail "a private key reached a log or a response"; fi
 if grep -rq 'OPENSSH PRIVATE KEY' "$work/agent" 2>/dev/null; then fail "a private key stayed on the agent's disk"; fi
 
+log "Rotating Octopushy's own key, in stages, beside a person's"
+person=$(ssh-keygen -q -t ed25519 -N '' -f "$work/keys/person" </dev/null >/dev/null; cat "$work/keys/person.pub")
+# A person's key whose comment quotes the key that will be removed: it has to stay.
+person="$person, replaces $managed"
+podman exec "$target" sh -c "printf '%s\n' '$person' >>/home/ops/.ssh/authorized_keys"
+keys_on_guest() { podman exec "$target" cat /home/ops/.ssh/authorized_keys; }
+decide() { # the step whose decision a person makes
+  local step
+  for _ in $(seq 1 60); do
+    step=$(call "$api/api/runs/$1" | jq -c --arg n "$2" '.steps[] | select(.name==$n and .status=="awaiting-approval")')
+    [[ -n $step ]] && break
+    sleep 1
+  done
+  [[ -n $step ]] || fail "$2 is not waiting for a person"
+  call -X POST "$api/api/runs/$1/steps/$(jq -r .id <<<"$step")/approve" \
+    -d "$(jq -cn --arg sha "$(jq -r .approval.planSha256 <<<"$step")" '{planSha256: $sha, note: "End to end."}')" >/dev/null
+}
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+[[ $(keys_on_guest | wc -l) == 3 ]] || fail "the candidate was not added beside the keys there"
+decide "$run" promote-key
+guest_key=$(call "$api/api/guests/$(guest_id)" | jq -r '.managedAccess.publicKey')
+[[ $guest_key != "$managed" ]] || fail "promoting did not change the key in use"
+has_key() { keys_on_guest | awk -v key="$1" 'index($0, key) == 1 { found = 1 } END { exit !found }'; }
+has_key "${managed% *}" || fail "the old key went before its removal was approved"
+decide "$run" approve-removal
+wait_run "$run" succeeded
+if has_key "${managed% *}"; then fail "the old key is still on the guest"; fi
+keys_on_guest | grep -qF "$person" || fail "a rotation touched a person's key"
+keys_on_guest | grep -qF "${guest_key% *}" || fail "the new key is not on the guest"
+logs_of "$run" >"$work/rotation.log"
+call "$api/api/runs/$run" >>"$work/rotation.log"
+if grep -q 'PRIVATE KEY' "$work/rotation.log"; then fail "a private key reached a log or a response"; fi
+run=$(start_action configure)
+wait_run "$run" succeeded
+
+log "A key sshd still takes stays on the list, wherever it is"
+kept_key=$guest_key
+kept_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+key_state() { call "$api/api/guests/$(guest_id)" | jq -r --argjson version "$1" '.managedAccess.keys[] | select(.version==$version) | .state'; }
+podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2' <<<"$kept_key"
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+[[ $(call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .status') == failed ]] \
+  || fail "the rotation did not stop at sshd's answer"
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts' \
+  || fail "the run does not say sshd took the removed key"
+[[ $(key_state "$kept_version") == old ]] || fail "a key sshd still takes does not read as old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+run=$(start_action configure)
+wait_run "$run" succeeded
+
+log "With two old keys, the second is the one sshd still takes"
+second_key=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.publicKey)
+second_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2' <<<"$second_key"
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts old key 2 of 2' \
+  || fail "the run does not say which old key sshd took"
+[[ $(key_state "$second_version") == old ]] || fail "a key sshd still takes does not read as old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+
+log "A login that fails after sshd took the key is not a refusal"
+run=$(start_action configure)
+wait_run "$run" succeeded
+third_key=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.publicKey)
+third_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
+# As a key whose forced command runs an ssh of its own would answer.
+printf 'command="echo ops@inner: Permission denied \\(publickey\\). >&2; exit 255" %s\n' "$third_key" \
+  | podman exec -i "$target" sh -c 'cat > /home/ops/.ssh/authorized_keys2; chown ops:ops /home/ops/.ssh/authorized_keys2'
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" failed
+call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") | .detail' | grep -q 'still accepts old key 3 of 3' \
+  || fail "a forced command that says it was refused was believed"
+[[ $(key_state "$third_version") == old ]] || fail "a key sshd took reads as anything but old"
+podman exec "$target" rm /home/ops/.ssh/authorized_keys2
+
+log "The next rotation shows sshd refusing all four old keys it has left"
+run=$(start_action configure)
+wait_run "$run" succeeded
+run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
+for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done
+decide "$run" promote-key
+decide "$run" approve-removal
+wait_run "$run" succeeded
+logs_of "$run" | grep -q 'old key 4 of 4' || fail "not every old key was tried"
+if logs_of "$run" | grep -q 'PRIVATE KEY'; then fail "a private key reached a log"; fi
+[[ $(key_state "$kept_version") == removed ]] || fail "the key left behind was not removed by the next rotation"
+[[ $(call "$api/api/guests/$(guest_id)" | jq '[.managedAccess.keys[] | select(.state=="removed")] | length') == 5 ]] \
+  || fail "not every old key reads as removed"
+
+log "What a rotation removes, against a real sshd"
+python3 "$root/tests/ansible/authorized_keys_sshd.py" localhost/octopushy-ansible-target:e2e
+
 log "Passed ($runtime)"

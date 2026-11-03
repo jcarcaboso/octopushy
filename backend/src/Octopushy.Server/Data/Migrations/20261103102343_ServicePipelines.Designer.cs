@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261102173410_ServicePipelines")]
+    [Migration("20261103102343_ServicePipelines")]
     partial class ServicePipelines
     {
         /// <inheritdoc />
@@ -406,6 +406,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("version");
 
+                    b.Property<DateTimeOffset?>("AuthorizedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("authorized_at");
+
                     b.Property<bool>("Bootstrap")
                         .HasColumnType("boolean")
                         .HasColumnName("bootstrap");
@@ -427,6 +431,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("last_used_run_id");
 
+                    b.Property<DateTimeOffset?>("PromotedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("promoted_at");
+
+                    b.Property<string>("PromotedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("promoted_by");
+
+                    b.Property<string>("PromotionEvidence")
+                        .HasColumnType("text")
+                        .HasColumnName("promotion_evidence");
+
                     b.Property<DateTimeOffset?>("ProvisionedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("provisioned_at");
@@ -435,6 +451,18 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("public_key");
+
+                    b.Property<DateTimeOffset?>("RemovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("removed_at");
+
+                    b.Property<DateTimeOffset?>("VerifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("verified_at");
+
+                    b.Property<Guid?>("VerifiedRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("verified_run_id");
 
                     b.HasKey("ResourceId", "Version")
                         .HasName("pk_guest_access_keys");

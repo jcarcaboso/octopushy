@@ -22,6 +22,13 @@ export function ConfigurePreviewView({ preview }: { preview: ConfigurePreview })
               </span>
             ),
           },
+          ...(preview.accessRotation
+            ? [
+                { term: "Key in use", value: <span className="mono break">{preview.accessRotation.current}</span> },
+                { term: "Candidate", value: <span className="mono break">{preview.accessRotation.candidate}</span> },
+                { term: "Comes off", value: <span className="mono break">{preview.accessRotation.remove.join(", ") || "—"}</span> },
+              ]
+            : []),
           { term: "Tool", value: <span className="small">{preview.toolVersion ?? "—"}</span> },
           { term: "Image", value: <span className="mono break small">{preview.image ?? "—"}</span> },
           {

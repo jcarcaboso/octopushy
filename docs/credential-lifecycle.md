@@ -1,8 +1,9 @@
 # Credential lifecycle and run pinning
 
 Implemented October 21, 2026. This extends the built-in encrypted variable store;
-it is not an external secret manager, automatic SSH rotation, or proof that a
-replacement credential works.
+it is not an external secret manager or proof that a replacement credential works.
+Rotating a guest's SSH key is built on these versions and adds the guest stages they
+lack: see [rotating the key](guest-configuration.md#rotating-the-key).
 
 ## Operator workflow
 
@@ -123,9 +124,10 @@ changes; reconcile those before dispatch resumes.
   credentials remain trusted. No tenant/RBAC boundary is claimed.
 - Worker mTLS renewal is separate and unchanged.
 - A guest's own SSH key uses this store under `system/`, so it has versions and pinning, and
-  stays out of these operator endpoints. See [SSH identity](guest-configuration.md#ssh-identity).
-  This lifecycle changes a stored value: it neither touches a guest nor tests a login. No
-  host-trust registry or application-password update is implemented here.
+  stays out of these operator endpoints. Promoting a version here changes a stored value: it
+  neither touches a guest nor tests a login, so a guest's key changes only through
+  [its own rotation](guest-configuration.md#rotating-the-key). No host-trust registry or
+  application-password update is implemented here.
 - No automatic provider-token creation/revocation, secret-manager integration,
   KEK keyring/rewrap, or complete immutable promotion-event ledger.
 - This change does not fix custom-CA transport into OpenTofu or turn insecure

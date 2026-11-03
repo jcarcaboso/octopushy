@@ -18,6 +18,8 @@ interface Props {
   configure?: boolean;
   /** The run is a service's pipeline, so this names one document covering every stage. */
   pipeline?: boolean;
+  /** The run rotates a guest's key: approving does the stage described, and nothing else. */
+  rotation?: boolean;
 }
 
 function fingerprintLabel(setupOnly: boolean, configure: boolean, pipeline: boolean) {
@@ -51,7 +53,7 @@ function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOn
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false, pipeline = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false, pipeline = false, rotation = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
@@ -85,6 +87,8 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
         {pipeline
           ? "Approving covers every stage above, as planned and previewed, and applies them in order. Nothing has changed yet. If a stage fails, the ones before it stay applied."
+          : rotation
+          ? "Approving does this stage of the rotation and nothing else. It only ever chooses Octopushy's own keys on the guest."
           : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
           : setupOnly

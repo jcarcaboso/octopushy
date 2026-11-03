@@ -84,6 +84,15 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     public async Task<int> StageAsync(string key, string value, string? description, CancellationToken cancellationToken)
     {
         CheckUserKey(key);
+        return await StageValueAsync(key, value, description, cancellationToken);
+    }
+
+    /// <summary>A candidate version of a server-owned secret. The operator endpoints stay closed to system/.</summary>
+    public Task<int> StageInternalAsync(string key, string value, CancellationToken cancellationToken) =>
+        StageValueAsync(key, value, null, cancellationToken);
+
+    private async Task<int> StageValueAsync(string key, string value, string? description, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrEmpty(value))
         {
             throw new StoreException("A candidate value must not be empty.");
@@ -138,12 +147,27 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             throw new StoreConflictException("The selected version is already active.");
         }
 
-        entry.CurrentVersion = version;
-        entry.UpdatedAt = clock.GetUtcNow();
-        candidate.ActivatedAt = entry.UpdatedAt;
-        candidate.ActivatedBy = actor;
-        candidate.ActivationNote = verificationNote.Trim();
+        Activate(entry, candidate, clock.GetUtcNow(), actor, verificationNote);
         await SaveAsync(cancellationToken);
+    }
+
+    /// <summary>The one way a version becomes the active one, whoever asks.</summary>
+    internal static void Activate(StoreEntry entry, StoreVersion version, DateTimeOffset now, string actor, string note)
+    {
+        entry.CurrentVersion = version.Version;
+        entry.UpdatedAt = now;
+        version.ActivatedAt = now;
+        version.ActivatedBy = actor;
+        version.ActivationNote = note.Trim();
+    }
+
+    /// <summary>The one way a version stops being released, whoever asks.</summary>
+    internal static void Revoke(StoreEntry entry, StoreVersion version, DateTimeOffset now, string actor, string reason)
+    {
+        version.RevokedAt = now;
+        version.RevokedBy = actor;
+        version.RevocationNote = reason.Trim();
+        entry.UpdatedAt = now;
     }
 
     /// <summary>Blocks subsequent release; does not retract assignments or revoke a provider token.</summary>
@@ -165,10 +189,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             throw new StoreConflictException("The selected version is already revoked.");
         }
 
-        value.RevokedAt = clock.GetUtcNow();
-        value.RevokedBy = actor;
-        value.RevocationNote = reason.Trim();
-        entry.UpdatedAt = value.RevokedAt.Value;
+        Revoke(entry, value, clock.GetUtcNow(), actor, reason);
         await SaveAsync(cancellationToken);
     }
 
@@ -204,12 +225,12 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
 
     /// <summary>
     /// One exact version of a server-owned credential, for the single caller that releases it. A
-    /// revoked or unpromoted version is refused, as a run's other bindings are.
+    /// revoked version is refused, and an unpromoted one unless a rotation is testing it.
     /// </summary>
-    public async Task<string?> GetVersionInternalAsync(string key, int number, CancellationToken cancellationToken)
+    public async Task<string?> GetVersionInternalAsync(string key, int number, CancellationToken cancellationToken, bool candidate = false)
     {
         var version = await db.StoreVersions.AsNoTracking()
-            .FirstOrDefaultAsync(v => v.Key == key && v.Version == number && v.RevokedAt == null && v.ActivatedAt != null, cancellationToken);
+            .FirstOrDefaultAsync(v => v.Key == key && v.Version == number && v.RevokedAt == null && (candidate || v.ActivatedAt != null), cancellationToken);
         return version is null ? null : Encoding.UTF8.GetString(envelope.Open(version.Ciphertext, version.WrappedKey, Context(key, number)));
     }
 

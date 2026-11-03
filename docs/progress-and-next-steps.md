@@ -433,6 +433,9 @@ successful access policy/version and verification evidence are recorded
 separately from the VM provisioning hash. A global secret promotion must not
 implicitly rotate other guests.
 
+**Status, November 2, 2026:** built for guests with a managed key, through a fixed set of
+playbooks the server ships. See [rotating the key](guest-configuration.md#rotating-the-key).
+
 ### 4. Run the full remote-worker acceptance test
 
 Use one dedicated controller, one separately enrolled worker on another machine,

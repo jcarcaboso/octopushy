@@ -312,6 +312,62 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         return run;
     }
 
+    /// <summary>
+    /// A rotation of a guest's own key. Its login is its own binding: each step takes the version
+    /// it needs, so no Proxmox credential and no setup secret is in it, only the pin.
+    /// </summary>
+    public Run RotateAccess(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, AccessRotationContext rotation)
+    {
+        var inputs = ConfigureInputs.Build(repository, guest);
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = inputs.HostKey.Key };
+        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (inputs.HostKey.Version is { } hostVersion)
+            requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        var installation = repository.Installation(guest.InstallationAddress)!;
+        var policy = PolicyResolver.For(repository, guest);
+        var labels = PolicyResolver.AgentLabels(repository, guest);
+        var context = new RunContext
+        {
+            Address = guest.Address,
+            Commit = revision.Commit,
+            AgentLabels = labels.Value,
+            AgentLabelsSetBy = labels.SetBy,
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
+            Proxmox = new ProxmoxContext(ProvisionInputs.EndpointFor(installation, installation.Hosts[guest.Host]), installation.Connection.VerifyTls, null,
+                guest.Host, guest.Vmid, guest.Id, null),
+            Secrets = secrets,
+            RequestedSecretVersions = requestedVersions,
+            AccessRotation = rotation,
+            Ansible = new AnsibleContext(
+                GuestAccessPlaybooks.Root,
+                Operations.RotateAccess,
+                GuestAccessPlaybooks.Root,
+                GuestAccessPlaybooks.Authorize,
+                null,
+                false,
+                false,
+                10,
+                options.Value.Tools.AnsibleImage,
+                guest.Id,
+                guest.Directory,
+                inputs.Address,
+                inputs.Port,
+                inputs.User,
+                [],
+                [],
+                [],
+                [],
+                null),
+        };
+
+        var run = NewRun(resource, Operations.RotateAccess, revision, "manual", context);
+        run.InputsHash = inputs.Hash;
+        AddSteps(run, [
+            StepNames.Preview, StepNames.Approval, StepNames.VerifyCurrent, StepNames.AuthorizeKey, StepNames.VerifyKey,
+            StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval, StepNames.ConfirmRefused]);
+        return run;
+    }
+
     /// <summary>What an observation of the installation's hosts and VMs through its Proxmox API is built from.</summary>
     public static RunContext Observation(LabRepository repository, InstallationDefinition installation, DefinitionRevision revision)
     {
@@ -400,7 +456,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 RunId = run.Id,
                 Ordinal = i,
                 Name = names[i],
-                Kind = names[i] is StepNames.Approval or StepNames.OutcomeApproval ? StepKinds.Approval : StepKinds.Agent,
+                Kind = names[i] is StepNames.Approval or StepNames.OutcomeApproval or StepNames.PromoteKey or StepNames.ApproveRemoval
+                    ? StepKinds.Approval : StepKinds.Agent,
             });
         }
     }

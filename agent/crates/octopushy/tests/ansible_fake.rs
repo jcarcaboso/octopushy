@@ -44,6 +44,10 @@ if [ -n "${OCTOPUSHY_PREPARED_FILE:-}" ]; then
   exit 0
 fi
 if [ -n "${OCTOPUSHY_STDIN:-}" ]; then cat > "$REC/stdin.json"; fi
+n=$(( $(cat "$REC/runs" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$REC/runs"
+if [ -f "$REC/stdin.json" ]; then cp "$REC/stdin.json" "$REC/stdin.$n.json"; fi
+if [ -f "$REC/recap.$n.json" ]; then cp "$REC/recap.$n.json" "$REC/recap.json"; fi
+if [ -f "$REC/exit.$n" ]; then cp "$REC/exit.$n" "$REC/exit"; fi
 if [ -f "$REC/sleep" ]; then sleep "$(cat "$REC/sleep")"; fi
 if [ -f "$REC/kill" ]; then kill -9 $$; fi
 echo "output with $(cat "$REC/echo" 2>/dev/null)"
@@ -688,6 +692,145 @@ async fn a_guest_lost_during_a_task_is_uncertain() {
     fx.set("exit", "4");
     let done = run(&fx).await;
     assert!(matches!(done.result, Err(Failure::Uncertain(_))));
+}
+
+const OLD_ONE: &str =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nb25l\n-----END OPENSSH PRIVATE KEY-----\n";
+const OLD_TWO: &str =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\ndHdv\n-----END OPENSSH PRIVATE KEY-----\n";
+
+async fn confirming(fx: &Fixture, keys: &str) -> Finished {
+    let mut body = input();
+    body["expectRefused"] = json!("ansible.refused-keys");
+    let named = HashMap::from([
+        ("ansible.ssh-key".to_owned(), SSH_KEY.to_owned()),
+        ("ansible.refused-keys".to_owned(), keys.to_owned()),
+        ("ansible.var.tailscale_key".to_owned(), PASSWORD.to_owned()),
+        ("ansible.file.git_key_src".to_owned(), "git-key".to_owned()),
+    ]);
+    exec(
+        fx,
+        "run",
+        body,
+        Secrets::new(named),
+        vec![preview_artifact(Value::Null)],
+    )
+    .await
+}
+
+/// Scripts what each login in turn answers, by the number of the run.
+fn answers(fx: &Fixture, logins: &[(&str, i32)]) {
+    for (index, (text, exit)) in logins.iter().enumerate() {
+        let number = index + 1;
+        let mut answer = recap(text.is_empty());
+        if !text.is_empty() {
+            answer["unreachable"] = json!(text);
+        }
+        fx.set(&format!("recap.{number}.json"), &answer.to_string());
+        fx.set(&format!("exit.{number}"), &exit.to_string());
+    }
+}
+
+const SSHD_SAYS_NO: &str = "ops@10.0.0.5: Permission denied (publickey).";
+
+fn offered(fx: &Fixture, run: usize) -> String {
+    let document: Value = serde_json::from_str(&fx.read(&format!("stdin.{run}.json"))).unwrap();
+    document["sshKey"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn each_old_key_is_offered_alone_and_then_the_key_in_use() {
+    let fx = Fixture::new();
+    answers(&fx, &[(SSHD_SAYS_NO, 4), (SSHD_SAYS_NO, 4), ("", 0)]);
+    let done = confirming(&fx, &format!("{OLD_ONE}\n{OLD_TWO}")).await;
+    match done.result {
+        Ok(success) => assert_eq!(success.outputs["refusedKeys"], json!(2)),
+        Err(failure) => panic!("{}", failure.message()),
+    }
+    assert_eq!(fx.read("runs").trim(), "3");
+    assert_eq!(offered(&fx, 1), OLD_ONE);
+    assert_eq!(offered(&fx, 2), OLD_TWO);
+    assert_eq!(offered(&fx, 3), SSH_KEY);
+}
+
+#[tokio::test]
+async fn a_login_with_any_old_key_is_the_failure_and_says_which() {
+    let fx = Fixture::new();
+    answers(&fx, &[(SSHD_SAYS_NO, 4), ("", 0)]);
+    let done = confirming(&fx, &format!("{OLD_ONE}{OLD_TWO}")).await;
+    assert!(message(&done.result).contains("still accepts old key 2 of 2"));
+    assert_eq!(fx.read("runs").trim(), "2");
+}
+
+#[tokio::test]
+async fn a_session_that_failed_after_the_login_is_not_a_refusal() {
+    let long = "x".repeat(2000);
+    for text in [
+        // As ssh reports a forced command that fails, in this order. It can quote a refusal.
+        "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\nPermission denied (publickey).\nTransferred: sent 1, received 1 bytes",
+        // A forced command that is itself an ssh to somewhere else.
+        "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\nops@inner: Permission denied (publickey).",
+        // Past what a report keeps, so what ssh said first has been cut by the end.
+        &format!(
+            "Authenticated to g ([10.0.0.5]:22) using \"publickey\".\n{long}\nops@10.0.0.5: Permission denied (publickey)."
+        ),
+        // One key of two: sshd took it.
+        "Authenticated using \"publickey\" with partial success.\nops@10.0.0.5: Permission denied (password).",
+    ] {
+        let fx = Fixture::new();
+        answers(&fx, &[(text, 4), ("", 0)]);
+        let done = confirming(&fx, OLD_ONE).await;
+        assert!(
+            message(&done.result).contains("still accepts old key 1 of 1"),
+            "{text}"
+        );
+        assert_eq!(fx.read("runs").trim(), "1", "{text}");
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_counts_only_if_the_key_in_use_then_gets_in() {
+    let fx = Fixture::new();
+    // As with DenyUsers: sshd turns everyone away, so this is no answer about the key.
+    answers(&fx, &[(SSHD_SAYS_NO, 4), (SSHD_SAYS_NO, 4)]);
+    let done = confirming(&fx, OLD_ONE).await;
+    let text = message(&done.result);
+    assert!(text.contains("the key in use did not log in"), "{text}");
+}
+
+#[tokio::test]
+async fn a_guest_that_did_not_answer_said_nothing_about_a_key() {
+    for text in [
+        "Connection timed out",
+        "ssh: connect to host g port 22: Permission denied",
+        // Not ssh giving up on this guest, whatever else ssh failed to report.
+        "Permission denied (publickey).",
+        "ops@inner: Permission denied (publickey).",
+        // A banner saying it, then a login that timed out.
+        "ops@10.0.0.5: Permission denied (publickey).\nConnection closed by 10.0.0.5 port 22",
+        "Received disconnect from g: Too many authentication failures",
+        "Host key verification failed.",
+    ] {
+        let fx = Fixture::new();
+        answers(&fx, &[(text, 4), ("", 0)]);
+        let done = confirming(&fx, OLD_ONE).await;
+        assert!(done.result.is_err(), "{text}");
+        assert_eq!(fx.read("runs").trim(), "1", "{text}");
+    }
+}
+
+#[tokio::test]
+async fn keys_that_cannot_be_told_apart_are_not_tried() {
+    let fx = Fixture::new();
+    for keys in [
+        "",
+        "not a key",
+        OLD_ONE.trim_end_matches("-----END OPENSSH PRIVATE KEY-----\n"),
+    ] {
+        let done = confirming(&fx, keys).await;
+        assert!(done.result.is_err(), "{keys}");
+    }
+    assert_eq!(fx.read("runs"), "");
 }
 
 #[tokio::test]

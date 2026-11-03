@@ -271,6 +271,24 @@ public sealed class GuestAccessKey
     public DateTimeOffset? LastUsedAt { get; set; }
 
     public Guid? LastUsedRunId { get; set; }
+
+    /// <summary>When a rotation added this version beside what was on the guest.</summary>
+    public DateTimeOffset? AuthorizedAt { get; set; }
+
+    /// <summary>When a step that does nothing else logged in with this key alone, and what ran it.</summary>
+    public DateTimeOffset? VerifiedAt { get; set; }
+
+    public Guid? VerifiedRunId { get; set; }
+
+    /// <summary>When a person made this the version runs use, and what they had to go on.</summary>
+    public DateTimeOffset? PromotedAt { get; set; }
+
+    public string? PromotedBy { get; set; }
+
+    public string? PromotionEvidence { get; set; }
+
+    /// <summary>When a login showed this version gone from the guest. Other keys there are not touched.</summary>
+    public DateTimeOffset? RemovedAt { get; set; }
 }
 
 /// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
@@ -305,6 +323,7 @@ public static class Operations
     public const string Configure = "configure";
     /// <summary>A service's stages: everything planned, one approval, then everything applied in order.</summary>
     public const string Pipeline = "pipeline";
+    public const string RotateAccess = "rotate-access";
 }
 
 /// <summary>Why a run was started, where something depends on it.</summary>

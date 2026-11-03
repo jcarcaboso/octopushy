@@ -1,0 +1,12 @@
+---
+# Adds a candidate key beside what is there. This is the only change it makes.
+- name: Authorize the candidate key
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Add the candidate to the login's authorized keys
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/authorized_keys.py add {{ access_candidate_key | quote }}"
+        executable: /usr/bin/python3
+      register: access_added
+      changed_when: "'changed' in access_added.stdout"

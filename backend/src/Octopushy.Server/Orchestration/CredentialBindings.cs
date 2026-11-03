@@ -93,7 +93,8 @@ internal static class CredentialBindings
         var problems = new List<string>();
         if (context.Secrets.Keys.Any(n => n is SecretNames.ProxmoxSharedToken or SecretNames.ProxmoxReadOnlyToken or SecretNames.ProxmoxPrivilegedToken or SecretNames.ProxmoxToken))
             problems.Add("A configure run carries no Proxmox credentials; inspect and replan");
-        if (!context.Secrets.ContainsKey(SecretNames.AnsibleSshKey) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
+        // A rotation takes the guest's own key by step, so it binds only the pin.
+        if ((context.AccessRotation is null && !context.Secrets.ContainsKey(SecretNames.AnsibleSshKey)) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
             problems.Add("A configure run needs an SSH key and a pinned host key; inspect and replan");
         return problems;
     }

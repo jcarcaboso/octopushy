@@ -80,6 +80,9 @@ public sealed record RunContext
     /// <summary>The guest a pipeline run's service is on, whose SSH key its stages log in with.</summary>
     public Guid? GuestResourceId { get; init; }
 
+    /// <summary>The versions a rotation of the guest's key works with.</summary>
+    public AccessRotationContext? AccessRotation { get; init; }
+
     public long? RootDiskBytes { get; init; }
 
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
@@ -122,6 +125,12 @@ public sealed record RunContext
 
 /// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools.</summary>
 public sealed record StageContext(string Name, string Recipe, OpenTofuContext? OpenTofu, AnsibleContext? Ansible);
+
+/// <summary>
+/// A rotation of a guest's own key. <see cref="Current"/> adds the candidate; the candidate does
+/// everything after that; <see cref="Remove"/> are the versions it takes off the guest.
+/// </summary>
+public sealed record AccessRotationContext(int Current, int Candidate, IReadOnlyList<int> Remove);
 
 public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
 
@@ -228,6 +237,24 @@ public static class StepNames
     public const string OutcomeApproval = "outcome-approval";
     /// <summary>The one further run a person may approve after a declared outcome.</summary>
     public const string PlaybookApproved = "playbook-approved";
+    /// <summary>A fresh login with the key in use alone, so a rotation starts from a key shown to work.</summary>
+    public const string VerifyCurrent = "verify-current";
+    /// <summary>Adds a candidate key beside the keys on a guest, with the key in use.</summary>
+    public const string AuthorizeKey = "authorize-key";
+    /// <summary>A fresh login with the candidate alone, and the privileges a run needs.</summary>
+    public const string VerifyKey = "verify-key";
+    /// <summary>A person makes the candidate the key runs use, with that evidence in front of them.</summary>
+    public const string PromoteKey = "promote-key";
+    /// <summary>A separate decision to take the old key off the guest.</summary>
+    public const string ApproveRemoval = "approve-removal";
+    public const string RemoveKey = "remove-key";
+    /// <summary>A fresh login with the promoted key, and proof the old one is gone.</summary>
+    public const string VerifyRemoval = "verify-removal";
+    /// <summary>A login with the old key, which sshd has to refuse. Only its answer shows the key is gone.</summary>
+    public const string ConfirmRefused = "confirm-refused";
+
+    /// <summary>The steps a person decides, whatever the policy says.</summary>
+    public static bool IsAccessDecision(string name) => name is PromoteKey or ApproveRemoval;
 }
 
 /// <summary>The secret names executors look for.</summary>
@@ -242,6 +269,7 @@ public static class SecretNames
     public const string DiskReporterToken = "disk-reporter.token";
 
     public const string AnsibleSshKey = "ansible.ssh-key";
+    public const string AnsibleRefusedKeys = "ansible.refused-keys";
     public const string AnsibleHostKey = "ansible.host-key";
 
     public static string Backend(string environmentVariable) => $"backend.{environmentVariable}";

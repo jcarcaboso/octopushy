@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/guests/{id}/access/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rotateGuestAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/installations/{id}": {
         parameters: {
             query?: never;
@@ -888,6 +904,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AccessRotationDto: {
+            current: string;
+            candidate: string;
+            remove: string[];
+        };
         AgentDto: {
             /** Format: uuid */
             id: string;
@@ -995,6 +1016,7 @@ export interface components {
             prepared: null | components["schemas"]["JsonNode"];
             hostKeyFingerprints: string[];
             previewSha256: null | string;
+            accessRotation?: null | components["schemas"]["AccessRotationDto"];
         };
         ConfigureSecretDto: {
             name: string;
@@ -1289,6 +1311,23 @@ export interface components {
             provisionedAt: null | string;
             /** Format: date-time */
             lastUsedAt: null | string;
+            keys: components["schemas"]["ManagedAccessKeyDto"][];
+        };
+        ManagedAccessKeyDto: {
+            /** Format: int32 */
+            version: number;
+            fingerprint: string;
+            state: string;
+            /** Format: date-time */
+            authorizedAt: null | string;
+            /** Format: date-time */
+            verifiedAt: null | string;
+            /** Format: date-time */
+            promotedAt: null | string;
+            promotedBy: null | string;
+            promotionEvidence: null | string;
+            /** Format: date-time */
+            removedAt: null | string;
         };
         MissingVariableDto: {
             key: string;
@@ -2463,6 +2502,55 @@ export interface operations {
         };
     };
     deployService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    rotateGuestAccess: {
         parameters: {
             query?: never;
             header?: never;

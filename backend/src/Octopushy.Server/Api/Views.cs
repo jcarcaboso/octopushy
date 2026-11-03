@@ -130,7 +130,10 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             (manifest?["secrets"] as JsonObject)?.Select(p => new ConfigureSecretDto(p.Key, p.Value?.GetValue<string>() ?? "")).ToList() ?? [],
             outputs["prepared"]?.DeepClone(),
             Strings(outputs["hostKeyFingerprints"]),
-            outputs["planSha256"]?.GetValue<string>());
+            outputs["planSha256"]?.GetValue<string>(),
+            manifest?["accessRotation"] is JsonObject rotation
+                ? new AccessRotationDto(rotation["current"]?.GetValue<string>() ?? "?", rotation["candidate"]?.GetValue<string>() ?? "?", Strings(rotation["remove"]))
+                : null);
     }
 
     public static (string Status, string? Detail) GuestStatus(Resource resource, Run? active, Run? last)
@@ -420,9 +423,13 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
     {
         var entry = GuestAccessCredentials.Key(id);
         var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == entry).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
-        var key = current is null ? null
-            : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == id && k.Version == current, cancellationToken);
-        return key is null ? null : new ManagedAccessDto(key.PublicKey, key.Fingerprint, key.Version, key.ProvisionedAt, key.LastUsedAt);
+        var keys = await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == id).OrderByDescending(k => k.Version).ToListAsync(cancellationToken);
+        if (keys.Find(k => k.Version == current) is not { } key)
+            return null;
+        static string State(GuestAccessKey k, int? current) =>
+            k.Version == current ? "in-use" : k.RemovedAt is not null ? "removed" : k.Version > current ? "candidate" : "old";
+        return new ManagedAccessDto(key.PublicKey, key.Fingerprint, key.Version, key.ProvisionedAt, key.LastUsedAt, keys.Select(k => new ManagedAccessKeyDto(
+            k.Version, k.Fingerprint, State(k, current), k.AuthorizedAt, k.VerifiedAt, k.PromotedAt, k.PromotedBy, k.PromotionEvidence, k.RemovedAt)).ToList());
     }
 
     private async Task<IReadOnlyList<GuestScheduleDto>> SchedulesAsync(LabRepository repository, GuestDefinition guest, Guid id, CancellationToken cancellationToken)
