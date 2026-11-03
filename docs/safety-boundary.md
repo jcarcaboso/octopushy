@@ -31,29 +31,71 @@ one that runs Home Assistant. Octopushy observes its hosts and VMs, and does not
   observation that touches the installation: by the run's resource, the address and host
   in its context, the store keys of the installation's tokens, or its endpoints.
   So its token is released only to an observation, even for a run whose context was
-  altered after it was made.
+  altered after it was made. Work of **another** installation that names one of those
+  keys or endpoints is refused too, its observations included.
+
+### The denylist is the server's record
+
+The sync records the observed-only state on the installation itself, with every token
+key and endpoint the installation has declared while observed only. The record does not
+depend on the definition being readable:
+
+- A definition that says `manage: false`, even one with other errors, puts the
+  installation on the denylist and adds its keys and endpoints.
+- A definition that is **invalid or missing** changes nothing: the installation stays
+  observed only. So breaking ziost's `installation.yaml` in the same commit that points
+  another installation's token at ziost's store key does not release ziost's token.
+- Only a **valid** definition that asks to be managed takes the installation off the
+  denylist.
+
+### Becoming managed takes trust again
+
+Trust given while an installation is observed only covers its observations alone. When
+it asks to be managed, its work waits with *Waiting for trust: … was trusted while it was
+observed only*, observations included, and its page asks for trust again, as for a new
+endpoint. Until an operator trusts it as managed, its keys and endpoints stay refused to
+every other installation's work.
 
 The installation page and the inventory show it as **Observed only**, and the API's
-installation summary has `managed: false`.
+installation summary has `managed: false`; its trust has `managementChanged: true`
+while it waits for that trust.
 
-## Plans that remove a machine that is not the run's own
+## Plans that act on a machine that is not the run's own
 
-Before an approval is offered, the effects of every OpenTofu plan step are checked. A
-plan that deletes or replaces a `proxmox_virtual_environment_vm` or
-`proxmox_virtual_environment_container` fails the run, with the VMID and node of each
-such machine in its detail, unless the machine is the run's own:
+Before an approval is offered, the effects of every OpenTofu plan step are checked
+against the agent's plan summary (see
+[the executor contract](../contracts/agent/v1/executors.md#preview)), which reports for
+every change whether it imports something and, for a resource of a Proxmox provider,
+every VM and node it names before and after. The plan fails the run, naming each change,
+when:
 
-- A **provision** or **retire** run owns one machine: the guest's VMID on the guest's
-  host, as the state names it. Removing that one keeps its usual rules: approval unless
-  destructive is explicitly automatic, then unprotect, apply, and reprotect if the apply
-  does not finish.
-- A **pipeline stage** owns no machine, so any such removal is refused.
-- A removal whose VMID or node the plan does not say is refused: what cannot be shown to
-  be the guest's own is treated as someone else's. So is a plan that counts deletes or
-  replaces but lists no changes.
+- **any change imports an existing resource.** What OpenTofu would adopt is something
+  Octopushy did not create, so an `import` block is refused whatever it imports.
+- **a Proxmox resource with a create, update, delete or replace action names a VM other
+  than the run's own,** or names its own VMID without its node. That covers more than
+  deleting a VM: firewall options on VM 100, an HA resource, an update in place.
+- **a Proxmox resource names no VM, or one not known until apply,** unless its type is on
+  the short allowlist of types that never act on a VM. That includes resources that only
+  name a node, such as a network bridge.
 
-The approval step and the dispatch of the apply ask again, so no path offers such a plan
-for approval or applies it.
+A **provision** or **retire** run owns one machine: the guest's VMID on the guest's host.
+Changing or removing that one keeps its usual rules: approval unless destructive is
+explicitly automatic, then unprotect, apply, and reprotect if the apply does not finish.
+A **pipeline stage** owns no machine, so it may change no Proxmox resource that names a
+VM at all, and nothing of a Proxmox provider outside the allowlist. A plan that counts
+changes without listing them is refused too.
+
+The allowlist (`GuestVmPlan.MachineFreeTypes`) holds files on a node's datastore:
+
+| Type | Why it never acts on a VM |
+|---|---|
+| `proxmox_virtual_environment_file` | Uploads a snippet, ISO or template to a datastore |
+| `proxmox_virtual_environment_download_file` | Downloads an image to a datastore |
+| `proxmox_download_file` | The provider's newer name for the same |
+
+A resource counts as Proxmox when its type starts with `proxmox_`, or the agent says its
+provider is a Proxmox provider. The approval step and the dispatch of the apply ask
+again, so no path offers such a plan for approval or applies it.
 
 ## A VMID that is an observed VM Octopushy does not manage
 
@@ -67,18 +109,27 @@ not the guest's own, is blocked:
 - **At dispatch of the plan step,** the check is made again, and the run fails with it.
 
 The VM is the guest's own when the guest is bound to it, after its first apply, or when
-the guest's own OpenTofu state records it: a first apply that made the VM and did not
-finish can still be recovered. Work of the guest's that may have made the VM and not
-reported yet does not count as a collision either. A VMID bound to another guest is
-reported as that guest's.
+the server recorded a **claim** for it: when it sends the apply of an approved provision
+plan that creates the guest's own VMID on its node, it records that installation, node
+and VMID on the guest. So a first apply that made the VM and did not finish can still be
+recovered. A claim matches only the same installation, node and VMID. What an OpenTofu
+state holds is never read as ownership: a state can hold a data source or an imported
+resource for any VM. A VMID bound to another guest is reported as that guest's.
 
 Observations are runtime data, so this check is the server's, not the repository
 loader's. **Without an observation of the installation yet, nothing is blocked:** there
 is nothing to compare with. Creating a VM at a VMID that exists fails at the provider
-anyway, and removing a machine that is not the guest's own is refused by the plan check
+anyway, and acting on a machine that is not the guest's own is refused by the plan check
 above whatever has been observed.
 
-## Not covered
+## Accepted limits
 
-Narrowing the Proxmox tokens to what Octopushy needs remains the hardening planned for
-later. These guards do not depend on it.
+- **A plan runs provider code with credentials before any guard sees it.** The plan step
+  gets the installation's read-only (or shared) token, and the provider reads Proxmox
+  while it plans. The guards judge the plan's result, not what planning does.
+- **The agent's plan summary is trusted.** The controller never sees the JSON plan,
+  which can hold configuration values; it relies on the agent to report every change,
+  import and target. A missing target fails closed, but an agent that lies is outside
+  this boundary, as an agent is trusted with the credentials it is sent.
+- Narrowing the Proxmox tokens to what Octopushy needs remains the hardening planned for
+  later. These guards do not depend on it.
