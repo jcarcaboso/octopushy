@@ -226,7 +226,7 @@ public class PipelineDefinitionTests
     }
 
     [Fact]
-    public void Only_a_valid_service_gives_its_guest_octopushys_key_and_an_invalid_one_keeps_what_there_is()
+    public void Only_a_valid_service_gives_its_guest_octopushys_key_and_an_issued_key_stays_wanted()
     {
         // The recipe needs web_password, which this stage does not give: the service is invalid, its guest is not.
         using var test = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: deploy, recipe: web, inputs: { port: 1 } }\n");
@@ -240,7 +240,12 @@ public class PipelineDefinitionTests
         using var tofuOnly = WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
         var plain = LabRepositoryLoader.Load(tofuOnly.Root);
         Assert.Equal(ProvisionInputs.Build(plain, plain.Guest(Guest)!, "c").Hash, ProvisionInputs.Build(repository, guest, "c", keyIssued: false).Hash);
-        Assert.False(ManagedAccess.Wanted(plain, plain.Guest(Guest)!, keyIssued: true));
+
+        // Once issued, it stays wanted whatever the services say, until the guest names a key of its own.
+        Assert.True(ManagedAccess.Wanted(plain, plain.Guest(Guest)!, keyIssued: true));
+        using var declared = WithoutSetup(declaredKey: true);
+        var named = LabRepositoryLoader.Load(declared.Root);
+        Assert.False(ManagedAccess.Wanted(named, named.Guest(Guest)!, keyIssued: true));
     }
 
     [Fact]

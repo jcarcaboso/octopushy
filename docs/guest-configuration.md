@@ -307,6 +307,10 @@ kind of Ansible work runs on it. A leaked key reaches one machine. Nobody copies
 - **`GuestAccessKey` records where each version stands**, apart from the provisioning hash. That
   hash only says that the guest has a managed key, so a change of key plans nothing.
 - **A rebuild keeps the key**, and retiring the guest removes it. The record of who received it stays.
+- **Once issued, the key stays wanted** until the guest is retired or names `access.sshKey`. Removing the setup
+  recipe, or every Ansible stage of the guest's services, or breaking a service in any way, does not take it off
+  the guest's provisioning, which would reboot a VM and replace a container for a key that is harmless where it
+  is. Before pipelines, removing a setup recipe dropped it.
 - **It is unaffected by the refusal of Proxmox and OpenTofu credentials,** because only the
   public half goes to that work, as a variable, and is never a released secret.
 
@@ -349,7 +353,7 @@ guest that had no Ansible work had no managed key, so the service changes its pr
 provisioned again first, which for a VM is the in-place update and one reboot above, with new host keys,
 and for a container is a replacement. The service waits for that. The owner's approach is to rebuild
 guests rather than migrate them, so there is no migration path for existing guests. An invalid
-service does neither: it gives no key and takes none away, as [pipelines.md](pipelines.md) says.
+service gives no key, and nothing about a service takes one away, as [pipelines.md](pipelines.md) says.
 
 The guest agent cannot carry a key: on Fedora, with SELinux enforcing, `guest-ssh-add-authorized-keys`
 fails and `guest-file-open` for appending to `authorized_keys` is denied.

@@ -188,11 +188,14 @@ configured by its image.
   provisioning caught up without an apply looks like, such as one whose recipe does not put `sshAuthorizedKeys` on the
   machine. A 0.4.0 guest whose provisioning carried the key has the record already.
 
-**Only a valid service gives its guest Octopushy's key.** An invalid `pipeline.yaml` affects only its service, so it does not
-count toward the guest's key, and it does not take away a key the guest already has either: while Octopushy holds a key for the
-guest, an invalid service with an Ansible stage keeps counting. Either change would otherwise reach the guest's provisioning,
-which reboots a VM and replaces a container, before the pipeline is valid or approved. Removing a service, or its last Ansible
-stage, does change what the guest wants, as removing a setup recipe does.
+**Only a valid service gives its guest Octopushy's key, and once issued the key stays.** An invalid `pipeline.yaml` affects
+only its service, so it does not count toward the guest's key. And once Octopushy has issued a key for a guest, the guest keeps
+wanting it until the guest is retired or names `access.sshKey`, whatever happens to its services or setup recipe: a pipeline
+broken in any way, even one that cannot be parsed, a service removed, its last Ansible stage removed, or the setup recipe
+removed. Taking Octopushy's public key off a machine is never worth provisioning it again for, which reboots a VM and replaces
+a container, and a key left on a machine is harmless: nothing logs in with it unless Ansible work asks for it, and that work is
+held to the delivery record above. This changes #26's behaviour, where removing a setup recipe dropped the key from the next
+provisioning.
 
 **Adding a valid service with an Ansible stage to an existing guest delivers the key the way a setup recipe does.** It changes
 the guest's provisioning hash, so the guest is provisioned again first, and the service waits for that. For a VM that is an

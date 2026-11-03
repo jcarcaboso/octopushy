@@ -997,25 +997,93 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Equal(0, await server.QueryAsync(db => db.GuestAccessKeys.CountAsync(k => k.ResourceId == guest.Id)));
     }
 
-    [Fact]
-    public async Task A_pipeline_turning_invalid_does_not_take_its_guests_key_away()
+    /// <summary>Commits a change and checks the guest's provisioning did not move: no new hash, no new run.</summary>
+    private static async Task AssertProvisioningStaysAsync(ServerHarness server, Resource guest, string message)
+    {
+        var runs = await ProvisionRunsAsync(server, guest.Id);
+        server.Commit(message);
+        await server.SyncAsync();
+        await server.TickAsync();
+        Assert.Equal(guest.DesiredInputsHash, (await server.ResourceAsync(Guest)).DesiredInputsHash);
+        Assert.Equal(runs, await ProvisionRunsAsync(server, guest.Id));
+    }
+
+    /// <summary>A guest whose provisioning carried Octopushy's key, with the repository it was made from.</summary>
+    private static async Task<(Resource Guest, HttpClient Http)> KeyedAsync(ServerHarness server)
+    {
+        var (_, _, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        var guest = await server.ResourceAsync(Guest);
+        Assert.NotNull(await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == guest.Id).Select(k => k.ProvisionedAt).SingleAsync()));
+        return (guest, http);
+    }
+
+    [Theory]
+    [InlineData(InvalidAnsible)]
+    [InlineData("schemaVersion: 1\nstages:\n  - { name: deploy, recipe: web-typo }\n")]
+    [InlineData("schemaVersion: 1\nstages: []\n")]
+    [InlineData("schemaVersion: 1\nstages: [\n")]
+    public async Task A_pipeline_broken_in_any_way_does_not_take_its_guests_key_away(string broken)
     {
         var test = Repository.WithoutSetup();
         await using var server = await ServerHarness.StartAsync(postgres, test);
-        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        var (guest, http) = await KeyedAsync(server);
         using var _ = http;
-        var guest = await server.ResourceAsync(Guest);
-        Assert.NotNull(await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == guest.Id).Select(k => k.ProvisionedAt).SingleAsync()));
+
+        test.Write(PipelineFile, broken);
+        await AssertProvisioningStaysAsync(server, guest, "Break the pipeline");
+        Assert.False((await server.ResourceAsync(Service)).Valid);
+    }
+
+    [Fact]
+    public async Task Removing_the_last_ansible_stage_or_the_service_keeps_the_guests_key()
+    {
+        var test = Repository.WithoutSetup();
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (guest, http) = await KeyedAsync(server);
+        using var _ = http;
+
+        test.Write(PipelineFile, TofuOnly);
+        await AssertProvisioningStaysAsync(server, guest, "Only OpenTofu left");
+        test.Delete("labs/home/proxmox/korriban/guests/krb-app-01/services");
+        await AssertProvisioningStaysAsync(server, guest, "No service left");
+    }
+
+    [Fact]
+    public async Task Removing_the_setup_recipe_keeps_the_guests_key()
+    {
+        var test = Repository.Repository();
+        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+            .Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
+        test.Delete("labs/home/proxmox/korriban/guests/krb-app-01/services");
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (guest, http) = await KeyedAsync(server);
+        using var _ = http;
+
+        var text = File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile));
+        test.Write(PipelineDefinitionTests.GuestFile, text[..text.IndexOf("setup:", StringComparison.Ordinal)]
+            + "access:\n  user: ops\n  hostKey: { store: access/app/host-key }\n");
+        await AssertProvisioningStaysAsync(server, guest, "No setup recipe");
+    }
+
+    [Fact]
+    public async Task A_key_the_guest_names_afterwards_wins_over_the_one_octopushy_issued()
+    {
+        var test = Repository.WithoutSetup();
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (guest, http) = await KeyedAsync(server);
+        using var _ = http;
         var runs = await ProvisionRunsAsync(server, guest.Id);
 
-        test.Write(PipelineFile, InvalidAnsible);
-        server.Commit("Break the pipeline");
+        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+            .Replace("  hostKey: { store: access/app/host-key }\n", "  sshKey: { store: access/app/ssh-key }\n  hostKey: { store: access/app/host-key }\n"));
+        server.Commit("Name a key");
         await server.SyncAsync();
         await server.TickAsync();
 
-        Assert.False((await server.ResourceAsync(Service)).Valid);
-        Assert.Equal(guest.DesiredInputsHash, (await server.ResourceAsync(Guest)).DesiredInputsHash);
-        Assert.Equal(runs, await ProvisionRunsAsync(server, guest.Id));
+        Assert.NotEqual(guest.DesiredInputsHash, (await server.ResourceAsync(Guest)).DesiredInputsHash);
+        Assert.Equal(runs + 1, await ProvisionRunsAsync(server, guest.Id));
+        var plan = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.False(RunContext.Parse(plan.Context).ManagedAccess);
     }
 
     /// <summary>
