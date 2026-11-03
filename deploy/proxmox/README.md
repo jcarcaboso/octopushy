@@ -117,9 +117,8 @@ and the `tmpfs` on `/tmp` that `compose.yaml` gives it. It shares only a private
 reach PostgreSQL, and it gets neither the key nor the database password. The state it
 works on is decrypted for one attempt of the guest it was assigned. It still runs
 on the same machine as the server. Once you manage more than this lab, or want a
-stronger boundary, add agents on their own VMs (the
-[managed worker wizard](../../docs/worker-deployment-wizard.md) builds them with this
-one) and give the internal agent's labels only to what should run here.
+stronger boundary, add agents on their own VMs, enrolled by hand with a token from
+**Agents**, and give the internal agent's labels only to what should run here.
 
 To enroll it again, for example under another name, remove it under **Agents** and run
 `pct exec <ctid> -- sh -c 'octopushy-compose rm -sf agent && docker volume rm octopushy_agent'`
@@ -129,9 +128,8 @@ before enrolling with a new token (`OCTOPUSHY_AGENT_NAME=<name>` picks the name)
 
 The web interface is plain HTTP on port 8081. Put a TLS proxy in front of it; the
 frontend trusts `X-Forwarded-Proto` from private addresses, so session cookies become
-secure once the proxy sets it. Without a proxy the web interface, the
-[operator CLI](../../docs/operator-access.md#plain-http) and
-[guest disk reporting](../../agent/packaging/disk-reporter/README.md#plain-http) still work
+secure once the proxy sets it. Without a proxy the web interface and the
+[operator CLI](../../docs/operator-access.md#plain-http) still work
 over plain HTTP, but passwords, session cookies and tokens are then readable by anyone on
 the network path. With Traefik's file provider:
 

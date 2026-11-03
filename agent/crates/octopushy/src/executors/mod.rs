@@ -3,10 +3,6 @@
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
 pub mod ansible;
-pub mod guest;
-mod managed_update;
-pub mod managed_worker;
-pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
 
@@ -23,26 +19,14 @@ use crate::attempts::logs::AttemptLogger;
 use crate::tools::ToolRuntime;
 
 /// Executors this binary provides, as announced in `Hello`.
-pub const EXECUTORS: &[&str] = &[
-    "opentofu",
-    "proxmox",
-    "nixos-rootfs",
-    "guest",
-    "managed-worker",
-    "ansible",
-];
+pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "ansible"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
 /// interruption by a restart makes their outcome uncertain.
 pub fn is_mutating(executor: &str, action: &str) -> bool {
     matches!(
         (executor, action),
-        ("opentofu", "apply")
-            | ("proxmox", "set-protection")
-            | ("nixos-rootfs", "grow")
-            | ("guest", "install-disk-reporter")
-            | ("managed-worker", "prepare" | "install" | "update-os")
-            | ("ansible", "run")
+        ("opentofu", "apply") | ("proxmox", "set-protection") | ("ansible", "run")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
 }
 
@@ -195,10 +179,7 @@ pub type ExecResult = Result<Success, Failure>;
 pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> ExecResult {
     match executor {
         "proxmox" => proxmox::run(cfg, ctx).await,
-        "guest" => guest::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
-        "managed-worker" => managed_worker::run(cfg, ctx).await,
-        "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         "ansible" => ansible::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,

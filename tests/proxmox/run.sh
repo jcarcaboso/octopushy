@@ -15,11 +15,6 @@
 #   UI=1             also serve the web interface at http://127.0.0.1:5174 while it runs
 #   KEEP=1           leave everything running at the end, until Ctrl-C
 #   CLEANUP=1        only retire a VM left behind by an interrupted run, reusing its state
-#   PORTAINER_WORKFLOW=1 use an isolated NixOS service-node fixture (no resize)
-#   PORTAINER_TEMPLATE_DIR  reviewed NixOS image template directory for that fixture
-#   PORTAINER_CONFIG_DIR    locked native NixOS deployment flake for that fixture
-#   KEEP_GUEST=1      after a successful Portainer test, leave its VM/data running
-#   RESUME_SERVICE=1  resume that native test on its existing VM/state (requires KEEP_GUEST=1)
 #   REMOTE_WORKER=1   reuse a dedicated controller and pre-enrolled remote worker;
 #                     see tests/remote-worker/README.md for required explicit endpoints
 #
@@ -38,15 +33,6 @@ agent_port=18443
 database=proxmox_e2e
 state_database=proxmox_e2e_state
 template=fedora-44
-if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-  work=$root/.dev/portainer-vm-e2e
-  api_port=18081
-  agent_port=18444
-  api=http://127.0.0.1:$api_port
-  database=portainer_e2e
-  state_database=portainer_e2e_state
-  template=nixos-service-node
-fi
 agent_label=proxmox-e2e
 if [[ $remote == 1 ]]; then
   # Validate supplied credentials before DNS, fixtures, databases, or starting processes.
@@ -66,7 +52,6 @@ bridge=${PVE_BRIDGE:-vmbr0}
 read_only_token_file=$PVE_READ_ONLY_TOKEN_FILE
 privileged_token_file=$PVE_PRIVILEGED_TOKEN_FILE
 name=${TEST_NAME:-opy-e2e-01}
-if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then name=${TEST_NAME:-opy-service-01}; fi
 lab=$work/lab
 guest_dir=$lab/labs/home/proxmox/$node/guests/$name
 address=home/$node/$name
@@ -80,8 +65,6 @@ fail() {
   if [[ $created == 1 ]]; then
     if [[ $remote == 1 ]]; then
       echo "The VM $name may still exist on $node. Preserve the fixture; rerun with the same remote inputs and CLEANUP=1 only when authorized." >&2
-    elif [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-      echo "The VM $name may still exist on $node. Retire only when authorized: PORTAINER_WORKFLOW=1 CLEANUP=1 $0" >&2
     else
       echo "The VM $name may still exist on $node. Retire it with: CLEANUP=1 $0" >&2
     fi
@@ -110,13 +93,8 @@ import_proxmox_credentials() {
 }
 
 [[ $name =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "TEST_NAME must be a valid id."
-if [[ ${RESUME_SERVICE:-0} == 1 ]]; then
-  [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${KEEP_GUEST:-0} == 1 && ${CLEANUP:-0} != 1 ]] ||
-    fail "RESUME_SERVICE requires PORTAINER_WORKFLOW=1 KEEP_GUEST=1 and is not a retirement."
-  [[ -s ${PORTAINER_CONFIG_DIR:-/nonexistent}/flake.lock ]] || fail "The retained locked NixOS configuration is required."
-fi
 
-if [[ ${CLEANUP:-0} == 1 || ${RESUME_SERVICE:-0} == 1 ]]; then
+if [[ ${CLEANUP:-0} == 1 ]]; then
   # Accept only this harness's split fixture; never rewrite legacy definitions or run contexts.
   installation_file=$lab/labs/home/proxmox/$node/installation.yaml
   if [[ ! -f $installation_file ]] || ! python3 - "$installation_file" "$node" <<'PY'
@@ -166,13 +144,7 @@ if [[ $remote == 1 ]]; then
     mkdir -p "$work"
     printf '%s\n' "$fixture" >"$work/remote-fixture.json"
   fi
-elif [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
-  if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-    [[ -s ${PORTAINER_TEMPLATE_DIR:-/nonexistent}/template.yaml ]] || fail "Build and review the NixOS image template first."
-    [[ -s ${PORTAINER_CONFIG_DIR:-/nonexistent}/flake.lock ]] || fail "A locked NixOS deployment is required."
-    existing=$("${pg[@]}" -Atc "SELECT count(*) FROM pg_database WHERE datname IN ('$database', '$state_database')")
-    [[ $existing == 0 ]] || fail "Portainer fixture databases already exist. Preserve them and inspect/resume; never silently reset state."
-  fi
+elif [[ ${CLEANUP:-0} != 1 ]]; then
   [[ ! -f $work/vmid ]] || fail "A previous run left state in $work (VMID $(<"$work/vmid")). Retire it with CLEANUP=1 first, or delete $work if the VM is gone."
   rm -rf "$work" && mkdir -p "$work"
   "${pg[@]}" -c "DROP DATABASE IF EXISTS $database" -c "DROP DATABASE IF EXISTS $state_database" \
@@ -206,7 +178,7 @@ commit() {
   trust_fixture_installations "$lab" "$(git -C "$lab" rev-parse HEAD)"
 }
 
-if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
+if [[ ${CLEANUP:-0} != 1 ]]; then
   log "Account, variables, repository, agent"
   if [[ $remote == 0 ]]; then
     code=$(tr -d '\n' <"$work/server/setup-code")
@@ -223,11 +195,7 @@ if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
 
   mkdir -p "$lab/labs/home/proxmox/$node" "$lab/recipes" "$lab/templates" "$lab/modules/opentofu"
   cp -r "$root/examples/lab/recipes/proxmox-vm" "$lab/recipes/"
-  if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-    cp -r "$PORTAINER_TEMPLATE_DIR" "$lab/templates/$template"
-  else
-    cp -r "$root/examples/lab/templates/fedora-44" "$lab/templates/"
-  fi
+  cp -r "$root/examples/lab/templates/fedora-44" "$lab/templates/"
   cp -r "$root/examples/lab/modules/opentofu/proxmox-vm" "$lab/modules/opentofu/"
   cat >"$lab/octopushy.yaml" <<YAML
 schemaVersion: 1
@@ -330,11 +298,6 @@ review_and_approve() {
   counts=$(jq -c '.steps[] | select(.name=="plan") | .plan.counts' <<<"$detail")
   echo "  plan: $counts"
   jq -r '.steps[] | select(.name=="plan") | .plan.changes[] | "    \(.actions | join("/")) \(.address)"' <<<"$detail"
-  if [[ ${PORTAINER_WORKFLOW:-0} == 1 ]]; then
-    jq -e 'all(.steps[] | select(.name=="plan") | .plan.changes[];
-      .address == "proxmox_download_file.image" or .address == "proxmox_virtual_environment_vm.guest")' \
-      <<<"$detail" >/dev/null || fail "The saved plan includes an unexpected resource; not approved."
-  fi
   if ! jq -e "$condition" <<<"$counts" >/dev/null; then
     call -X POST "$api/api/runs/$run/steps/$step/reject" -d '{"note":"The end-to-end test did not expect this plan."}' >/dev/null
     fail "The plan does not match what this step expects ($condition)."
@@ -422,7 +385,7 @@ summary=$(call "$api/api/installations/$installation")
 jq -r '"  Proxmox \(.installation.proxmoxVersion), \(.observedGuests | length) VMs visible"' <<<"$summary"
 jq -r '.installation.hosts[] | "  host \(.name): online=\(.online), memory \((.memoryBytes // 0) / 1073741824 | floor)/\((.maxMemoryBytes // 0) / 1073741824 | floor) GiB"' <<<"$summary"
 
-if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
+if [[ ${CLEANUP:-0} != 1 ]]; then
   free=$(jq --arg n "$node" '[.installation.hosts[] | select(.name==$n) | (.maxMemoryBytes - .memoryBytes)][0] // 0' <<<"$summary")
   (( free > 3 * 1024 * 1024 * 1024 )) || fail "$node has less than 3 GiB of free memory; the test needs 2 GiB plus headroom."
   used=$(jq -c '[.observedGuests[].vmid]' <<<"$summary")
@@ -451,7 +414,6 @@ if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
   jq -e '.status == "running" and .maxCpu == 1 and .maxMemoryBytes == 1073741824' <<<"$vm" >/dev/null ||
     fail "The VM does not match: expected running, 1 core, 1 GiB."
 
-  if [[ ${PORTAINER_WORKFLOW:-0} != 1 ]]; then
   log "2. Resize: 2 cores, 2 GiB, 20 GiB disk"
   write_guest 2 2048 20
   commit "Resize $name"
@@ -463,33 +425,9 @@ if [[ ${CLEANUP:-0} != 1 && ${RESUME_SERVICE:-0} != 1 ]]; then
   echo "  Proxmox reports: $vm"
   jq -e '.status == "running" and .maxCpu == 2 and .maxMemoryBytes == 2147483648' <<<"$vm" >/dev/null ||
     fail "The VM does not match: expected running, 2 cores, 2 GiB."
-  fi
 else
   created=1
   guest=$(guest_id)
-fi
-
-if [[ ${PORTAINER_WORKFLOW:-0} == 1 && ${CLEANUP:-0} != 1 ]]; then
-  log "Native NixOS/Docker Portainer workflow on the controller-provisioned VM"
-  PVE_ENDPOINT=$endpoint PVE_NODE=$node PVE_TOKEN_FILE=$privileged_token_file TEST_NAME=$name \
-    python3 "$root/tests/portainer/live.py" "$work" "$PORTAINER_CONFIG_DIR" ||
-    fail "The Portainer workflow failed; preserve the VM/state and inspect $work/portainer."
-  log "VM no-op plan after native service configuration"
-  call -X POST "$api/api/guests/$guest/plan" >/dev/null
-  run=$(wait_run "$guest" provision awaiting-approval,succeeded 15) || fail "The final VM plan did not complete."
-  detail=$(call "$api/api/runs/$run")
-  counts=$(jq -c '.steps[] | select(.name=="plan") | .plan.counts' <<<"$detail")
-  echo "  plan: $counts"
-  jq -e '.create == 0 and .update == 0 and .delete == 0 and .replace == 0' <<<"$counts" >/dev/null ||
-    fail "Unexpected VM drift after native setup; inspect the saved plan. No further apply was approved."
-  [[ $(jq -r .run.status <<<"$detail") == succeeded ]] ||
-    fail "The no-change run did not complete automatically; inspect rather than applying."
-  show_run "$run"
-  if [[ ${KEEP_GUEST:-0} == 1 ]]; then
-    log "Passed: leaving $name running with its state and service data intact"
-    echo "Retire only when requested: PORTAINER_WORKFLOW=1 CLEANUP=1 $0"
-    exit 0
-  fi
 fi
 
 log "3. Delete"

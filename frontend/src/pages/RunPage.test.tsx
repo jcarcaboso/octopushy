@@ -8,33 +8,7 @@ import { RunPage } from "./RunPage";
 const sha = "3f6c2a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615e4d3";
 const created = "2026-10-20T08:00:00Z";
 
-it.each(["grow-root", "verify"])("retries a failed %s step without requesting another infrastructure plan", async (name) => {
-  const detail = runDetail({ status: "failed", currentStep: name });
-  detail.steps = [{ ...detail.steps[0], name, kind: "agent", status: "failed", plan: null, approval: null }];
-  const { requests } = mockApi({
-    "GET /api/runs/run-1": () => detail,
-    "POST /api/runs/run-1/retry-filesystem": () => undefined,
-  });
-  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  await userEvent.click(await screen.findByRole("button", { name: "Retry guest step" }));
-  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
-  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-filesystem"]);
-});
-
-it.each([
-  { lost: "read-only", mutating: false, offered: true },
-  { lost: "mutating", mutating: true, offered: false },
-])("offers the guest retry after a lost $lost attempt only when it could not have changed anything", async ({ mutating, offered }) => {
-  const detail = runDetail({ status: "failed", currentStep: "verify-root" });
-  const lost = { ...detail.steps[0].attempts[0], id: "attempt-lost", status: "uncertain", mutating };
-  detail.steps = [{ ...detail.steps[0], name: "verify-root", kind: "agent", status: "failed", plan: null, approval: null, attempts: [lost] }];
-  mockApi({ "GET /api/runs/run-1": () => detail });
-  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  await screen.findByText(/Independently measures guest disk/);
-  expect(screen.queryByRole("button", { name: "Retry guest step" }) !== null).toBe(offered);
-});
-
-it("retries a failed stage of a pipeline, names its stage, and never offers the guest retry", async () => {
+it("retries a failed stage of a pipeline and names its stage", async () => {
   const detail = runDetail({ operation: "pipeline", status: "failed", currentStep: null });
   detail.steps = [{ ...detail.steps[0], name: "playbook", stage: "deploy", kind: "agent", status: "failed", plan: null, approval: null }];
   const { requests } = mockApi({
@@ -46,7 +20,6 @@ it("retries a failed stage of a pipeline, names its stage, and never offers the 
   await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-stage"]);
   expect(screen.getByText("deploy")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Retry guest step" })).toBeNull();
 });
 
 it("offers no stage retry once a change may have been lost", async () => {
@@ -217,31 +190,6 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
 describe("RunPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("requires separate consent for the exact worker OS archive before approving its plan", async () => {
-    const user = userEvent.setup();
-    const detail = runDetail();
-    detail.workerUpdate = {
-      generation: "884d09b4-0934-43a4-bffb-d2f7977bc01c",
-      archiveUrl: "https://release.test/worker.nar.xz", archiveSha256: "c".repeat(64),
-      systemPath: "/nix/store/00000000000000000000000000000000-nixos-system-worker-v1",
-      imageSha256: "a".repeat(64),
-    };
-    const { requests } = mockApi({
-      "GET /api/runs/run-1": () => detail,
-      "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
-    });
-    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-    const approve = await screen.findByRole("button", { name: "Approve" });
-    expect(approve).toBeDisabled();
-    expect(screen.getByText(detail.workerUpdate.systemPath)).toBeVisible();
-    await user.click(screen.getByLabelText(/I approve this exact worker OS archive/));
-    await user.click(approve);
-    await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
-    expect(requests.find((r) => r.method === "POST")?.body).toEqual({
-      planSha256: sha, note: null, workerUpdateSha256: "c".repeat(64),
-    });
-  });
-
   it("shows the plan's changes and approves with the plan hash the step shows", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({
@@ -281,27 +229,6 @@ describe("RunPage", () => {
     renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
     await user.click(await screen.findByRole("button", { name: "Approve" }));
     expect(await screen.findByText("The plan changed since it was shown; review the current plan.")).toBeInTheDocument();
-  });
-
-  it("approves setup-only runs without claiming to apply a saved infrastructure plan", async () => {
-    const user = userEvent.setup();
-    const detail = runDetail();
-    detail.steps[0].plan = {
-      hasChanges: false, planSha256: null, toolVersion: "1.13.1", changes: [],
-      counts: { create: 0, update: 0, delete: 0, replace: 0 },
-    };
-    detail.steps[1].detail = "This run installs the disk reporter inside the VM after verification.";
-    const { requests } = mockApi({
-      "GET /api/runs/run-1": () => detail,
-      "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
-    });
-    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-    expect(await screen.findByText("Setup approval fingerprint")).toBeInTheDocument();
-    expect(screen.getByText(/Approving authorizes the pending guest setup/)).toBeInTheDocument();
-    expect(screen.queryByText(/Approving applies exactly this saved plan/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
-    expect(requests.find((r) => r.method === "POST")!.body).toEqual({ planSha256: sha, note: null });
   });
 
   it("rejects without a plan hash", async () => {
@@ -356,12 +283,3 @@ describe("RunPage", () => {
   });
 });
 
-it.each(["prepare-worker", "install-worker", "wait-worker"])("retries known failed %s without another VM apply", async (name) => {
-  const detail = runDetail({ status: "failed", currentStep: name });
-  detail.steps = [{ ...detail.steps[0], name, kind: "agent", status: "failed", plan: null, approval: null }];
-  const { requests } = mockApi({ "GET /api/runs/run-1": () => detail, "POST /api/runs/run-1/retry-filesystem": () => undefined });
-  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  await userEvent.click(await screen.findByRole("button", { name: "Retry guest step" }));
-  await waitFor(() => expect(requests.filter((r) => r.method === "POST")).toHaveLength(1));
-  expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/retry-filesystem");
-});

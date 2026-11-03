@@ -14,7 +14,6 @@ fn operator_cli_is_separate_from_execution_agent_identity() {
     );
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("login") && help.contains("request") && help.contains("logout"));
-    assert!(!help.contains("managed-identity"));
 }
 
 const CLEARTEXT_WARNING: &str = "warning: the operator token travels unencrypted";

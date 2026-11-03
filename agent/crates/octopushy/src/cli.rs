@@ -63,17 +63,10 @@ pub enum OperatorCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
-    /// Configure the image-native reporter using bounded sensitive stdin only.
-    ManagedReporting,
     /// Enroll with a server using a one-time token.
     Enroll(EnrollArgs),
     /// Connect to the server and execute assignments.
     Run(RunArgs),
-    /// Fixed public-CSR managed worker bootstrap (no bearer token).
-    ManagedIdentity {
-        #[command(subcommand)]
-        command: ManagedIdentityCommand,
-    },
     /// Show the stored enrollment and pending work.
     Status(StatusArgs),
 }
@@ -129,26 +122,4 @@ pub struct StatusArgs {
     /// State directory (see `enroll`).
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ManagedIdentityCommand {
-    Prepare(ManagedPrepareArgs),
-    Install(ManagedInstallArgs),
-}
-#[derive(Debug, Args)]
-pub struct ManagedPrepareArgs {
-    #[arg(long)]
-    pub generation: String,
-    #[arg(long)]
-    pub state_dir: PathBuf,
-}
-#[derive(Debug, Args)]
-pub struct ManagedInstallArgs {
-    #[arg(long)]
-    pub generation: String,
-    #[arg(long)]
-    pub state_dir: PathBuf,
-    #[arg(long)]
-    pub payload_base64: String,
 }

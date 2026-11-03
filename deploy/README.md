@@ -8,11 +8,6 @@ works.
 To run it in a Proxmox LXC container with Docker, created and updated by script, see
 [`proxmox/`](proxmox/README.md).
 
-For repository-backed NixOS worker VMs, see the
-[managed worker wizard and image setup](../docs/worker-deployment-wizard.md).
-It reuses an independent control worker; publishing a definition does not grant
-infrastructure approval.
-
 ## First start
 
 ```sh
@@ -37,40 +32,6 @@ podman compose up -d                      # or: docker compose up -d
 - The backend writes a one-time setup code to its data volume; read it with
   `podman compose exec backend cat /var/lib/octopushy/setup-code` and enter it in the
   web interface to create the account.
-
-## Automatic guest disk reporting
-
-Build and publish `octopushy-disk-reporter` for your guests' architecture/libc,
-then set these values in `.env` and recreate the backend:
-
-```dotenv
-OCTOPUSHY_DISK_REPORTER_ENABLED=true
-OCTOPUSHY_DISK_REPORTER_PUBLIC_URL=https://octopushy.example
-OCTOPUSHY_DISK_REPORTER_BINARY_URL=https://releases.example/disk-reporter-v1
-OCTOPUSHY_DISK_REPORTER_BINARY_SHA256=<sha256sum of the published binary>
-OCTOPUSHY_DISK_REPORTER_INTERVAL_SECONDS=3600
-```
-
-The web/API origin and direct binary URL must be reachable **from the VM**. Either
-may use `http://` or `https://`. Over `http://` anyone on the network path can read
-the reporting token, which can only submit that VM's disk usage; see
-[plain HTTP](../agent/packaging/disk-reporter/README.md#plain-http). No
-redirect-following or insecure TLS fallback is allowed. For a private CA with an
-`https://` web/API origin, set `OCTOPUSHY_DISK_REPORTER_CA_PEM` to its public PEM
-(never the private key); it becomes the trust bundle for **both** endpoints.
-
-Upgrade the execution agents too: they must advertise the new `guest` executor.
-The VM needs Linux/systemd and a running QEMU guest agent with guest execution
-enabled. The Proxmox token needs guest-exec privileges on each managed VM.
-The [reporter guide](../agent/packaging/disk-reporter/README.md) lists prerequisites,
-per-guest overrides, and recovery steps.
-
-Once enabled, provision runs append **install-disk-reporter** after verification,
-enable the hourly timer, and attempt the first report immediately. Existing VMs
-can be installed or repaired with **Plan now**, even if OpenTofu has no changes.
-Manual-approval policy still applies. No SSH key or inbound VM port is required.
-Installation is disabled until deployment URLs and the checksum are configured;
-the server refuses invalid enabled configuration.
 
 ## What to keep safe
 

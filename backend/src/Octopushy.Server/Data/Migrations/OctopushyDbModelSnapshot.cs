@@ -515,35 +515,6 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("guest_configurations", (string)null);
                 });
 
-            modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
-                {
-                    b.Property<Guid>("ResourceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("resource_id");
-
-                    b.Property<int>("IntervalSeconds")
-                        .HasColumnType("integer")
-                        .HasColumnName("interval_seconds");
-
-                    b.Property<DateTimeOffset?>("ReceivedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("received_at");
-
-                    b.Property<string>("TokenHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("token_hash");
-
-                    b.Property<long?>("UsedBytes")
-                        .HasColumnType("bigint")
-                        .HasColumnName("used_bytes");
-
-                    b.HasKey("ResourceId")
-                        .HasName("pk_guest_disk_usages");
-
-                    b.ToTable("guest_disk_usages", (string)null);
-                });
-
             modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -604,106 +575,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasName("pk_installation_trusts");
 
                     b.ToTable("installation_trusts", (string)null);
-                });
-
-            modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>
-                {
-                    b.Property<Guid>("ResourceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("resource_id");
-
-                    b.Property<Guid?>("AgentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("agent_id");
-
-                    b.Property<DateTimeOffset?>("AuthenticatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("authenticated_at");
-
-                    b.Property<string>("CaCertificatePem")
-                        .HasColumnType("text")
-                        .HasColumnName("ca_certificate_pem");
-
-                    b.Property<string>("CertificatePem")
-                        .HasColumnType("text")
-                        .HasColumnName("certificate_pem");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("CsrDer")
-                        .HasColumnType("text")
-                        .HasColumnName("csr_der");
-
-                    b.Property<Guid>("Generation")
-                        .HasColumnType("uuid")
-                        .HasColumnName("generation");
-
-                    b.Property<string>("Host")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("host");
-
-                    b.Property<string>("Installation")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("installation");
-
-                    b.Property<DateTimeOffset?>("InstalledAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("installed_at");
-
-                    b.Property<Guid?>("PrepareAttemptId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("prepare_attempt_id");
-
-                    b.Property<DateTimeOffset?>("PreparedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("prepared_at");
-
-                    b.Property<DateTimeOffset?>("ReadyAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("ready_at");
-
-                    b.Property<Guid>("RevisionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("revision_id");
-
-                    b.Property<Guid>("RunId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("run_id");
-
-                    b.Property<string>("ServerUrl")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("server_url");
-
-                    b.Property<string>("VerifiedOsImageSha256")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("verified_os_image_sha256");
-
-                    b.Property<Guid?>("VerifiedOsUpdateRunId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("verified_os_update_run_id");
-
-                    b.Property<int>("Vmid")
-                        .HasColumnType("integer")
-                        .HasColumnName("vmid");
-
-                    b.HasKey("ResourceId")
-                        .HasName("pk_managed_workers");
-
-                    b.HasIndex("AgentId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_managed_workers_agent_id");
-
-                    b.HasIndex("Generation")
-                        .IsUnique()
-                        .HasDatabaseName("ix_managed_workers_generation");
-
-                    b.ToTable("managed_workers", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Observation", b =>
@@ -1244,10 +1115,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
-                    b.Property<string>("WorkerUpdateSha256")
-                        .HasColumnType("text")
-                        .HasColumnName("worker_update_sha256");
-
                     b.HasKey("Id")
                         .HasName("pk_steps");
 
@@ -1531,16 +1398,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasConstraintName("fk_guest_configurations_resources_resource_id");
                 });
 
-            modelBuilder.Entity("Octopushy.Server.Data.GuestDiskUsage", b =>
-                {
-                    b.HasOne("Octopushy.Server.Data.Resource", null)
-                        .WithOne()
-                        .HasForeignKey("Octopushy.Server.Data.GuestDiskUsage", "ResourceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_guest_disk_usages_resources_resource_id");
-                });
-
             modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>
                 {
                     b.HasOne("Octopushy.Server.Data.Resource", null)
@@ -1549,16 +1406,6 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_guest_schedules_resources_resource_id");
-                });
-
-            modelBuilder.Entity("Octopushy.Server.Data.ManagedWorkerBinding", b =>
-                {
-                    b.HasOne("Octopushy.Server.Data.Resource", null)
-                        .WithOne("ManagedWorker")
-                        .HasForeignKey("Octopushy.Server.Data.ManagedWorkerBinding", "ResourceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_managed_workers_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.OperatorToken", b =>
@@ -1601,11 +1448,6 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_tofu_state_versions_tofu_states_resource_id_stage");
-                });
-
-            modelBuilder.Entity("Octopushy.Server.Data.Resource", b =>
-                {
-                    b.Navigation("ManagedWorker");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Run", b =>

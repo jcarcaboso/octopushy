@@ -14,7 +14,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<Resource> Resources => Set<Resource>();
 
-    public DbSet<GuestDiskUsage> GuestDiskUsages => Set<GuestDiskUsage>();
 
     public DbSet<GuestConfiguration> GuestConfigurations => Set<GuestConfiguration>();
     public DbSet<GuestScheduleState> GuestSchedules => Set<GuestScheduleState>();
@@ -28,7 +27,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ArtifactRecord> Artifacts => Set<ArtifactRecord>();
 
-    public DbSet<ManagedWorkerBinding> ManagedWorkers => Set<ManagedWorkerBinding>();
 
     public DbSet<AgentRecord> Agents => Set<AgentRecord>();
 
@@ -89,16 +87,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Outputs).HasColumnType("jsonb");
         });
 
-        model.Entity<ManagedWorkerBinding>(e =>
-        {
-            e.HasKey(x => x.ResourceId);
-            e.Property(x => x.VerifiedOsImageSha256).HasMaxLength(64);
-            e.HasIndex(x => x.Generation).IsUnique();
-            e.HasIndex(x => x.AgentId).IsUnique();
-            e.HasOne<Resource>().WithOne(x => x.ManagedWorker).HasForeignKey<ManagedWorkerBinding>(x => x.ResourceId).OnDelete(DeleteBehavior.Restrict);
-        });
-        model.Entity<Resource>().Navigation(x => x.ManagedWorker).AutoInclude();
-
         model.Entity<Run>(e =>
         {
             e.Property(x => x.Number).UseIdentityAlwaysColumn();
@@ -127,13 +115,6 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.HasKey(x => new { x.ResourceId, x.Version });
             e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
-        });
-
-        model.Entity<GuestDiskUsage>(e =>
-        {
-            e.HasKey(x => x.ResourceId);
-            e.HasOne<Resource>().WithOne().HasForeignKey<GuestDiskUsage>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
-            e.Property(x => x.TokenHash).HasMaxLength(64);
         });
 
         model.Entity<Step>(e =>

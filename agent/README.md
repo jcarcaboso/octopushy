@@ -1,8 +1,5 @@
 # Octopushy agent
 
-For the separate one-shot guest disk reporter and its configurable systemd timer,
-see [disk reporter installation](packaging/disk-reporter/README.md).
-
 The Rust side of Octopushy: the `octopushy` binary (agent mode; a supervisor mode
 comes later), Octopushy's own Proxmox API client, and a fake Proxmox API for tests.
 The protocol is [`contracts/agent/v1/agent.proto`](../contracts/agent/v1/agent.proto)
@@ -83,7 +80,7 @@ At startup the enrolled state directory, work directory and provider cache are
 resolved to canonical absolute paths, including relative paths and symlinks.
 Container mounts and OpenTofu's repository root therefore use the same paths.
 The runtime is probed once: if that probe fails, the agent warns and omits
-`opentofu` from `Hello`, while native `proxmox` and `nixos-rootfs` remain advertised.
+`opentofu` from `Hello`, while native `proxmox` remains advertised.
 Fix the tool/runtime and restart the agent to advertise OpenTofu again. A successful
 version probe does not prove image pulls, provider access or backend connectivity.
 
@@ -104,7 +101,7 @@ What the agent does on the channel:
   (`RenewCertificate` over the current connection), replaces key and certificate as
   a pair, and reconnects with the new identity.
 - `CancelAttempt` stops read-only attempts (`OUTCOME_CANCELLED`) but never an
-  `opentofu/apply`, `proxmox/set-protection`, or `guest/install-disk-reporter`;
+  `opentofu/apply`, `proxmox/set-protection`, or `ansible/run`;
   the refusal is logged in the attempt.
 - gRPC messages may be up to 64 MiB each way (repository files, saved plans).
 
@@ -133,7 +130,7 @@ fsync, rename, fsync of the directory) before it is sent and deleted only on
 `ResultAck`; the workspace is removed then too. On start, a workspace whose marker
 says `running` but has no result means the agent died mid-attempt: it reports
 `OUTCOME_UNCERTAIN` for `opentofu/apply`, `proxmox/set-protection`, and
-`guest/install-disk-reporter`, and
+`ansible/run`, and
 `OUTCOME_FAILED` ("agent restarted during the attempt") otherwise. A `queued`
 marker fails with "restarted before the attempt started".
 
@@ -146,16 +143,6 @@ verification. Before concluding that a VM is absent, the token's `VM.Audit` on
 `/vms/<vmid>` is checked, because Proxmox silently hides VMs a token cannot audit.
 `verify-guest` polls every 5 s until all checks pass or `waitSeconds` ends.
 `set-protection` refuses a VM found on another node than `node`.
-
-**`guest`** (`install-disk-reporter`) installs the one-shot reporter through the
-existing Proxmox connection and QEMU guest agent after verification. It validates
-the VM identity and guest-exec privilege, downloads a checksum-pinned HTTPS binary,
-installs the systemd timer, and starts the first report. Credentials travel over
-QEMU stdin, never command-line arguments or OpenTofu state. Guest output is not
-forwarded because it could expose credentials. The remote command is bounded to
-240 seconds (plus a 5-second forced-kill grace period); a lost dispatch response
-or execution status is **uncertain**, not automatically retried. See the
-[installation guide](packaging/disk-reporter/README.md).
 
 **`opentofu`** (`preview`, `apply`):
 

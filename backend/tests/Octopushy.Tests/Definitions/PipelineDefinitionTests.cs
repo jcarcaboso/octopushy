@@ -263,16 +263,6 @@ public class PipelineDefinitionTests
     }
 
     [Fact]
-    public void A_managed_worker_has_no_services()
-    {
-        using var test = Repository();
-        var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.NotNull(repository.Service(Address));
-        Replace(test, GuestFile, "setup:", "worker:\n  templateVersion: 1\n  generation: 3f2f6f0a-3d2c-4b6e-9c8f-0a1b2c3d4e5f\n  labels: [home]\n  maxConcurrency: 1\nsetup:");
-        Assert.Contains("cannot have services", Errors(test));
-    }
-
-    [Fact]
     public void An_error_in_guest_yaml_does_not_read_as_its_services_having_gone()
     {
         using var test = Repository();

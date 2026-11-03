@@ -1,7 +1,7 @@
 import { Check, X } from "lucide-react";
 import { useId, useState } from "react";
 import { useApproveStep, useRejectStep } from "../../api/queries";
-import type { Step, WorkerUpdate } from "../../api/types";
+import type { Step } from "../../api/types";
 import { Callout } from "../../components/Callout";
 import { Hash } from "../../components/Mono";
 import { RelativeTime } from "../../components/RelativeTime";
@@ -13,7 +13,6 @@ interface Props {
   runId: string;
   step: Step;
   plan: PlanSummary | null;
-  workerUpdate?: WorkerUpdate | null;
   /** The run configures a guest, so this names a preview rather than a plan. */
   configure?: boolean;
   /** The run is a service's pipeline, so this names one document covering every stage. */
@@ -22,11 +21,11 @@ interface Props {
   rotation?: boolean;
 }
 
-function fingerprintLabel(setupOnly: boolean, configure: boolean, pipeline: boolean) {
-  return pipeline ? "Pipeline document SHA-256" : configure ? "Preview SHA-256" : setupOnly ? "Setup approval fingerprint" : "Plan SHA-256";
+function fingerprintLabel(configure: boolean, pipeline: boolean) {
+  return pipeline ? "Pipeline document SHA-256" : configure ? "Preview SHA-256" : "Plan SHA-256";
 }
 
-function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOnly: boolean; configure: boolean; pipeline: boolean }) {
+function Decided({ step, configure, pipeline }: { step: Step; configure: boolean; pipeline: boolean }) {
   const approval = step.approval!;
   const byPolicy = approval.decidedBy === "policy";
   const rejected = approval.decision === "rejected";
@@ -45,33 +44,27 @@ function Decided({ step, setupOnly, configure, pipeline }: { step: Step; setupOn
       {approval.note ? <p className="decision__note">{approval.note}</p> : null}
       {approval.planSha256 ? (
         <div className="small muted inline-group">
-          {fingerprintLabel(setupOnly, configure, pipeline)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
+          {fingerprintLabel(configure, pipeline)} <Hash value={approval.planSha256} label="Copy the approval fingerprint" />
         </div>
       ) : null}
-      {approval.workerUpdateSha256 ? <p>Approved OS archive SHA-256 <Hash value={approval.workerUpdateSha256} /></p> : null}
     </div>
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = false, pipeline = false, rotation = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, configure = false, pipeline = false, rotation = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
-  const [approvedRelease, setApprovedRelease] = useState<string | null>(null);
   const noteId = useId();
   const approval = step.approval;
-  const setupOnly = plan?.hasChanges === false;
 
-  if (approval?.decision) return <Decided step={step} setupOnly={setupOnly} configure={configure} pipeline={pipeline} />;
+  if (approval?.decision) return <Decided step={step} configure={configure} pipeline={pipeline} />;
   if (step.status !== "awaiting-approval") return null;
 
   const planSha256 = approval?.planSha256 ?? null;
   const pending = approve.isPending || reject.isPending;
   const decision = (kind: "approve" | "reject") => {
-    const input = {
-      runId, stepId: step.id, planSha256, note: note.trim() || null,
-      ...(workerUpdate ? { workerUpdateSha256: workerUpdate.archiveSha256 } : {}),
-    };
+    const input = { runId, stepId: step.id, planSha256, note: note.trim() || null };
     if (kind === "approve") {
       reject.reset();
       approve.mutate(input);
@@ -91,29 +84,11 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
           ? "Approving does this stage of the rotation and nothing else. It only ever chooses Octopushy's own keys on the guest."
           : configure
           ? "Approving runs this playbook as root on the guest, with the secrets and prepared values listed in the preview. Octopushy cannot show what it will change."
-          : setupOnly
-          ? "Infrastructure is unchanged. Approving authorizes the pending guest setup with the configuration recorded in this run."
-          : "Approving applies exactly this saved plan and any guest setup recorded in this run; if anything changes, a new plan needs a new approval."}
+          : "Approving applies exactly this saved plan; if anything changes, a new plan needs a new approval."}
       </Callout>
       {plan ? <PlanCountsLine counts={plan.counts} /> : null}
-      {workerUpdate ? (
-        <div className="stack stack--small">
-          <Callout kind="warning" title="In-place worker OS update">
-            This switches the existing worker OS, preserving its generation, enrollment and state filesystem.
-            It is not a VM replacement. The worker remains drained until explicitly resumed.
-          </Callout>
-          <code className="break">{workerUpdate.systemPath}</code>
-          <p className="small break">{workerUpdate.archiveUrl}</p>
-          <p>OS archive SHA-256 <Hash value={workerUpdate.archiveSha256} /></p>
-          <label className="inline-group">
-            <input type="checkbox" checked={approvedRelease === workerUpdate.archiveSha256}
-              onChange={(e) => setApprovedRelease(e.target.checked ? workerUpdate.archiveSha256 : null)} />
-            I approve this exact worker OS archive in addition to the saved plan.
-          </label>
-        </div>
-      ) : null}
       <div className="inline-group">
-        <span className="muted">{fingerprintLabel(setupOnly, configure, pipeline)}</span>
+        <span className="muted">{fingerprintLabel(configure, pipeline)}</span>
         {planSha256 ? <Hash value={planSha256} label="Copy the approval fingerprint" /> : <span className="muted">not recorded</span>}
       </div>
       <div className="field">
@@ -128,7 +103,7 @@ export function ApprovalPanel({ runId, step, plan, workerUpdate, configure = fal
       <ErrorMessage error={approve.error ?? reject.error} />
       <div className="button-row">
         <button type="button" className="button button--primary" onClick={() => decision("approve")}
-          disabled={pending || !planSha256 || Boolean(workerUpdate && approvedRelease !== workerUpdate.archiveSha256)}>
+          disabled={pending || !planSha256}>
           <Check size={15} aria-hidden="true" />
           {approve.isPending ? "Approving…" : "Approve"}
         </button>

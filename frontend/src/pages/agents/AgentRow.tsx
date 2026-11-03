@@ -1,6 +1,5 @@
 import { Power, PowerOff, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router";
 import { useDeleteAgent, useUpdateAgent } from "../../api/queries";
 import type { Agent } from "../../api/types";
 import { Badge } from "../../components/Badge";
@@ -161,7 +160,6 @@ export function AgentRow({ agent }: { agent: Agent }) {
             The agent is disconnected and its certificate is no longer accepted. This does not delete its VM, remove its
             Git definition or retire the guest.
           </p>
-          <p>Managed workers retain their generation-bound identity history. Use <Link to="/agents/prepare">worker deployment</Link> to verify retirement after the VM has been removed.</p>
           {running > 0 ? (
             <p>
               It is running {running} {running === 1 ? "attempt" : "attempts"}; disable it and wait for them to finish first.

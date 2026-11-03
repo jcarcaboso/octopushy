@@ -39,11 +39,10 @@ class CredentialFixtureTests(unittest.TestCase):
                                     if item["key"] in expected))
                 self.assertFalse(any(item["key"] == "e2e/proxmox-token" for item in payloads))
 
-    def test_native_helpers_receive_only_the_explicit_required_role(self):
+    def test_the_harness_declares_both_roles_explicitly(self):
         source = (ROOT / "tests/proxmox/run.sh").read_text()
         self.assertIn('readOnlyToken: { store: proxmox/$node/read-only-token }', source)
         self.assertIn('privilegedToken: { store: proxmox/$node/privileged-token }', source)
-        self.assertRegex(source, r'PVE_TOKEN_FILE=\$privileged_token_file TEST_NAME=\$name \\\n\s+python3 "\$root/tests/portainer/live.py"')
 
 
 if __name__ == "__main__":

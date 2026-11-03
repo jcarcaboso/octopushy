@@ -6,9 +6,8 @@ namespace Octopushy.Definitions;
 
 /// <summary>
 /// Everything a guest's provisioning run is built from, and a hash of it that changes exactly
-/// when a new plan or reporter setup could differ: the guest's definition, its host and
-/// installation settings, its template, its recipe and root files, its external state
-/// backend, and its disk reporter overrides.
+/// when a new plan could differ: the guest's definition, its host and installation settings,
+/// its template, its recipe and root files, and its external state backend.
 /// </summary>
 public sealed record ProvisionInputs(
     GuestDefinition Guest,
@@ -20,7 +19,7 @@ public sealed record ProvisionInputs(
     JsonObject Variables,
     string Hash)
 {
-    /// <summary>Guest fields excluded from the infrastructure hash; reporter setup is hashed separately.</summary>
+    /// <summary>Guest fields excluded from the infrastructure hash.</summary>
     private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
@@ -83,8 +82,6 @@ public sealed record ProvisionInputs(
                 }
                 : null,
         };
-        if (guest.ManagedWorker is { } worker)
-            variables["guest"]!["workerGeneration"] = worker.Generation.ToString();
 
         var guestJson = guest.Json.DeepClone().AsObject();
         foreach (var field in NotProvisioned)
@@ -124,12 +121,6 @@ public sealed record ProvisionInputs(
         if (ManagedAccess.Wanted(repository, guest, keyIssued))
         {
             hashed["managedAccess"] = true;
-        }
-        // Reporter setup changes need a new run, but never become OpenTofu inputs.
-        // Omit the key entirely for existing definitions to preserve their hashes.
-        if (guest.Json["setup"]?["diskReporter"] is { } diskReporter)
-        {
-            hashed["diskReporter"] = diskReporter.DeepClone();
         }
 
         return new ProvisionInputs(guest, installation, host, recipe, template, backend, variables, Canonical.Hash(hashed));

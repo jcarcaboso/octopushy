@@ -59,7 +59,6 @@ public sealed partial class RunEngine
             var agents = await db.Agents.AsNoTracking()
                 .Where(a => !a.Disabled && !a.Draining && connectedIds.Contains(a.Id))
                 .ToListAsync(cancellationToken);
-            var managed = await db.ManagedWorkers.AsNoTracking().Where(w => w.AgentId != null).ToListAsync(cancellationToken);
             var builder = services.GetRequiredService<AssignmentBuilder>();
             // Guests something was handed to in this pass: the database does not show them yet.
             var changing = new HashSet<Guid>();
@@ -104,10 +103,7 @@ public sealed partial class RunEngine
                 var candidates = agents
                     .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                 && attempt.RequiredLabels.All(a.Labels.Contains)
-                                && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability))
-                                && !managed.Any(w => w.AgentId == a.Id && (w.ReadyAt is null || context.AgentLabels.Count == 0
-                                    || w.ResourceId == resourceId
-                                    || context.Proxmox.Vmid == w.Vmid && context.Proxmox.Node == w.Host)))
+                                && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability)))
                     .ToList();
                 string? waiting = null;
                 if (candidates.Count == 0)
@@ -234,12 +230,6 @@ public sealed partial class RunEngine
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
-            var worker = await db.ManagedWorkers.SingleOrDefaultAsync(w => w.AgentId == agentId, cancellationToken);
-            if (worker is not null && connections.Get(agentId) is { } session
-                && hello.Executors.Contains("opentofu") && hello.Executors.Contains("proxmox")
-                && session.Executors.Contains("opentofu") && session.Executors.Contains("proxmox")
-                && !string.IsNullOrWhiteSpace(hello.AgentVersion))
-                worker.AuthenticatedAt = clock.GetUtcNow();
             var running = hello.RunningAttemptIds.Select(Guid.Parse).ToHashSet();
             var mine = await db.Attempts
                 .Where(a => a.AgentId == agentId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
@@ -421,19 +411,6 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Succeeded;
                         step.Detail = late ? "The result arrived after the agent had stopped reporting." : null;
                         step.Outputs = outputs?.ToJsonString();
-                        if (step.Name is StepNames.PrepareWorker or StepNames.InstallWorker or StepNames.UpdateWorkerOs or StepNames.VerifyWorkerOs
-                            || step.Name == StepNames.VerifyAbsent && ManagedWorkerSafety.IsRetirementCheck(run))
-                        {
-                            try { await ApplyWorkerEffectsAsync(db, run, step, attempt, outputs, cancellationToken); }
-                            catch (Exception e) when (e is RunException or ArgumentException or System.Security.Cryptography.CryptographicException or FormatException or InvalidOperationException)
-                            {
-                                attempt.Status = step.Name == StepNames.UpdateWorkerOs ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
-                                attempt.Error = "Managed worker evidence was refused: " + e.Message;
-                                step.Status = step.Name == StepNames.UpdateWorkerOs ? StepStatuses.Uncertain : StepStatuses.Failed;
-                                step.Detail = attempt.Error;
-                                step.Outputs = attempt.Outputs = null;
-                            }
-                        }
                         if (step.Status == StepStatuses.Succeeded)
                             await ApplyEffectsAsync(db, run, step, outputs, cancellationToken);
                         break;

@@ -13,7 +13,6 @@ python3 -m unittest discover -s tests/ansible -p 'test_*.py' -v
 python3 -m unittest discover -s tests/remote-worker -p 'test_*.py' -v
 python3 -m unittest discover -s tests/e2e -p 'test_*.py' -v
 python3 -m unittest discover -s tests/installation-trust -p 'test_*.py' -v
-python3 tests/technitium/check.py -v
 
 while IFS= read -r -d '' script; do
     bash -n "$script"

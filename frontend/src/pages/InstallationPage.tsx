@@ -151,9 +151,6 @@ export function InstallationPage() {
         }
         actions={
           <>
-            <Link className="button" to={`/agents/prepare?installation=${encodeURIComponent(installation.address)}`}>
-              Prepare worker deployment
-            </Link>
             <button
               type="button"
               className="button button--primary"

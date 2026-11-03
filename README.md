@@ -22,7 +22,7 @@ Octopushy is becoming an engine only. Workflows move to their own repository,
 `jcarcaboso/octopushy-lab`, where each whole workflow is versioned `M.m`; `homelab-config` holds only data; and every change made in the UI
 becomes a commit. The plan and its phases are in [workflows migration](docs/workflows-migration.md).
 
-Service workflows live in `jcarcaboso/octopushy-lab`; the NixOS examples stay here until Phase 1.
+Service workflows, the NixOS modules and their tests live in `jcarcaboso/octopushy-lab`.
 
 ## Layout
 
@@ -32,7 +32,7 @@ Service workflows live in `jcarcaboso/octopushy-lab`; the NixOS examples stay he
 | [`frontend/`](frontend) | Vite + React + TypeScript, served by Caddy, which forwards `/api` to the backend |
 | [`agent/`](agent) | Rust: the `octopushy` binary (agent mode) and Octopushy's own Proxmox API library |
 | [`contracts/`](contracts) | What the parts share: the agent protocol, executor inputs and outputs, JSON Schemas for definitions, the OpenAPI document |
-| [`examples/lab/`](examples/lab) | An example lab repository: the `proxmox-vm` and `machine-tools` recipes, and the NixOS examples |
+| [`examples/lab/`](examples/lab) | An example lab repository: the `proxmox-vm` and `machine-tools` recipes |
 | [`tests/`](tests) | End-to-end harnesses and offline checks |
 | [`deploy/`](deploy) | Compose project for the control host, and the Proxmox LXC installer |
 | [`docs/`](docs) | Design notes, ADRs and operating guides |
@@ -79,9 +79,8 @@ after an API change. `just proxmox-e2e` runs the [real Proxmox end-to-end test](
 [`.github/workflows/checks.yml`](.github/workflows/checks.yml) runs on pushes to `main` and
 on every pull request. It runs the backend tests; locked Rust tests, formatting and clippy;
 frozen pnpm tests, typecheck, lint and build; the offline Python checks and shell syntax;
-drift checks for the OpenAPI document and the typed client; and locked Nix flake evaluation
-without building an image. It also runs `cargo audit`, `pnpm audit` and an audited NuGet
-restore that fails on findings. `just test`, `just check` and `just check-nix` (requires Nix)
+and drift checks for the OpenAPI document and the typed client. It also runs `cargo audit`,
+`pnpm audit` and an audited NuGet restore that fails on findings. `just test` and `just check`
 run the same checks locally.
 
 CI uses disposable hosted runners, read-only repository permissions, and no secrets.

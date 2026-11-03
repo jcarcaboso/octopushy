@@ -51,8 +51,6 @@ struct Input {
     secret_env: BTreeMap<String, String>,
     #[serde(default)]
     destroy: bool,
-    #[serde(default)]
-    retain_no_changes_plan: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -478,7 +476,7 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         ctx.log.agent("no changes");
     }
 
-    if has_changes || prep.input.retain_no_changes_plan {
+    if has_changes {
         let plan_bin = fs::read(&plan_path)
             .map_err(|e| Failure::msg(format!("reading the saved plan: {e}")))?;
         let lock_path = prep.root.join(LOCK_FILE);

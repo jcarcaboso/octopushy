@@ -26,13 +26,9 @@ public static partial class Endpoints
         MapOverview(api);
         MapRepository(api.MapGroup("/repository").WithTags("Repository"));
         MapInventory(api);
-        api.MapGuestDiskUsage();
         api.MapTofuState();
         MapRuns(api);
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));
-        api.MapWorkerPreparation();
-        api.MapWorkerUpdates();
-        api.MapWorkerRepositoryDeployment();
         api.MapRepositoryEditor();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
@@ -262,7 +258,7 @@ public static partial class Endpoints
                 s.Outputs is null ? null : JsonNode.Parse(s.Outputs),
                 Views.Plan(s),
                 s.Kind == StepKinds.Approval
-                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256, s.WorkerUpdateSha256,
+                    ? new ApprovalDto(s.ApprovalRequired, s.Decision, s.DecidedBy, s.DecidedAt, s.DecisionNote, s.PlanSha256,
                         s.Document is null ? null : JsonNode.Parse(s.Document))
                     : null,
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
@@ -282,14 +278,13 @@ public static partial class Endpoints
                 context.AgentLabelsSetBy,
                 context.Policy is { } p ? new RunPolicyDto(p.Approval, p.ApprovalSetBy, p.Destructive, p.DestructiveSetBy) : null,
                 canCancel,
-                run.Status == RunStatuses.Uncertain,
-                context.WorkerUpdate is { } update ? ManagedWorkerUpdates.View(context.ManagedWorker!.Generation, update) : null));
+                run.Status == RunStatuses.Uncertain));
         })
         .WithName("getRun");
 
         group.MapPost("/{id:guid}/steps/{stepId:guid}/approve", async (Guid id, Guid stepId, DecisionRequest request, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {
-            await engine.ApproveAsync(id, stepId, request.PlanSha256 ?? "", http.User.Identity!.Name!, request.Note, ct, request.WorkerUpdateSha256);
+            await engine.ApproveAsync(id, stepId, request.PlanSha256 ?? "", http.User.Identity!.Name!, request.Note, ct);
             return TypedResults.NoContent();
         })
         .WithName("approveStep");
@@ -307,13 +302,6 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("cancelRun");
-
-        group.MapPost("/{id:guid}/retry-filesystem", async (Guid id, RunEngine engine, CancellationToken ct) =>
-        {
-            await engine.RetryFilesystemAsync(id, ct);
-            return TypedResults.NoContent();
-        })
-        .WithName("retryFilesystem");
 
         group.MapPost("/{id:guid}/retry-stage", async (Guid id, RunEngine engine, CancellationToken ct) =>
         {
@@ -369,11 +357,6 @@ public static partial class Endpoints
                 {
                     return TypedResults.NotFound();
                 }
-                if ((update.Draining is false || update.Disabled is true) && await ManagedWorkerSafety.HasUnfinishedUpdateAsync(db, id, ct))
-                {
-                    return TypedResults.Problem(statusCode: 409, title: "Resolve this worker's OS update or uncertain outcome before disabling it or ending its drain.");
-                }
-
                 if (update.Labels is { } labels)
                 {
                     if (labels.Any(l => !LabelPattern().IsMatch(l)))
@@ -415,8 +398,6 @@ public static partial class Endpoints
         group.MapDelete("/{id:guid}", (Guid id, RunEngine engine, AgentConnections connections, OrchestratorSignal signal, CancellationToken ct) =>
             engine.ExecuteAsync<Results<NoContent, ProblemHttpResult>>(async (db, _) =>
             {
-                if (await ManagedWorkerSafety.HasUnfinishedUpdateAsync(db, id, ct))
-                    return TypedResults.Problem(statusCode: 409, title: "Resolve this worker's OS update or uncertain outcome before removing its enrollment.");
                 if (await db.Attempts.AnyAsync(a => a.AgentId == id
                     && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
                         || a.Mutating && a.Status == AttemptStatuses.Uncertain && a.Step!.Status == StepStatuses.Uncertain), ct))

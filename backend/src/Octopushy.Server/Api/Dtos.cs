@@ -64,7 +64,6 @@ public sealed record ApprovalDto(
     DateTimeOffset? DecidedAt,
     string? Note,
     string? PlanSha256,
-    string? WorkerUpdateSha256 = null,
     JsonNode? Document = null);
 
 public sealed record AttemptDto(
@@ -140,10 +139,9 @@ public sealed record RunDetailDto(
     string AgentLabelsSetBy,
     RunPolicyDto? Policy,
     bool CanCancel,
-    bool CanClose,
-    WorkerUpdateView? WorkerUpdate = null);
+    bool CanClose);
 
-public sealed record DecisionRequest(string? PlanSha256, string? Note, string? WorkerUpdateSha256 = null);
+public sealed record DecisionRequest(string? PlanSha256, string? Note);
 
 public sealed record StartedRun(Guid RunId);
 
@@ -312,7 +310,6 @@ public sealed record GuestDetailDto(
     DateTimeOffset? MissingSince,
     DateTimeOffset? RetiredAt,
     IReadOnlyList<RunSummaryDto> Runs,
-    GuestDiskUsageDto DiskUsage,
     GuestConfigurationDto? Configuration,
     ManagedAccessDto? ManagedAccess,
     IReadOnlyList<ServiceSummaryDto> Services);

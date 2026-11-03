@@ -37,8 +37,6 @@ public sealed record RunContext
 
     public required ProxmoxContext Proxmox { get; init; }
 
-    public DiskReporterContext? DiskReporter { get; init; }
-
     /// <summary>Semantic credential roles mapped to store keys; the builder selects the wire alias.</summary>
     public Dictionary<string, string> Secrets { get; init; } = [];
 
@@ -52,10 +50,6 @@ public sealed record RunContext
 
     /// <summary><c>proxmox</c> or <c>none</c>.</summary>
     public string Verify { get; init; } = "proxmox";
-
-    public ManagedWorkerContext? ManagedWorker { get; init; }
-
-    public WorkerUpdateContext? WorkerUpdate { get; init; }
 
     /// <summary>
     /// The commit that deleted the guest's folder, when this retire run removes a guest whose
@@ -82,8 +76,6 @@ public sealed record RunContext
 
     /// <summary>The versions a rotation of the guest's key works with.</summary>
     public AccessRotationContext? AccessRotation { get; init; }
-
-    public long? RootDiskBytes { get; init; }
 
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
     public DateTimeOffset? ScheduledFor { get; init; }
@@ -131,10 +123,6 @@ public sealed record StageContext(string Name, string Recipe, OpenTofuContext? O
 /// everything after that; <see cref="Remove"/> are the versions it takes off the guest.
 /// </summary>
 public sealed record AccessRotationContext(int Current, int Candidate, IReadOnlyList<int> Remove);
-
-public sealed record ManagedWorkerContext(Guid Generation, IReadOnlyList<string> Labels, int MaxConcurrency, string ServerUrl);
-
-public sealed record WorkerUpdateContext(Guid AgentId, string ArchiveUrl, string ArchiveSha256, string SystemPath, string ImageSha256, string? CaCertificatePem);
 
 public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy, bool DestructiveExplicit = false);
 
@@ -196,15 +184,6 @@ public sealed record ProxmoxContext(
     string? Name,
     string? ExpectIpv4);
 
-public sealed record DiskReporterContext(
-    string Endpoint,
-    string? BinaryUrl,
-    string? BinarySha256,
-    int IntervalSeconds,
-    string? CaCertificatePem,
-    string InstallationMode = "fhs-download-v1",
-    string? ImageSha256 = null);
-
 /// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames
 {
@@ -217,19 +196,6 @@ public static class StepNames
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";
-    public const string GrowRoot = "grow-root";
-    public const string VerifyRoot = "verify-root";
-    public const string PrepareWorker = "prepare-worker";
-    public const string InstallWorker = "install-worker";
-    public const string WaitWorker = "wait-worker";
-    public const string InstallDiskReporter = "install-disk-reporter";
-    public const string UpdateWorkerOs = "update-worker-os";
-    public const string VerifyWorkerOs = "verify-worker-os";
-    public const string WaitUpdatedWorker = "wait-updated-worker";
-    /// <summary>Server-side: stop a managed worker taking work and wait for its attempts to end.</summary>
-    public const string DrainWorker = "drain-worker";
-    /// <summary>Server-side: remove a removed managed worker's enrollment once its VM is gone.</summary>
-    public const string RevokeWorker = "revoke-worker";
     /// <summary>Shows what a configure run will do, with no secrets and no contact with the guest.</summary>
     public const string Preview = "preview";
     public const string Playbook = "playbook";
@@ -266,7 +232,6 @@ public static class SecretNames
     /// <summary>Executor wire alias only; never a persisted role in new runs.</summary>
     public const string ProxmoxToken = "proxmox.token";
     public const string ProxmoxCa = "proxmox.ca";
-    public const string DiskReporterToken = "disk-reporter.token";
 
     public const string AnsibleSshKey = "ansible.ssh-key";
     public const string AnsibleRefusedKeys = "ansible.refused-keys";

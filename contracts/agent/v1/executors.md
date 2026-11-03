@@ -29,85 +29,6 @@ with that CA as its only trust root.
 The agent's certificate subject CN is its agent ID. The certificate is valid for
 30 days; the agent renews it when less than a third of its validity remains.
 
-## `guest`
-
-Advertised separately from `proxmox`, so older workers cannot receive guest setup.
-
-### `install-disk-reporter`
-
-Runs after VM verification on provision runs only, including no-change plans.
-Takes the same `connection` object as `proxmox` and secrets `proxmox.token` and
-`disk-reporter.token` (64 hexadecimal characters). No repository bundle or plan
-artifact is needed.
-
-```json
-{
-  "connection": { "endpoint": "https://10.1.0.10:8006/", "verifyTls": true },
-  "node": "korriban",
-  "vmid": 310,
-  "name": "krb-app-01",
-  "reporter": {
-    "endpoint": "https://octopushy.example/api/guests/RESOURCE-UUID/disk-usage",
-    "binaryUrl": "https://releases.example/disk-reporter-v1",
-    "binarySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "intervalSeconds": 3600,
-    "caCertificatePem": null
-  }
-}
-```
-
-For ordinary guests this is `installationMode=fhs-download-v1` (the default;
-controllers omit the mode field on this legacy wire shape for compatibility).
-`reporter` is a strict object: `http` or `https` URLs without userinfo/query/fragment,
-a SHA-256 digest, interval 60–604800 seconds, and an optional public CA bundle (at
-most 16 KiB) for both download and reporting. A CA needs an `https` `endpoint`.
-
-The executor confirms a running, non-template QEMU VM with matching name/node
-and checks guest-exec privileges. It sends the installer as plain `input-data`
-to `POST /nodes/{node}/qemu/{vmid}/agent/exec`, then polls `agent/exec-status`
-with the returned PID. The guest command is
-`/usr/bin/timeout --kill-after=5s 240s /bin/sh`; credentials are on stdin, not in
-command arguments. Guest output is discarded, including on failure.
-
-The installer downloads a pinned binary, checks its digest, installs the systemd
-oneshot/timer, and starts a first report. Successful output:
-
-```json
-{ "installed": true, "firstReportSent": true, "binarySha256": "…", "intervalSeconds": 3600 }
-```
-
-Managed NixOS workers instead freeze `installationMode=managed-nixos-v1`, an
-explicitly qualified `imageSha256`, and the existing address/generation/VM
-identity expectations in the run. Their `reporter` object omits `binaryUrl` and
-`binarySha256`: the image-native executable is **not** the downloadable release.
-The assignment additionally carries top-level `address` and canonical UUID
-`generation`. Native-v1 requires `intervalSeconds=3600`.
-
-The native executor verifies the exact management tag/address/generation in VM
-configuration before sending a single fixed command:
-`/run/current-system/sw/bin/octopushy-worker-reporting` (no arguments). Its strict,
-bounded stdin JSON contains `protocolVersion=1`, `generation`, `endpoint`,
-`intervalSeconds`, optional `caCertificatePem`, and the separately resolved
-reporter `token`. Never put this sensitive JSON into command arguments or the
-**public-only** managed-identity bootstrap payload. A missing helper never selects
-a shell or FHS fallback. New native assignments require an updated independent
-control worker; older executors reject the unknown native mode before execution.
-
-The fixed helper checks the enrolled guest generation, atomically writes protected
-runtime credential files, starts the image's hardened systemd oneshot, and waits
-for its new authenticated 204 upload before starting the hourly timer.
-Native success outputs have `installed`, `firstReportSent`, `installationMode`,
-`imageSha256` (frozen image provenance expectation, not a measured running-OS
-attestation), and `intervalSeconds`, but **no** `binarySha256`. Unconfigured image
-units are inactive. See [rollout and validation](../../../docs/managed-worker-disk-reporting.md).
-
-This action is **mutating and not cancellable**. A known nonzero exit fails;
-ambiguous dispatch or lost status returns `OUTCOME_UNCERTAIN`. No automatic
-remote-execution retries. Native helper timeout (124/137) or interruption is also
-uncertain. Guest output is never forwarded. The controller requests a saved infrastructure plan even
-when it has no changes, binding approval to its `planSha256` before releasing any
-installation credentials. Missing or mismatched plans block installation.
-
 ## `proxmox`
 
 All actions take a `connection` and the secret `proxmox.token`, formatted
@@ -117,10 +38,8 @@ All actions take a `connection` and the secret `proxmox.token`, formatted
 selects the pinned read-only credential for `observe`, `verify-guest`, and
 `verify-absent`; `set-protection` receives the pinned privileged credential only
 after the run's approval gate. OpenTofu `preview` also receives read-only, while
-`apply`, **both** `nixos-rootfs` actions, and `guest` / `install-disk-reporter`
-receive privileged. Root verification uses QGA command execution, even though its
-retry classification is read-only. In shared mode, these actions use the same
-pinned token, with the approval gate unchanged for privileged work.
+`apply` receives privileged. In shared mode, these actions use the same pinned
+token, with the approval gate unchanged for privileged work.
 See [credential roles and rollout limits](../../../docs/proxmox-credentials.md).
 
 ```json
@@ -244,8 +163,7 @@ Input (the same for both actions):
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
   "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "PG_CONN_STR": "backend.PG_CONN_STR" },
-  "destroy": false,
-  "retainNoChangesPlan": false
+  "destroy": false
 }
 ```
 
@@ -340,17 +258,9 @@ one, such as `replace_because_tainted`. A change to a
 a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
 them out never gets that VM's protection lifted, and the apply fails on it as before.
 
-When `hasChanges` is true, or optional `retainNoChangesPlan` is true (default
-false), the result carries the artifact `plan.tar.gz`, holding
+When `hasChanges` is true, the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers
 has no lock file; then the archive holds only `plan.bin`.
-
-The controller requests retention for provision runs that include privileged
-guest filesystem work or disk reporter installation. This supplies an exact plan
-digest for approval even when infrastructure itself has no changes; it does not
-request `show` or `apply` for a no-change plan. Older workers may ignore the field,
-but a missing required plan artifact blocks subsequent privileged work rather
-than bypassing approval.
 
 ### `apply`
 
@@ -482,39 +392,3 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.
 With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
 restart for attempts it lost.
-
-## `nixos-rootfs`
-
-An explicitly advertised capability, selected only by recipes opting into
-`guestFilesystem: nixos-ext4-root`. See
-[supported layout and recovery](../../../docs/guest-filesystem-growth.md).
-
-Actions: `grow` (mutating), `verify` (read-only). Uses only `proxmox.token`
-and the existing connection TLS/CA policy, never OpenTofu backend credentials.
-Both actions take:
-
-```json
-{
-  "connection": { "endpoint": "https://pve.example:8006/", "verifyTls": true },
-  "node": "pve",
-  "vmid": 9210,
-  "name": "opy-service-01",
-  "address": "home/pve/opy-service-01",
-  "diskBytes": 27917287424,
-  "waitSeconds": 180
-}
-```
-
-The VM name, Octopushy tag, and exact managed-by description must match before
-any guest command is submitted. A fixed argument-array command uses QEMU
-guest-agent execution and the native NixOS operation lock. No caller-supplied
-script or path is accepted. Its stdout reports `diskBytes`, `partitionBytes`,
-`filesystemBytes` (ext4 block count × block size), `usableBytes` (filesystem
-statistics), `uuid`, and `changed`. Verification must report `changed: false`.
-
-There is one command submission per attempt; status is polled by PID.
-Lost submission/status responses, deadline expiry, or signals after a growth
-submission are `uncertain`. Native lock contention and completed nonzero
-commands are known failures; capacity checks still run on a retry. A completed
-growth process and a successful infrastructure apply are not substitutes for
-the subsequent independent `verify` step.

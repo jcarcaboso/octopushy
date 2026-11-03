@@ -13,18 +13,6 @@
     "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999 },
     "template": { "$ref": "common.schema.json#/$defs/id" },
     "profiles": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/id" }, "uniqueItems": true },
-    "worker": {
-      "type": "object",
-      "description": "A managed NixOS worker. Identity is generated in the guest; never put keys, enrollment tokens or controller URLs here.",
-      "properties": {
-        "templateVersion": { "const": 1 },
-        "generation": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])", "not": { "const": "00000000-0000-0000-0000-000000000000" } },
-        "labels": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/id" } },
-        "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 16 }
-      },
-      "required": ["templateVersion", "generation", "labels", "maxConcurrency"],
-      "additionalProperties": false
-    },
     "hardware": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
     "network": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
     "provision": {
@@ -43,7 +31,7 @@
       "additionalProperties": false
     },
     "setup": {
-      "description": "Post-provision guest setup: disk reporting, and a configure recipe.",
+      "description": "Post-provision guest setup: a configure recipe.",
       "type": "object",
       "properties": {
         "recipe": { "description": "A recipe with operation: configure.", "$ref": "common.schema.json#/$defs/id" },
@@ -76,15 +64,6 @@
           "type": "object",
           "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
           "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
-        },
-        "diskReporter": {
-          "description": "Overrides automatic disk reporting when it is enabled on the control plane.",
-          "type": "object",
-          "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "intervalSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 }
-          },
-          "additionalProperties": false
         }
       }
     },

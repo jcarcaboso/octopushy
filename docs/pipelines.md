@@ -53,7 +53,7 @@ recipe decides how, and a router is out of scope.
   `onChange`, on the guest's connection: its address, user, SSH key and pin. `secrets` and `secretFiles` on the stage work
   as they do in `setup`. `{{ octopushy.guest_directory }}` is the service's folder.
 - **An OpenTofu stage** is a recipe with `operation: stage`, which is a root module like a provision recipe's, but not
-  `verify` or `guestFilesystem`. Its inputs are its variables. OpenTofu warns about one it does not declare, and goes on.
+  `verify`. Its inputs are its variables. OpenTofu warns about one it does not declare, and goes on.
   It has a state of its own and, in step 1, **no credentials of any kind**: no Proxmox token and no backend environment.
 - **Files.** Anything else in the service's folder reaches a playbook through `guest_directory`.
 
@@ -168,8 +168,7 @@ Services are read from the repository, from `services/<id>/pipeline.yaml` in the
 last run, and each has a page with its stages, policy and history. `GET /api/services/{id}` has the same.
 
 An invalid `pipeline.yaml` marks only that service. An invalid `guest.yaml` marks the guest's services invalid, and they are
-not treated as gone. A renamed guest keeps its services and their state. A managed worker cannot have services, because it is
-configured by its image.
+not treated as gone. A renamed guest keeps its services and their state.
 
 **The key follows who manages the machine, not what kind of Ansible work runs.** Decided by the owner on November 3, 2026:
 

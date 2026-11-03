@@ -371,4 +371,9 @@ public sealed partial class RepositoryMirror
 
         return environment;
     }
+
+    /// <summary>A relative path with no empty, dot or <c>.git</c> segments, control characters, backslashes or colons.</summary>
+    internal static bool IsSafePath(string path) =>
+        path.Length is > 0 and <= 512 && !path.Any(c => char.IsControl(c) || c is '\\' or ':')
+        && !path.Split('/').Any(p => p.Length == 0 || p is "." or ".." || p.Equals(".git", StringComparison.OrdinalIgnoreCase));
 }

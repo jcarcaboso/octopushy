@@ -260,13 +260,7 @@ appropriate network access; it is not required on every managed machine.
 _Avoid_: Node, runner when naming the Octopushy worker
 
 **Bootstrap image**:
-The immutable base image used to create a guest's boot disk. Its declaration
-does not identify later in-place OS releases.
-
-**Verified worker OS release**:
-A worker OS release whose activation and preserved identity and state have been
-verified, followed by authentication from the same enrollment. It does not reset
-the guest's generation or replace its bootstrap image.
+The immutable base image used to create a guest's boot disk.
 
 **Enrollment revocation**:
 Removal of an agent's authority to connect and execute work. It does not remove
@@ -276,11 +270,6 @@ _Avoid_: Guest retirement when only execution authority has been removed
 **Guest retirement**:
 The intentional end of a guest's managed lifecycle, completed after the guest's
 absence has been verified. Revoking its agent enrollment alone is not retirement.
-
-**Guest reporter**:
-A guest-local source of resource-usage measurements for its own machine, without
-permission to execute operations against targets.
-_Avoid_: Agent when referring to the execution worker
 
 **Operation**:
 A supported action on explicitly selected resources, such as provisioning,
