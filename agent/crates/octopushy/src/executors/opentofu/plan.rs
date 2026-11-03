@@ -11,6 +11,17 @@ use serde_json::{Map, Value};
 const VM_RESOURCE_TYPE: &str = "proxmox_virtual_environment_vm";
 const CONTAINER_RESOURCE_TYPE: &str = "proxmox_virtual_environment_container";
 
+/// What every resource type of a Proxmox provider starts with: `bpg/proxmox` names its
+/// resources `proxmox_virtual_environment_*` and, newer ones, `proxmox_*`.
+const PROXMOX_TYPE_PREFIX: &str = "proxmox_";
+
+/// Top-level attributes of a Proxmox resource that name the VM or container it acts on.
+const VM_FIELDS: &[&str] = &["vm_id", "vmid", "container_id"];
+/// Top-level attributes of a Proxmox resource that name the node it acts on.
+const NODE_FIELDS: &[&str] = &["node_name", "node", "target_node"];
+/// Top-level attributes that name a guest inside a string: `vm:100`, `ct:100`, `/vms/100`.
+const REFERENCE_FIELDS: &[&str] = &["resource_id", "path"];
+
 /// One entry of `changes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Change {
@@ -29,6 +40,26 @@ pub struct Change {
     /// The node the state holds for a Proxmox VM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// The change adopts an existing object into the state (`change.importing`).
+    pub importing: bool,
+    /// The resource belongs to a Proxmox provider.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub proxmox: bool,
+    /// Every VM and node a Proxmox resource names, before and after the change.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<Target>,
+    /// One of the attributes that name a VM or node is not known until apply.
+    #[serde(rename = "targetUnknown", skip_serializing_if = "std::ops::Not::not")]
+    pub target_unknown: bool,
+}
+
+/// A VM or container, or a node, that a Proxmox resource names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Target {
+    #[serde(rename = "vmId", skip_serializing_if = "Option::is_none")]
+    pub vm_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -45,8 +76,57 @@ pub struct PlanSummary {
     pub counts: Counts,
 }
 
-/// Summarizes `resource_changes`, leaving out `no-op` and `read`. A replace
-/// (`["delete","create"]` or `["create","delete"]`) counts as `replace`.
+/// A VMID given as a number or as a string of digits.
+fn vmid(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+}
+
+/// The VMID in `vm:100`, `ct:100`, `qemu/100`, `lxc/100` or `/vms/100`.
+fn referenced_vmid(text: &str) -> Option<u64> {
+    let rest = ["vm:", "ct:", "qemu/", "lxc/", "/vms/"]
+        .iter()
+        .find_map(|prefix| text.strip_prefix(prefix))?;
+    rest.split('/').next()?.parse().ok()
+}
+
+/// What one side of a change, `before` or `after`, names.
+fn targets_of(values: &Value, out: &mut Vec<Target>) {
+    if !values.is_object() {
+        return;
+    }
+    let node = NODE_FIELDS
+        .iter()
+        .find_map(|f| values.get(f).and_then(Value::as_str))
+        .map(str::to_owned);
+    let vmids: Vec<u64> = VM_FIELDS
+        .iter()
+        .filter_map(|f| values.get(f).and_then(vmid))
+        .chain(REFERENCE_FIELDS.iter().filter_map(|f| {
+            values
+                .get(f)
+                .and_then(Value::as_str)
+                .and_then(referenced_vmid)
+        }))
+        .collect();
+    if vmids.is_empty() {
+        if node.is_some() {
+            out.push(Target { vm_id: None, node });
+        }
+        return;
+    }
+    for vm_id in vmids {
+        out.push(Target {
+            vm_id: Some(vm_id),
+            node: node.clone(),
+        });
+    }
+}
+
+/// Summarizes `resource_changes`, leaving out `no-op` and `read` unless the change
+/// imports something. A replace (`["delete","create"]` or `["create","delete"]`)
+/// counts as `replace`.
 pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
     let plan: Value =
         serde_json::from_slice(show_json).context("tofu show -json printed invalid JSON")?;
@@ -64,18 +144,26 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
                     .collect()
             })
             .unwrap_or_default();
+        let importing = rc
+            .pointer("/change/importing")
+            .is_some_and(|i| !i.is_null());
         let acts: Vec<&str> = actions.iter().map(String::as_str).collect();
         match acts.as_slice() {
-            [] | ["no-op"] | ["read"] => continue,
+            [] | ["no-op"] | ["read"] if !importing => continue,
             ["create"] => summary.counts.create += 1,
             ["update"] => summary.counts.update += 1,
             ["delete"] => summary.counts.delete += 1,
             ["delete", "create"] | ["create", "delete"] => summary.counts.replace += 1,
-            _ => {} // e.g. "forget": listed, not counted
+            _ => {} // e.g. "forget", or an import that changes nothing: listed, not counted
         }
         let text = |key: &str| rc.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
         let kind = text("type");
         let machine = kind == VM_RESOURCE_TYPE || kind == CONTAINER_RESOURCE_TYPE;
+        let proxmox = kind.starts_with(PROXMOX_TYPE_PREFIX)
+            || rc
+                .get("provider_name")
+                .and_then(Value::as_str)
+                .is_some_and(|p| p.ends_with("/proxmox"));
         let before = rc
             .pointer("/change/before")
             .filter(|b| machine && !b.is_null());
@@ -84,6 +172,27 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
         let creating = matches!(actions.as_slice(), [a] if a == "create");
         let identity =
             before.or_else(|| rc.pointer("/change/after").filter(|_| machine && creating));
+        let mut targets = Vec::new();
+        let mut target_unknown = false;
+        if proxmox {
+            for side in ["/change/before", "/change/after"] {
+                if let Some(values) = rc.pointer(side) {
+                    targets_of(values, &mut targets);
+                }
+            }
+            targets.sort();
+            targets.dedup();
+            target_unknown = rc
+                .pointer("/change/after_unknown")
+                .and_then(Value::as_object)
+                .is_some_and(|unknown| {
+                    VM_FIELDS
+                        .iter()
+                        .chain(NODE_FIELDS)
+                        .chain(REFERENCE_FIELDS)
+                        .any(|f| unknown.get(*f).is_some_and(|u| u != &Value::Bool(false)))
+                });
+        }
         summary.changes.push(Change {
             address: text("address"),
             name: text("name"),
@@ -100,6 +209,10 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
                 .and_then(|b| b.get("node_name"))
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            importing,
+            proxmox,
+            targets,
+            target_unknown,
             kind,
         });
     }
@@ -202,6 +315,73 @@ mod tests {
         assert!(!wire.contains("secret user data"));
         // Absent values stay off the wire instead of appearing as nulls.
         assert!(!wire.contains("null"));
+    }
+
+    #[test]
+    fn reports_every_vm_and_node_a_proxmox_resource_names() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_firewall_options.other","type":"proxmox_virtual_environment_firewall_options",
+             "name":"other","provider_name":"registry.opentofu.org/bpg/proxmox",
+             "change":{"actions":["create"],"before":null,"after":{"vm_id":100,"node_name":"pve01","enabled":true}}},
+            {"address":"proxmox_virtual_environment_haresource.ha","type":"proxmox_virtual_environment_haresource","name":"ha",
+             "change":{"actions":["update"],"before":{"resource_id":"vm:100"},"after":{"resource_id":"ct:101"}}},
+            {"address":"proxmox_virtual_environment_vm.moved","type":"proxmox_virtual_environment_vm","name":"moved",
+             "change":{"actions":["update"],"before":{"vm_id":310,"node_name":"pve01"},"after":{"vm_id":"311","node_name":"pve02"},
+                       "after_unknown":{"vm_id":false,"ipv4_addresses":true}}},
+            {"address":"proxmox_virtual_environment_network_linux_bridge.br","type":"proxmox_virtual_environment_network_linux_bridge",
+             "name":"br","change":{"actions":["create"],"after":{"node_name":"pve01"},"after_unknown":{"node_name":true}}},
+            {"address":"terraform_data.x","type":"terraform_data","name":"x",
+             "change":{"actions":["create"],"after":{"vm_id":100}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let target = |vm: Option<u64>, node: Option<&str>| Target {
+            vm_id: vm,
+            node: node.map(str::to_owned),
+        };
+        assert!(s.changes[0].proxmox);
+        assert_eq!(s.changes[0].targets, [target(Some(100), Some("pve01"))]);
+        assert_eq!(
+            s.changes[1].targets,
+            [target(Some(100), None), target(Some(101), None)]
+        );
+        assert_eq!(
+            s.changes[2].targets,
+            [
+                target(Some(310), Some("pve01")),
+                target(Some(311), Some("pve02"))
+            ]
+        );
+        assert!(!s.changes[2].target_unknown);
+        assert_eq!(s.changes[3].targets, [target(None, Some("pve01"))]);
+        assert!(s.changes[3].target_unknown);
+        // Only a Proxmox provider's resources are read for targets.
+        assert!(!s.changes[4].proxmox);
+        assert!(s.changes[4].targets.is_empty());
+
+        let wire = serde_json::to_string(&s.changes[0]).unwrap();
+        assert!(wire.contains(
+            r#""importing":false,"proxmox":true,"targets":[{"vmId":100,"node":"pve01"}]"#
+        ));
+    }
+
+    #[test]
+    fn reports_imports_even_when_they_change_nothing() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.adopted","type":"proxmox_virtual_environment_vm","name":"adopted",
+             "change":{"actions":["no-op"],"importing":{"id":"pve01/100"},
+                       "before":{"vm_id":100,"node_name":"pve01"},"after":{"vm_id":100,"node_name":"pve01"}}},
+            {"address":"terraform_data.same","type":"terraform_data","name":"same","change":{"actions":["no-op"],"importing":null}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        assert_eq!(s.changes.len(), 1);
+        assert!(s.changes[0].importing);
+        assert_eq!(s.changes[0].actions, ["no-op"]);
+        assert_eq!(s.counts, Counts::default());
+        assert!(
+            serde_json::to_string(&s.changes[0])
+                .unwrap()
+                .contains(r#""importing":true"#)
+        );
     }
 
     #[test]

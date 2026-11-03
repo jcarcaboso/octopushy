@@ -247,6 +247,34 @@ one, such as `replace_because_tainted`. A change to a
 a delete or replace whose `vmId` and `node` are the guest's own, so an agent that leaves
 them out never gets that VM's protection lifted, and the apply fails on it as before.
 
+Every change carries `importing`: true when OpenTofu adopts an existing object into the
+state (`change.importing` in the JSON plan). An import is listed even when its actions
+are `["no-op"]`; it is not counted. The controller refuses any plan with an import.
+
+A change to a resource of a Proxmox provider, one whose type starts with `proxmox_` or
+whose `provider_name` ends in `/proxmox`, carries `proxmox: true` and, in `targets`,
+every VM and node it names, from both `before` and `after`. A target has `vmId`, `node`,
+or both. They come from the top-level attributes `vm_id`, `vmid` and `container_id`
+(each a target of its own), `node_name`, `node` and `target_node`, and from guests named
+inside `resource_id` or `path` (`vm:100`, `ct:100`, `qemu/100`, `lxc/100`, `/vms/100`).
+`targetUnknown: true` says one of those attributes is not known until apply. Absent
+fields stay off the wire.
+
+```json
+{
+  "address": "proxmox_virtual_environment_firewall_options.vm",
+  "type": "proxmox_virtual_environment_firewall_options", "name": "vm",
+  "actions": ["create"], "importing": false, "proxmox": true,
+  "targets": [{ "vmId": 310, "node": "korriban" }]
+}
+```
+
+The controller refuses, before approval, a plan whose Proxmox change with a `create`,
+`update` or `delete` action names a VM other than the run's own, names none and is not
+of a type that never acts on a VM, or has `targetUnknown`; see
+[the safety boundary](../../../docs/safety-boundary.md). So a summary that leaves
+targets out fails closed.
+
 When `hasChanges` is true, the result carries the artifact `plan.tar.gz`, holding
 `plan.bin` and the root's `.terraform.lock.hcl` after init. A root without providers
 has no lock file; then the archive holds only `plan.bin`.
