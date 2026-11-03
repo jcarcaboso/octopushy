@@ -40,6 +40,49 @@ public static class GuestVmPlan
             && Actions(c).Contains("create")
             && (c["vmId"] is null || c["node"] is null));
 
+    /// <summary>
+    /// Why the plan may not go on because it deletes or replaces a Proxmox VM or container that is not
+    /// <paramref name="context"/>'s own machine, or null. A provision or retire run owns exactly one machine,
+    /// the VMID and node of its guest, as <see cref="IsGuests"/> decides; a pipeline stage owns none. A
+    /// machine the plan cannot name is refused too, and so is a removal the plan does not list: what cannot
+    /// be shown to be the guest's own is treated as someone else's. No approval or policy lifts this.
+    /// See docs/safety-boundary.md.
+    /// </summary>
+    public static string? ForeignRemoval(JsonNode? outputs, RunContext context)
+    {
+        var changes = outputs?["changes"] as JsonArray;
+        if (changes is null)
+        {
+            var counts = outputs?["counts"];
+            return (counts?["delete"]?.GetValue<int>() ?? 0) + (counts?["replace"]?.GetValue<int>() ?? 0) > 0
+                ? "The plan deletes or replaces resources without listing them, so it cannot be shown to leave other Proxmox machines alone. It was refused."
+                : null;
+        }
+
+        var stage = context.Stage is not null;
+        var foreign = changes.OfType<JsonNode>()
+            .Where(c => c["type"]?.ToString() is VmResourceType or ContainerResourceType && Actions(c).Contains("delete"))
+            .Where(c => stage || !IsGuests(c, context))
+            .Select(Describe)
+            .ToList();
+        if (foreign.Count == 0)
+            return null;
+        var what = string.Join("; ", foreign);
+        return stage
+            ? $"Stage {context.Stage} would delete or replace a Proxmox machine ({what}). A pipeline stage owns no machine, so Octopushy refuses this plan whatever the policy says."
+            : $"The plan would delete or replace a Proxmox machine that is not this guest's VM {context.Proxmox.Vmid} on {context.Proxmox.Node} ({what}). "
+              + "Octopushy refuses to remove a machine it does not manage, whatever the policy says.";
+    }
+
+    /// <summary>A removal as a person can check it: what it is, and the VMID and node it names, or that it names none.</summary>
+    private static string Describe(JsonNode change)
+    {
+        var vmid = change["vmId"] is JsonValue id && id.TryGetValue<int>(out var value) ? $"VMID {value}" : "an unknown VMID";
+        var node = change["node"]?.ToString() is { Length: > 0 } name ? $"node {name}" : "an unknown node";
+        var verb = Actions(change).Contains("create") ? "replaces" : "deletes";
+        return $"{change["address"]?.ToString() ?? change["type"]?.ToString()} {verb} {vmid} on {node}";
+    }
+
     /// <summary>The plan deletes or replaces some Proxmox VM, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();
 

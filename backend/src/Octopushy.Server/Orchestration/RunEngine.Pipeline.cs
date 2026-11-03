@@ -18,6 +18,18 @@ public sealed partial class RunEngine
     private bool DecidePipelineApproval(Run run, Step step, RunContext context)
     {
         step.StartedAt ??= clock.GetUtcNow();
+        // Each plan's effects refuse this already; asked again so no path offers it for approval.
+        foreach (var plan in run.Steps.Where(s => s.Stage is not null && s.Name == StepNames.Plan))
+        {
+            if (GuestVmPlan.ForeignRemoval(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), context.ForStep(plan)) is { } foreign)
+            {
+                step.Status = StepStatuses.Failed;
+                step.Detail = foreign;
+                Finish(run, RunStatuses.Failed, foreign);
+                return false;
+            }
+        }
+
         PipelineDocument document;
         try
         {
@@ -65,6 +77,14 @@ public sealed partial class RunEngine
     /// </summary>
     private async Task ApplyStageEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
     {
+        // A stage owns no machine, so a plan that removes one is refused before the approval: see docs/safety-boundary.md.
+        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignRemoval(outputs, RunContext.Parse(run.Context).ForStep(step)) is { } foreign)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = foreign;
+            return;
+        }
+
         if (step.Name == StepNames.Plan && outputs?["hasChanges"]?.GetValue<bool>() == false)
         {
             var apply = run.Steps.Single(s => s.Stage == step.Stage && s.Name == StepNames.Apply);

@@ -368,6 +368,15 @@ public sealed partial class RunEngine(
     {
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
+        // The plan's effects refuse this already; asked again so no path offers it for approval.
+        if (GuestVmPlan.ForeignRemoval(outputs, context) is { } foreign)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = foreign;
+            Finish(run, RunStatuses.Failed, foreign);
+            return false;
+        }
+
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
         // Output-only plans can still need privileged apply. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
@@ -480,6 +489,14 @@ public sealed partial class RunEngine(
         if (step.Stage is not null)
         {
             await ApplyStageEffectsAsync(db, run, step, outputs, cancellationToken);
+            return;
+        }
+
+        // Refused before anything else is recorded, and before any approval is offered: see docs/safety-boundary.md.
+        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignRemoval(outputs, RunContext.Parse(run.Context)) is { } foreign)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = foreign;
             return;
         }
 

@@ -414,12 +414,14 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData(311, "korriban")]
-    [InlineData(Vmid, "dromund")]
-    [InlineData(null, null)]
-    public async Task A_vm_the_plan_does_not_identify_as_the_guests_keeps_its_protection(int? vmid, string? node)
+    [InlineData(311, "korriban", "VMID 311 on node korriban")]
+    [InlineData(Vmid, "dromund", "VMID 310 on node dromund")]
+    [InlineData(null, null, "an unknown VMID on an unknown node")]
+    [InlineData(Vmid, null, "VMID 310 on an unknown node")]
+    public async Task A_vm_the_plan_does_not_identify_as_the_guests_is_refused(int? vmid, string? node, string named)
     {
-        await using var server = await StartAsync();
+        // Explicitly automatic destructive: no policy lets this through.
+        await using var server = await StartAsync("policy: { approval: automatic, destructive: automatic }");
         var agent = await server.ConnectAgentAsync("home");
         await FailFirstApplyAsync(server, agent);
 
@@ -428,13 +430,16 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
         await server.TickAsync();
 
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(StepStatuses.Skipped, run.Steps.Single(s => s.Name == StepNames.Unprotect).Status);
-        // Not provably this guest's failed VM, so it is no recovery: it waits for a person.
-        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains(named, run.Detail);
+        Assert.Contains("refuses to remove a machine it does not manage", run.Detail);
+        Assert.Equal(StepStatuses.Failed, run.Steps.Single(s => s.Name == StepNames.Plan).Status);
+        // No approval was offered, and nothing changed.
         var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
-        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
-        Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
+        Assert.Equal((StepStatuses.Skipped, null), (approval.Status, approval.Decision));
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action is "apply" or "set-protection");
         Assert.Equal(0, await SetProtectionAttemptsAsync(server));
+        Assert.Equal(0, await server.QueryAsync(db => db.Attempts.CountAsync(a => a.RunId == run.Id && a.Action == "apply")));
     }
 
     [Fact]
@@ -450,7 +455,11 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, plan, artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
 
-        Assert.Equal(RunStatuses.AwaitingApproval, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("proxmox_virtual_environment_vm.sidecar replaces VMID 311 on node korriban", run.Detail);
+        Assert.DoesNotContain("VMID 310 on", run.Detail);
+        Assert.Equal(0, await SetProtectionAttemptsAsync(server));
     }
 
     [Fact]

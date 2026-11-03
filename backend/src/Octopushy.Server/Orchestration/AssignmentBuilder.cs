@@ -192,6 +192,8 @@ public sealed partial class AssignmentBuilder(
             throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
         }
         var runContext = RunContext.Parse(run.Context);
+        if (GuestVmPlan.ForeignRemoval(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext) is { } foreign)
+            throw new AssignmentException(foreign);
         if (stepName == StepNames.Unprotect && run.Operation == Operations.Provision
             && !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
             throw new AssignmentException("Protection is lifted only for an approved plan that replaces or deletes this guest's VM.");
