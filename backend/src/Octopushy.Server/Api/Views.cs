@@ -47,7 +47,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         run.StartedAt,
         run.FinishedAt,
         run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => !StepStatuses.IsDone(s.Status))?.Name,
-        Waiting(run));
+        Waiting(run),
+        run.ReasonDetail);
 
     public static RunSummaryDto Summary(Run run, (string Address, string Kind) resource) => Summary(run, resource.Address, resource.Kind);
 
@@ -251,6 +252,10 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 {
                     var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
                     var schedules = await SchedulesAsync(repository, guest, id, cancellationToken);
+                    var followed = ConfigureInputs.FollowedSecretsOf(guest);
+                    var usable = await FollowedSecrets.UsableAsync(db, followed, cancellationToken);
+                    var started = FollowedSecrets.Parse(state?.SecretVersions);
+                    var pending = state?.SecretVersions is null ? [] : FollowedSecrets.Changes(started, usable).Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
                     configure = new GuestConfigurationDto(
                         recipe,
                         offered.Actions.Values.Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList(),
@@ -260,7 +265,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                             ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null,
                         state?.AppliedAt,
                         state?.Snapshot is not null,
-                        schedules);
+                        schedules,
+                        followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList());
                 }
             }
 

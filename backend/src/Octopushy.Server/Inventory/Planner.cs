@@ -64,9 +64,14 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
             var chosen = action ?? inputs.Configure.OnChange?.Id
                 ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
             var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken, scheduledFor);
+            // However it is started, a run of the onChange action delivers the current inputs and
+            // store versions, so neither is owed another automatic run.
             if (chosen == inputs.Configure.OnChange?.Id
                 && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
+            {
                 configuration.ProposedHash = inputs.Hash;
+                await FollowedSecrets.RecordAsync(db, configuration, inputs.FollowedSecrets, cancellationToken);
+            }
             await engine.AddRunsAsync(db, [run], cancellationToken);
             return run.Id;
         }, cancellationToken);
@@ -107,7 +112,8 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
     /// <summary>
     /// Proposes the onChange action of each guest whose configure inputs have changed, once its
     /// provisioning has caught up. Each input hash gets one automatic run, so a failure waits for
-    /// a new commit or a person instead of repeating.
+    /// a new commit or a person instead of repeating. A new active version of a store value the
+    /// guest's setup follows is a change too, and gets one run the same way.
     /// </summary>
     public Task ScheduleConfigurationsAsync(CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
@@ -118,17 +124,23 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                 .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
             if (revision is null) return 0;
 
+            // A guest whose provisioning has caught up and that nothing holds: a run that is
+            // active, waiting or uncertain keeps every automatic run off it.
+            var ready = db.Resources.Where(r => r.Valid && r.RetiredAt == null && r.MissingSince == null && r.BoundVmid != null
+                && r.SyncedInputsHash == r.DesiredInputsHash
+                && db.Runs.Where(run => run.ResourceId == r.Id && run.Operation == Operations.Provision)
+                    .OrderByDescending(run => run.CreatedAt).Select(run => run.Status).FirstOrDefault() == RunStatuses.Succeeded
+                && !db.Runs.Any(run => run.ResourceId == r.Id && run.Status != RunStatuses.Succeeded
+                    && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled));
             var due = await db.GuestConfigurations
                 .Where(c => c.DesiredHash != null && c.DesiredHash != c.ProposedHash)
-                .Join(db.Resources.Where(r => r.Valid && r.RetiredAt == null && r.MissingSince == null && r.BoundVmid != null
-                        && r.SyncedInputsHash == r.DesiredInputsHash
-                        && db.Runs.Where(run => run.ResourceId == r.Id && run.Operation == Operations.Provision)
-                            .OrderByDescending(run => run.CreatedAt).Select(run => run.Status).FirstOrDefault() == RunStatuses.Succeeded
-                        && !db.Runs.Any(run => run.ResourceId == r.Id && run.Status != RunStatuses.Succeeded
-                            && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled)),
-                    c => c.ResourceId, r => r.Id, (c, r) => new { Configuration = c, Resource = r })
+                .Join(ready, c => c.ResourceId, r => r.Id, (c, r) => new { Configuration = c, Resource = r })
                 .ToListAsync(cancellationToken);
-            if (due.Count == 0) return 0;
+            var following = await db.GuestConfigurations
+                .Where(c => c.DesiredHash != null && c.DesiredHash == c.ProposedHash)
+                .Join(ready, c => c.ResourceId, r => r.Id, (c, r) => new { Configuration = c, Resource = r })
+                .ToListAsync(cancellationToken);
+            if (due.Count == 0 && following.Count == 0) return 0;
 
             var repository = await revisions.GetAsync(revision.Commit, cancellationToken);
             var runs = new List<Run>();
@@ -139,8 +151,50 @@ public sealed class Planner(RunEngine engine, RunFactory factory, RevisionCache 
                 var inputs = ConfigureInputs.Build(repository, guest);
                 item.Configuration.DesiredHash = inputs.Hash;
                 item.Configuration.ProposedHash = inputs.Hash;
+                await FollowedSecrets.RecordAsync(db, item.Configuration, inputs.FollowedSecrets, cancellationToken);
                 if (inputs.Configure.OnChange is { } action)
                     runs.Add(await ConfigureRunAsync(db, repository, guest, item.Resource, revision, action.Id, "revision", cancellationToken));
+            }
+
+            // Read without building the inputs, which hashes the recipe's files: this runs every
+            // tick, for every guest, and almost always finds nothing.
+            var followed = new List<(GuestConfiguration Configuration, Resource Resource, GuestDefinition Guest, IReadOnlyList<string> Keys)>();
+            foreach (var item in following)
+            {
+                if (repository.Resource(item.Resource.Address)?.Valid == true && repository.Guest(item.Resource.Address) is { SetupRecipe: not null } guest)
+                    followed.Add((item.Configuration, item.Resource, guest, ConfigureInputs.FollowedSecretsOf(guest)));
+            }
+
+            var active = await FollowedSecrets.UsableAsync(db, followed.SelectMany(f => f.Keys).ToHashSet(StringComparer.Ordinal), cancellationToken);
+            foreach (var (configuration, resource, guest, keys) in followed)
+            {
+                var usable = keys.ToDictionary(k => k, k => active[k], StringComparer.Ordinal);
+                if (configuration.SecretVersions is null)
+                {
+                    // Recorded once, from what is active now: an upgrade starts no run on any guest.
+                    configuration.SecretVersions = FollowedSecrets.Serialize(usable);
+                    continue;
+                }
+
+                if (repository.Recipes[guest.SetupRecipe!].Configure?.OnChange is not { } onChange)
+                    continue;
+                // What the newest run of the action actually took counts, not what was active when
+                // it was created: it pins at its first dispatch, which can follow a promotion. That
+                // is read before comparing, so a run that took a newer version than was recorded is
+                // owed a run when the recorded one is promoted again. Nothing holds this guest, so
+                // that run has finished.
+                var recorded = FollowedSecrets.Parse(configuration.SecretVersions);
+                if (await FollowedSecrets.PinnedByNewestAsync(db, resource.Id, onChange.Id, cancellationToken) is { } pinned)
+                    foreach (var key in keys)
+                        if (pinned.TryGetValue(key, out var took))
+                            recorded[key] = took;
+                var changes = FollowedSecrets.Changes(recorded, usable);
+                configuration.SecretVersions = FollowedSecrets.Serialize(FollowedSecrets.Started(recorded, usable));
+                if (changes.Count == 0)
+                    continue;
+                var run = await ConfigureRunAsync(db, repository, guest, resource, revision, onChange.Id, RunReasons.Secret, cancellationToken);
+                run.ReasonDetail = FollowedSecrets.Describe(changes);
+                runs.Add(run);
             }
 
             await engine.AddRunsAsync(db, runs, cancellationToken);

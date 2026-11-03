@@ -69,6 +69,9 @@ credentials under an approved plan.
 
 Updating a backing credential does not change Git's provisioning-input hash
 or automatically reprovision machines. A new run selects newly active versions.
+Promoting a new version of a key a guest's `setup.secrets` or `setup.secretFiles`
+name does configure that guest once, with its `onChange` action and under its
+own approval policy: see [shared store values](guest-configuration.md#shared-store-values).
 Changing an explicit version in Git changes the declared binding and can request
 a new plan; it does not by itself require VM replacement.
 
@@ -124,10 +127,10 @@ changes; reconcile those before dispatch resumes.
   credentials remain trusted. No tenant/RBAC boundary is claimed.
 - Worker mTLS renewal is separate and unchanged.
 - A guest's own SSH key uses this store under `system/`, so it has versions and pinning, and
-  stays out of these operator endpoints. Promoting a version here changes a stored value: it
-  neither touches a guest nor tests a login, so a guest's key changes only through
-  [its own rotation](guest-configuration.md#rotating-the-key). No host-trust registry or
-  application-password update is implemented here.
+  stays out of these operator endpoints. Promoting a version here changes a stored value and tests
+  no login. It configures guests whose setup names the key, but never touches a guest's access,
+  so a guest's key changes only through [its own rotation](guest-configuration.md#rotating-the-key).
+  No host-trust registry or application-password update is implemented here.
 - No automatic provider-token creation/revocation, secret-manager integration,
   KEK keyring/rewrap, or complete immutable promotion-event ledger.
 - This change does not fix custom-CA transport into OpenTofu or turn insecure

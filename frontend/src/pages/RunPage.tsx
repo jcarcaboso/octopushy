@@ -65,7 +65,17 @@ function RunFacts({ detail }: { detail: RunDetail }) {
           ),
         },
         { term: "Operation", value: operationLabel(run.operation) },
-        { term: "Reason", value: reasonLabel(run.reason) },
+        {
+          term: "Reason",
+          value: run.reasonDetail ? (
+            <span className="stack stack--small">
+              <span>{reasonLabel(run.reason)}</span>
+              <span className="muted">{run.reasonDetail}</span>
+            </span>
+          ) : (
+            reasonLabel(run.reason)
+          ),
+        },
         { term: "Commit", value: <Commit commit={run.commit} length={10} /> },
         { term: "Created", value: <RelativeTime value={run.createdAt} /> },
         { term: "Started", value: <RelativeTime value={run.startedAt} empty="Not yet" /> },
