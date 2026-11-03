@@ -114,6 +114,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasKey(x => x.ResourceId);
             e.HasOne<Resource>().WithOne().HasForeignKey<GuestConfiguration>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.Snapshot).HasColumnType("jsonb");
+            e.Property(x => x.SecretVersions).HasColumnType("jsonb");
         });
 
         model.Entity<GuestScheduleState>(e =>

@@ -501,6 +501,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("proposed_hash");
 
+                    b.Property<string>("SecretVersions")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("secret_versions");
+
                     b.Property<string>("Snapshot")
                         .HasColumnType("jsonb")
                         .HasColumnName("snapshot");
@@ -1085,6 +1089,10 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("reason");
+
+                    b.Property<string>("ReasonDetail")
+                        .HasColumnType("text")
+                        .HasColumnName("reason_detail");
 
                     b.Property<Guid>("ResourceId")
                         .HasColumnType("uuid")

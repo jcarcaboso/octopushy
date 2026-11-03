@@ -4751,6 +4751,37 @@
           }
         }
       },
+      "FollowedSecretDto": {
+        "required": [
+          "key",
+          "activeVersion",
+          "startedVersion",
+          "pending"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "activeVersion": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "startedVersion": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "pending": {
+            "type": "boolean"
+          }
+        }
+      },
       "GuestConfigurationDto": {
         "required": [
           "recipe",
@@ -4760,7 +4791,8 @@
           "appliedCommit",
           "appliedAt",
           "hasSnapshot",
-          "schedules"
+          "schedules",
+          "secrets"
         ],
         "type": "object",
         "properties": {
@@ -4802,6 +4834,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GuestScheduleDto"
+            }
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FollowedSecretDto"
             }
           }
         }
@@ -6530,6 +6568,12 @@
             ]
           },
           "waiting": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reasonDetail": {
             "type": [
               "null",
               "string"

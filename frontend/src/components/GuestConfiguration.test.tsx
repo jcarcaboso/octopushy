@@ -17,6 +17,7 @@ const configuration: GuestConfiguration = {
   appliedAt: null,
   hasSnapshot: false,
   schedules: [],
+  secrets: [],
 };
 
 it("starts the chosen action", async () => {
@@ -77,5 +78,27 @@ describe("a guest's schedules", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText("the task failed")).toBeInTheDocument();
     expect(screen.getByText(/Skipped: Run #12 is uncertain./)).toBeInTheDocument();
+  });
+});
+
+describe("the store values a guest follows", () => {
+  it("says which one has a newer version waiting for a run", () => {
+    renderAt(
+      <GuestConfigurationCard
+        id="guest-1"
+        configuration={{
+          ...configuration,
+          secrets: [
+            { key: "shared/git-ssh-key", activeVersion: 3, startedVersion: 2, pending: true },
+            { key: "pve01-ai/tailscale", activeVersion: null, startedVersion: null, pending: false },
+          ],
+        }}
+      />,
+      { path: "/guests/:id", route: "/guests/guest-1" },
+    );
+    const list = screen.getByRole("list", { name: "Store values" });
+    expect(list).toHaveTextContent("shared/git-ssh-key active v3, last configured with v2 Run pending");
+    expect(list).toHaveTextContent("pve01-ai/tailscale active not set, last configured with not set");
+    expect(screen.getAllByText("Run pending")).toHaveLength(1);
   });
 });

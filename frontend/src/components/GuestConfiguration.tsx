@@ -1,7 +1,7 @@
 import { Wrench } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { useConfigureGuest } from "../api/queries";
-import type { GuestConfiguration, GuestSchedule } from "../api/types";
+import type { FollowedSecret, GuestConfiguration, GuestSchedule } from "../api/types";
 import { Badge } from "./Badge";
 import { Card } from "./Card";
 import { KeyValue } from "./KeyValue";
@@ -41,6 +41,23 @@ function ScheduleRow({ schedule }: { schedule: GuestSchedule }) {
   );
 }
 
+/**
+ * A store value the setup takes at its active version. A newer one than the onChange action last
+ * started with is owed one run, which starts once nothing else holds the guest.
+ */
+function FollowedSecretRow({ secret }: { secret: FollowedSecret }) {
+  const version = (value: number | null | undefined) => (value == null ? "not set" : `v${value}`);
+  return (
+    <li>
+      <span className="mono">{secret.key}</span>{" "}
+      <span className="muted">
+        active {version(secret.activeVersion)}, last configured with {version(secret.startedVersion)}
+      </span>{" "}
+      {secret.pending && <Badge tone="neutral">Run pending</Badge>}
+    </li>
+  );
+}
+
 /** A guest's configure recipe: where it stands, and the actions that can be started by hand. */
 export function GuestConfigurationCard({ id, configuration }: { id: string; configuration: GuestConfiguration }) {
   const configure = useConfigureGuest(id);
@@ -72,6 +89,13 @@ export function GuestConfigurationCard({ id, configuration }: { id: string; conf
           <ul className="stack stack--small" aria-label="Schedules">
             {configuration.schedules.map((schedule) => (
               <ScheduleRow key={`${schedule.action} ${schedule.cron}`} schedule={schedule} />
+            ))}
+          </ul>
+        )}
+        {configuration.secrets.length > 0 && (
+          <ul className="stack stack--small" aria-label="Store values">
+            {configuration.secrets.map((secret) => (
+              <FollowedSecretRow key={secret.key} secret={secret} />
             ))}
           </ul>
         )}

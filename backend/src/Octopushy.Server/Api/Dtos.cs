@@ -54,7 +54,8 @@ public sealed record RunSummaryDto(
     DateTimeOffset? StartedAt,
     DateTimeOffset? FinishedAt,
     string? CurrentStep,
-    string? Waiting);
+    string? Waiting,
+    string? ReasonDetail = null);
 
 public sealed record ApprovalDto(
     bool Required,
@@ -240,7 +241,14 @@ public sealed record GuestConfigurationDto(
     string? AppliedCommit,
     DateTimeOffset? AppliedAt,
     bool HasSnapshot,
-    IReadOnlyList<GuestScheduleDto> Schedules);
+    IReadOnlyList<GuestScheduleDto> Schedules,
+    IReadOnlyList<FollowedSecretDto> Secrets);
+
+/// <summary>
+/// A store value the guest's setup takes at its active version. <see cref="Pending"/> means a
+/// newer active version has not reached a run of the onChange action yet, so one is owed.
+/// </summary>
+public sealed record FollowedSecretDto(string Key, int? ActiveVersion, int? StartedVersion, bool Pending);
 
 /// <summary>A schedule in Git, when it next falls due, and what its last firing did.</summary>
 public sealed record GuestScheduleDto(

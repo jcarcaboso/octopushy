@@ -17,6 +17,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
     private const string AccessKeys = "20261102121056_GuestAccessKeys";
     private const string Schedules = "20261102164720_GuestSchedules";
     private const string Rotation = "20261102173935_GuestAccessRotation";
+    private const string FollowedSecrets = "20261103100001_FollowedSecrets";
 
     private static async Task<Guid> ReleasedGuestAsync(OctopushyDb db)
     {
@@ -38,6 +39,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         Assert.Contains(AccessKeys, applied);
         Assert.Contains(Rotation, applied);
         Assert.Contains(Schedules, applied);
+        Assert.Contains(FollowedSecrets, applied);
     }
 
     /// <summary>Both tables, with every column the running server reads and writes.</summary>
@@ -46,6 +48,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var now = DateTimeOffset.UtcNow;
         db.GuestAccessKeys.Add(new GuestAccessKey { ResourceId = guest, Version = 2, PublicKey = "ssh-ed25519 AAAA", Fingerprint = "SHA256:new", CreatedAt = now, AuthorizedAt = now, VerifiedAt = now, PromotedAt = now, PromotedBy = "ops", RemovedAt = now });
         db.GuestSchedules.Add(new GuestScheduleState { ResourceId = guest, Action = "update-system", Cron = "30 6 * * *", LastSlot = now });
+        db.GuestConfigurations.Add(new GuestConfiguration { ResourceId = guest, SecretVersions = """{"shared/git-ssh-key":2}""" });
         await db.SaveChangesAsync();
     }
 
@@ -69,7 +72,7 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         var migrator = db.GetService<IMigrator>();
 
         await migrator.MigrateAsync(Schedules);
-        Assert.Equal([Rotation], await db.Database.GetPendingMigrationsAsync());
+        Assert.Equal([Rotation, FollowedSecrets], await db.Database.GetPendingMigrationsAsync());
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO guest_access_keys (resource_id, version, public_key, fingerprint, bootstrap, created_at)
             VALUES ({guest}, 1, 'ssh-ed25519 AAAA', 'SHA256:old', TRUE, {DateTimeOffset.UtcNow});
@@ -86,6 +89,27 @@ public class GuestMigrationOrderTests(PostgresFixture postgres)
         Assert.Null(key.RemovedAt);
         Assert.Equal("0 6 * * *", (await db.GuestSchedules.AsNoTracking().SingleAsync()).Cron);
         await AssertUsableAsync(db, guest);
+    }
+
+    [Fact]
+    public async Task A_configured_guest_on_0_4_0_keeps_its_configuration_with_nothing_recorded_yet()
+    {
+        await using var db = await NewDbAsync();
+        var guest = await ReleasedGuestAsync(db);
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync(Rotation);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO guest_configurations (resource_id, desired_hash, proposed_hash, applied_hash)
+            VALUES ({guest}, 'h', 'h', 'h');
+            """);
+
+        await migrator.MigrateAsync();
+
+        await AssertCurrentAsync(db);
+        var configuration = await db.GuestConfigurations.AsNoTracking().SingleAsync();
+        Assert.Equal("h", configuration.ProposedHash);
+        // Null makes the scheduler record what is active, and start nothing.
+        Assert.Null(configuration.SecretVersions);
     }
 
     private async Task<OctopushyDb> NewDbAsync() =>
