@@ -83,7 +83,7 @@ public class FollowedSecretTests(PostgresFixture postgres)
         Assert.NotEqual(first.Id, run.Id);
         Assert.Equal(RunReasons.Secret, run.Reason);
         Assert.Equal("A store value this guest's setup uses changed: app/git-key v1 to v2.", run.ReasonDetail);
-        Assert.Equal("configure", RunContext.Parse(run.Context).Ansible!.Action);
+        Assert.Equal("setup", RunContext.Parse(run.Context).Ansible!.Action);
         var summary = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!["run"]!;
         Assert.Equal("secret", summary["reason"]!.GetValue<string>());
         Assert.Contains("app/git-key v1 to v2", summary["reasonDetail"]!.GetValue<string>());
@@ -215,7 +215,7 @@ public class FollowedSecretTests(PostgresFixture postgres)
         await ScheduleAsync(server);
         var next = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal(RunReasons.Secret, next.Reason);
-        Assert.Equal("configure", RunContext.Parse(next.Context).Ansible!.Action);
+        Assert.Equal("setup", RunContext.Parse(next.Context).Ansible!.Action);
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class FollowedSecretTests(PostgresFixture postgres)
 
         // A person running the onChange action delivers what is active, so nothing is owed after it.
         await PromoteAsync(http, Shared, await StageAsync(http, Shared, "v3"), 2);
-        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "configure" })).EnsureSuccessStatusCode();
+        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
         var manual = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal("manual", manual.Reason);
         await FinishAsync(server, agent);
@@ -368,7 +368,7 @@ public class FollowedSecretTests(PostgresFixture postgres)
         var test = Repository.Repository();
         const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
         test.Write(file, File.ReadAllText(Path.Combine(test.Root, file)).Replace("access:\n  user: ops",
-            "  schedules:\n    - { action: configure, cron: \"0 6 * * *\" }\naccess:\n  user: ops"));
+            "schedules:\n    - { action: setup, cron: \"0 6 * * *\" }\naccess:\n  user: ops"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ConfiguredAsync(server);
         using var _ = http;

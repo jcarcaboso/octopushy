@@ -161,6 +161,7 @@ namespace Octopushy.Server.Data.Migrations
                     valid = table.Column<bool>(type: "boolean", nullable: false),
                     definition = table.Column<string>(type: "jsonb", nullable: true),
                     definition_file = table.Column<string>(type: "text", nullable: true),
+                    workflow = table.Column<string>(type: "text", nullable: true),
                     issues = table.Column<string>(type: "jsonb", nullable: false),
                     desired_inputs_hash = table.Column<string>(type: "text", nullable: true),
                     desired_revision_id = table.Column<Guid>(type: "uuid", nullable: true),

@@ -20,7 +20,7 @@ live acceptance. The intended `run.sh` lifecycle on a disposable Proxmox host is
 
 1. **Observe** the host and pick a free VMID (the first from 9900 to 9999 that Proxmox
    does not report, or `TEST_VMID`), after checking there are 3 GiB of free memory.
-2. **Create** `opy-e2e-01` from the Fedora 44 cloud image with the `proxmox-vm` recipe:
+2. **Create** `opy-e2e-01` from the Fedora 44 cloud image with the `proxmox-vm` workflow:
    1 core, 1 GiB, a 16 GiB disk, DHCP on `vmbr0`, and a throwaway SSH key in
    `.dev/proxmox-e2e/ssh-key` for the `ops` user.
 3. **Resize** it to 2 cores, 2 GiB, and a 20 GiB disk.

@@ -4,13 +4,15 @@ namespace Octopushy.Definitions;
 
 /// <summary>
 /// Everything a guest's configure runs are built from, and a hash of it that changes exactly
-/// when a run could differ: the guest's setup and access, the recipe, its files and project, and
-/// the guest's own files. A guest's hardware and network are not part of it.
+/// when a run could differ: the guest's inputs, secrets and access, the workflow it resolved to
+/// with its version, its folder and the root of its setup stage, and the guest's own files. A
+/// guest's hardware and network are not part of it.
 /// </summary>
 public sealed record ConfigureInputs(
     GuestDefinition Guest,
-    RecipeDefinition Recipe,
-    ConfigureRecipe Configure,
+    WorkflowDefinition Workflow,
+    WorkflowStage Stage,
+    ConfigureActions Configure,
     string Address,
     int Port,
     string User,
@@ -26,10 +28,10 @@ public sealed record ConfigureInputs(
     public static readonly string[] AccessOnly = ["address", "port", "user", "sshKey", "hostKey"];
 
     /// <summary>
-    /// The store keys <c>setup.secrets</c> and <c>setup.secretFiles</c> name without a version, so
-    /// a run takes whichever version is active. A new active version of one of them starts the
-    /// onChange action. A key pinned to a version in Git changes only with a commit, and a
-    /// <c>system/</c> key, which validation refuses here anyway, rotates on its own terms.
+    /// The store keys <c>secrets</c> and <c>secretFiles</c> name without a version, so a run takes
+    /// whichever version is active. A new active version of one of them starts the setup action.
+    /// A key pinned to a version in Git changes only with a commit, and a <c>system/</c> key, which
+    /// validation refuses here anyway, rotates on its own terms.
     /// </summary>
     public IReadOnlyList<string> FollowedSecrets => FollowedSecretsOf(Guest);
 
@@ -47,41 +49,42 @@ public sealed record ConfigureInputs(
     public static StoreReference? Reference(GuestDefinition guest, string field) =>
         guest.Json["access"]?[field] is JsonObject reference ? Parse(reference) : null;
 
-    /// <summary>A guest's <c>setup.secrets</c> or <c>setup.secretFiles</c>.</summary>
+    /// <summary>A guest's <c>secrets</c> or <c>secretFiles</c>.</summary>
     public static IReadOnlyDictionary<string, StoreReference> Secrets(GuestDefinition guest, string field) =>
-        (guest.Json["setup"]?[field] as JsonObject)?.ToDictionary(p => p.Key, p => Parse(p.Value!), StringComparer.Ordinal) ?? [];
+        (guest.Json[field] as JsonObject)?.ToDictionary(p => p.Key, p => Parse(p.Value!), StringComparer.Ordinal) ?? [];
 
     private static StoreReference Parse(JsonNode node) =>
         new(node["store"]!.GetValue<string>(), node["version"]?.GetValue<int>());
 
-    /// <summary>Builds the inputs for a valid guest with a setup recipe; the repository must have validated it.</summary>
+    /// <summary>Builds the inputs for a valid guest whose workflow has a setup stage; the repository must have validated it.</summary>
     public static ConfigureInputs Build(LabRepository repository, GuestDefinition guest)
     {
-        var recipe = repository.Recipes[guest.SetupRecipe!];
-        var setup = guest.Json["setup"]!.DeepClone().AsObject();
+        var workflow = guest.Workflow!;
+        var stage = workflow.Setup ?? throw new InvalidOperationException($"{workflow.Label} has no setup stage.");
+        var inputs = guest.Json["inputs"]?.DeepClone().AsObject() ?? [];
         // A schedule says when an action runs, not what it does, so changing one configures nothing.
-        setup.Remove("schedules");
         var hashed = new JsonObject
         {
-            ["setup"] = setup,
+            ["inputs"] = inputs.DeepClone(),
+            ["secrets"] = guest.Json["secrets"]?.DeepClone(),
+            ["secretFiles"] = guest.Json["secretFiles"]?.DeepClone(),
             ["access"] = guest.Json["access"]?.DeepClone(),
             ["address"] = AddressOf(guest),
-            ["recipe"] = recipe.Json.DeepClone(),
-            ["recipeFiles"] = ProvisionInputs.TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
-            ["rootFiles"] = ProvisionInputs.TreeHash(repository.Root, recipe.Root),
+            ["workflow"] = ProvisionInputs.WorkflowHash(workflow, [stage.Root]),
             // A service has its own runs: a change to one does not configure its guest again.
             ["guestFiles"] = ProvisionInputs.TreeHash(repository.Root, guest.Directory, "guest.yaml", "services"),
         };
         return new ConfigureInputs(
             guest,
-            recipe,
-            recipe.Configure!,
+            workflow,
+            stage,
+            stage.Configure!,
             AddressOf(guest)!,
             guest.Json["access"]?["port"]?.GetValue<int>() ?? 22,
             guest.Json["access"]!["user"]!.GetValue<string>(),
             Reference(guest, "sshKey"),
             Reference(guest, "hostKey")!,
-            setup["inputs"]?.DeepClone().AsObject() ?? [],
+            inputs,
             Secrets(guest, "secrets"),
             Secrets(guest, "secretFiles"),
             Canonical.Hash(hashed));

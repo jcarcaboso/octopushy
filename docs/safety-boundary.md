@@ -142,7 +142,7 @@ A successful apply whose plan did not create the guest's machine never binds: ve
 says so and the guest stays unbound, so nothing that waits for provisioning starts. A
 verified VM without the marks fails the verify step. What an OpenTofu state holds is
 never read as ownership: a state can hold a data source or an imported resource for any
-VM. A recipe with `verify: none` cannot confirm a creation, so its guest is never bound.
+VM. A workflow whose machine stage has `verify: none` cannot confirm a creation, so its guest is never bound.
 
 A reservation keeps one thing open: retrying the same guest's create after an apply that
 did not finish. While it is **recoverable**, the VM at that VMID and node counts as the

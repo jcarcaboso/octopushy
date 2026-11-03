@@ -1,0 +1,17 @@
+schemaVersion: 1
+version: "1.0"
+manages: service
+description: Two OpenTofu stages around an Ansible one. OpenTofu stages need no provider, so they hold no credentials at all.
+inputs: inputs.schema.json
+secrets: [web_password]
+stages:
+  - name: expose
+    executor: opentofu
+    root: ../../modules/opentofu/web-rules
+  - name: deploy
+    executor: ansible
+    root: ../../modules/ansible/web
+    playbook: deploy.yml
+  - name: audit
+    executor: opentofu
+    root: ../../modules/opentofu/web-rules

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "Address and MAC patterns end with a negative lookahead because $ alone can accept a trailing newline.",
-  "title": "proxmox-vm inputs",
+  "title": "machine-tools",
   "type": "object",
   "properties": {
     "hardware": {
@@ -57,9 +57,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "machine_tools_channel": { "description": "The release channel to follow.", "enum": ["stable", "nightly"] }
+      },
+      "required": ["machine_tools_channel"],
+      "additionalProperties": false
     }
   },
-  "required": ["hardware", "network"],
+  "required": ["hardware", "network", "inputs"],
   "$defs": {
     "ipv4": {
       "type": "string",

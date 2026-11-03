@@ -89,6 +89,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             resource.Valid = entry.Valid;
             resource.Definition = entry.Json?.ToJsonString();
             resource.DefinitionFile = entry.File;
+            resource.Workflow = entry.Workflow;
             resource.Issues = JsonSerializer.Serialize(repository.IssuesFor(entry.Address).ToList(), IssueJson);
             if (entry.Kind == ResourceKind.Installation)
                 await RecordObservedOnlyAsync(db, resource, entry, cancellationToken);
@@ -220,7 +221,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
     }
 
     /// <summary>
-    /// Records what each guest's configure recipe wants in this revision. The orchestrator proposes
+    /// Records what each guest's setup stage wants in this revision. The orchestrator proposes
     /// the run, because that also has to wait for the guest's provisioning. A configure run that
     /// has not started changing anything gives way to the new inputs.
     /// </summary>
@@ -232,7 +233,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         {
             var guest = repository.Guest(resource.Address)!;
             configurations.TryGetValue(resource.Id, out var configuration);
-            if (guest.SetupRecipe is null || guest.Retired)
+            if (guest.Setup is null || guest.Retired)
             {
                 configuration?.DesiredHash = null;
                 continue;

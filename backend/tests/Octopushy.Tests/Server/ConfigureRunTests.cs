@@ -54,7 +54,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         var content = Encoding.UTF8.GetBytes(new JsonObject { ["schemaVersion"] = 1, ["prepared"] = prepared?.DeepClone() }.ToJsonString());
         var outputs = new JsonObject
         {
-            ["action"] = "configure",
+            ["action"] = "setup",
             ["playbook"] = "site.yml",
             ["tasks"] = new JsonArray("Install tools"),
             ["prepared"] = prepared?.DeepClone(),
@@ -125,7 +125,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         var resource = await server.ResourceAsync(Guest);
         var configuration = await server.QueryAsync(db => db.GuestConfigurations.AsNoTracking().SingleAsync(c => c.ResourceId == resource.Id));
         Assert.Equal(run.InputsHash, configuration.AppliedHash);
-        Assert.Equal("configure", configuration.AppliedAction);
+        Assert.Equal("setup", configuration.AppliedAction);
         Assert.Contains("1.2.3", configuration.Snapshot);
 
         // One run per input hash.
@@ -138,7 +138,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         var view = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!;
         Assert.DoesNotContain("tskey-secret-value", view.ToJsonString());
         var preview = view["steps"]!.AsArray().Single(s => s!["name"]!.GetValue<string>() == "preview")!["configurePreview"]!;
-        Assert.Equal("configure", preview["action"]!.GetValue<string>());
+        Assert.Equal("setup", preview["action"]!.GetValue<string>());
         Assert.Equal("Install tools", preview["tasks"]![0]!.GetValue<string>());
     }
 
@@ -268,7 +268,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
                 approve:
                   vars: { allow_busy: true }
             """;
-        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraRecipe: outcomes));
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: outcomes));
         var (_, agent, http) = await ProvisionedAsync(server);
         using var _ = http;
         await ScheduleAsync(server);
@@ -304,7 +304,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
             outcomes:
               deferred: { approve: { vars: { allow_busy: true } } }
             """;
-        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraRecipe: outcomes));
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: outcomes));
         var (_, agent, http) = await ProvisionedAsync(server);
         using var _ = http;
         await ScheduleAsync(server);
@@ -327,7 +327,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
             outcomes:
               deferred: { approve: { vars: { allow_busy: true } } }
             """;
-        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraRecipe: outcomes));
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: outcomes));
         var (_, agent, http) = await ProvisionedAsync(server);
         using var _ = http;
         await ScheduleAsync(server);
@@ -349,7 +349,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
             outcomes:
               pending-reboot: { result: {{result}} }
             """;
-        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraRecipe: outcomes));
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: outcomes));
         var (_, agent, http) = await ProvisionedAsync(server);
         using var _ = http;
         await ScheduleAsync(server);
@@ -386,10 +386,10 @@ public class ConfigureRunTests(PostgresFixture postgres)
 
         // A person has to close it before anything else touches the guest.
         var resource = await server.ResourceAsync(Guest);
-        var blocked = await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "configure" });
+        var blocked = await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" });
         Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
         (await http.PostAsync($"/api/runs/{run.Id}/close", null)).EnsureSuccessStatusCode();
-        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "configure" })).EnsureSuccessStatusCode();
+        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
     }
 
     [Fact]
@@ -549,7 +549,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
         await server.TickAsync();
 
         var resource = await server.ResourceAsync(Guest);
-        var response = await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "configure" });
+        var response = await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" });
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 

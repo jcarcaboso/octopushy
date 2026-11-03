@@ -74,7 +74,7 @@ public sealed class StoreOptions
 
 public sealed class ToolOptions
 {
-    /// <summary>The pinned image agents run OpenTofu in, unless a recipe names another.</summary>
+    /// <summary>The pinned image agents run OpenTofu in, unless a workflow's stage names another.</summary>
     public string OpenTofuImage { get; set; } = "ghcr.io/opentofu/opentofu:1.13.1";
 
     /// <summary>Its tag names the content of agent/ansible; scripts/checks/offline.sh keeps this up to date.</summary>

@@ -5,6 +5,14 @@
   "type": "object",
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "workflows": {
+      "description": "Where guests and services find the workflows they name. local, the default, is this repository's workflows/ folder, where each workflow's version is the one its workflow.yaml declares. A separate workflows repository, resolved by tags, comes later.",
+      "type": "object",
+      "properties": {
+        "source": { "const": "local" }
+      },
+      "additionalProperties": false
+    },
     "defaults": {
       "type": "object",
       "properties": {

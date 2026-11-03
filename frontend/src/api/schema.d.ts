@@ -997,7 +997,7 @@ export interface components {
             pending: boolean;
         };
         GuestConfigurationDto: {
-            recipe: string;
+            workflow: string;
             actions: components["schemas"]["ConfigureActionDto"][];
             inSync: boolean;
             appliedAction: null | string;
@@ -1069,6 +1069,7 @@ export interface components {
             observed: null | components["schemas"]["ObservedGuestDto"];
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
+            workflow: null | components["schemas"]["WorkflowDto"];
         };
         InstallationDetailDto: {
             installation: components["schemas"]["InstallationSummaryDto"];
@@ -1423,7 +1424,6 @@ export interface components {
         };
         ServiceStageDto: {
             name: string;
-            recipe: string;
             executor: string;
         };
         ServiceSummaryDto: {
@@ -1436,6 +1436,7 @@ export interface components {
             valid: boolean;
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
+            workflow: null | components["schemas"]["WorkflowDto"];
         };
         SetupRequest: {
             setupCode: string;
@@ -1597,6 +1598,10 @@ export interface components {
             entries: components["schemas"]["VariableDto"][];
             missing: components["schemas"]["MissingVariableDto"][];
             system: components["schemas"]["SystemVariableDto"][];
+        };
+        WorkflowDto: {
+            reference: string;
+            resolved: null | string;
         };
     };
     responses: never;

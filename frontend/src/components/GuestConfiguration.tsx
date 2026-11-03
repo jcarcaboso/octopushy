@@ -59,7 +59,7 @@ function FollowedSecretRow({ secret }: { secret: FollowedSecret }) {
   );
 }
 
-/** A guest's configure recipe: where it stands, and the actions that can be started by hand. */
+/** A guest's setup, the Ansible stage of its workflow: where it stands, and the actions that can be started by hand. */
 export function GuestConfigurationCard({ id, configuration }: { id: string; configuration: GuestConfiguration }) {
   const configure = useConfigureGuest(id);
   const navigate = useNavigate();
@@ -68,7 +68,7 @@ export function GuestConfigurationCard({ id, configuration }: { id: string; conf
       <div className="stack stack--small">
         <KeyValue
           items={[
-            { term: "Recipe", value: <span className="mono">{configuration.recipe}</span> },
+            { term: "Workflow", value: <span className="mono">{configuration.workflow}</span> },
             {
               term: "Last success",
               value: configuration.appliedAt ? (

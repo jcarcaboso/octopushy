@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/workflow.schema.json",
+  "title": "Workflow (workflows/<workflow>/workflow.yaml)",
+  "description": "Everything needed to manage one kind of thing from start to end, with one version for all of it. See docs/workflows.md.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "version": {
+      "description": "M.m, quoted: a new major (M) is a breaking change, a new minor (m) is not. Guests and services name @M (newest M.x) or @M.m (exactly).",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})(?![\\s\\S])"
+    },
+    "manages": {
+      "description": "vm: a guest names it, and its first stage creates the machine. service: a service on a guest names it.",
+      "enum": ["vm", "service"]
+    },
+    "description": { "type": "string" },
+    "inputs": {
+      "description": "A JSON Schema inside this workflow's folder. For manages: vm it validates { hardware, network, inputs } from the guest, for manages: service { inputs } from the service.",
+      "type": "string",
+      "minLength": 1
+    },
+    "ui": {
+      "description": "Hints for the form rendered from the inputs schema. Octopushy stores and serves them, and does not interpret them.",
+      "type": "object"
+    },
+    "secrets": {
+      "description": "The extra vars a guest or service must provide in secrets or secretFiles. Only Ansible stages receive them.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "uniqueItems": true
+    },
+    "stages": {
+      "description": "manages: vm has the OpenTofu stage that makes the machine, then at most one Ansible stage that sets it up. manages: service has one or more stages, planned and previewed, approved once, then applied in order.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/stage" }
+    },
+    "actions": {
+      "description": "What else can be run from an Ansible stage, by name: by hand or on a guest's schedules. manages: vm only.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "stage": { "description": "The Ansible stage whose project, image and connection the action uses.", "$ref": "common.schema.json#/$defs/id" },
+          "playbook": { "description": "Relative to the stage's root.", "type": "string", "minLength": 1 },
+          "prepare": { "description": "A playbook run on the agent before approval, with no secrets and no access to the guest. What it writes to OCTOPUSHY_PREPARED_FILE becomes extra vars. Relative to the stage's root.", "type": "string", "minLength": 1 },
+          "snapshot": { "description": "applied reuses what the guest's last successful run prepared.", "enum": ["applied"] },
+          "destructive": { "description": "Whether this action can delete data or a service. Octopushy cannot tell from a playbook, so this is required, and true waits under policy.destructive: manual.", "type": "boolean" },
+          "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+        },
+        "required": ["stage", "playbook", "destructive"],
+        "not": { "required": ["prepare", "snapshot"] },
+        "additionalProperties": false
+      }
+    },
+    "outcomes": {
+      "description": "Results a playbook may report with set_stats, other than success or failure.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "approve": {
+            "description": "A person may approve running the playbook once more with these extra vars. Not in manages: service, which has one approval.",
+            "type": "object",
+            "properties": { "vars": { "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" } } },
+            "required": ["vars"],
+            "additionalProperties": false
+          },
+          "result": { "description": "How the run ends without an approval.", "enum": ["succeeded", "failed"] }
+        },
+        "not": { "required": ["approve", "result"] },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schemaVersion", "version", "manages", "stages"],
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "properties": {
+        "name": { "description": "Unique in this workflow.", "$ref": "common.schema.json#/$defs/id" },
+        "description": { "type": "string" },
+        "executor": { "enum": ["opentofu", "ansible"] },
+        "root": {
+          "description": "The OpenTofu root module or Ansible project, relative to this file. It must be inside this workflow's folder or under modules/.",
+          "type": "string",
+          "minLength": 1
+        },
+        "image": { "description": "Overrides the server's default image for the executor. Ignored by an agent with the local tool runtime.", "type": "string", "minLength": 1 },
+        "verify": { "description": "OpenTofu, the stage that makes a VM only: proxmox (the default) checks the VM through the Proxmox API afterwards.", "enum": ["proxmox", "none"] },
+        "playbook": { "description": "Ansible: what runs when the guest, the service or this workflow changes. Relative to root.", "type": "string", "minLength": 1 },
+        "prepare": { "description": "Ansible: a playbook run on the agent before approval, with no secrets and no access to the guest. Relative to root.", "type": "string", "minLength": 1 },
+        "destructive": { "description": "Ansible: whether the playbook can delete data or a service. False when not set.", "type": "boolean" },
+        "timeoutMinutes": { "description": "Ansible only.", "type": "integer", "minimum": 1, "maximum": 1440 }
+      },
+      "required": ["name", "executor", "root"],
+      "allOf": [
+        {
+          "if": { "properties": { "executor": { "const": "ansible" } }, "required": ["executor"] },
+          "then": { "required": ["playbook"], "properties": { "verify": false } },
+          "else": { "properties": { "playbook": false, "prepare": false, "destructive": false, "timeoutMinutes": false } }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

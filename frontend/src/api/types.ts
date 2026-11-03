@@ -13,6 +13,7 @@ export type GuestSummary = Schemas["GuestSummaryDto"];
 export type GuestDetail = Schemas["GuestDetailDto"];
 export type ServiceSummary = Schemas["ServiceSummaryDto"];
 export type ServiceDetail = Schemas["ServiceDetailDto"];
+export type Workflow = Schemas["WorkflowDto"];
 export type GuestConfiguration = Schemas["GuestConfigurationDto"];
 export type GuestSchedule = Schemas["GuestScheduleDto"];
 export type FollowedSecret = Schemas["FollowedSecretDto"];

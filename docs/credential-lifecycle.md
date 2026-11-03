@@ -69,8 +69,8 @@ credentials under an approved plan.
 
 Updating a backing credential does not change Git's provisioning-input hash
 or automatically reprovision machines. A new run selects newly active versions.
-Promoting a new version of a key a guest's `setup.secrets` or `setup.secretFiles`
-name does configure that guest once, with its `onChange` action and under its
+Promoting a new version of a key a guest's `secrets` or `secretFiles`
+name does configure that guest once, with its `setup` action and under its
 own approval policy: see [shared store values](guest-configuration.md#shared-store-values).
 Changing an explicit version in Git changes the declared binding and can request
 a new plan; it does not by itself require VM replacement.

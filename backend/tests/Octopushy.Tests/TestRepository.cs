@@ -28,7 +28,7 @@ public sealed class TestRepository : IDisposable
 
     public static string ExampleLab => Path.Combine(SourceRoot, "examples", "lab");
 
-    /// <summary>A minimal valid repository: one lab, one standalone installation, one guest, and a test recipe.</summary>
+    /// <summary>A minimal valid repository: one lab, one standalone installation, one guest, and a test workflow that makes its machine.</summary>
     public static TestRepository Minimal()
     {
         var repository = new TestRepository();
@@ -60,15 +60,17 @@ public sealed class TestRepository : IDisposable
             vmid: 310
             hardware: { cores: 2, memory: 2048 }
             network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }
-            provision:
-              recipe: test-vm
+            workflow: test-vm@1
             """);
-        repository.Write("recipes/test-vm/recipe.yaml", """
+        repository.Write("workflows/test-vm/workflow.yaml", """
             schemaVersion: 1
-            operation: provision
-            executor: opentofu
-            root: ../../modules/opentofu/test-vm
-            verify: proxmox
+            version: "1.0"
+            manages: vm
+            stages:
+              - name: machine
+                executor: opentofu
+                root: ../../modules/opentofu/test-vm
+                verify: proxmox
             """);
         repository.Write("modules/opentofu/test-vm/main.tf", """
             variable "guest" {

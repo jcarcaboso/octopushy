@@ -1,0 +1,9 @@
+schemaVersion: 1
+version: "1.0"
+manages: vm
+description: Stands in for a VM with terraform_data, so a run needs no real Proxmox.
+stages:
+  - name: machine
+    executor: opentofu
+    root: ../../modules/opentofu/test-vm
+    verify: proxmox

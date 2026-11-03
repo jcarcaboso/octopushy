@@ -29,14 +29,14 @@ public sealed record PipelineDocument(string Text, string Sha256, IReadOnlyList<
             var step = run.Steps.Single(s => s.Stage == stage.Name && s.Name is StepNames.Plan or StepNames.Preview);
             var outputs = step.Outputs is null ? null : JsonNode.Parse(step.Outputs);
             var artifact = outputs?["planSha256"]?.GetValue<string>();
-            var entry = new JsonObject { ["name"] = stage.Name, ["recipe"] = stage.Recipe };
+            var entry = new JsonObject { ["name"] = stage.Name, ["workflow"] = stage.Workflow };
             if (stage.Ansible is { } ansible)
             {
                 if (string.IsNullOrWhiteSpace(artifact))
                     throw new RunException($"Stage {stage.Name} has no saved preview for an approval to name.");
                 hasChanges = true;
                 if (ansible.Destructive)
-                    destructive.Add($"{stage.Name} (the recipe declares {ansible.Action} destructive)");
+                    destructive.Add($"{stage.Name} (the workflow declares {ansible.Action} destructive)");
                 entry["kind"] = "ansible";
                 entry["action"] = ansible.Action;
                 entry["destructive"] = ansible.Destructive;

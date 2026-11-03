@@ -73,7 +73,7 @@ it("shows what a configure run will do, and approves that preview", async () => 
   expect(screen.getByText("ssh-ed25519 SHA256:abcdef")).toBeTruthy();
   expect(screen.getByText("access/pve01-ai/ssh-key v2")).toBeTruthy();
   expect(screen.getByText("M modules/ansible/ai-server/site.yml")).toBeTruthy();
-  expect(screen.getByText("Declared by the recipe")).toBeTruthy();
+  expect(screen.getByText("Declared by the workflow")).toBeTruthy();
   expect(screen.getByText(/It shows what will run, not what will change/)).toBeTruthy();
   expect(screen.getByText(/Octopushy cannot show what it will change/)).toBeTruthy();
   expect(screen.getByText("Preview SHA-256")).toBeTruthy();

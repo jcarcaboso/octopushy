@@ -1,9 +1,9 @@
 # VM networking
 
-The example `proxmox-vm` recipe supports plain DHCP, DHCP with an externally
+The example `proxmox-vm` workflow supports plain DHCP, DHCP with an externally
 configured MAC reservation, and a manually configured static IPv4 address.
 `network.mode` remains either `dhcp` or `static`; there is no third reservation
-mode. Other recipes define their own networking validation and provisioning.
+mode. Other workflows define their own networking validation and provisioning.
 
 ## Plain DHCP
 
@@ -47,7 +47,7 @@ retry window ends with a failed address check containing the observed and
 expected addresses. No fleet-wide wait or cross-VM barrier is added.
 
 This checks the observed address, not how the guest obtained it or which
-interface owns it. If a recipe explicitly disables Proxmox verification with
+interface owns it. If a workflow explicitly disables Proxmox verification with
 `verify: none`, no address check runs.
 
 ## Manually configured static IPv4
@@ -67,7 +67,7 @@ reservation.
 
 ## Validation and boundaries
 
-The recipe's input schema validates `guest.network` during repository loading:
+The workflow's inputs schema validates the guest's `network` during repository loading:
 
 - Both modes require `bridge` and `mode`.
 - `static` requires `address` (IPv4/prefix) and `gateway` (bare IPv4).
@@ -86,5 +86,5 @@ Validation is not an IPAM service: it does not prove subnet/gateway reachability
 detect IP or MAC collisions across VMs, allocate addresses, or check DHCP-server
 configuration. Ensure static addresses cannot collide with dynamic leases.
 Guests need working QEMU guest-agent reporting for address discovery and
-verification. These guarantees apply to this Proxmox recipe and verification
-path, not to all possible future providers or custom recipes.
+verification. These guarantees apply to this Proxmox workflow and verification
+path, not to all possible future providers or custom workflows.

@@ -4228,7 +4228,7 @@
       },
       "GuestConfigurationDto": {
         "required": [
-          "recipe",
+          "workflow",
           "actions",
           "inSync",
           "appliedAction",
@@ -4241,7 +4241,7 @@
         ],
         "type": "object",
         "properties": {
-          "recipe": {
+          "workflow": {
             "type": "string"
           },
           "actions": {
@@ -4560,7 +4560,8 @@
           "valid",
           "observed",
           "activeRun",
-          "lastRun"
+          "lastRun",
+          "workflow"
         ],
         "type": "object",
         "properties": {
@@ -4629,6 +4630,16 @@
               },
               {
                 "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "workflow": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowDto"
               }
             ]
           }
@@ -6105,15 +6116,11 @@
       "ServiceStageDto": {
         "required": [
           "name",
-          "recipe",
           "executor"
         ],
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
-          },
-          "recipe": {
             "type": "string"
           },
           "executor": {
@@ -6130,7 +6137,8 @@
           "statusDetail",
           "valid",
           "activeRun",
-          "lastRun"
+          "lastRun",
+          "workflow"
         ],
         "type": "object",
         "properties": {
@@ -6173,6 +6181,16 @@
               },
               {
                 "$ref": "#/components/schemas/RunSummaryDto"
+              }
+            ]
+          },
+          "workflow": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowDto"
               }
             ]
           }
@@ -6827,6 +6845,24 @@
             "items": {
               "$ref": "#/components/schemas/SystemVariableDto"
             }
+          }
+        }
+      },
+      "WorkflowDto": {
+        "required": [
+          "reference",
+          "resolved"
+        ],
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       }

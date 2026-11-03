@@ -45,6 +45,12 @@ variable "guest" {
   }
 }
 
+variable "inputs" {
+  description = "The guest's inputs from guest.yaml, which every stage of its workflow is given. This module reads none."
+  type        = any
+  default     = {}
+}
+
 variable "host" {
   description = "The Proxmox host's settings from installation.yaml."
   type = object({

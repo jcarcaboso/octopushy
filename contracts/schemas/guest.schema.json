@@ -12,60 +12,46 @@
     "host": { "$ref": "common.schema.json#/$defs/id" },
     "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999 },
     "template": { "$ref": "common.schema.json#/$defs/id" },
+    "workflow": { "description": "A workflow with manages: vm, and its version: <id>@<M> or <id>@<M.m>.", "$ref": "common.schema.json#/$defs/workflowRef" },
     "profiles": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/id" }, "uniqueItems": true },
-    "hardware": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
-    "network": { "description": "Validated by the provisioning recipe's inputs schema.", "type": "object" },
-    "provision": {
+    "hardware": { "description": "Validated by the workflow's inputs schema, and passed to its OpenTofu stage.", "type": "object" },
+    "network": { "description": "Validated by the workflow's inputs schema, and passed to its OpenTofu stage.", "type": "object" },
+    "inputs": {
+      "description": "Given to every stage of the workflow: as the OpenTofu variable inputs, and as extra vars to its Ansible stage. Validated by the workflow's inputs schema.",
       "type": "object",
-      "properties": {
-        "recipe": { "$ref": "common.schema.json#/$defs/id" }
-      },
-      "required": ["recipe"],
-      "additionalProperties": false
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" }
     },
-    "setup": {
-      "description": "Post-provision guest setup: a configure recipe.",
+    "secrets": {
+      "description": "Extra vars filled from the variable store, for the workflow's Ansible stage. Only the step that runs the playbook receives them.",
       "type": "object",
-      "properties": {
-        "recipe": { "description": "A recipe with operation: configure.", "$ref": "common.schema.json#/$defs/id" },
-        "inputs": {
-          "description": "Extra vars for the recipe, validated by its inputs schema.",
-          "type": "object",
-          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" }
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+    },
+    "secretFiles": {
+      "description": "Extra vars holding the path of a private file with the store value, for tasks that copy a file.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+    },
+    "schedules": {
+      "description": "Actions of the workflow to run on their own, at times in the lab's timezone.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "description": "setup, or an action of the workflow.", "$ref": "common.schema.json#/$defs/id" },
+          "cron": { "description": "Five fields: minute, hour, day of the month, month, day of the week.", "type": "string", "minLength": 9 }
         },
-        "secrets": {
-          "description": "Extra vars filled from the variable store. Only the step that runs the playbook receives them.",
-          "type": "object",
-          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
-          "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
-        },
-        "schedules": {
-          "description": "Actions of the recipe to run on their own, at times in the lab's timezone.",
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "action": { "description": "An action of the recipe.", "$ref": "common.schema.json#/$defs/id" },
-              "cron": { "description": "Five fields: minute, hour, day of the month, month, day of the week.", "type": "string", "minLength": 9 }
-            },
-            "required": ["action", "cron"],
-            "additionalProperties": false
-          }
-        },
-        "secretFiles": {
-          "description": "Extra vars holding the path of a private file with the store value, for tasks that copy a file.",
-          "type": "object",
-          "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
-          "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
-        }
+        "required": ["action", "cron"],
+        "additionalProperties": false
       }
     },
     "access": {
       "type": "object",
       "properties": {
-        "address": { "description": "Where a configure run connects; by default the guest's static or reserved address.", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.:-]*(?![\\s\\S])" },
+        "address": { "description": "Where an Ansible stage connects; by default the guest's static or reserved address.", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.:-]*(?![\\s\\S])" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "user": { "description": "The login of a configure run.", "type": "string", "pattern": "^[a-z_][a-z0-9_.-]*(?![\\s\\S])" },
+        "user": { "description": "The login of an Ansible stage.", "type": "string", "pattern": "^[a-z_][a-z0-9_.-]*(?![\\s\\S])" },
         "sshKey": { "description": "For a machine Octopushy did not create: an unencrypted OpenSSH private key, stored as a secret. Without it, Octopushy generates and uses its own key for this guest.", "$ref": "common.schema.json#/$defs/storeRef" },
         "hostKey": { "description": "The guest's public SSH host key, read through a trusted channel and stored by an operator. Octopushy never scans for it.", "$ref": "common.schema.json#/$defs/storeRef" },
         "sshAuthorizedKeys": { "type": "array", "items": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)" } }
@@ -75,6 +61,6 @@
     "execution": { "$ref": "common.schema.json#/$defs/execution" },
     "policy": { "$ref": "common.schema.json#/$defs/policy" }
   },
-  "required": ["schemaVersion", "type", "host", "vmid", "provision"],
+  "required": ["schemaVersion", "type", "host", "vmid", "workflow"],
   "additionalProperties": false
 }

@@ -1,0 +1,36 @@
+schemaVersion: 1
+version: "1.0"
+manages: vm
+description: A Proxmox VM, then set up by Ansible as a machine with no particular tools in it.
+inputs: inputs.schema.json                # validates each guest's hardware, network and inputs
+secrets: [machine_tools_token]            # what a guest has to provide in secrets or secretFiles
+stages:
+  - name: machine                         # the provision and retire runs
+    executor: opentofu
+    root: ../../modules/opentofu/proxmox-vm
+    verify: proxmox
+  - name: setup                           # configure runs, once the machine is provisioned
+    executor: ansible
+    root: ../../modules/ansible/machine-tools   # the Ansible project, relative to this file
+    description: Set the machine up from what the channels offer now.
+    playbook: configure.yml               # the action setup: runs when the guest or this workflow changes
+    prepare: prepare.yml                  # runs on the agent, with no secrets, before approval
+    timeoutMinutes: 180
+actions:                                  # run by hand, or on a guest's schedules
+  update-tools:
+    stage: setup
+    description: Move the tools to what the channels offer now.
+    playbook: update-tools.yml            # relative to the stage's root
+    prepare: prepare.yml
+    destructive: false                    # required: only the workflow can say
+  update-system:
+    stage: setup
+    description: Update the OS, keeping the tools the last run installed. May reboot.
+    playbook: update-system.yml
+    snapshot: applied                     # what the last successful run prepared
+    destructive: false
+outcomes:
+  deferred:                               # reported with set_stats; see tasks/activity.yml
+    description: Work is active on the machine. Approving interrupts it.
+    approve:
+      vars: { machine_tools_allow_busy: true }

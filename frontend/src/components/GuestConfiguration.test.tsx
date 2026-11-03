@@ -6,7 +6,7 @@ import { mockApi, problem, renderAt } from "../test/utils";
 import { GuestConfigurationCard } from "./GuestConfiguration";
 
 const configuration: GuestConfiguration = {
-  recipe: "ai-server",
+  workflow: "ai-server@1.0",
   actions: [
     { id: "configure", description: null, destructive: false, onChange: true },
     { id: "update-system", description: "Update the OS.", destructive: false, onChange: false },

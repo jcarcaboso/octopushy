@@ -19,6 +19,7 @@ import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { ServicesCard } from "../components/ServicesCard";
+import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { formatBytes } from "../lib/format";
@@ -166,6 +167,9 @@ export function GuestPage() {
             </Card>
           </div>
           <div className="stack stack--large">
+            <Card title="Workflow">
+              <WorkflowLabel workflow={guest.workflow} />
+            </Card>
             <Card title="Policy">
               <PolicyView policy={data.policy} />
             </Card>

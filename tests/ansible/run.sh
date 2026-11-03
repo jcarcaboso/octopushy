@@ -94,14 +94,14 @@ cp -r "$root/tests/ansible/lab/." "$work/lab/"
 grep -rlF 18006 "$work/lab" | xargs -r sed -i "s/18006/$proxmox_port/g"
 guest_dir=$work/lab/labs/e2e/proxmox/korriban/guests/e2e-vm-01
 echo 'From the guest folder.' >"$guest_dir/motd"
+# The same machine, with the workflow that also sets it up.
+sed -i 's/^workflow: test-vm@1$/workflow: test-config@1/' "$guest_dir/guest.yaml"
 cat >>"$guest_dir/guest.yaml" <<YAML
-setup:
-  recipe: test-config
-  inputs: { greeting: hello }
-  secrets:
-    app_password: { store: e2e/app-password }
-  secretFiles:
-    deploy_key_src: { store: e2e/deploy-key }
+inputs: { greeting: hello }
+secrets:
+  app_password: { store: e2e/app-password }
+secretFiles:
+  deploy_key_src: { store: e2e/deploy-key }
 access:
   address: 127.0.0.1
   port: $port
@@ -211,7 +211,7 @@ call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
 [[ $(podman exec "$target" cat /var/lib/app-password) == "$password" ]] || fail "the password did not arrive intact"
 [[ $(podman exec "$target" cat /var/lib/deploy-key) == "$(cat "$work/keys/deploy")" ]] || fail "the secret file did not arrive intact"
 call "$api/api/runs/$run" | jq -e '[.steps[] | select(.name=="preview")][0].configurePreview
-  | .action == "configure" and (.tasks | length > 3) and .prepared.release_version == "1.2.3"
+  | .action == "setup" and (.tasks | length > 3) and .prepared.release_version == "1.2.3"
     and (.hostKeyFingerprints[0] | startswith("ssh-ed25519 SHA256:"))' >/dev/null || fail "the preview does not show the run"
 
 log "Nothing secret in logs, evidence, or on the agent"
@@ -262,7 +262,7 @@ log "A wrong pin is refused and nothing runs"
 stranger=$(cut -d' ' -f1-2 "$work/keys/stranger.pub")
 set_variable e2e/host-key "$stranger" plain
 podman exec "$target" rm -f /var/lib/configured
-run=$(start_action configure)
+run=$(start_action setup)
 wait_run "$run" failed
 call "$api/api/runs/$run" | jq -e '.run.detail | contains("not the pinned one")' >/dev/null \
   || { call "$api/api/runs/$run" | jq .run; fail "a wrong pin is not reported as one"; }
@@ -376,7 +376,7 @@ keys_on_guest | grep -qF "${guest_key% *}" || fail "the new key is not on the gu
 logs_of "$run" >"$work/rotation.log"
 call "$api/api/runs/$run" >>"$work/rotation.log"
 if grep -q 'PRIVATE KEY' "$work/rotation.log"; then fail "a private key reached a log or a response"; fi
-run=$(start_action configure)
+run=$(start_action setup)
 wait_run "$run" succeeded
 
 log "A key sshd still takes stays on the list, wherever it is"
@@ -395,7 +395,7 @@ call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") |
   || fail "the run does not say sshd took the removed key"
 [[ $(key_state "$kept_version") == old ]] || fail "a key sshd still takes does not read as old"
 podman exec "$target" rm /home/ops/.ssh/authorized_keys2
-run=$(start_action configure)
+run=$(start_action setup)
 wait_run "$run" succeeded
 
 log "With two old keys, the second is the one sshd still takes"
@@ -413,7 +413,7 @@ call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") |
 podman exec "$target" rm /home/ops/.ssh/authorized_keys2
 
 log "A login that fails after sshd took the key is not a refusal"
-run=$(start_action configure)
+run=$(start_action setup)
 wait_run "$run" succeeded
 third_key=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.publicKey)
 third_version=$(call "$api/api/guests/$(guest_id)" | jq -r .managedAccess.version)
@@ -431,7 +431,7 @@ call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="confirm-refused") |
 podman exec "$target" rm /home/ops/.ssh/authorized_keys2
 
 log "The next rotation shows sshd refusing all four old keys it has left"
-run=$(start_action configure)
+run=$(start_action setup)
 wait_run "$run" succeeded
 run=$(call -X POST "$api/api/guests/$(guest_id)/access/rotate" | jq -r .runId)
 for _ in $(seq 1 90); do [[ $(keys_on_guest | wc -l) == 3 ]] && break; sleep 1; done

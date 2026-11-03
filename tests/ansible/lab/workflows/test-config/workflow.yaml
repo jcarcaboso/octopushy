@@ -1,27 +1,35 @@
 schemaVersion: 1
-description: Runs real playbooks against a throwaway SSH target.
-operation: configure
-executor: ansible
-root: ../../modules/ansible/test
+version: "1.0"
+manages: vm
+description: The test VM, then real playbooks against a throwaway SSH target.
 inputs: inputs.schema.json
 secrets: [app_password]
-actions:
-  configure:
+stages:
+  - name: machine
+    executor: opentofu
+    root: ../../modules/opentofu/test-vm
+    verify: proxmox
+  - name: setup
+    executor: ansible
+    root: ../../modules/ansible/test
     playbook: configure.yml
     prepare: prepare.yml
-    destructive: false
-    onChange: true
+actions:
   defer:
+    stage: setup
     playbook: defer.yml
     destructive: false
   update-system:
+    stage: setup
     playbook: update-system.yml
     snapshot: applied
     destructive: false
   fail:
+    stage: setup
     playbook: fail.yml
     destructive: false
   hang:
+    stage: setup
     playbook: hang.yml
     destructive: false
 outcomes:

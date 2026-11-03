@@ -88,7 +88,7 @@ public class VmNetworkingTests
     [InlineData("mode: dhcp, mac: \"02:00:00:00:00:31\\n\", reservedAddress: 10.1.0.31")]
     [InlineData("mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1, mac: '01:00:00:00:00:31'")]
     [InlineData("mode: reserved, mac: '02:00:00:00:00:31', reservedAddress: 10.1.0.31")]
-    public void Invalid_networks_are_reported_on_the_guest_by_the_recipe(string network)
+    public void Invalid_networks_are_reported_on_the_guest_by_the_workflow(string network)
     {
         using var test = WithNetwork(network);
         var repository = LabRepositoryLoader.Load(test.Root);
@@ -99,7 +99,7 @@ public class VmNetworkingTests
             issue.Address == guest.Address &&
             issue.File == GuestFile &&
             issue.Line is not null &&
-            issue.Message.Contains("recipe test-vm"));
+            issue.Message.Contains("workflow test-vm@1.0"));
         Assert.True(repository.IsValid("home/korriban"));
     }
 
@@ -124,10 +124,10 @@ public class VmNetworkingTests
             .Replace("hardware: { cores: 2, memory: 2048 }", "hardware: { cores: 2, memory: 2048, disks: [{ size: 16 }] }")
             .Replace("network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }",
                 $"network: {{ bridge: vmbr0, {network} }}"));
-        test.Write("recipes/test-vm/recipe.yaml",
-            File.ReadAllText(Path.Combine(test.Root, "recipes/test-vm/recipe.yaml")) + "\ninputs: inputs.schema.json");
-        test.Write("recipes/test-vm/inputs.schema.json",
-            File.ReadAllText(Path.Combine(TestRepository.ExampleLab, "recipes/proxmox-vm/inputs.schema.json")));
+        test.Write("workflows/test-vm/workflow.yaml",
+            File.ReadAllText(Path.Combine(test.Root, "workflows/test-vm/workflow.yaml")) + "\ninputs: inputs.schema.json");
+        test.Write("workflows/test-vm/inputs.schema.json",
+            File.ReadAllText(Path.Combine(TestRepository.ExampleLab, "workflows/proxmox-vm/inputs.schema.json")));
         return test;
     }
 }

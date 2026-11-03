@@ -77,9 +77,9 @@ public class ForeignMachineRemovalTests(PostgresFixture postgres)
     public async Task A_stage_plan_that_removes_any_machine_is_refused(int? vmid, string? node)
     {
         // Explicitly automatic: nothing a policy says lets a stage remove a machine.
-        var test = PipelineDefinitionTests.Repository();
-        test.Write(PipelineDefinitionTests.PipelineFile,
-            PipelineDefinitionTests.Pipeline.Replace("stages:", "policy: { approval: automatic, destructive: automatic }\nstages:"));
+        var test = ServiceDefinitionTests.Repository();
+        test.Write(ServiceDefinitionTests.ServiceFile,
+            ServiceDefinitionTests.Service.Replace("workflow:", "policy: { approval: automatic, destructive: automatic }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         await server.SetSecretAsync("web/password", "a-web-password");
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
@@ -96,7 +96,7 @@ public class ForeignMachineRemovalTests(PostgresFixture postgres)
             artifacts: FakeAgent.PlanArtifact());
         await server.TickAsync();
 
-        var run = await server.LatestRunAsync(PipelineDefinitionTests.Address, Operations.Pipeline);
+        var run = await server.LatestRunAsync(ServiceDefinitionTests.Address, Operations.Pipeline);
         Assert.Equal(RunStatuses.Failed, run.Status);
         Assert.Contains("Stage expose would change a Proxmox resource that acts on a machine", run.Detail);
         Assert.Contains("A pipeline stage owns no machine", run.Detail);

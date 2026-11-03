@@ -113,10 +113,10 @@ policy, not another level of the resource hierarchy.
 Services may need network exposure and DNS. **Decided (November 2, 2026),
 replacing October 19:** Octopushy provides the infra to define the lab and run the
 operations defined, and holds nothing service-specific. A service is an ordered list
-of stages, each a recipe; ports and DNS are inputs to those recipes, not concepts
-Octopushy has. Generic slots such as `dns` are bound to a recipe in the lab, and a
-cluster is a set of guests with stages applied to them. [Pipelines](pipelines.md) is
-the design.
+of stages; ports and DNS are inputs to those stages, not concepts Octopushy has.
+Generic slots such as `dns` are bound to a workflow in the lab, and a cluster is a set
+of guests with stages applied to them. *Since November 3, 2026, a service names a
+versioned workflow whose stages these are; [workflows.md](workflows.md) is the design.*
 
 Reusable machine/setup profiles are a working organizing concept. Their contents,
 composition rules, and representation have not been chosen.
@@ -663,8 +663,8 @@ now the images are built by hand (October 20, 2026).
 
 The user asked for the architecture of the Git repository that defines labs, their
 Proxmox hosts, VMs, and services (October 16, 2026). The
-[lab repository proposal](lab-repository.md) has the layout, rules, and example
-definitions.
+[workflows page](workflows.md) has the layout, rules, and example definitions.
+It replaced the lab repository proposal on November 3, 2026.
 
 **Decided (October 16, 2026):**
 
@@ -693,11 +693,12 @@ definitions.
   them are defined once on the lab.~~ *Replaced November 2, 2026; see below.*
 
 **Decided (November 2, 2026),** overriding what is struck through in this section. The
-[pipelines design](pipelines.md) has the detail:
+[workflows page](workflows.md#services-and-their-runs) has the detail:
 
 - Octopushy holds nothing service-specific. No code in `backend/src`, `agent/crates`,
   `contracts` or `frontend/src` names a service or a kind of service.
-- A service is an ordered list of stages, each a recipe, OpenTofu or Ansible. Ports and
+- A service is an ordered list of stages, OpenTofu or Ansible: since November 3, 2026,
+  the stages of the workflow it names. Ports and
   DNS are only inputs.
 - Every stage is planned and previewed, then approved once, then applied in order.
   Nothing changes before that approval, with the limit that an OpenTofu plan runs
@@ -708,10 +709,10 @@ definitions.
   it without a new approval, unless the inputs changed.
 - A later stage cannot use an earlier one's results: every plan is made before
   anything applies.
-- An interface is a named slot bound to a recipe in the lab, whose schema lives in the
+- An interface is a named slot bound to a workflow in the lab, whose schema lives in the
   repository. A cluster is a set of guests with stages applied to them, member by
   member, under one approval. Both are later steps.
-- A deleted folder proposes a removal that removes only what recipes declare. That is a
+- A deleted folder proposes a removal that removes only what workflows declare. That is a
   later step too: today it is shown as missing and removes nothing.
 
 **Decided (October 19, 2026):**
@@ -745,17 +746,17 @@ definitions.
   cluster changes a field rather than its folder.
 - Moving a folder to another parent creates a new resource; Octopushy proposes
   retiring the old one once the new one is verified. Renames are declared.
-- Shared parts sit at the repository root: `templates/`, `profiles/`, `recipes/`,
-  and `modules/`.
+- Shared parts sit at the repository root: `templates/`, `workflows/` (recipes until
+  November 3, 2026), and `modules/`.
 - Agent labels flow down the tree the same way as the approval setting.
-- Destructive means deleting a guest, data such as disks or volumes, or what a recipe
+- Destructive means deleting a guest, data such as disks or volumes, or what a workflow
   declares destructive. Octopushy decides what a change does from the preview (such
   as an OpenTofu plan's delete and replace actions), not from the edit, and shows a
   recreate as a recreate.
 - A maintenance window only limits when an automatic change may start; started
   attempts finish, and approving a manual change runs it at once unless the
   approver chooses the next window.
-- Hardware and network are inputs to the provisioning recipe, validated against
+- Hardware and network are inputs to the workflow that provisions the guest, validated against
   its schema, so one shared OpenTofu module provisions every guest.
 - Secrets are `{ store: <key> }` references; removal is an explicit
   `lifecycle: retired`, never a deleted file.
@@ -808,9 +809,9 @@ Deferred until releases are published or backups are added:
 - What backup retention and restore target are acceptable for the database, and
   where is the key-encryption key escrowed?
 
-Open questions from section 7 are listed in the
-[lab repository proposal](lab-repository.md#open-questions): how the ports step is
-implemented, including how source limits are written, still needs checking.
+Section 7's open question on ports no longer applies: since November 2, 2026, a
+port is an input to a stage, and how it is opened is the workflow's business
+([workflows](workflows.md)).
 
 Section 5 holds working proposals for the secret store and agent enrollment.
 Execution isolation, notifications, rollout policies, live health, backup/restore,

@@ -161,7 +161,7 @@ public sealed partial class AssignmentBuilder
         {
             ["commit"] = context.Commit,
             ["inputsHash"] = run.InputsHash,
-            ["recipe"] = ansible.Recipe,
+            ["workflow"] = ansible.Workflow,
             ["root"] = ansible.Root,
             ["image"] = ansible.Image,
             ["host"] = $"{ansible.User}@{ansible.Address}:{ansible.Port}",

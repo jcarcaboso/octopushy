@@ -2,7 +2,7 @@
 
 Octopushy keeps each guest's OpenTofu state in its own PostgreSQL database. There is no
 backend or credential to set up: install Octopushy, add a lab repository, and provision.
-It is the only state backend: a recipe's root must not declare one of its own.
+It is the only state backend: an OpenTofu stage's root must not declare one of its own.
 
 ## How it reaches OpenTofu
 

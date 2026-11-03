@@ -184,8 +184,8 @@ if [[ ${CLEANUP:-0} != 1 ]]; then
   fi
   import_proxmox_credentials
 
-  mkdir -p "$lab/labs/home/proxmox/$node" "$lab/recipes" "$lab/templates" "$lab/modules/opentofu"
-  cp -r "$root/examples/lab/recipes/proxmox-vm" "$lab/recipes/"
+  mkdir -p "$lab/labs/home/proxmox/$node" "$lab/workflows" "$lab/templates" "$lab/modules/opentofu"
+  cp -r "$root/examples/lab/workflows/proxmox-vm" "$lab/workflows/"
   cp -r "$root/examples/lab/templates/fedora-44" "$lab/templates/"
   cp -r "$root/examples/lab/modules/opentofu/proxmox-vm" "$lab/modules/opentofu/"
   cat >"$lab/octopushy.yaml" <<YAML
@@ -350,8 +350,7 @@ hardware:
 network:
   bridge: $bridge
   mode: dhcp
-provision:
-  recipe: proxmox-vm
+workflow: proxmox-vm@1
 access:
   sshAuthorizedKeys:
     - $(<"$work/ssh-key.pub")

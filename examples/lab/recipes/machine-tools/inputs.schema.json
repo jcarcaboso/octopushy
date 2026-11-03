@@ -1,9 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "machine_tools_channel": { "description": "The release channel to follow.", "enum": ["stable", "nightly"] }
-  },
-  "required": ["machine_tools_channel"],
-  "additionalProperties": false
-}

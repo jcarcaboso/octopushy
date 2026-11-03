@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>octopushy-validate</AssemblyName>
+    <RootNamespace>Octopushy.Validate</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Octopushy.Definitions/Octopushy.Definitions.csproj" />
+  </ItemGroup>
+</Project>

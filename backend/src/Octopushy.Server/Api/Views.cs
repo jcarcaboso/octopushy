@@ -259,7 +259,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 var effective = PolicyResolver.For(repository, guest);
                 policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
                 labels = PolicyResolver.AgentLabels(repository, guest);
-                if (guest.SetupRecipe is { } recipe && repository.Recipes.TryGetValue(recipe, out var definition) && definition.Configure is { } offered)
+                if (guest.Setup?.Configure is { } offered)
                 {
                     var state = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == id, cancellationToken);
                     var schedules = await SchedulesAsync(repository, guest, id, cancellationToken);
@@ -268,7 +268,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                     var started = FollowedSecrets.Parse(state?.SecretVersions);
                     var pending = state?.SecretVersions is null ? [] : FollowedSecrets.Changes(started, usable).Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
                     configure = new GuestConfigurationDto(
-                        recipe,
+                        guest.Workflow!.Label,
                         offered.Actions.Values.Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList(),
                         state is { AppliedHash: not null } && state.AppliedHash == state.DesiredHash,
                         state?.AppliedAction,
@@ -347,8 +347,15 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
         var (status, detail) = ServiceStatus(resource, active, last, state, waiting);
         return new ServiceSummaryDto(resource.Id, resource.Address, resource.Address.Split('/')[^1], status, detail, resource.Valid,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
-            last is null ? null : Summary(last, resource.Address, resource.Kind));
+            last is null ? null : Summary(last, resource.Address, resource.Kind),
+            Workflow(resource));
     }
+
+    /// <summary>What a guest or service names in its definition, and what the latest revision resolved that to.</summary>
+    private static WorkflowDto? Workflow(Resource resource) =>
+        resource.Definition is not null && JsonNode.Parse(resource.Definition)?["workflow"] is JsonValue reference && reference.TryGetValue<string>(out var text)
+            ? new WorkflowDto(text, resource.Workflow)
+            : null;
 
     public static (string Status, string? Detail) ServiceStatus(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting)
     {
@@ -421,7 +428,7 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             policy,
             labels?.Value ?? [],
             labels?.SetBy,
-            definition?.Stages.Select(s => new ServiceStageDto(s.Name, s.Recipe, repository!.Recipes.GetValueOrDefault(s.Recipe)?.Executor ?? "?")).ToList() ?? [],
+            definition?.Stages.Select(s => new ServiceStageDto(s.Name, s.Definition.Executor)).ToList() ?? [],
             commits.GetValueOrDefault(state?.AppliedRevisionId ?? Guid.Empty),
             state?.AppliedAt,
             resource.MissingSince,
@@ -634,7 +641,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             resource.Valid,
             observed is null ? null : ObservedGuest(observed, [resource]),
             active is null ? null : Summary(active, resource.Address, resource.Kind),
-            last is null ? null : Summary(last, resource.Address, resource.Kind));
+            last is null ? null : Summary(last, resource.Address, resource.Kind),
+            Workflow(resource));
     }
 
     private static int? Vmid(Resource resource) =>

@@ -57,13 +57,13 @@ public class ObservedOnlyInstallationTests
     [Fact]
     public void A_service_under_an_observed_only_installation_is_invalid()
     {
-        using var test = PipelineDefinitionTests.Repository();
+        using var test = ServiceDefinitionTests.Repository();
         ObserveOnly(test);
 
         var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.False(repository.IsValid(PipelineDefinitionTests.Address));
-        Assert.Contains(repository.IssuesFor(PipelineDefinitionTests.Address),
-            i => i.Address == PipelineDefinitionTests.Address && i.Message.Contains("no service may be defined under it"));
+        Assert.False(repository.IsValid(ServiceDefinitionTests.Address));
+        Assert.Contains(repository.IssuesFor(ServiceDefinitionTests.Address),
+            i => i.Address == ServiceDefinitionTests.Address && i.Message.Contains("no service may be defined under it"));
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 namespace Octopushy.Definitions;
 
-/// <summary>The definitions read from one snapshot of a lab repository.</summary>
+/// <summary>The definitions read from one snapshot of a lab repository, with the workflows they resolved to.</summary>
 public sealed class LabRepository(
     string root,
     RepositoryDefinition? settings,
@@ -9,7 +9,7 @@ public sealed class LabRepository(
     IReadOnlyList<GuestDefinition> guests,
     IReadOnlyList<ServiceDefinition> services,
     IReadOnlyDictionary<string, TemplateDefinition> templates,
-    IReadOnlyDictionary<string, RecipeDefinition> recipes,
+    IReadOnlyList<WorkflowDefinition> workflows,
     IReadOnlyList<ResourceEntry> resources,
     IReadOnlyList<DefinitionIssue> issues,
     IReadOnlyList<StoreUse> storeUses,
@@ -31,7 +31,8 @@ public sealed class LabRepository(
 
     public IReadOnlyDictionary<string, TemplateDefinition> Templates { get; } = templates;
 
-    public IReadOnlyDictionary<string, RecipeDefinition> Recipes { get; } = recipes;
+    /// <summary>Every workflow the workflow source read, valid or not, whether anything names it or not.</summary>
+    public IReadOnlyList<WorkflowDefinition> Workflows { get; } = workflows;
 
     /// <summary>Every lab, installation, guest, and service found, including those whose definition is invalid.</summary>
     public IReadOnlyList<ResourceEntry> Resources { get; } = resources;
@@ -55,15 +56,17 @@ public sealed class LabRepository(
 
     public bool IsValid(string address) => Resource(address)?.Valid ?? false;
 
-    /// <summary>Issues of a resource itself, of the shared definitions it uses, and of the repository.</summary>
+    /// <summary>Issues of a resource itself, of the shared definitions it uses, such as its workflow, and of the repository.</summary>
     public IEnumerable<DefinitionIssue> IssuesFor(string address)
     {
         var guest = Guest(address);
-        var stages = Service(address)?.Stages.Select(s => $"recipes/{s.Recipe}").ToHashSet(StringComparer.Ordinal);
+        // The workflow it names, whether or not that resolved: a workflow that cannot be read is why it did not.
+        var reference = guest?.WorkflowReference ?? Service(address)?.WorkflowReference;
+        var workflow = reference is null ? null : $"workflows/{reference.Id}";
         return Issues.Where(i =>
             i.Address == address
             || i.Address is null
-            || (guest is not null && (i.Address == $"recipes/{guest.Recipe}" || (guest.Template is { } t && i.Address == $"templates/{t}")))
-            || (stages is not null && stages.Contains(i.Address)));
+            || (workflow is not null && i.Address == workflow)
+            || (guest?.Template is { } t && i.Address == $"templates/{t}"));
     }
 }

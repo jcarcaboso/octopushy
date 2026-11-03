@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/service.schema.json",
+  "title": "Service (guests/<guest>/services/<service>/service.yaml)",
+  "description": "One thing that runs on a guest, managed by a workflow with manages: service. See docs/workflows.md.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "workflow": { "$ref": "common.schema.json#/$defs/workflowRef" },
+    "inputs": {
+      "description": "Given to every stage: as variables to an OpenTofu stage, as extra vars to an Ansible one. Validated by the workflow's inputs schema, as { inputs }.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" }
+    },
+    "secrets": {
+      "description": "Extra vars filled from the variable store, for the workflow's Ansible stages. Only the steps that run a playbook receive them.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+    },
+    "secretFiles": {
+      "description": "Extra vars holding the path of a private file with the store value, for the workflow's Ansible stages.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+    },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" },
+    "execution": { "$ref": "common.schema.json#/$defs/execution" }
+  },
+  "required": ["schemaVersion", "workflow"],
+  "additionalProperties": false
+}

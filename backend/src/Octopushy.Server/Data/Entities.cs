@@ -159,6 +159,9 @@ public sealed class Resource
 
     public string? DefinitionFile { get; set; }
 
+    /// <summary>For a guest or service, the workflow and version the latest revision resolved it to, such as <c>fedora-vm@2.3</c>.</summary>
+    public string? Workflow { get; set; }
+
     /// <summary>JSON array of the issues that affect this resource.</summary>
     public string Issues { get; set; } = "[]";
 
@@ -317,12 +320,12 @@ public sealed class GuestAccessKey
     public DateTimeOffset? RemovedAt { get; set; }
 }
 
-/// <summary>Where a guest's configure recipe stands. The row exists once a guest has one.</summary>
+/// <summary>Where a guest's setup stands. The row exists once a guest's workflow has a setup stage.</summary>
 public sealed class GuestConfiguration
 {
     public Guid ResourceId { get; set; }
 
-    /// <summary>The configure inputs of the latest revision; null when the guest has no recipe any more.</summary>
+    /// <summary>The configure inputs of the latest revision; null when the guest's workflow has no setup stage any more.</summary>
     public string? DesiredHash { get; set; }
 
     public Guid? DesiredRevisionId { get; set; }

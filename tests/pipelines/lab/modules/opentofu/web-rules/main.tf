@@ -1,4 +1,4 @@
-# Declares only part of what a stage is given; OpenTofu warns about the rest.
+# Declares only part of what a stage is given (the service's inputs); OpenTofu warns about the rest.
 variable "port" {
   type = number
 }

@@ -28,6 +28,11 @@ jobs:
       # Testcontainers owns its PostgreSQL container; no dev-db or retained service.
       - name: Backend tests (disposable PostgreSQL)
         run: dotnet test backend/Octopushy.slnx
+      - name: Validate the example and end-to-end lab repositories offline
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet run --project backend/src/Octopushy.Validate -- examples/lab
+          dotnet run --project backend/src/Octopushy.Validate -- tests/e2e/lab
       - name: OpenAPI document drift
         if: ${{ !cancelled() }}
         run: |

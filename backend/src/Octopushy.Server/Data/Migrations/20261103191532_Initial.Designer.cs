@@ -937,6 +937,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("verified_at");
 
+                    b.Property<string>("Workflow")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow");
+
                     b.HasKey("Id")
                         .HasName("pk_resources");
 

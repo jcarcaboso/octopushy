@@ -135,9 +135,9 @@ public class StoreReferenceTests
             """);
         test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + """
 
-            setup:
+            inputs:
               steps:
-                - credentials: { store: setup/token, version: 4 }
+                - credentials: { store: inputs/token, version: 4 }
             """);
         var guest = ReadDefinition(test, GuestFile);
         guest["hardware"]!["credentials"] = JsonNode.Parse("""{"store":"hardware/token","version":5}""");
@@ -150,7 +150,7 @@ public class StoreReferenceTests
         Assert.Contains(new StoreUse("integrations/first", "home", LabFile, 2), repository.StoreUses);
         Assert.Contains(new StoreUse("integrations/second", "home", LabFile), repository.StoreUses);
         Assert.Contains(new StoreUse("dns/token", "home", LabFile, 3), repository.StoreUses);
-        Assert.Contains(new StoreUse("setup/token", "home/korriban/krb-app-01", GuestFile, 4), repository.StoreUses);
+        Assert.Contains(new StoreUse("inputs/token", "home/korriban/krb-app-01", GuestFile, 4), repository.StoreUses);
         Assert.Contains(new StoreUse("hardware/token", "home/korriban/krb-app-01", GuestFile, 5), repository.StoreUses);
         Assert.Contains(new StoreUse("network/token", "home/korriban/krb-app-01", GuestFile, 6), repository.StoreUses);
     }
@@ -173,7 +173,7 @@ public class StoreReferenceTests
             """);
         test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + $$"""
 
-            setup:
+            inputs:
               steps:
                 - credentials: {{reference}}
             """);

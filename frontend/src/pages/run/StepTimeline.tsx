@@ -48,7 +48,7 @@ function describe(step: Step, operation: string): string | null {
     case "outcome-approval":
       return "The playbook reported something that needs your decision. It ran once; this would run it once more.";
     case "playbook-approved":
-      return "Runs the same commit and preview once more, with what the recipe says approving adds.";
+      return "Runs the same commit and preview once more, with what the workflow says approving adds.";
     case "unprotect":
       return "Removes the VM's protection so it can be deleted.";
     case "apply":
