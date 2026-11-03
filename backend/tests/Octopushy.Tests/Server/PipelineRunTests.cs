@@ -13,16 +13,16 @@ using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
 using Octopushy.Tests.Definitions;
-using Repository = Octopushy.Tests.Definitions.PipelineDefinitionTests;
+using Repository = Octopushy.Tests.Definitions.ServiceDefinitionTests;
 
 namespace Octopushy.Tests.Server;
 
 [Collection(PostgresCollection.Name)]
 public class PipelineRunTests(PostgresFixture postgres)
 {
-    private const string Guest = PipelineDefinitionTests.Guest;
-    private const string Service = PipelineDefinitionTests.Address;
-    private const string PipelineFile = PipelineDefinitionTests.PipelineFile;
+    private const string Guest = ServiceDefinitionTests.Guest;
+    private const string Service = ServiceDefinitionTests.Address;
+    private const string PipelineFile = ServiceDefinitionTests.ServiceFile;
     private const string Password = "a-web-password";
 
     private static Task ScheduleAsync(ServerHarness server) => server.Services.GetRequiredService<Planner>().SchedulePipelinesAsync(CancellationToken.None);
@@ -97,7 +97,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task Every_stage_is_planned_approved_once_then_applied_in_order()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -115,7 +115,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.DoesNotContain(Password, preview.InputJson);
         var tofu = JsonNode.Parse(plan.InputJson)!;
         Assert.Null(tofu["backend"]);
-        Assert.Equal(8080, tofu["variables"]!["port"]!.GetValue<int>());
+        Assert.Equal(9000, tofu["variables"]!["port"]!.GetValue<int>());
         Assert.Empty(tofu["secretEnv"]!.AsObject());
         var ansible = JsonNode.Parse(preview.InputJson)!;
         Assert.Equal(Service, ansible["context"]!["address"]!.GetValue<string>());
@@ -203,7 +203,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_service_policy_overrides_what_its_guest_resolves_to()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -221,7 +221,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_plan_that_deletes_or_replaces_waits_under_destructive_manual(int delete, int replace)
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { destructive: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { destructive: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -237,7 +237,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_plan_that_only_adds_goes_ahead_under_destructive_manual()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { destructive: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { destructive: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -248,11 +248,11 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_recipe_that_declares_its_action_destructive_waits_under_destructive_manual()
+    public async Task A_workflow_that_declares_a_stage_destructive_waits_under_destructive_manual()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { destructive: manual }\nstages:"));
-        test.Write("recipes/web/recipe.yaml", File.ReadAllText(Path.Combine(test.Root, "recipes/web/recipe.yaml")).Replace("destructive: false", "destructive: true"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { destructive: manual }\nworkflow:"));
+        test.Write("workflows/web/workflow.yaml", File.ReadAllText(Path.Combine(test.Root, "workflows/web/workflow.yaml")).Replace("destructive: false", "destructive: true"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -287,7 +287,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_document_changed_after_approval_is_refused_before_anything_is_sent()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -354,7 +354,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task An_approved_run_stops_for_setup_that_changed_while_it_waited_and_then_goes_on()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -364,9 +364,9 @@ public class PipelineRunTests(PostgresFixture postgres)
         var run = (await server.LatestRunAsync(Service, Operations.Pipeline));
         Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
 
-        // The guest's setup changes while the service waits for a person.
-        var guestFile = Path.Combine(test.Root, PipelineDefinitionTests.GuestFile);
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(guestFile).Replace("greeting: hello", "greeting: hi"));
+        // The guest's setup changes while the service waits for a person: a file in its folder, which only its setup reads.
+        // (Its inputs would not do: every stage of its workflow gets them, so they plan the machine again first.)
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/motd", "changed\n");
         server.Commit("Change the guest's setup");
         await server.SyncAsync();
 
@@ -428,17 +428,17 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task Changes_held_for_their_guests_do_not_starve_the_setup_they_wait_for()
     {
         const int Count = 200;
-        const string SingleStage = "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\ninputs: { port: 8080 }\n";
+        const string SingleStage = "schemaVersion: 1\nworkflow: web-rules@1\ninputs: { port: 8080 }\n";
         var test = Repository.Repository(SingleStage);
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
-        var guestText = File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile));
+        var guestText = File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile));
         for (var i = 1; i < Count; i++)
         {
             var directory = $"labs/home/proxmox/korriban/guests/many-{i:D3}";
             test.Write(directory + "/guest.yaml", guestText.Replace("vmid: 310", $"vmid: {310 + i}").Replace("10.1.0.31/24", $"10.1.{i / 250}.{31 + i % 200}/24"));
-            test.Write(directory + "/services/web/pipeline.yaml", SingleStage);
+            test.Write(directory + "/services/web/service.yaml", SingleStage);
         }
 
         server.Commit("Add many guests");
@@ -516,7 +516,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task Another_source_with_the_same_inputs_gives_an_unstarted_run_a_replacement()
     {
         var test = Repository.Repository();
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -581,24 +581,21 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task One_change_at_a_time_on_a_guest_and_a_service_nobody_approved_holds_nobody_back()
     {
         var test = Repository.Repository();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/other/pipeline.yaml", """
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/other/service.yaml", """
             schemaVersion: 1
-            stages:
-              - { name: expose, recipe: web-rules }
+            workflow: web-rules@1
             inputs: { port: 1 }
             """);
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/parked/pipeline.yaml", """
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/parked/service.yaml", """
             schemaVersion: 1
             policy: { approval: manual }
-            stages:
-              - { name: expose, recipe: web-rules }
+            workflow: web-rules@1
             inputs: { port: 2 }
             """);
         test.Delete(PipelineFile);
         test.Write(PipelineFile, """
             schemaVersion: 1
-            stages:
-              - { name: expose, recipe: web-rules }
+            workflow: web-rules@1
             inputs: { port: 3 }
             """);
         await using var server = await ServerHarness.StartAsync(postgres, test);
@@ -675,8 +672,8 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_failed_stage_stops_the_pipeline_marks_only_its_service_and_retry_continues_from_it_without_a_new_approval()
     {
         var test = Repository.Repository();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/other/pipeline.yaml", "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\ninputs: { port: 1 }\n");
-        test.Write(PipelineFile, Repository.Pipeline.Replace("stages:", "policy: { approval: manual }\nstages:"));
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/services/other/service.yaml", "schemaVersion: 1\nworkflow: web-rules@1\ninputs: { port: 1 }\n");
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -736,7 +733,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         var failed = await server.LatestRunAsync(Service, Operations.Pipeline);
         Assert.Equal(RunStatuses.Failed, failed.Status);
 
-        test.Write(PipelineFile, Repository.Pipeline.Replace("port: 9000", "port: 9001"));
+        test.Write(PipelineFile, Repository.Service.Replace("port: 9000", "port: 9001"));
         server.Commit("Change the port");
         await server.SyncAsync();
         var retry = await http.PostAsync($"/api/runs/{failed.Id}/retry-stage", null);
@@ -798,13 +795,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     [Fact]
     public async Task Each_opentofu_stage_has_its_own_state_apart_from_its_guests()
     {
-        var test = Repository.Repository("""
-            schemaVersion: 1
-            stages:
-              - { name: one, recipe: web-rules }
-              - { name: two, recipe: web-rules }
-            inputs: { port: 1 }
-            """);
+        var test = Repository.Repository("schemaVersion: 1\nworkflow: two-rules@1\ninputs: { port: 1 }\n");
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
@@ -838,17 +829,11 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Two_stages_can_bind_one_extra_var_to_different_keys()
+    public async Task Each_ansible_stage_gets_the_services_secrets_under_a_role_of_its_own()
     {
-        var test = Repository.Repository("""
-            schemaVersion: 1
-            stages:
-              - { name: one, recipe: web, inputs: { port: 1 }, secrets: { web_password: { store: web/one } } }
-              - { name: two, recipe: web, inputs: { port: 2 }, secrets: { web_password: { store: web/two } } }
-            """);
+        var test = Repository.Repository("schemaVersion: 1\nworkflow: two-webs@1\nsecrets: { web_password: { store: web/one } }\n");
         await using var server = await ServerHarness.StartAsync(postgres, test);
         await server.SetSecretAsync("web/one", "first-secret");
-        await server.SetSecretAsync("web/two", "second-secret");
         var (agent, http) = await ReadyAsync(server);
         using var _ = http;
         await ScheduleAsync(server);
@@ -863,7 +848,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Equal("one", first.Artifacts.Single().Content.ToStringUtf8());
         await agent.ReportAsync(first, Outcome.Succeeded, ConfigureRunTests.Recap());
         var second = await agent.NextAsync("run");
-        Assert.Equal("second-secret", second.Secrets[SecretNames.AnsibleVar("web_password")]);
+        Assert.Equal("first-secret", second.Secrets[SecretNames.AnsibleVar("web_password")]);
         Assert.Equal("two", second.Artifacts.Single().Content.ToStringUtf8());
     }
 
@@ -871,8 +856,8 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_stage_logs_in_with_its_guests_own_key()
     {
         var test = Repository.Repository();
-        var guestFile = Path.Combine(test.Root, PipelineDefinitionTests.GuestFile);
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(guestFile).Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
+        var guestFile = Path.Combine(test.Root, ServiceDefinitionTests.GuestFile);
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(guestFile).Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         await server.SetSecretAsync("web/password", Password);
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
@@ -899,7 +884,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var _ = http;
         var guest = await server.ResourceAsync(Guest);
-        // The provision apply carried the public half to the machine, as it does for a guest with a setup recipe.
+        // The provision apply carried the public half to the machine, as it does for a guest whose workflow sets it up.
         var key = await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().SingleAsync(k => k.ResourceId == guest.Id));
         Assert.NotNull(key.ProvisionedAt);
 
@@ -924,7 +909,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_machine_octopushys_provisioning_never_put_its_key_on_is_refused_and_told_to_name_one()
     {
         // Provisioned when nothing ran on it, so Octopushy kept no key for it.
-        var test = Repository.WithoutSetup(pipeline: "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n");
+        var test = Repository.WithoutSetup(service: TofuOnly);
         await using var server = await ServerHarness.StartAsync(postgres, test);
         await server.SetSecretAsync("web/password", Password);
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
@@ -938,8 +923,8 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
 
         // A stage that runs on the guest arrives. The provisioning that should carry Octopushy's key plans no change,
-        // as for a machine whose recipe does not put the key on it, so it catches up with no apply.
-        test.Write(PipelineFile, Repository.Pipeline);
+        // as for a machine whose workflow does not put the key on it, so it catches up with no apply.
+        test.Write(PipelineFile, Repository.Service);
         server.Commit("Run something on the guest");
         await server.SyncAsync();
         await server.TickAsync();
@@ -966,10 +951,10 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key.StartsWith("system/guest-access/"))));
     }
 
-    private const string TofuOnly = "schemaVersion: 1\nstages:\n  - { name: expose, recipe: web-rules }\n";
+    private const string TofuOnly = ServiceDefinitionTests.TofuOnly;
 
-    /// <summary>A pipeline whose stage runs on the guest, invalid because the recipe needs a secret it does not give.</summary>
-    private const string InvalidAnsible = "schemaVersion: 1\nstages:\n  - { name: deploy, recipe: web, inputs: { port: 1 } }\n";
+    /// <summary>A service whose stage runs on the guest, invalid because the workflow needs a secret it does not give.</summary>
+    private const string InvalidAnsible = "schemaVersion: 1\nworkflow: web@1\ninputs: { port: 1 }\n";
 
     private static Task<int> ProvisionRunsAsync(ServerHarness server, Guid guest) =>
         server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == guest && r.Operation == Operations.Provision));
@@ -977,7 +962,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     [Fact]
     public async Task An_invalid_pipeline_does_not_give_its_guest_octopushys_key_or_provision_it_again()
     {
-        var test = Repository.WithoutSetup(pipeline: TofuOnly);
+        var test = Repository.WithoutSetup(service: TofuOnly);
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var _ = http;
@@ -1019,8 +1004,8 @@ public class PipelineRunTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(InvalidAnsible)]
-    [InlineData("schemaVersion: 1\nstages:\n  - { name: deploy, recipe: web-typo }\n")]
-    [InlineData("schemaVersion: 1\nstages: []\n")]
+    [InlineData("schemaVersion: 1\nworkflow: web-typo@1\n")]
+    [InlineData("schemaVersion: 1\nworkflow: web@2\n")]
     [InlineData("schemaVersion: 1\nstages: [\n")]
     public async Task A_pipeline_broken_in_any_way_does_not_take_its_guests_key_away(string broken)
     {
@@ -1049,20 +1034,24 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Removing_the_setup_recipe_keeps_the_guests_key()
+    public async Task Moving_to_a_workflow_with_no_setup_stage_keeps_the_guests_key()
     {
         var test = Repository.Repository();
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
         test.Delete("labs/home/proxmox/korriban/guests/krb-app-01/services");
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (guest, http) = await KeyedAsync(server);
         using var _ = http;
 
-        var text = File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile));
-        test.Write(PipelineDefinitionTests.GuestFile, text[..text.IndexOf("setup:", StringComparison.Ordinal)]
-            + "access:\n  user: ops\n  hostKey: { store: access/app/host-key }\n");
-        await AssertProvisioningStaysAsync(server, guest, "No setup recipe");
+        // A workflow with no setup stage is another workflow, so the guest is planned again, still carrying the key.
+        test.Write(ServiceDefinitionTests.GuestFile, ServiceDefinitionTests.MachineOnly(File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))));
+        var runs = await ProvisionRunsAsync(server, guest.Id);
+        server.Commit("No setup stage");
+        await server.SyncAsync();
+        await server.TickAsync();
+        Assert.Equal(runs + 1, await ProvisionRunsAsync(server, guest.Id));
+        Assert.True(RunContext.Parse((await server.LatestRunAsync(Guest, Operations.Provision)).Context).ManagedAccess);
     }
 
     [Fact]
@@ -1074,7 +1063,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         using var _ = http;
         var runs = await ProvisionRunsAsync(server, guest.Id);
 
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  hostKey: { store: access/app/host-key }\n", "  sshKey: { store: access/app/ssh-key }\n  hostKey: { store: access/app/host-key }\n"));
         server.Commit("Name a key");
         await server.SyncAsync();
@@ -1087,16 +1076,16 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     /// <summary>
-    /// A guest provisioned when nothing ran on it, then given a setup recipe and no key of its own, whose provisioning
+    /// A guest provisioned when nothing ran on it, then given a workflow that sets it up and no key of its own, whose provisioning
     /// catches up with a plan that changes nothing: no apply has carried Octopushy's key to the machine.
     /// </summary>
     private static async Task<(TestRepository Test, FakeAgent Agent, HttpClient Http)> SetupNeverGivenTheKeyAsync(ServerHarness server, TestRepository test)
     {
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var withSetup = Repository.Repository();
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(withSetup.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(withSetup.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
-        server.Commit("A setup recipe, and no key of its own");
+        server.Commit("A workflow that sets it up, and no key of its own");
         await server.SyncAsync();
         await server.TickAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact());
@@ -1111,7 +1100,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     [Fact]
     public async Task Setup_is_refused_too_where_no_apply_carried_octopushys_key_and_told_to_name_one()
     {
-        var test = Repository.WithoutSetup(pipeline: TofuOnly);
+        var test = Repository.WithoutSetup(service: TofuOnly);
         await using var server = await ServerHarness.StartAsync(postgres, test);
         var (_, agent, http) = await SetupNeverGivenTheKeyAsync(server, test);
         using var _ = http;
@@ -1125,7 +1114,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         var refused = await Assert.ThrowsAsync<RunException>(() => planner.ConfigureGuestAsync(guest.Id, null, CancellationToken.None));
         Assert.Equal(GuestWork.OwnKeyNotDelivered, refused.Message);
         Assert.Contains("access.sshKey", refused.Message);
-        await Assert.ThrowsAsync<RunException>(() => planner.ConfigureGuestAsync(guest.Id, "configure", CancellationToken.None, RunReasons.Schedule, DateTimeOffset.UtcNow));
+        await Assert.ThrowsAsync<RunException>(() => planner.ConfigureGuestAsync(guest.Id, "setup", CancellationToken.None, RunReasons.Schedule, DateTimeOffset.UtcNow));
         var page = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{guest.Id}"))!;
         Assert.Equal(GuestWork.OwnKeyNotDelivered, page["configuration"]!["refused"]!.GetValue<string>());
 
@@ -1137,7 +1126,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key.StartsWith("system/guest-access/"))));
 
         // Naming a key is the way on, and that key is what the playbook gets.
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  hostKey: { store: access/app/host-key }\n", "  sshKey: { store: access/app/ssh-key }\n  hostKey: { store: access/app/host-key }\n"));
         server.Commit("Name the key");
         await server.SyncAsync();
@@ -1155,7 +1144,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task A_followed_value_starts_nothing_without_the_delivery_record_and_stays_owed()
     {
         var test = Repository.Repository();
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
         test.Delete("labs/home/proxmox/korriban/guests/krb-app-01/services");
         await using var server = await ServerHarness.StartAsync(postgres, test);
@@ -1181,7 +1170,7 @@ public class PipelineRunTests(PostgresFixture postgres)
     public async Task The_key_is_not_released_for_a_run_started_before_its_delivery_record_went()
     {
         var test = Repository.Repository();
-        test.Write(PipelineDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, PipelineDefinitionTests.GuestFile))
+        test.Write(ServiceDefinitionTests.GuestFile, File.ReadAllText(Path.Combine(test.Root, ServiceDefinitionTests.GuestFile))
             .Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         await server.SetSecretAsync("web/password", Password);
@@ -1251,7 +1240,7 @@ public class PipelineRunTests(PostgresFixture postgres)
         Assert.Contains((await http.GetFromJsonAsync<JsonObject>($"/api/guests/{guest.Id}"))!["services"]!.AsArray(), s => s!["status"]!.GetValue<string>() == "missing");
         Assert.NotEqual(HttpStatusCode.OK, (await http.PostAsync($"/api/services/{resource.Id}/deploy", null)).StatusCode);
 
-        test.Write(PipelineFile, Repository.Pipeline);
+        test.Write(PipelineFile, Repository.Service);
         server.Commit("Restore the service");
         await server.SyncAsync();
         Assert.Null((await server.ResourceAsync(Service)).MissingSince);

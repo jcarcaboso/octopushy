@@ -12,7 +12,7 @@ public sealed partial class RunEngine
 
     /// <summary>
     /// Writes the document that covers every stage and applies the policy to it. Destructive here means
-    /// what it means elsewhere: a recipe that declares its action destructive, and a plan that deletes.
+    /// what it means elsewhere: a workflow that declares a stage destructive, and a plan that deletes.
     /// A plan's replace counts too: a provision run holds a replaced VM by another rule, and a stage has none.
     /// </summary>
     private bool DecidePipelineApproval(Run run, Step step, RunContext context)

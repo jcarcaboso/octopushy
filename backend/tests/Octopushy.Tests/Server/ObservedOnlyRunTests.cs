@@ -134,8 +134,7 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
         vmid: 400
         hardware: { cores: 2, memory: 2048 }
         network: { bridge: vmbr0, mode: static, address: 10.9.0.40/24, gateway: 10.9.0.1 }
-        provision:
-          recipe: test-vm
+        workflow: test-vm@1
         """;
 
     [Fact]
@@ -153,8 +152,7 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
             vmid: 400
             hardware: { cores: 2, memory: 2048 }
             network: { bridge: vmbr0, mode: static, address: 10.9.0.40/24, gateway: 10.9.0.1 }
-            provision:
-              recipe: test-vm
+            workflow: test-vm@1
             """);
         server.Commit("Manage ziost");
         await server.SyncAsync();
@@ -219,7 +217,7 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
     [Fact]
     public void No_run_is_made_for_an_observed_only_installation()
     {
-        using var test = PipelineDefinitionTests.Repository();
+        using var test = ServiceDefinitionTests.Repository();
         ObservedOnlyInstallationTests.ObserveOnly(test);
         var repository = LabRepositoryLoader.Load(test.Root);
         var factory = new RunFactory(Options.Create(new OctopushyOptions()), TimeProvider.System);
@@ -232,7 +230,7 @@ public class ObservedOnlyRunTests(PostgresFixture postgres)
             () => factory.Guest(repository, guest, resource, revision, "manual", false),
             () => factory.Configure(repository, guest, resource, revision, "apply", "manual", null, null),
             () => factory.RotateAccess(repository, guest, resource, revision, new AccessRotationContext(1, 2, [1])),
-            () => factory.Pipeline(repository, repository.Service(PipelineDefinitionTests.Address)!, resource, resource, revision, "manual"),
+            () => factory.Pipeline(repository, repository.Service(ServiceDefinitionTests.Address)!, resource, resource, revision, "manual"),
         }, make => Assert.Contains("home/korriban is observed only", Assert.Throws<RunException>(make).Message));
     }
 

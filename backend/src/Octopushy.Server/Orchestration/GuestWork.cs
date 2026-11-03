@@ -66,14 +66,14 @@ public static class GuestWork
             .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
         if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
             return "Waiting for the guest's provisioning to catch up with its definition.";
-        if (definition.SetupRecipe is { } recipe && repository.Recipes.GetValueOrDefault(recipe)?.Configure?.OnChange is not null)
+        if (definition.Setup?.Configure?.OnChange is not null)
         {
             var setup = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == guest.Id, cancellationToken);
             if (setup?.AppliedHash is null || setup.AppliedHash != setup.DesiredHash)
                 return "Waiting for the guest's setup to be applied.";
         }
 
-        var runsOnGuest = service?.Stages.Any(s => repository.Recipes.GetValueOrDefault(s.Recipe)?.Configure is not null) ?? false;
+        var runsOnGuest = service?.Stages.Any(s => s.Definition.Executor == Executors.Ansible) ?? false;
         return runsOnGuest ? await OwnKeyRefusedAsync(db, guest.Id, definition, cancellationToken) : null;
     }
 
@@ -83,7 +83,7 @@ public static class GuestWork
         + "so nothing that would log in with it starts. For a machine Octopushy did not create, name the key to log in with in access.sshKey.";
 
     /// <summary>
-    /// Why Ansible work on this guest, from its setup recipe or a service's stage alike, may not log in with Octopushy's key,
+    /// Why Ansible work on this guest, from its workflow's setup stage or a service's stage alike, may not log in with Octopushy's key,
     /// or null. The key follows who manages the machine: Octopushy puts it on one only through an apply of the guest's
     /// provisioning, so where nothing shows that happened, a login with it is not tried. A key the guest names wins.
     /// </summary>

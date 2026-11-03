@@ -3,7 +3,7 @@ using Cronos;
 
 namespace Octopushy.Definitions;
 
-/// <summary>A configure action a guest runs on its own, at a time written in cron.</summary>
+/// <summary>An action of a guest's workflow that the guest runs on its own, at a time written in cron.</summary>
 public sealed record GuestScheduleDefinition(string Action, string Cron);
 
 /// <summary>Reads a guest's schedules, and finds when they fall in the lab's time zone.</summary>
@@ -11,7 +11,7 @@ public static class GuestSchedules
 {
     /// <summary>What a guest declares. This also reads definitions that failed their schema, which report their own error, so what is malformed is left out.</summary>
     public static IReadOnlyList<GuestScheduleDefinition> Of(GuestDefinition guest) =>
-        (guest.Json["setup"]?["schedules"] as JsonArray)?
+        (guest.Json["schedules"] as JsonArray)?
             .OfType<JsonObject>()
             .Where(s => IsText(s["action"]) && IsText(s["cron"]))
             .Select(s => new GuestScheduleDefinition(s["action"]!.GetValue<string>(), s["cron"]!.GetValue<string>()))

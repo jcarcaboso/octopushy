@@ -9,7 +9,7 @@ public sealed partial class RunFactory
 {
     /// <summary>
     /// A service's run: a plan or preview of every stage, one approval, then every stage applied in
-    /// order. An Ansible stage is the onChange action of its recipe, on the guest's connection. An
+    /// order. An Ansible stage runs its playbook on the guest's connection. An
     /// OpenTofu stage has its inputs and a state of its own, and no credentials of any kind.
     /// </summary>
     public Run Pipeline(LabRepository repository, ServiceDefinition service, Resource resource, Resource guestResource, DefinitionRevision revision, string reason)
@@ -22,7 +22,8 @@ public sealed partial class RunFactory
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
         var stages = new List<StageContext>();
-        foreach (var (stage, recipe) in inputs.Stages.Select(s => (s.Stage, s.Recipe)))
+        var workflow = inputs.Workflow.Label;
+        foreach (var (stage, definition) in inputs.Stages.Select(s => (s, s.Definition)))
         {
             void Bind(string role, StoreReference reference)
             {
@@ -32,12 +33,12 @@ public sealed partial class RunFactory
                     requestedVersions[scoped] = version;
             }
 
-            if (recipe.Configure is not { } configure)
+            if (definition.Configure is not { } configure)
             {
-                stages.Add(new StageContext(stage.Name, recipe.Id, new OpenTofuContext(
+                stages.Add(new StageContext(stage.Name, workflow, new OpenTofuContext(
                     $"{service.Address.Replace('/', '.')}.{stage.Name}",
-                    recipe.Root,
-                    recipe.Image ?? options.Value.Tools.OpenTofuImage,
+                    definition.Root,
+                    definition.Image ?? options.Value.Tools.OpenTofuImage,
                     stage.Inputs.DeepClone().AsObject(),
                     [],
                     []), null));
@@ -60,16 +61,16 @@ public sealed partial class RunFactory
             }
 
             var action = configure.OnChange!;
-            stages.Add(new StageContext(stage.Name, recipe.Id, null, new AnsibleContext(
-                recipe.Id,
+            stages.Add(new StageContext(stage.Name, workflow, null, new AnsibleContext(
+                workflow,
                 action.Id,
-                recipe.Root,
+                definition.Root,
                 action.Playbook,
                 action.Prepare,
                 action.UsesAppliedSnapshot,
                 action.Destructive,
                 action.TimeoutMinutes,
-                recipe.Image ?? options.Value.Tools.AnsibleImage,
+                definition.Image ?? options.Value.Tools.AnsibleImage,
                 guest.Id,
                 service.Directory,
                 ConfigureInputs.AddressOf(guest)!,

@@ -16,8 +16,8 @@ public enum DefinitionKind
     Installation,
     Guest,
     Template,
-    Recipe,
-    Pipeline,
+    Workflow,
+    Service,
 }
 
 /// <summary>The JSON Schemas shared with the editor, embedded from <c>contracts/schemas</c>.</summary>
@@ -38,8 +38,8 @@ public sealed class SchemaCatalog
         _schemas[DefinitionKind.Installation] = Build(options, "installation");
         _schemas[DefinitionKind.Guest] = Build(options, "guest");
         _schemas[DefinitionKind.Template] = Build(options, "template");
-        _schemas[DefinitionKind.Recipe] = Build(options, "recipe");
-        _schemas[DefinitionKind.Pipeline] = Build(options, "pipeline");
+        _schemas[DefinitionKind.Workflow] = Build(options, "workflow");
+        _schemas[DefinitionKind.Service] = Build(options, "service");
     }
 
     public static SchemaCatalog Instance => Shared.Value;
@@ -57,7 +57,7 @@ public sealed class SchemaCatalog
         Evaluate(_schemas[kind], instance);
 
     /// <summary>
-    /// Builds a schema supplied by a lab repository, such as a recipe's inputs schema. It may
+    /// Builds a schema supplied by a lab repository, such as a workflow's inputs schema. It may
     /// not reference anything outside itself: nothing is fetched.
     /// </summary>
     public static JsonSchema BuildUntrusted(string text) =>
@@ -76,7 +76,8 @@ public sealed class SchemaCatalog
         var seen = new HashSet<(string, string)>();
         foreach (var detail in (results.Details ?? []).Prepend(results))
         {
-            if (detail.IsValid || detail.Errors is null)
+            // An if that does not hold only picks else: what it found is not wrong with the document.
+            if (detail.IsValid || detail.Errors is null || detail.EvaluationPath.ToString().Split('/').Contains("if"))
             {
                 continue;
             }

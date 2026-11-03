@@ -1,5 +1,5 @@
 ---
-# An outcome is neither success nor failure. Octopushy knows only the name, which the recipe
+# An outcome is neither success nor failure. Octopushy knows only the name, which the workflow
 # declares; what it means belongs here. The run waits for a person, who can approve running
 # the action once more with machine_tools_allow_busy.
 - name: Look for active work

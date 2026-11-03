@@ -26,13 +26,15 @@ public sealed record StoreReference(string Key, int? Version = null);
 public sealed record PolicySettings(string? Approval, string? Destructive);
 
 /// <summary>Where a resource's definition lives and whether it, and everything it relies on, is valid.</summary>
+/// <param name="Workflow">For a guest or service, the workflow and version it resolved to, such as <c>fedora-vm@2.3</c>.</param>
 public sealed record ResourceEntry(
     ResourceKind Kind,
     string Address,
     string? ParentAddress,
     string File,
     JsonObject? Json,
-    bool Valid);
+    bool Valid,
+    string? Workflow = null);
 
 public sealed record RepositoryDefinition(
     string File,
@@ -85,6 +87,10 @@ public sealed record InstallationDefinition(
     public string DisplayName => Json["name"]?.GetValue<string>() ?? Id;
 }
 
+/// <summary>
+/// A VM. <paramref name="WorkflowReference"/> is what <c>guest.yaml</c> names; <paramref name="Workflow"/> is the version it
+/// resolved to, a workflow with <c>manages: vm</c>, or null when it resolved to none.
+/// </summary>
 public sealed record GuestDefinition(
     string Id,
     string Lab,
@@ -97,7 +103,8 @@ public sealed record GuestDefinition(
     string Host,
     int Vmid,
     string? Template,
-    string Recipe,
+    WorkflowReference WorkflowReference,
+    WorkflowDefinition? Workflow,
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {
@@ -110,20 +117,23 @@ public sealed record GuestDefinition(
 
     public bool Retired => Lifecycle == "retired";
 
-    /// <summary>The configure recipe of <c>setup.recipe</c>, if the guest has one.</summary>
-    public string? SetupRecipe => Json["setup"]?["recipe"]?.GetValue<string>();
+    /// <summary>The workflow's Ansible stage that sets the machine up, if it has one.</summary>
+    public WorkflowStage? Setup => Workflow?.Setup;
 }
 
 /// <summary>
-/// One thing that runs on a guest: an ordered list of stages, from <c>services/&lt;id&gt;/pipeline.yaml</c>
-/// in the guest's folder. Octopushy knows nothing of what it is: what its inputs mean is its recipes'.
+/// One thing that runs on a guest, from <c>services/&lt;id&gt;/service.yaml</c> in the guest's folder: a workflow with
+/// <c>manages: service</c>, run as its stages. Octopushy knows nothing of what it is: what its inputs mean is its workflow's.
 /// </summary>
+/// <param name="Stages">The resolved workflow's stages, with the service's inputs and secrets; empty when it resolved to none.</param>
 public sealed record ServiceDefinition(
     string Id,
     string GuestAddress,
     string File,
     string Directory,
     JsonObject Json,
+    WorkflowReference WorkflowReference,
+    WorkflowDefinition? Workflow,
     IReadOnlyList<StageDefinition> Stages,
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
@@ -131,10 +141,13 @@ public sealed record ServiceDefinition(
     public string Address => $"{GuestAddress}/{Id}";
 }
 
-/// <summary>A step of a service's pipeline. <paramref name="Inputs"/> holds the pipeline's inputs with the stage's own on top.</summary>
+/// <summary>
+/// A stage of a service's workflow as the service runs it. Every stage gets the service's inputs; only an Ansible stage gets
+/// its secrets, and an OpenTofu stage none.
+/// </summary>
 public sealed record StageDefinition(
     string Name,
-    string Recipe,
+    WorkflowStage Definition,
     JsonObject Inputs,
     IReadOnlyDictionary<string, StoreReference> Secrets,
     IReadOnlyDictionary<string, StoreReference> SecretFiles);
@@ -148,42 +161,6 @@ public sealed record TemplateDefinition(
     string? Os,
     ImageSource? Image,
     IReadOnlyList<string> AvailableOn);
-
-public sealed record RecipeDefinition(
-    string Id,
-    string File,
-    JsonObject Json,
-    string Operation,
-    string Executor,
-    string Root,
-    string? InputsSchema,
-    string Verify,
-    string? Image,
-    ConfigureRecipe? Configure = null);
-
-/// <summary>What a recipe with <c>operation: configure</c> offers.</summary>
-public sealed record ConfigureRecipe(
-    IReadOnlyDictionary<string, RecipeAction> Actions,
-    IReadOnlyDictionary<string, RecipeOutcome> Outcomes,
-    IReadOnlyList<string> Secrets)
-{
-    /// <summary>What runs when a guest or these files change, if anything does.</summary>
-    public RecipeAction? OnChange => Actions.Values.FirstOrDefault(a => a.OnChange);
-}
-
-/// <summary>One thing that can be run from a configure recipe.</summary>
-public sealed record RecipeAction(
-    string Id,
-    string? Description,
-    string Playbook,
-    string? Prepare,
-    bool UsesAppliedSnapshot,
-    bool Destructive,
-    bool OnChange,
-    int? TimeoutMinutes);
-
-/// <summary>A result a playbook may report that is neither success nor failure.</summary>
-public sealed record RecipeOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result);
 
 /// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
 public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);

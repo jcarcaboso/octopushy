@@ -50,7 +50,7 @@ public class PolicyAndInputsTests
     }
 
     [Fact]
-    public void The_inputs_hash_ignores_policy_and_follows_the_recipe_files()
+    public void The_inputs_hash_ignores_policy_and_follows_the_workflow_files()
     {
         using var test = TestRepository.Minimal();
         var before = Hash(test);
@@ -78,17 +78,30 @@ public class PolicyAndInputsTests
     }
 
     [Fact]
-    public void Setup_never_changes_the_provision_hash_or_the_infrastructure_variables()
+    public void Inputs_reach_the_machine_stage_and_its_hash()
     {
         using var test = TestRepository.Minimal();
         const string path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
         var guest = File.ReadAllText(Path.Combine(test.Root, path));
         var before = Hash(test);
-        test.Write(path, guest + "\nsetup: { otherFutureSetting: true }\n");
-        Assert.Equal(before, Hash(test));
         var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(ProvisionInputs.Build(repository, repository.Guests[0], "rev").Variables["inputs"]!.AsObject());
+        test.Write(path, guest + "\ninputs: { size: large }\n");
+        Assert.NotEqual(before, Hash(test));
+        repository = LabRepositoryLoader.Load(test.Root);
         var inputs = ProvisionInputs.Build(repository, repository.Guests[0], "rev");
-        Assert.Null(inputs.Variables["guest"]!["setup"]);
+        Assert.Equal("large", inputs.Variables["inputs"]!["size"]!.GetValue<string>());
+        Assert.Equal("test-vm@1.0", inputs.Variables["octopushy"]!["workflow"]!.GetValue<string>());
+        Assert.Null(inputs.Variables["guest"]!["inputs"]);
+    }
+
+    [Fact]
+    public void A_setup_section_is_the_earlier_format_and_refused()
+    {
+        using var test = TestRepository.Minimal();
+        const string path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        test.Write(path, File.ReadAllText(Path.Combine(test.Root, path)) + "\nsetup: { recipe: test-vm }\n");
+        Assert.False(LabRepositoryLoader.Load(test.Root).IsValid("home/korriban/krb-app-01"));
     }
 
     private static string Hash(TestRepository test)

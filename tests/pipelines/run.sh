@@ -86,14 +86,13 @@ service_dir=$guest_dir/services/web
 mkdir -p "$service_dir"
 echo 'server_name web;' >"$service_dir/site.conf"
 echo 'From the guest folder.' >"$guest_dir/motd"
+sed -i 's/^workflow: test-vm@1$/workflow: test-config@1/' "$guest_dir/guest.yaml"
 cat >>"$guest_dir/guest.yaml" <<YAML
-setup:
-  recipe: test-config
-  inputs: { greeting: hello }
-  secrets:
-    app_password: { store: e2e/web-password }
-  secretFiles:
-    deploy_key_src: { store: e2e/deploy-key }
+inputs: { greeting: hello }
+secrets:
+  app_password: { store: e2e/web-password }
+secretFiles:
+  deploy_key_src: { store: e2e/deploy-key }
 access:
   address: 127.0.0.1
   port: $port
@@ -101,20 +100,15 @@ access:
   sshKey: { store: e2e/ssh-key }
   hostKey: { store: e2e/host-key }
 YAML
-# Three stages, two of them OpenTofu, so a state of one stage cannot pass for the other's.
+# The web workflow has three stages, two of them OpenTofu, so a state of one stage cannot pass for the other's.
 write_pipeline() {
-  cat >"$service_dir/pipeline.yaml" <<YAML
+  cat >"$service_dir/service.yaml" <<YAML
 schemaVersion: 1
+workflow: web@1
 policy: { approval: $1 }
-stages:
-  - { name: expose, recipe: web-rules }
-  - name: deploy
-    recipe: web
-    inputs: { fail_until_allowed: $3 }
-    secrets:
-      web_password: { store: e2e/web-password }
-  - { name: audit, recipe: web-rules, inputs: { port: 1 } }
-inputs: { port: $2 }
+inputs: { port: $2, fail_until_allowed: $3 }
+secrets:
+  web_password: { store: e2e/web-password }
 YAML
 }
 write_pipeline manual 8080 false

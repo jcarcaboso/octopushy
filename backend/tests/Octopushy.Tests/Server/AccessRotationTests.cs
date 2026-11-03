@@ -186,7 +186,7 @@ public class AccessRotationTests(PostgresFixture postgres)
         Assert.Null(keys[0].RemovedAt);
 
         // Runs carry on with the key that works.
-        await server.Services.GetRequiredService<Planner>().ConfigureGuestAsync(resource, "configure", CancellationToken.None);
+        await server.Services.GetRequiredService<Planner>().ConfigureGuestAsync(resource, "setup", CancellationToken.None);
         await server.TickAsync();
         await ConfigureRunTests.PreviewAsync(agent);
         var playbook = await agent.NextAsync("run");

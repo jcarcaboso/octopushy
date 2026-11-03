@@ -12,8 +12,7 @@ hardware:
 network:
   bridge: vmbr0
   mode: dhcp
-provision:
-  recipe: proxmox-vm
+workflow: proxmox-vm@1
 access:
   sshAuthorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example

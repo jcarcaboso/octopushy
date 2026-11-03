@@ -84,15 +84,15 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
-                inputs.Recipe.Root,
-                inputs.Recipe.Image ?? options.Value.Tools.OpenTofuImage,
+                inputs.Stage.Root,
+                inputs.Stage.Image ?? options.Value.Tools.OpenTofuImage,
                 inputs.Variables,
                 env,
                 secretEnv),
             Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest)),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
-            Verify = inputs.Recipe.Verify,
+            Verify = inputs.Stage.Verify,
         };
 
         var run = NewRun(resource, retire ? Operations.Retire : Operations.Provision, revision, reason, context);
@@ -106,7 +106,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             foreach (var step in run.Steps.Where(s => s.Name is StepNames.Verify or StepNames.VerifyAbsent))
             {
                 step.Status = StepStatuses.Skipped;
-                step.Detail = "The recipe does not verify through Proxmox.";
+                step.Detail = "The workflow does not verify this VM through Proxmox.";
             }
         }
 
@@ -114,7 +114,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     }
 
     /// <summary>
-    /// A configure run: one action of the guest's setup recipe. It reaches the guest over SSH, so
+    /// A configure run: one action of the setup stage of the guest's workflow. It reaches the guest over SSH, so
     /// it holds no Proxmox credentials. The installation's endpoint stays in its context because
     /// trust in that installation still decides whether its guests are worked on.
     /// </summary>
@@ -126,7 +126,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         Managed(repository, guest.InstallationAddress);
         var inputs = ConfigureInputs.Build(repository, guest);
         if (!inputs.Configure.Actions.TryGetValue(actionId, out var action))
-            throw new RunException($"The recipe {inputs.Recipe.Id} has no action {actionId}.");
+            throw new RunException($"The workflow {inputs.Workflow.Label} has no action {actionId}.");
         if (action.UsesAppliedSnapshot && configuration?.Snapshot is null)
             throw new RunException($"{actionId} reuses what the last successful run prepared, and this guest has none yet. Run an action that prepares one first.");
 
@@ -172,15 +172,15 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
             Ansible = new AnsibleContext(
-                inputs.Recipe.Id,
+                inputs.Workflow.Label,
                 action.Id,
-                inputs.Recipe.Root,
+                inputs.Stage.Root,
                 action.Playbook,
                 action.Prepare,
                 action.UsesAppliedSnapshot,
                 action.Destructive,
                 action.TimeoutMinutes,
-                inputs.Recipe.Image ?? options.Value.Tools.AnsibleImage,
+                inputs.Stage.Image ?? options.Value.Tools.AnsibleImage,
                 guest.Id,
                 guest.Directory,
                 inputs.Address,

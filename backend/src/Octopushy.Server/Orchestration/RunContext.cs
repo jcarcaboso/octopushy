@@ -115,8 +115,8 @@ public sealed record RunContext
         JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
 }
 
-/// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools.</summary>
-public sealed record StageContext(string Name, string Recipe, OpenTofuContext? OpenTofu, AnsibleContext? Ansible);
+/// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools. <c>Workflow</c> is the workflow at its version.</summary>
+public sealed record StageContext(string Name, string Workflow, OpenTofuContext? OpenTofu, AnsibleContext? Ansible);
 
 /// <summary>
 /// A rotation of a guest's own key. <see cref="Current"/> adds the candidate; the candidate does
@@ -135,11 +135,11 @@ public sealed record OpenTofuContext(
     Dictionary<string, string> SecretEnv);
 
 /// <summary>
-/// A configure run: one action of a recipe, against one guest. <see cref="Vars"/> holds no secret
+/// A configure run: one action of a workflow's Ansible stage, against one guest. <c>Workflow</c> is the workflow at its version. <see cref="Vars"/> holds no secret
 /// value; a secret var names its role in <see cref="RunContext.Secrets"/>.
 /// </summary>
 public sealed record AnsibleContext(
-    string Recipe,
+    string Workflow,
     string Action,
     string Root,
     string Playbook,
@@ -157,7 +157,7 @@ public sealed record AnsibleContext(
     IReadOnlyList<string> SecretVars,
     IReadOnlyList<string> SecretFiles,
     Dictionary<string, AnsibleOutcome> Outcomes,
-    /// <summary>What changed under the recipe and its project since the guest's last successful run; null when it has none.</summary>
+    /// <summary>What changed under the workflow and its project since the guest's last successful run; null when it has none.</summary>
     IReadOnlyList<string>? ChangedFiles);
 
 /// <summary>A declared outcome, as the run was built with it.</summary>

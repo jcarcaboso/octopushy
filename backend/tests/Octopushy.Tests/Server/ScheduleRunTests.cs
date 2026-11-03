@@ -28,7 +28,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
         var guest = Path.Combine(test.Root, GuestFile);
         test.Write(GuestFile, File.ReadAllText(guest).Replace(
             "access:\n  user: ops",
-            $"  schedules:\n    - {{ action: {action}, cron: \"{cron}\" }}\naccess:\n  user: ops"));
+            $"schedules:\n    - {{ action: {action}, cron: \"{cron}\" }}\naccess:\n  user: ops"));
         return test;
     }
 
@@ -117,7 +117,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
         await using (var scope = server.Services.CreateAsyncScope())
         {
             var configuration = await scope.ServiceProvider.GetRequiredService<OctopushyDb>().GuestConfigurations.AsNoTracking().SingleAsync();
-            Assert.Equal("configure", configuration.AppliedAction);
+            Assert.Equal("setup", configuration.AppliedAction);
             Assert.Contains("\"1\"", configuration.Snapshot);
         }
 
@@ -126,7 +126,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData("refused", RunStatuses.Failed, "configure")]
+    [InlineData("refused", RunStatuses.Failed, "setup")]
     [InlineData("unchanged", RunStatuses.Succeeded, "update-system")]
     public async Task An_outcome_no_person_can_approve_ends_a_scheduled_run_as_it_declares(string outcome, string status, string appliedAction)
     {
@@ -209,7 +209,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
     [Fact]
     public async Task Under_manual_approval_it_waits_and_the_next_firing_is_skipped()
     {
-        await using var server = await ServerHarness.StartAsync(postgres, Scheduled("policy:\n  destructive: manual\n", action: "configure", destructive: "true"));
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled("policy:\n  destructive: manual\n", action: "setup", destructive: "true"));
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var _ = http;
         await FireAsync(server, At(1));
@@ -281,7 +281,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
         var file = Path.Combine(test.Root, GuestFile);
         test.Write(GuestFile, File.ReadAllText(file).Replace(
             "access:\n  user: ops",
-            "  schedules:\n    - { action: configure, cron: \"not a cron\" }\naccess:\n  user: ops"));
+            "schedules:\n    - { action: setup, cron: \"not a cron\" }\naccess:\n  user: ops"));
         await using var server = await ServerHarness.StartAsync(postgres, test);
         using var http = server.CreateClient();
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
@@ -510,7 +510,7 @@ public class ScheduleRunTests(PostgresFixture postgres)
     public async Task A_person_who_approves_after_the_limit_decides_and_the_limit_stops_applying()
     {
         var clock = new TestClock();
-        await using var server = await ServerHarness.StartAsync(postgres, Scheduled("policy:\n  destructive: manual\n", action: "configure", destructive: "true"), clock: clock);
+        await using var server = await ServerHarness.StartAsync(postgres, Scheduled("policy:\n  destructive: manual\n", action: "setup", destructive: "true"), clock: clock);
         var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
         using var _ = http;
         await PassAsync(server, clock, At(1));

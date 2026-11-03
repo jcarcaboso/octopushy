@@ -42,7 +42,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         }, cancellationToken);
 
     /// <summary>
-    /// Runs one action of a guest's setup recipe at the latest revision; by default the one that
+    /// Runs one action of a guest's workflow at the latest revision; by default the one that
     /// follows changes. A person's run queues behind what is running. A schedule's does not: it
     /// is refused, so nothing piles up behind a run that is waiting or uncertain.
     /// </summary>
@@ -51,8 +51,8 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         {
             var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
             var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            if (guest.SetupRecipe is null)
-                throw new RunException("This guest has no setup recipe.");
+            if (guest.Setup is null)
+                throw new RunException($"This guest's workflow, {guest.Workflow?.Label ?? guest.WorkflowReference.ToString()}, has no setup stage.");
             if (reason == RunReasons.Schedule
                 && await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
                         && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
@@ -68,7 +68,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 throw new RunException(refused);
             var inputs = ConfigureInputs.Build(repository, guest);
             var chosen = action ?? inputs.Configure.OnChange?.Id
-                ?? throw new RunException("Choose an action: the recipe marks none with onChange.");
+                ?? throw new RunException("Choose an action: the workflow's setup stage runs none on change.");
             var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken, scheduledFor);
             // However it is started, a run of the onChange action delivers the current inputs and
             // store versions, so neither is owed another automatic run.
@@ -157,7 +157,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             var runs = new List<Run>();
             foreach (var item in due)
             {
-                if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Guest(item.Resource.Address) is not { SetupRecipe: not null } guest
+                if (repository.Resource(item.Resource.Address)?.Valid != true || repository.Guest(item.Resource.Address) is not { Setup: not null } guest
                     || Refused(item.Resource, guest))
                     continue;
                 var inputs = ConfigureInputs.Build(repository, guest);
@@ -168,13 +168,13 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                     runs.Add(await ConfigureRunAsync(db, repository, guest, item.Resource, revision, action.Id, "revision", cancellationToken));
             }
 
-            // Read without building the inputs, which hashes the recipe's files: this runs every
+            // Read without building the inputs, which hashes the workflow's files: this runs every
             // tick, for every guest, and almost always finds nothing.
             var followed = new List<(GuestConfiguration Configuration, Resource Resource, GuestDefinition Guest, IReadOnlyList<string> Keys)>();
             foreach (var item in following)
             {
                 // A refused guest's change of a followed value stays owed, as its other changes do.
-                if (repository.Resource(item.Resource.Address)?.Valid == true && repository.Guest(item.Resource.Address) is { SetupRecipe: not null } guest
+                if (repository.Resource(item.Resource.Address)?.Valid == true && repository.Guest(item.Resource.Address) is { Setup: not null } guest
                     && !Refused(item.Resource, guest))
                     followed.Add((item.Configuration, item.Resource, guest, ConfigureInputs.FollowedSecretsOf(guest)));
             }
@@ -190,7 +190,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                     continue;
                 }
 
-                if (repository.Recipes[guest.SetupRecipe!].Configure?.OnChange is not { } onChange)
+                if (guest.Setup!.Configure?.OnChange is not { } onChange)
                     continue;
                 // What the newest run of the action actually took counts, not what was active when
                 // it was created: it pins at its first dispatch, which can follow a promotion. That
@@ -338,12 +338,12 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         string action, string reason, CancellationToken cancellationToken, DateTimeOffset? scheduledFor = null)
     {
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
-        var recipe = repository.Recipes[guest.SetupRecipe!];
+        var workflow = guest.Workflow!;
         var applied = configuration?.AppliedRevisionId is { } id
             ? await db.Revisions.AsNoTracking().Where(r => r.Id == id).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken)
             : null;
         var changed = applied is null ? null
-            : await mirror.ChangedFilesAsync(applied, revision.Commit, [Path.GetDirectoryName(recipe.File)!, recipe.Root, guest.Directory], cancellationToken);
+            : await mirror.ChangedFilesAsync(applied, revision.Commit, [workflow.Directory, workflow.Setup!.Root, guest.Directory], cancellationToken);
         return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed, scheduledFor);
     }
 

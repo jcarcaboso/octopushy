@@ -11,7 +11,7 @@ public sealed partial class RunEngine
 {
     /// <summary>
     /// Applies the policy to a preview, or waits for a person on a declared outcome. Nothing shows
-    /// what a playbook will change, so every run is treated as a change, and the recipe's
+    /// what a playbook will change, so every run is treated as a change, and the workflow's
     /// declaration stands in for the plan's count of deletes.
     /// </summary>
     private bool DecideConfigureApproval(Run run, Step step, RunContext context)
@@ -71,7 +71,7 @@ public sealed partial class RunEngine
 
         step.Status = StepStatuses.AwaitingApproval;
         step.Detail = destructiveManual && !manual
-            ? $"The recipe declares {ansible.Action} destructive and destructive is manual (set by {policy.DestructiveSetBy})."
+            ? $"The workflow declares {ansible.Action} destructive and destructive is manual (set by {policy.DestructiveSetBy})."
             : $"Approval is manual (set by {policy.ApprovalSetBy}).";
         return false;
     }
@@ -122,7 +122,7 @@ public sealed partial class RunEngine
 
     /// <summary>
     /// Settles a finished playbook. Success promotes what was prepared. A declared outcome waits
-    /// for a person if the recipe lets one approve it, once, and otherwise ends as it declares:
+    /// for a person if the workflow lets one approve it, once, and otherwise ends as it declares:
     /// a declared success promotes like any other, and a declared failure promotes nothing.
     /// A scheduled run never waits on an approvable one: holding the guest for a person would
     /// block every later run, so it ends as succeeded, promotes nothing, and the next time tries

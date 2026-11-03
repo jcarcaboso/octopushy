@@ -1,6 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using Json.Schema;
 using Octopushy.Definitions.Schemas;
 using Octopushy.Definitions.Yaml;
 
@@ -8,50 +6,55 @@ namespace Octopushy.Definitions;
 
 /// <summary>
 /// Reads a lab repository snapshot from a directory: every definition file is parsed, checked
-/// against its schema, and cross-checked for references. A problem in one resource invalidates
-/// that resource and what is below it, not its siblings.
+/// against its schema, and cross-checked for references, and every workflow a guest or service
+/// names is resolved. A problem in one resource invalidates that resource and what is below it,
+/// not its siblings.
 /// </summary>
-public sealed partial class LabRepositoryLoader
+public sealed class LabRepositoryLoader
 {
     /// <summary>Keys reserved for Octopushy's own credentials, which definitions may not use.</summary>
     public const string SystemScope = "system/";
 
+    /// <summary>Where the format is described, for messages about files in an earlier one.</summary>
+    public const string FormatDocument = "docs/workflows.md";
+
     private readonly string _root;
+    private readonly IWorkflowSource _workflows;
     private readonly List<DefinitionIssue> _issues = [];
     private readonly List<StoreUse> _storeUses = [];
     private readonly HashSet<string> _invalidAddresses = new(StringComparer.Ordinal);
     private readonly HashSet<string> _invalidTemplates = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _invalidRecipes = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, JsonSchema?> _inputSchemas = new(StringComparer.Ordinal);
     private readonly List<ServiceDefinition> _services = [];
+    private readonly Dictionary<string, YamlDocument> _documents = new(StringComparer.Ordinal);
     private bool _repositoryValid = true;
 
-    private LabRepositoryLoader(string root)
+    private LabRepositoryLoader(string root, IWorkflowSource? workflows)
     {
         _root = Path.GetFullPath(root);
+        _workflows = workflows ?? new LocalWorkflowSource(_root);
     }
 
-    public static LabRepository Load(string root) => new LabRepositoryLoader(root).LoadAll();
+    /// <summary>Reads a repository whose workflows are its own, in <c>workflows/</c>.</summary>
+    public static LabRepository Load(string root) => new LabRepositoryLoader(root, null).LoadAll();
+
+    /// <summary>Reads a repository, resolving the workflows it names from <paramref name="workflows"/>.</summary>
+    public static LabRepository Load(string root, IWorkflowSource workflows) => new LabRepositoryLoader(root, workflows).LoadAll();
 
     private LabRepository LoadAll()
     {
         var settings = LoadSettings();
-        var templates = LoadShared("templates", "template.yaml", DefinitionKind.Template, ParseTemplate, _invalidTemplates);
-        var recipes = LoadShared("recipes", "recipe.yaml", DefinitionKind.Recipe, ParseRecipe, _invalidRecipes);
+        CheckEarlierFormat();
+        var templates = LoadTemplates();
+        _issues.AddRange(_workflows.Issues);
 
         var labs = new List<LabDefinition>();
         var installations = new List<InstallationDefinition>();
         var guests = new List<GuestDefinition>();
         var entries = new List<ResourceEntry>();
         var labsDirectory = Path.Combine(_root, "labs");
-        foreach (var labDirectory in SubDirectories(labsDirectory))
+        foreach (var labDirectory in DefinitionFiles.SubDirectories(labsDirectory))
         {
             LoadLab(labDirectory, labs, installations, guests, entries);
-        }
-
-        foreach (var recipe in recipes.Values)
-        {
-            CheckRecipe(recipe);
         }
 
         foreach (var installation in installations)
@@ -76,13 +79,13 @@ public sealed partial class LabRepositoryLoader
         }
         foreach (var guest in guests)
         {
-            CheckGuest(guest, settings, installations, templates, recipes);
-            CheckSetup(guest, recipes, installations, labs.Find(l => l.Id == guest.Lab)?.Timezone);
+            CheckGuest(guest, installations, templates);
+            CheckSetup(guest, installations, labs.Find(l => l.Id == guest.Lab)?.Timezone);
         }
         foreach (var service in _services)
         {
             if (guests.FirstOrDefault(g => g.Address == service.GuestAddress) is { } guest)
-                CheckService(service, guest, recipes, installations);
+                CheckService(service, guest, installations);
         }
 
         // An installation Octopushy only observes holds nothing it would change: see docs/safety-boundary.md.
@@ -99,7 +102,16 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
-        var validEntries = entries.Select(e => e with { Valid = IsValid(e, guests, settings) }).ToList();
+        var validEntries = entries.Select(e => e with
+        {
+            Valid = IsValid(e, guests, settings),
+            Workflow = e.Kind switch
+            {
+                ResourceKind.Guest => guests.Find(g => g.Address == e.Address)?.Workflow?.Label,
+                ResourceKind.Service => _services.Find(s => s.Address == e.Address)?.Workflow?.Label,
+                _ => null,
+            },
+        }).ToList();
         return new LabRepository(
             _root,
             _repositoryValid ? settings : null,
@@ -108,7 +120,7 @@ public sealed partial class LabRepositoryLoader
             guests,
             _services,
             templates,
-            recipes,
+            _workflows.Workflows,
             validEntries,
             _issues.ToList(),
             _storeUses.ToList(),
@@ -137,8 +149,7 @@ public sealed partial class LabRepositoryLoader
 
         if (entry.Kind == ResourceKind.Service)
         {
-            return _services.FirstOrDefault(s => s.Address == entry.Address) is { } service
-                && !service.Stages.Any(s => _invalidRecipes.Contains(s.Recipe));
+            return _services.FirstOrDefault(s => s.Address == entry.Address) is { Workflow.Valid: true };
         }
 
         if (entry.Kind != ResourceKind.Guest)
@@ -147,10 +158,8 @@ public sealed partial class LabRepositoryLoader
         }
 
         var guest = guests.FirstOrDefault(g => g.Address == entry.Address);
-        return guest is not null
-            && (guest.Template is null || !_invalidTemplates.Contains(guest.Template))
-            && !_invalidRecipes.Contains(guest.Recipe)
-            && (guest.SetupRecipe is null || !_invalidRecipes.Contains(guest.SetupRecipe));
+        return guest is { Workflow.Valid: true }
+            && (guest.Template is null || !_invalidTemplates.Contains(guest.Template));
     }
 
     private RepositoryDefinition? LoadSettings()
@@ -179,41 +188,45 @@ public sealed partial class LabRepositoryLoader
             ParseLabels(defaults?["execution"]));
     }
 
-    private Dictionary<string, T> LoadShared<T>(
-        string folder,
-        string fileName,
-        DefinitionKind kind,
-        Func<string, string, JsonObject, YamlDocument, T?> parse,
-        HashSet<string> invalid)
+    /// <summary>Recipes and pipelines were the format before workflows. Nothing reads them, so a repository that has them is refused.</summary>
+    private void CheckEarlierFormat()
     {
-        var result = new Dictionary<string, T>(StringComparer.Ordinal);
-        foreach (var directory in SubDirectories(Path.Combine(_root, folder)))
+        if (Directory.Exists(Path.Combine(_root, "recipes")))
+            Error("recipes", null,
+                $"recipes/ is the format before workflows, and nothing reads it: move each recipe into a workflow, workflows/<id>/workflow.yaml. See {FormatDocument}.");
+    }
+
+    private Dictionary<string, TemplateDefinition> LoadTemplates()
+    {
+        var result = new Dictionary<string, TemplateDefinition>(StringComparer.Ordinal);
+        foreach (var directory in DefinitionFiles.SubDirectories(Path.Combine(_root, "templates")))
         {
             var id = Path.GetFileName(directory);
-            var file = Relative(Path.Combine(directory, fileName));
-            if (!IdPattern().IsMatch(id))
+            var file = Relative(Path.Combine(directory, "template.yaml"));
+            var address = $"templates/{id}";
+            if (!DefinitionFiles.IsId(id))
             {
-                Error(file, null, $"'{id}' is not a valid id: use lowercase letters, digits, and hyphens.", $"{folder}/{id}");
-                invalid.Add(id);
+                Error(file, null, $"'{id}' is not a valid id: use lowercase letters, digits, and hyphens.", address);
+                _invalidTemplates.Add(id);
                 continue;
             }
 
-            if (!File.Exists(Path.Combine(directory, fileName)))
+            if (!File.Exists(Path.Combine(directory, "template.yaml")))
             {
-                Warning(file, null, $"The folder {folder}/{id} has no {fileName} and is ignored.");
+                Warning(file, null, $"The folder templates/{id} has no template.yaml and is ignored.");
                 continue;
             }
 
             var errorsBefore = ErrorCount();
-            var (json, document) = ReadDefinition(file, kind, $"{folder}/{id}");
+            var (json, document) = ReadDefinition(file, DefinitionKind.Template, address);
             if (json is null || document is null)
             {
-                invalid.Add(id);
+                _invalidTemplates.Add(id);
                 continue;
             }
 
-            CollectStoreUses(json, $"{folder}/{id}", file, document);
-            var parsed = parse(id, file, json, document);
+            CollectStoreUses(json, address, file, document);
+            var parsed = ParseTemplate(id, file, json, document);
             if (parsed is not null)
             {
                 result[id] = parsed;
@@ -221,7 +234,7 @@ public sealed partial class LabRepositoryLoader
 
             if (parsed is null || ErrorCount() > errorsBefore)
             {
-                invalid.Add(id);
+                _invalidTemplates.Add(id);
             }
         }
 
@@ -252,175 +265,6 @@ public sealed partial class LabRepositoryLoader
 
         var availableOn = (json["availableOn"] as JsonArray)?.Select(n => n!.GetValue<string>()).ToList() ?? [];
         return new TemplateDefinition(id, file, json, json["os"]?.GetValue<string>(), image, availableOn);
-    }
-
-    private RecipeDefinition? ParseRecipe(string id, string file, JsonObject json, YamlDocument document)
-    {
-        var recipeDirectory = Path.GetDirectoryName(Path.Combine(_root, file))!;
-        var root = ResolveInside(recipeDirectory, json["root"]!.GetValue<string>());
-        if (root is null)
-        {
-            Error(file, document.LineOf("/root"), "The root must stay inside the repository.", $"recipes/{id}");
-            return null;
-        }
-
-        string? inputs = null;
-        if (json["inputs"] is JsonValue inputsValue)
-        {
-            inputs = ResolveInside(recipeDirectory, inputsValue.GetValue<string>());
-            if (inputs is null)
-            {
-                Error(file, document.LineOf("/inputs"), "The inputs schema must stay inside the repository.", $"recipes/{id}");
-                return null;
-            }
-        }
-
-        return new RecipeDefinition(
-            id,
-            file,
-            json,
-            json["operation"]!.GetValue<string>(),
-            json["executor"]!.GetValue<string>(),
-            root,
-            inputs,
-            json["verify"]?.GetValue<string>() ?? "proxmox",
-            json["image"]?.GetValue<string>(),
-            ParseConfigure(json));
-    }
-
-    private static ConfigureRecipe? ParseConfigure(JsonObject json)
-    {
-        if (json["actions"] is not JsonObject actions)
-        {
-            return null;
-        }
-
-        return new ConfigureRecipe(
-            actions.ToDictionary(
-                p => p.Key,
-                p => new RecipeAction(
-                    p.Key,
-                    p.Value!["description"]?.GetValue<string>(),
-                    p.Value!["playbook"]!.GetValue<string>(),
-                    p.Value!["prepare"]?.GetValue<string>(),
-                    p.Value!["snapshot"] is not null,
-                    p.Value!["destructive"]!.GetValue<bool>(),
-                    p.Value!["onChange"]?.GetValue<bool>() ?? false,
-                    p.Value!["timeoutMinutes"]?.GetValue<int>()),
-                StringComparer.Ordinal),
-            (json["outcomes"] as JsonObject)?.ToDictionary(
-                p => p.Key,
-                p => new RecipeOutcome(
-                    p.Key,
-                    p.Value!["description"]?.GetValue<string>(),
-                    p.Value!["approve"]?["vars"]?.DeepClone().AsObject(),
-                    p.Value!["result"]?.GetValue<string>() ?? "failed"),
-                StringComparer.Ordinal) ?? [],
-            (json["secrets"] as JsonArray)?.Select(s => s!.GetValue<string>()).ToList() ?? []);
-    }
-
-    private void CheckRecipe(RecipeDefinition recipe)
-    {
-        var address = $"recipes/{recipe.Id}";
-        var rootPath = Path.Combine(_root, recipe.Root);
-        if (!Directory.Exists(rootPath))
-        {
-            Error(recipe.File, null, $"The root {recipe.Root} does not exist.", address);
-            _invalidRecipes.Add(recipe.Id);
-            return;
-        }
-
-        if (recipe.Configure is { } configure)
-        {
-            CheckConfigureRecipe(recipe, configure, rootPath, address);
-            CheckInputsSchema(recipe, address);
-            return;
-        }
-
-        var tofuFiles = Directory.EnumerateFiles(rootPath)
-            .Where(f => f.EndsWith(".tf", StringComparison.Ordinal) || f.EndsWith(".tf.json", StringComparison.Ordinal))
-            .ToList();
-        if (tofuFiles.Count == 0)
-        {
-            Error(recipe.File, null, $"The root {recipe.Root} holds no .tf files.", address);
-            _invalidRecipes.Add(recipe.Id);
-        }
-
-        foreach (var tofuFile in tofuFiles.Where(f => f.EndsWith(".tf", StringComparison.Ordinal)))
-        {
-            if (BackendBlock().IsMatch(File.ReadAllText(tofuFile)))
-            {
-                Error(Relative(tofuFile), null, "The root must not declare a backend: Octopushy keeps the state.", address);
-                _invalidRecipes.Add(recipe.Id);
-            }
-        }
-
-        CheckInputsSchema(recipe, address);
-    }
-
-    private void CheckConfigureRecipe(RecipeDefinition recipe, ConfigureRecipe configure, string rootPath, string address)
-    {
-        void Invalid(string message)
-        {
-            Error(recipe.File, null, message, address);
-            _invalidRecipes.Add(recipe.Id);
-        }
-
-        foreach (var action in configure.Actions.Values)
-        {
-            foreach (var (what, path) in new[] { ("playbook", action.Playbook), ("prepare playbook", action.Prepare) })
-            {
-                if (path is null)
-                {
-                    continue;
-                }
-
-                var full = Path.GetFullPath(Path.Combine(rootPath, path));
-                if (!full.StartsWith(Path.GetFullPath(rootPath) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                {
-                    Invalid($"The {what} of {action.Id} must stay inside the root.");
-                }
-                else if (!File.Exists(full))
-                {
-                    Invalid($"The {what} {path} of {action.Id} does not exist in {recipe.Root}.");
-                }
-            }
-        }
-
-        if (configure.Actions.Values.Count(a => a.OnChange) > 1)
-        {
-            Invalid("At most one action may set onChange.");
-        }
-
-        if (configure.Actions.Values.Any(a => a.OnChange && a.UsesAppliedSnapshot))
-        {
-            Invalid("An onChange action cannot reuse a snapshot: a new machine has none.");
-        }
-    }
-
-    private void CheckInputsSchema(RecipeDefinition recipe, string address)
-    {
-        if (recipe.InputsSchema is { } inputs)
-        {
-            _inputSchemas[recipe.Id] = null;
-            var inputsPath = Path.Combine(_root, inputs);
-            if (!File.Exists(inputsPath))
-            {
-                Error(recipe.File, null, $"The inputs schema {inputs} does not exist.", address);
-                _invalidRecipes.Add(recipe.Id);
-                return;
-            }
-
-            try
-            {
-                _inputSchemas[recipe.Id] = SchemaCatalog.BuildUntrusted(File.ReadAllText(inputsPath));
-            }
-            catch (Exception e) when (e is System.Text.Json.JsonException or JsonSchemaException or InvalidOperationException or ArgumentException)
-            {
-                Error(inputs, null, $"The inputs schema is not a valid JSON Schema: {e.Message}", address);
-                _invalidRecipes.Add(recipe.Id);
-            }
-        }
     }
 
     private void LoadLab(
@@ -459,7 +303,7 @@ public sealed partial class LabRepositoryLoader
                 ParseLabels(json["execution"])));
         }
 
-        foreach (var installationDirectory in SubDirectories(Path.Combine(labDirectory, "proxmox")))
+        foreach (var installationDirectory in DefinitionFiles.SubDirectories(Path.Combine(labDirectory, "proxmox")))
         {
             LoadInstallation(id, installationDirectory, installations, guests, entries);
         }
@@ -528,7 +372,7 @@ public sealed partial class LabRepositoryLoader
                 json["manage"]?.GetValue<bool>() ?? true));
         }
 
-        foreach (var guestDirectory in SubDirectories(Path.Combine(directory, "guests")))
+        foreach (var guestDirectory in DefinitionFiles.SubDirectories(Path.Combine(directory, "guests")))
         {
             LoadGuest(lab, id, guestDirectory, guests, entries);
         }
@@ -553,7 +397,7 @@ public sealed partial class LabRepositoryLoader
         var (json, document) = ReadDefinition(file, DefinitionKind.Guest, address);
         entries.Add(new ResourceEntry(ResourceKind.Guest, address, $"{lab}/{installation}", file, json, false));
         // Whatever the state of guest.yaml: an error there must not read as the guest's services having gone.
-        foreach (var serviceDirectory in SubDirectories(Path.Combine(directory, "services")))
+        foreach (var serviceDirectory in DefinitionFiles.SubDirectories(Path.Combine(directory, "services")))
         {
             LoadService(address, serviceDirectory, entries);
         }
@@ -564,7 +408,7 @@ public sealed partial class LabRepositoryLoader
         }
 
         CollectStoreUses(json, address, file, document);
-        var provision = (JsonObject)json["provision"]!;
+        var reference = WorkflowReference.Parse(json["workflow"]!.GetValue<string>())!;
         guests.Add(new GuestDefinition(
             id,
             lab,
@@ -577,28 +421,59 @@ public sealed partial class LabRepositoryLoader
             json["host"]!.GetValue<string>(),
             json["vmid"]!.GetValue<int>(),
             json["template"]?.GetValue<string>(),
-            provision["recipe"]!.GetValue<string>(),
+            reference,
+            ResolveWorkflow(reference, WorkflowKinds.Vm, "guest", file, address),
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
+    }
+
+    /// <summary>The workflow a reference names, if it resolves to one that manages what names it; an error otherwise.</summary>
+    private WorkflowDefinition? ResolveWorkflow(WorkflowReference reference, string manages, string what, string file, string address)
+    {
+        var resolution = _workflows.Resolve(reference);
+        if (resolution.Workflow is not { } workflow)
+        {
+            Error(file, LineOf(file, "/workflow"), resolution.Problem!, address);
+            return null;
+        }
+
+        if (workflow.Manages != manages)
+        {
+            Error(file, LineOf(file, "/workflow"),
+                $"{reference} resolved to {workflow.Label}, which has manages: {workflow.Manages}, and a {what} needs a workflow with manages: {manages}.", address);
+            return null;
+        }
+
+        return workflow;
     }
 
     private void LoadService(string guest, string directory, List<ResourceEntry> entries)
     {
         var id = Path.GetFileName(directory);
         var address = $"{guest}/{id}";
-        var file = Relative(Path.Combine(directory, "pipeline.yaml"));
+        var file = Relative(Path.Combine(directory, "service.yaml"));
         if (!CheckId(id, file, address))
         {
             return;
         }
 
-        if (!File.Exists(Path.Combine(directory, "pipeline.yaml")))
+        if (File.Exists(Path.Combine(directory, "pipeline.yaml")))
         {
-            Warning(file, null, $"The service folder {Relative(directory)} has no pipeline.yaml and is ignored.", guest);
+            var earlier = Relative(Path.Combine(directory, "pipeline.yaml"));
+            Error(earlier, null,
+                $"pipeline.yaml is the format before workflows, and nothing reads it: a service is service.yaml naming a workflow with manages: service. See {FormatDocument}.",
+                address);
+            entries.Add(new ResourceEntry(ResourceKind.Service, address, guest, earlier, null, false));
             return;
         }
 
-        var (json, document) = ReadDefinition(file, DefinitionKind.Pipeline, address);
+        if (!File.Exists(Path.Combine(directory, "service.yaml")))
+        {
+            Warning(file, null, $"The service folder {Relative(directory)} has no service.yaml and is ignored.", guest);
+            return;
+        }
+
+        var (json, document) = ReadDefinition(file, DefinitionKind.Service, address);
         entries.Add(new ResourceEntry(ResourceKind.Service, address, guest, file, json, false));
         if (json is null || document is null)
         {
@@ -606,26 +481,22 @@ public sealed partial class LabRepositoryLoader
         }
 
         CollectStoreUses(json, address, file, document);
-        var shared = json["inputs"] as JsonObject;
-        var stages = json["stages"]!.AsArray().Select(node =>
-        {
-            var inputs = shared?.DeepClone().AsObject() ?? [];
-            foreach (var (name, value) in (node!["inputs"] as JsonObject) ?? [])
-            {
-                inputs[name] = value?.DeepClone();
-            }
-
-            return new StageDefinition(
-                node["name"]!.GetValue<string>(),
-                node["recipe"]!.GetValue<string>(),
-                inputs,
-                StageSecrets(node["secrets"]),
-                StageSecrets(node["secretFiles"]));
-        }).ToList();
-        _services.Add(new ServiceDefinition(id, guest, file, Relative(directory), json, stages, ParsePolicy(json["policy"]), ParseLabels(json["execution"])));
+        var reference = WorkflowReference.Parse(json["workflow"]!.GetValue<string>())!;
+        var workflow = ResolveWorkflow(reference, WorkflowKinds.Service, "service", file, address);
+        var inputs = json["inputs"] as JsonObject ?? [];
+        var secrets = StoreReferences(json["secrets"]);
+        var secretFiles = StoreReferences(json["secretFiles"]);
+        var stages = workflow?.Stages.Select(stage => new StageDefinition(
+            stage.Name,
+            stage,
+            inputs.DeepClone().AsObject(),
+            stage.Executor == Executors.Ansible ? secrets : [],
+            stage.Executor == Executors.Ansible ? secretFiles : [])).ToList() ?? [];
+        _services.Add(new ServiceDefinition(id, guest, file, Relative(directory), json, reference, workflow, stages,
+            ParsePolicy(json["policy"]), ParseLabels(json["execution"])));
     }
 
-    private static Dictionary<string, StoreReference> StageSecrets(JsonNode? node) =>
+    private static Dictionary<string, StoreReference> StoreReferences(JsonNode? node) =>
         (node as JsonObject)?.ToDictionary(p => p.Key, p => ParseStoreReference(p.Value!), StringComparer.Ordinal) ?? [];
 
     private void CheckInstallation(InstallationDefinition installation, List<GuestDefinition> guests)
@@ -645,12 +516,7 @@ public sealed partial class LabRepositoryLoader
         }
     }
 
-    private void CheckGuest(
-        GuestDefinition guest,
-        RepositoryDefinition? settings,
-        List<InstallationDefinition> installations,
-        Dictionary<string, TemplateDefinition> templates,
-        Dictionary<string, RecipeDefinition> recipes)
+    private void CheckGuest(GuestDefinition guest, List<InstallationDefinition> installations, Dictionary<string, TemplateDefinition> templates)
     {
         var installation = installations.FirstOrDefault(i => i.Address == guest.InstallationAddress);
         if (installation is null)
@@ -696,82 +562,68 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
-        if (!recipes.TryGetValue(guest.Recipe, out var recipe))
-        {
-            Error(guest.File, LineOf(guest.File, "/provision/recipe"), $"The recipe '{guest.Recipe}' does not exist under recipes/.", guest.Address);
-        }
-        else if (recipe.Operation != "provision")
-        {
-            Error(guest.File, LineOf(guest.File, "/provision/recipe"), $"The recipe '{guest.Recipe}' does not provision guests.", guest.Address);
-        }
-        else if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } inputs)
+        if (guest.Workflow?.Schema is { } schema)
         {
             var instance = new JsonObject
             {
                 ["hardware"] = guest.Json["hardware"]?.DeepClone(),
                 ["network"] = guest.Json["network"]?.DeepClone(),
+                ["inputs"] = guest.Json["inputs"]?.DeepClone() ?? new JsonObject(),
             };
-            foreach (var error in SchemaCatalog.Evaluate(inputs, instance))
+            foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
-                Error(guest.File, LineOf(guest.File, error.Pointer), $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})", guest.Address);
+                Error(guest.File, LineOf(guest.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {guest.Workflow.Label})", guest.Address);
             }
         }
     }
 
-    private void CheckSetup(GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations, string? timezone)
+    /// <summary>What a guest needs for its workflow's Ansible stage: a way in, the secrets the workflow asks for, and sound schedules.</summary>
+    private void CheckSetup(GuestDefinition guest, List<InstallationDefinition> installations, string? timezone)
     {
-        if (guest.SetupRecipe is not { } id)
-        {
-            if (new[] { "inputs", "secrets", "secretFiles", "schedules" }.Any(f => guest.Json["setup"]?[f] is not null))
-                Error(guest.File, LineOf(guest.File, "/setup"), "setup.inputs, setup secrets and setup.schedules need a setup.recipe.", guest.Address);
-            return;
-        }
-
         void Invalid(string pointer, string message) => Error(guest.File, LineOf(guest.File, pointer), message, guest.Address);
 
-        if (!recipes.TryGetValue(id, out var recipe))
-        {
-            Invalid("/setup/recipe", $"The recipe '{id}' does not exist under recipes/.");
+        if (guest.Workflow is not { } workflow)
             return;
-        }
-
-        if (recipe.Configure is not { } configure)
+        if (workflow.Setup?.Configure is not { } configure)
         {
-            Invalid("/setup/recipe", $"The recipe '{id}' does not configure guests.");
+            foreach (var field in new[] { "secrets", "secretFiles", "schedules" }.Where(f => guest.Json[f] is not null))
+            {
+                Invalid($"/{field}", $"{field} are for a workflow's Ansible stage, and {workflow.Label} has none.");
+            }
+
             return;
         }
 
         if (ConfigureInputs.AddressOf(guest) is null)
-            Invalid("/access", "A guest with a setup recipe needs access.address, or a static or reserved address.");
+            Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.address, or a static or reserved address.");
         foreach (var field in new[] { "user", "hostKey" })
         {
             if (guest.Json["access"]?[field] is null)
-                Invalid("/access", $"A guest with a setup recipe needs access.{field}.");
+                Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.{field}.");
         }
 
         var secrets = ConfigureInputs.Secrets(guest, "secrets");
         var files = ConfigureInputs.Secrets(guest, "secretFiles");
         foreach (var name in configure.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
         {
-            Invalid("/setup", $"The recipe '{id}' needs setup.secrets.{name} or setup.secretFiles.{name}.");
+            Invalid("/secrets", $"The workflow {workflow.Label} needs secrets.{name} or secretFiles.{name}.");
         }
 
-        var inputs = (guest.Json["setup"]?["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
+        var inputs = (guest.Json["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
         foreach (var name in secrets.Keys.Intersect(files.Keys).Concat(secrets.Keys.Concat(files.Keys).Intersect(inputs)))
         {
-            Invalid("/setup", $"{name} is set more than once in setup.");
+            Invalid("/secrets", $"{name} is set more than once in inputs, secrets and secretFiles.");
         }
 
         // A token that can write to Proxmox is not an input to a playbook, and neither is one
         // that can read it: an installation's credentials go to its API and nowhere else.
-        var connectionKeys = installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key })
-            .ToHashSet(StringComparer.Ordinal);
+        var connectionKeys = ConnectionKeys(installations);
         var delivered = secrets.Concat(files)
             .Append(new("access.sshKey", ConfigureInputs.Reference(guest, "sshKey") ?? new StoreReference("")));
         foreach (var (name, reference) in delivered)
         {
             if (connectionKeys.Contains(reference.Key))
-                Invalid("/setup", $"{name} cannot use a Proxmox API token.");
+                Invalid(name == "access.sshKey" ? "/access/sshKey" : "/secrets", $"{name} cannot use a Proxmox API token.");
         }
 
         var schedules = GuestSchedules.Of(guest);
@@ -779,137 +631,85 @@ public sealed partial class LabRepositoryLoader
         {
             var schedule = schedules[index];
             if (!configure.Actions.ContainsKey(schedule.Action))
-                Invalid($"/setup/schedules/{index}/action", $"The schedule runs '{schedule.Action}', and the recipe '{id}' has no such action.");
+                Invalid($"/schedules/{index}/action", $"The schedule runs '{schedule.Action}', and the workflow {workflow.Label} has no such action.");
             if (!GuestSchedules.IsCron(schedule.Cron))
-                Invalid($"/setup/schedules/{index}/cron", $"'{schedule.Cron}' is not a cron expression: five fields, minute to day of the week.");
+                Invalid($"/schedules/{index}/cron", $"'{schedule.Cron}' is not a cron expression: five fields, minute to day of the week.");
             else if (!GuestSchedules.EverFires(schedule.Cron))
-                Invalid($"/setup/schedules/{index}/cron", $"'{schedule.Cron}' never falls due.");
+                Invalid($"/schedules/{index}/cron", $"'{schedule.Cron}' never falls due.");
         }
 
         if (schedules.Distinct().Count() != schedules.Count)
-            Invalid("/setup/schedules", "The same schedule is listed twice.");
+            Invalid("/schedules", "The same schedule is listed twice.");
         if (schedules.Count > 0 && timezone is not null && !GuestSchedules.IsZone(timezone))
-            Invalid("/setup/schedules", $"The lab's timezone '{timezone}' is not an IANA time zone, and a schedule needs one.");
-
-        if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
-        {
-            var instance = guest.Json["setup"]?["inputs"]?.DeepClone() ?? new JsonObject();
-            foreach (var error in SchemaCatalog.Evaluate(schema, instance))
-            {
-                Invalid($"/setup/inputs{error.Pointer}", $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})");
-            }
-        }
+            Invalid("/schedules", $"The lab's timezone '{timezone}' is not an IANA time zone, and a schedule needs one.");
     }
 
     /// <summary>
-    /// What a pipeline may name, checked once every recipe is read. A stage runs on its guest's
-    /// connection, so an Ansible stage needs what a setup recipe does. An error here is the
-    /// service's alone: its guest and its siblings stay valid.
+    /// What a service needs for its workflow, checked once every guest is read. An Ansible stage runs on its guest's
+    /// connection, so it needs what a guest's setup does. An error here is the service's alone: its guest and its siblings
+    /// stay valid.
     /// </summary>
-    private void CheckService(ServiceDefinition service, GuestDefinition guest, Dictionary<string, RecipeDefinition> recipes, List<InstallationDefinition> installations)
+    private void CheckService(ServiceDefinition service, GuestDefinition guest, List<InstallationDefinition> installations)
     {
         void Invalid(string pointer, string message) => Error(service.File, LineOf(service.File, pointer), message, service.Address);
 
-        foreach (var name in service.Stages.GroupBy(s => s.Name).Where(g => g.Count() > 1).Select(g => g.Key))
+        if (service.Workflow is not { } workflow)
+            return;
+        var secrets = StoreReferences(service.Json["secrets"]);
+        var files = StoreReferences(service.Json["secretFiles"]);
+        var ansible = workflow.Stages.Where(s => s.Executor == Executors.Ansible).ToList();
+        if (ansible.Count == 0)
         {
-            Invalid("/stages", $"The stage name '{name}' is used more than once.");
+            foreach (var field in new[] { "secrets", "secretFiles" }.Where(f => service.Json[f] is not null))
+            {
+                Invalid($"/{field}", $"{field} are for a workflow's Ansible stages, and {workflow.Label} has none: OpenTofu stages get no credentials.");
+            }
+        }
+        else
+        {
+            // No access.sshKey means Octopushy's own key, as for a guest's setup: see ManagedAccess.
+            if (ConfigureInputs.AddressOf(guest) is null)
+                Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.address, or a static or reserved address.");
+            foreach (var field in new[] { "user", "hostKey" })
+            {
+                if (guest.Json["access"]?[field] is null)
+                    Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.{field}.");
+            }
+
+            foreach (var name in workflow.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
+            {
+                Invalid("/secrets", $"The workflow {workflow.Label} needs secrets.{name} or secretFiles.{name}.");
+            }
+
+            var inputs = (service.Json["inputs"] as JsonObject)?.Select(p => p.Key).ToList() ?? [];
+            foreach (var name in secrets.Keys.Intersect(files.Keys).Concat(secrets.Keys.Concat(files.Keys).Intersect(inputs)))
+            {
+                Invalid("/secrets", $"{name} is set more than once in inputs, secrets and secretFiles.");
+            }
+
+            var connectionKeys = ConnectionKeys(installations);
+            foreach (var (name, reference) in secrets.Concat(files))
+            {
+                if (connectionKeys.Contains(reference.Key))
+                    Invalid("/secrets", $"{name} cannot use a Proxmox API token.");
+            }
         }
 
-        var connectionKeys = installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key })
-            .ToHashSet(StringComparer.Ordinal);
-        for (var index = 0; index < service.Stages.Count; index++)
+        if (workflow.Schema is { } schema)
         {
-            var stage = service.Stages[index];
-            var at = $"/stages/{index}";
-            if (!recipes.TryGetValue(stage.Recipe, out var recipe))
+            var instance = new JsonObject { ["inputs"] = service.Json["inputs"]?.DeepClone() ?? new JsonObject() };
+            foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
-                Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' does not exist under recipes/.");
-                continue;
-            }
-
-            if (recipe.Configure is { } configure)
-            {
-                if (configure.OnChange is null)
-                    Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' marks no action with onChange, and that is the action a stage runs.");
-                if (configure.Outcomes.Values.Any(o => o.ApproveVars is not null))
-                    Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' has an outcome a person approves, and a pipeline has one approval, before anything runs.");
-                if (ConfigureInputs.AddressOf(guest) is null)
-                    Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.address, or a static or reserved address.");
-                foreach (var field in new[] { "user", "hostKey" })
-                {
-                    if (guest.Json["access"]?[field] is null)
-                        Invalid($"{at}/recipe", $"Stage '{stage.Name}' runs on the guest, which needs access.{field}.");
-                }
-
-                // No access.sshKey means Octopushy's own key, as for a setup recipe: see ManagedAccess.
-
-                foreach (var name in configure.Secrets.Where(n => !stage.Secrets.ContainsKey(n) && !stage.SecretFiles.ContainsKey(n)))
-                {
-                    Invalid(at, $"The recipe '{stage.Recipe}' needs secrets.{name} or secretFiles.{name}.");
-                }
-
-                var names = stage.Secrets.Keys.Concat(stage.SecretFiles.Keys).ToList();
-                foreach (var name in stage.Secrets.Keys.Intersect(stage.SecretFiles.Keys).Concat(names.Intersect(stage.Inputs.Select(p => p.Key))))
-                {
-                    Invalid(at, $"{name} is set more than once in stage '{stage.Name}'.");
-                }
-
-                foreach (var (name, reference) in stage.Secrets.Concat(stage.SecretFiles))
-                {
-                    if (connectionKeys.Contains(reference.Key))
-                        Invalid(at, $"{name} cannot use a Proxmox API token.");
-                }
-            }
-            else if (recipe.Operation != "stage")
-            {
-                Invalid($"{at}/recipe", $"The recipe '{stage.Recipe}' cannot be a stage: it needs operation: configure or operation: stage.");
-                continue;
-            }
-            else if (stage.Secrets.Count + stage.SecretFiles.Count > 0)
-            {
-                Invalid(at, $"Stage '{stage.Name}' is OpenTofu, which gets no secrets yet.");
-            }
-
-            if (_inputSchemas.GetValueOrDefault(recipe.Id) is { } schema)
-            {
-                foreach (var error in SchemaCatalog.Evaluate(schema, stage.Inputs))
-                {
-                    Invalid(at, $"{Describe(error.Pointer)}{error.Message} (stage {stage.Name}, recipe {recipe.Id})");
-                }
+                Invalid(error.Pointer, $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {workflow.Label})");
             }
         }
     }
 
-    private (JsonObject? Json, YamlDocument? Document) ReadDefinition(string file, DefinitionKind kind, string? address)
-    {
-        YamlDocument document;
-        try
-        {
-            document = YamlDocumentReader.Read(File.ReadAllText(Path.Combine(_root, file)));
-        }
-        catch (YamlReadException e)
-        {
-            Error(file, e.Line, $"Invalid YAML: {e.Message}", address);
-            return (null, null);
-        }
+    private static HashSet<string> ConnectionKeys(List<InstallationDefinition> installations) =>
+        installations.SelectMany(i => new[] { i.Connection.ReadOnlyToken.Key, i.Connection.PrivilegedToken.Key }).ToHashSet(StringComparer.Ordinal);
 
-        _documents[file] = document;
-        if (document.Root is not JsonObject json)
-        {
-            Error(file, 1, "The file must hold a YAML mapping.", address);
-            return (null, null);
-        }
-
-        var errors = SchemaCatalog.Instance.Validate(kind, json);
-        foreach (var error in errors)
-        {
-            Error(file, document.LineOf(error.Pointer), Describe(error.Pointer) + error.Message, address);
-        }
-
-        return errors.Count == 0 ? (json, document) : (null, null);
-    }
-
-    private readonly Dictionary<string, YamlDocument> _documents = new(StringComparer.Ordinal);
+    private (JsonObject? Json, YamlDocument? Document) ReadDefinition(string file, DefinitionKind kind, string? address) =>
+        DefinitionFiles.Read(_root, file, kind, _documents, (f, line, message) => Error(f, line, message, address));
 
     private int? LineOf(string file, string pointer) =>
         _documents.TryGetValue(file, out var document) ? document.LineOf(pointer) : null;
@@ -957,7 +757,7 @@ public sealed partial class LabRepositoryLoader
 
     private bool CheckId(string id, string file, string address)
     {
-        if (IdPattern().IsMatch(id))
+        if (DefinitionFiles.IsId(id))
         {
             return true;
         }
@@ -977,31 +777,11 @@ public sealed partial class LabRepositoryLoader
     private static StoreReference ParseStoreReference(JsonNode node) =>
         new(node["store"]!.GetValue<string>(), node["version"]?.GetValue<int>());
 
-    private string? ResolveInside(string baseDirectory, string relative)
-    {
-        var full = Path.GetFullPath(Path.Combine(baseDirectory, relative));
-        if (full != _root && !full.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        return Relative(full);
-    }
-
     private static string? FileNameFromUrl(string url)
     {
         var name = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? Path.GetFileName(uri.AbsolutePath) : null;
         return string.IsNullOrEmpty(name) ? null : name;
     }
-
-    private static string Describe(string pointer) => pointer.Length == 0 ? "" : $"{pointer.TrimStart('/').Replace('/', '.')}: ";
-
-    private static IEnumerable<string> SubDirectories(string path) =>
-        Directory.Exists(path)
-            ? Directory.EnumerateDirectories(path)
-                .Where(d => !Path.GetFileName(d).StartsWith('.'))
-                .Order(StringComparer.Ordinal)
-            : [];
 
     private string Relative(string path) => Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
 
@@ -1022,10 +802,4 @@ public sealed partial class LabRepositoryLoader
 
     private void Warning(string file, int? line, string message, string? address = null) =>
         _issues.Add(new DefinitionIssue(IssueSeverity.Warning, file, line, message, address));
-
-    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
-    private static partial Regex IdPattern();
-
-    [GeneratedRegex(@"^\s*backend\s+""", RegexOptions.Multiline)]
-    private static partial Regex BackendBlock();
 }

@@ -7,19 +7,22 @@ namespace Octopushy.Definitions;
 /// <summary>
 /// Everything a guest's provisioning run is built from, and a hash of it that changes exactly
 /// when a new plan could differ: the guest's definition, its host and installation settings,
-/// its template, and its recipe and root files.
+/// its template, and the workflow it resolved to: its version, its folder and the root of the
+/// stage that makes the machine.
 /// </summary>
 public sealed record ProvisionInputs(
     GuestDefinition Guest,
     InstallationDefinition Installation,
     HostDefinition Host,
-    RecipeDefinition Recipe,
+    WorkflowDefinition Workflow,
+    WorkflowStage Stage,
     TemplateDefinition? Template,
     JsonObject Variables,
     string Hash)
 {
     /// <summary>Guest fields excluded from the infrastructure hash.</summary>
-    private static readonly string[] NotProvisioned = ["description", "policy", "execution", "setup", "renamedFrom"];
+    private static readonly string[] NotProvisioned =
+        ["description", "policy", "execution", "secrets", "secretFiles", "schedules", "renamedFrom", "workflow"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
     /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>
@@ -28,7 +31,8 @@ public sealed record ProvisionInputs(
         var installation = repository.Installation(guest.InstallationAddress)
             ?? throw new InvalidOperationException($"{guest.Address} has no installation.");
         var host = installation.Hosts[guest.Host];
-        var recipe = repository.Recipes[guest.Recipe];
+        var workflow = guest.Workflow!;
+        var stage = workflow.Machine!;
         var template = guest.Template is null ? null : repository.Templates[guest.Template];
 
         var variables = new JsonObject
@@ -40,6 +44,7 @@ public sealed record ProvisionInputs(
                 ["lab"] = guest.Lab,
                 ["installation"] = guest.Installation,
                 ["revision"] = revision,
+                ["workflow"] = workflow.Label,
             },
             ["guest"] = new JsonObject
             {
@@ -52,6 +57,8 @@ public sealed record ProvisionInputs(
                 ["network"] = guest.Json["network"]?.DeepClone() ?? new JsonObject(),
                 ["sshAuthorizedKeys"] = guest.Json["access"]?["sshAuthorizedKeys"]?.DeepClone() ?? new JsonArray(),
             },
+            // What the guest gives its workflow, for every stage alike.
+            ["inputs"] = guest.Json["inputs"]?.DeepClone() ?? new JsonObject(),
             ["host"] = new JsonObject
             {
                 ["id"] = host.Id,
@@ -106,9 +113,7 @@ public sealed record ProvisionInputs(
             },
             ["host"] = host.Json.DeepClone(),
             ["template"] = template?.Json.DeepClone(),
-            ["recipe"] = recipe.Json.DeepClone(),
-            ["recipeFiles"] = TreeHash(repository.Root, Path.GetDirectoryName(recipe.File)!),
-            ["rootFiles"] = TreeHash(repository.Root, recipe.Root),
+            ["workflow"] = WorkflowHash(workflow, [stage.Root]),
         };
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
@@ -117,8 +122,21 @@ public sealed record ProvisionInputs(
             hashed["managedAccess"] = true;
         }
 
-        return new ProvisionInputs(guest, installation, host, recipe, template, variables, Canonical.Hash(hashed));
+        return new ProvisionInputs(guest, installation, host, workflow, stage, template, variables, Canonical.Hash(hashed));
     }
+
+    /// <summary>
+    /// What a run takes from its workflow: which one, at which version, every file in its folder, and every file of the
+    /// roots its stages run from. The roots are inside that folder or under <c>modules/</c>, so this is all of it.
+    /// </summary>
+    public static JsonObject WorkflowHash(WorkflowDefinition workflow, IEnumerable<string> roots) => new()
+    {
+        ["id"] = workflow.Id,
+        ["version"] = workflow.Version.ToString(),
+        ["files"] = TreeHash(workflow.SourceRoot, workflow.Directory),
+        ["roots"] = new JsonObject(roots.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(root => KeyValuePair.Create(root, (JsonNode?)TreeHash(workflow.SourceRoot, root)))),
+    };
 
     /// <summary>The API endpoint for a host: its own when set, otherwise the installation's.</summary>
     public static string EndpointFor(InstallationDefinition installation, HostDefinition host) =>

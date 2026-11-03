@@ -8,6 +8,11 @@
       "type": "string",
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
     },
+    "workflowRef": {
+      "description": "A workflow and its version: <id>@<M> takes the newest M.x, <id>@<M.m> exactly that one. A reference without a version is invalid, so a major version is never adopted by accident.",
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?@(0|[1-9][0-9]{0,8})(\\.(0|[1-9][0-9]{0,8}))?(?![\\s\\S])"
+    },
     "schemaVersion": { "const": 1 },
     "extraVar": {
       "description": "An Ansible extra var. Names starting with ansible_ or octopushy are how Octopushy pins a connection, so they are refused.",

@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "inputs": { "type": "object", "properties": { "greeting": { "type": "string" } }, "required": ["greeting"], "additionalProperties": false }
+  },
+  "required": ["inputs"]
+}

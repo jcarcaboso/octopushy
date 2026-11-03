@@ -960,7 +960,7 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
         if !prep.input.outcomes.iter().any(|o| o == outcome) {
             // Not repeated: only a declared name is known not to be a secret.
             return Err(Failure::with_outputs(
-                "the playbook reported an outcome the recipe does not declare",
+                "the playbook reported an outcome the workflow does not declare",
                 outputs(out, &recap),
             ));
         }

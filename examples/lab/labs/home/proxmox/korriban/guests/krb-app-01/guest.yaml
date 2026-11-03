@@ -15,16 +15,13 @@ network:
   address: 10.1.0.31/24
   gateway: 10.1.0.1
   dns: [10.1.0.1]
-provision:
-  recipe: proxmox-vm
-setup:
-  recipe: machine-tools           # configures the machine once it is provisioned
-  inputs:
-    machine_tools_channel: stable
-  secrets:                        # extra var -> variable store key; only the playbook gets these
-    machine_tools_token: { store: machines/krb-app-01/tools-token }
-  schedules:                      # actions of the recipe, at times in the lab's timezone
-    - { action: update-tools, cron: "0 6 * * *" }
+workflow: machine-tools@1         # newest 1.x of workflows/machine-tools; @1.0 would stay on exactly 1.0
+inputs:                           # given to every stage of the workflow, checked by its inputs schema
+  machine_tools_channel: stable
+secrets:                          # extra var -> variable store key; only the playbook gets these
+  machine_tools_token: { store: machines/krb-app-01/tools-token }
+schedules:                        # actions of the workflow, at times in the lab's timezone
+  - { action: update-tools, cron: "0 6 * * *" }
 access:
   sshAuthorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example

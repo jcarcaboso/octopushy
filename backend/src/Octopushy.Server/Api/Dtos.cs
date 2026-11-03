@@ -184,7 +184,14 @@ public sealed record GuestSummaryDto(
     bool Valid,
     ObservedGuestDto? Observed,
     RunSummaryDto? ActiveRun,
-    RunSummaryDto? LastRun);
+    RunSummaryDto? LastRun,
+    WorkflowDto? Workflow);
+
+/// <summary>
+/// The workflow a guest or service names, as written (<c>fedora-vm@2</c>), and the version the latest revision resolved
+/// it to (<c>fedora-vm@2.3</c>); null when it resolved to none.
+/// </summary>
+public sealed record WorkflowDto(string Reference, string? Resolved);
 
 /// <summary>
 /// The endpoints an installation declares now, and those not trusted yet. Credentials are sent
@@ -236,9 +243,9 @@ public sealed record PolicyDto(string Approval, string ApprovalSetBy, string Des
 
 public sealed record BindingDto(string Installation, int Vmid, DateTimeOffset? BoundAt);
 
-/// <summary>A guest's configure recipe and where it stands.</summary>
+/// <summary>A guest's setup, the Ansible stage of its workflow, and where it stands. <c>Workflow</c> is the workflow at its version.</summary>
 public sealed record GuestConfigurationDto(
-    string Recipe,
+    string Workflow,
     IReadOnlyList<ConfigureActionDto> Actions,
     bool InSync,
     string? AppliedAction,
@@ -327,9 +334,10 @@ public sealed record ServiceSummaryDto(
     string? StatusDetail,
     bool Valid,
     RunSummaryDto? ActiveRun,
-    RunSummaryDto? LastRun);
+    RunSummaryDto? LastRun,
+    WorkflowDto? Workflow);
 
-public sealed record ServiceStageDto(string Name, string Recipe, string Executor);
+public sealed record ServiceStageDto(string Name, string Executor);
 
 public sealed record ServiceDetailDto(
     ServiceSummaryDto Service,

@@ -54,8 +54,7 @@ public class LabRepositoryLoaderTests
             type: vm
             host: korriban
             vmid: 12
-            provision:
-              recipe: test-vm
+            workflow: test-vm@1
             """);
         var repository = LabRepositoryLoader.Load(test.Root);
         var issue = Assert.Single(repository.Issues);
@@ -69,7 +68,7 @@ public class LabRepositoryLoaderTests
     public void A_broken_guest_does_not_affect_its_siblings()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: elsewhere\nvmid: 311\nprovision: { recipe: test-vm }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: elsewhere\nvmid: 311\nworkflow: test-vm@1\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.False(repository.IsValid("home/korriban/krb-app-02"));
         Assert.True(repository.IsValid("home/korriban/krb-app-01"));
@@ -80,7 +79,7 @@ public class LabRepositoryLoaderTests
     public void Duplicate_vmids_in_an_installation_are_errors_on_both_guests()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\nprovision: { recipe: test-vm }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-02/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\nworkflow: test-vm@1\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.False(repository.IsValid("home/korriban/krb-app-01"));
         Assert.False(repository.IsValid("home/korriban/krb-app-02"));
@@ -90,11 +89,11 @@ public class LabRepositoryLoaderTests
     public void References_to_missing_shared_definitions_are_errors()
     {
         using var test = TestRepository.Minimal();
-        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\ntemplate: nope\nprovision: { recipe: nope }\n");
+        test.Write("labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml", "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 310\ntemplate: nope\nworkflow: nope@1\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         var messages = repository.Issues.Select(i => i.Message).ToList();
         Assert.Contains(messages, m => m.Contains("template 'nope'"));
-        Assert.Contains(messages, m => m.Contains("recipe 'nope'"));
+        Assert.Contains(messages, m => m.Contains("nope@1 not found"));
     }
 
     [Fact]
@@ -128,15 +127,15 @@ public class LabRepositoryLoaderTests
     }
 
     [Fact]
-    public void Recipe_inputs_schemas_validate_hardware_and_network()
+    public void Workflow_inputs_schemas_validate_hardware_and_network()
     {
         using var test = TestRepository.Minimal();
-        test.Write("recipes/test-vm/inputs.schema.json", """
+        test.Write("workflows/test-vm/inputs.schema.json", """
             { "type": "object", "properties": { "hardware": { "type": "object", "required": ["disks"] } } }
             """);
-        test.Write("recipes/test-vm/recipe.yaml", "schemaVersion: 1\noperation: provision\nexecutor: opentofu\nroot: ../../modules/opentofu/test-vm\ninputs: inputs.schema.json\n");
+        test.Write("workflows/test-vm/workflow.yaml", "schemaVersion: 1\nversion: \"1.0\"\nmanages: vm\ninputs: inputs.schema.json\nstages:\n  - { name: machine, executor: opentofu, root: ../../modules/opentofu/test-vm }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Contains(repository.Issues, i => i.Message.Contains("disks") && i.Message.Contains("recipe test-vm"));
+        Assert.Contains(repository.Issues, i => i.Message.Contains("disks") && i.Message.Contains("workflow test-vm@1.0"));
     }
 
     [Fact]
@@ -193,7 +192,7 @@ public class LabRepositoryLoaderTests
     {
         using var test = TestRepository.Minimal();
         var path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
-        test.Write(path, File.ReadAllText(Path.Combine(test.Root, path)).Replace("  recipe: test-vm\n", "  recipe: test-vm\n  state: { backend: postgres }\n"));
+        test.Write(path, File.ReadAllText(Path.Combine(test.Root, path)).Replace("workflow: test-vm@1\n", "workflow: test-vm@1\nprovision: { state: { backend: postgres } }\n"));
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.False(repository.IsValid("home/korriban/krb-app-01"));
         Assert.Contains(repository.Issues, i => i.File == path);

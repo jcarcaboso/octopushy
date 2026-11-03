@@ -5,48 +5,52 @@ namespace Octopushy.Tests.Definitions;
 public class GuestConfigurationTests
 {
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
-    private const string RecipeFile = "recipes/app/recipe.yaml";
+    private const string WorkflowFile = "workflows/app/workflow.yaml";
     private const string Address = "home/korriban/krb-app-01";
 
-    /// <summary>A guest with a setup recipe: the fixture for configure runs, too.</summary>
-    public static TestRepository Repository(string policy = "", string extraRecipe = "", string destructive = "false")
+    /// <summary>A guest whose workflow sets it up with Ansible: the fixture for configure runs, too.</summary>
+    public static TestRepository Repository(string policy = "", string extraWorkflow = "", string destructive = "false")
     {
         var test = TestRepository.Minimal();
+        Edit(test, GuestFile, "workflow: test-vm@1", "workflow: app@1");
         test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + """
-            setup:
-              recipe: app
-              inputs: { greeting: hello }
-              secrets:
-                tailscale_key: { store: app/tailscale }
-              secretFiles:
-                git_key_src: { store: app/git-key }
+            inputs: { greeting: hello }
+            secrets:
+              tailscale_key: { store: app/tailscale }
+            secretFiles:
+              git_key_src: { store: app/git-key }
             access:
               user: ops
               sshKey: { store: access/app/ssh-key }
               hostKey: { store: access/app/host-key }
 
             """ + policy + "\n");
-        test.Write(RecipeFile, $"""
+        test.Write(WorkflowFile, $"""
             schemaVersion: 1
-            operation: configure
-            executor: ansible
-            root: ../../modules/ansible/app
+            version: "1.0"
+            manages: vm
             inputs: inputs.schema.json
             secrets: [tailscale_key]
-            actions:
-              configure:
+            stages:
+              - name: machine
+                executor: opentofu
+                root: ../../modules/opentofu/test-vm
+              - name: setup
+                executor: ansible
+                root: ../../modules/ansible/app
                 playbook: site.yml
                 prepare: prepare.yml
                 destructive: {destructive}
-                onChange: true
+            actions:
               update-system:
+                stage: setup
                 playbook: site.yml
                 snapshot: applied
                 destructive: false
-            {extraRecipe}
+            {extraWorkflow}
             """);
-        test.Write("recipes/app/inputs.schema.json", """
-            { "type": "object", "properties": { "greeting": { "type": "string" } }, "required": ["greeting"] }
+        test.Write("workflows/app/inputs.schema.json", """
+            { "type": "object", "properties": { "inputs": { "type": "object", "properties": { "greeting": { "type": "string" } }, "required": ["greeting"] } } }
             """);
         test.Write("modules/ansible/app/site.yml", "- hosts: all\n");
         test.Write("modules/ansible/app/prepare.yml", "- hosts: localhost\n");
@@ -64,38 +68,44 @@ public class GuestConfigurationTests
         string.Join("\n", LabRepositoryLoader.Load(test.Root).Issues.Where(i => i.Severity == IssueSeverity.Error).Select(i => i.Message));
 
     [Fact]
-    public void A_guest_with_a_configure_recipe_is_valid_and_keeps_its_provisioning_hash()
+    public void A_guest_whose_workflow_sets_it_up_is_valid_and_how_it_is_reached_does_not_plan_it()
     {
         using var test = Repository();
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(repository.Issues);
         Assert.True(repository.IsValid(Address));
         var guest = repository.Guest(Address)!;
+        Assert.Equal("app@1.0", guest.Workflow!.Label);
         var inputs = ConfigureInputs.Build(repository, guest);
         Assert.Equal("10.1.0.31", inputs.Address);
         Assert.Equal(22, inputs.Port);
         Assert.Equal("access/app/ssh-key", inputs.SshKey!.Key);
         Assert.Equal("access/app/host-key", inputs.HostKey.Key);
-        Assert.Equal("configure", inputs.Configure.OnChange!.Id);
+        Assert.Equal(WorkflowDefinition.SetupAction, inputs.Configure.OnChange!.Id);
+        Assert.Equal("site.yml", inputs.Configure.OnChange.Playbook);
+        Assert.Equal("modules/ansible/app", inputs.Stage.Root);
+        Assert.Equal("hello", inputs.Vars["greeting"]!.GetValue<string>());
         Assert.True(inputs.Configure.Actions["update-system"].UsesAppliedSnapshot);
 
-        using var plain = TestRepository.Minimal();
-        var unconfigured = LabRepositoryLoader.Load(plain.Root);
         var json = guest.Json.DeepClone().AsObject();
         json["access"]!["address"] = "10.1.0.32";
         json["access"]!["port"] = 2222;
-        // Telling Octopushy how to reach a guest must not plan it: adding this to a running guest
-        // with automatic approval would otherwise start a provision run.
+        json["secrets"]!["tailscale_key"] = new System.Text.Json.Nodes.JsonObject { ["store"] = "app/other" };
+        // Telling Octopushy how to reach a guest, or what its playbook is given, must not plan it: adding this to a
+        // running guest with automatic approval would otherwise start a provision run.
         Assert.Equal(
-            ProvisionInputs.Build(unconfigured, unconfigured.Guest(Address)!, "c").Hash,
+            ProvisionInputs.Build(repository, guest, "c").Hash,
             ProvisionInputs.Build(repository, guest with { Json = json }, "c").Hash);
     }
 
     [Theory]
     [InlineData(GuestFile, "playbook changes", false)]
     [InlineData("modules/ansible/app/site.yml", "- hosts: all\n# changed\n", true)]
-    [InlineData("recipes/app/inputs.schema.json", """{ "type": "object" }""", true)]
+    [InlineData("workflows/app/inputs.schema.json", """{ "type": "object" }""", true)]
+    [InlineData("workflows/app/files/motd", "hello\n", true)]
     [InlineData("labs/home/proxmox/korriban/guests/krb-app-01/files/motd", "hello\n", true)]
+    [InlineData("modules/opentofu/test-vm/main.tf", "# another machine\n", false)]
+    [InlineData("modules/ansible/other/site.yml", "- hosts: all\n", false)]
     public void The_hash_follows_what_a_run_is_built_from(string file, string content, bool changes)
     {
         using var test = Repository();
@@ -113,13 +123,14 @@ public class GuestConfigurationTests
     }
 
     [Theory]
-    [InlineData(RecipeFile, "destructive: false\n    onChange", "onChange")]
-    [InlineData(RecipeFile, "prepare: prepare.yml", "prepare: prepare.yml\n    snapshot: applied")]
-    [InlineData(RecipeFile, "executor: ansible", "executor: opentofu")]
-    [InlineData(RecipeFile, "playbook: site.yml\n    prepare", "playbook: ../../../etc/passwd\n    prepare")]
-    [InlineData(RecipeFile, "playbook: site.yml\n    prepare", "playbook: missing.yml\n    prepare")]
-    [InlineData(RecipeFile, "snapshot: applied", "snapshot: applied\n    onChange: true")]
-    [InlineData(RecipeFile, "secrets: [tailscale_key]", "secrets: [missing_key]")]
+    [InlineData(WorkflowFile, "prepare: prepare.yml\n    destructive", "prepare: prepare.yml\n    snapshot: applied\n    destructive")]
+    [InlineData(WorkflowFile, "executor: ansible", "executor: opentofu")]
+    [InlineData(WorkflowFile, "playbook: site.yml\n    prepare", "playbook: ../../../etc/passwd\n    prepare")]
+    [InlineData(WorkflowFile, "playbook: site.yml\n    prepare", "playbook: missing.yml\n    prepare")]
+    [InlineData(WorkflowFile, "playbook: site.yml\n    snapshot", "playbook: missing.yml\n    snapshot")]
+    [InlineData(WorkflowFile, "stage: setup", "stage: machine")]
+    [InlineData(WorkflowFile, "update-system:", "setup:")]
+    [InlineData(WorkflowFile, "secrets: [tailscale_key]", "secrets: [missing_key]")]
     [InlineData(GuestFile, "greeting: hello", "greeting: 3")]
     [InlineData(GuestFile, "greeting: hello", "ansible_ssh_common_args: x, greeting: hello")]
     [InlineData(GuestFile, "tailscale_key:", "octopushy_key:")]
@@ -130,8 +141,9 @@ public class GuestConfigurationTests
     [InlineData(GuestFile, "app/tailscale", "system/agents/key")]
     [InlineData(GuestFile, "  user: ops\n", "")]
     [InlineData(GuestFile, "  hostKey: { store: access/app/host-key }\n", "")]
-    [InlineData(GuestFile, "recipe: app", "recipe: test-vm")]
-    [InlineData(GuestFile, "recipe: app", "recipe: nothing")]
+    [InlineData(GuestFile, "workflow: app@1", "workflow: app")]
+    [InlineData(GuestFile, "workflow: app@1", "workflow: app@2")]
+    [InlineData(GuestFile, "workflow: app@1", "workflow: nothing@1")]
     public void Invalid_definitions_are_refused(string file, string from, string to)
     {
         using var test = Repository();
@@ -141,12 +153,11 @@ public class GuestConfigurationTests
     }
 
     [Fact]
-    public void An_action_that_follows_changes_cannot_need_a_snapshot()
+    public void The_playbook_of_the_setup_stage_cannot_need_a_snapshot()
     {
         using var test = Repository();
-        Edit(test, RecipeFile, "    onChange: true\n", "");
-        Edit(test, RecipeFile, "snapshot: applied", "snapshot: applied\n    onChange: true");
-        Assert.Contains("a new machine has none", Errors(test));
+        Edit(test, WorkflowFile, "prepare: prepare.yml\n    destructive", "snapshot: applied\n    destructive");
+        Assert.Contains("snapshot", Errors(test));
     }
 
     [Fact]
@@ -160,23 +171,25 @@ public class GuestConfigurationTests
     }
 
     [Fact]
-    public void Setup_values_without_a_recipe_are_refused()
+    public void Secrets_without_a_setup_stage_are_refused_and_inputs_are_not()
     {
         using var test = Repository();
-        Edit(test, GuestFile, "  recipe: app\n", "");
-        Assert.Contains("setup.recipe", Errors(test));
+        Edit(test, GuestFile, "workflow: app@1", "workflow: test-vm@1");
+        var errors = Errors(test);
+        Assert.Contains("secrets are for a workflow's Ansible stage, and test-vm@1.0 has none", errors);
+        Assert.DoesNotContain("inputs", errors);
     }
 
     [Fact]
-    public void A_provisioning_recipe_keeps_its_rules()
+    public void A_machine_stage_keeps_its_rules()
     {
         using var test = Repository();
-        Edit(test, "recipes/test-vm/recipe.yaml", "executor: opentofu", "executor: ansible");
+        Edit(test, "workflows/test-vm/workflow.yaml", "executor: opentofu", "executor: ansible");
         Assert.NotEmpty(Errors(test));
     }
 
     [Fact]
-    public void Store_references_in_setup_are_indexed()
+    public void Store_references_of_a_guest_are_indexed()
     {
         using var test = Repository();
         var uses = LabRepositoryLoader.Load(test.Root).StoreUses.Select(u => u.Key).ToList();
@@ -190,7 +203,7 @@ public class GuestConfigurationTests
     {
         var test = Repository();
         test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile))
-            .Replace("access:\n  user: ops", $"  schedules:\n{schedules}access:\n  user: ops"));
+            .Replace("access:\n  user: ops", $"schedules:\n{schedules}access:\n  user: ops"));
         return test;
     }
 
@@ -204,7 +217,7 @@ public class GuestConfigurationTests
     }
 
     [Fact]
-    public void A_schedule_names_an_action_of_the_recipe_and_a_time()
+    public void A_schedule_names_an_action_of_the_workflow_and_a_time()
     {
         using var test = WithSchedules("    - { action: update-system, cron: \"0 6 * * *\" }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
@@ -216,10 +229,10 @@ public class GuestConfigurationTests
 
     [Theory]
     [InlineData("    - { action: reinstall, cron: \"0 6 * * *\" }\n", "has no such action")]
-    [InlineData("    - { action: configure, cron: \"not a cron\" }\n", "is not a cron expression")]
-    [InlineData("    - { action: configure, cron: \"0 6 * * * *\" }\n", "is not a cron expression")]
-    [InlineData("    - { action: configure, cron: \"0 6 31 2 *\" }\n", "never falls due")]
-    [InlineData("    - { action: configure, cron: \"0 6 * * *\" }\n    - { action: configure, cron: \"0 6 * * *\" }\n", "listed twice")]
+    [InlineData("    - { action: setup, cron: \"not a cron\" }\n", "is not a cron expression")]
+    [InlineData("    - { action: setup, cron: \"0 6 * * * *\" }\n", "is not a cron expression")]
+    [InlineData("    - { action: setup, cron: \"0 6 31 2 *\" }\n", "never falls due")]
+    [InlineData("    - { action: setup, cron: \"0 6 * * *\" }\n    - { action: setup, cron: \"0 6 * * *\" }\n", "listed twice")]
     public void A_schedule_that_cannot_run_is_refused(string schedules, string message)
     {
         using var test = WithSchedules(schedules);
@@ -229,7 +242,7 @@ public class GuestConfigurationTests
     }
 
     [Theory]
-    [InlineData("    - { action: configure }\n")]
+    [InlineData("    - { action: setup }\n")]
     [InlineData("    - { cron: \"0 6 * * *\" }\n")]
     [InlineData("    - { action: 5, cron: 6 }\n")]
     [InlineData("    - just text\n")]
@@ -242,18 +255,18 @@ public class GuestConfigurationTests
     }
 
     [Fact]
-    public void A_schedule_needs_a_recipe()
+    public void A_schedule_needs_a_setup_stage()
     {
         using var test = TestRepository.Minimal();
-        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + "setup:\n  schedules:\n    - { action: configure, cron: \"0 6 * * *\" }\n");
+        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + "schedules:\n  - { action: setup, cron: \"0 6 * * *\" }\n");
         var repository = LabRepositoryLoader.Load(test.Root);
-        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("setup.schedules need a setup.recipe"));
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("schedules are for a workflow's Ansible stage, and test-vm@1.0 has none"));
     }
 
     [Fact]
     public void A_schedule_needs_a_real_time_zone()
     {
-        using var test = WithSchedules("    - { action: configure, cron: \"0 6 * * *\" }\n");
+        using var test = WithSchedules("    - { action: setup, cron: \"0 6 * * *\" }\n");
         test.Write("labs/home/lab.yaml", File.ReadAllText(Path.Combine(test.Root, "labs/home/lab.yaml")) + "timezone: Mars/Olympus\n");
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("Mars/Olympus"));
@@ -263,7 +276,7 @@ public class GuestConfigurationTests
     public void Changing_a_schedule_configures_nothing()
     {
         using var without = Repository();
-        using var with = WithSchedules("    - { action: configure, cron: \"0 6 * * *\" }\n");
+        using var with = WithSchedules("    - { action: setup, cron: \"0 6 * * *\" }\n");
         var before = LabRepositoryLoader.Load(without.Root);
         var after = LabRepositoryLoader.Load(with.Root);
         Assert.Equal(
@@ -325,7 +338,7 @@ public class GuestConfigurationTests
     }
 
     [Fact]
-    public void A_guest_with_a_recipe_needs_no_key_of_its_own()
+    public void A_guest_set_up_by_its_workflow_needs_no_key_of_its_own()
     {
         using var test = WithManagedKey();
         var repository = LabRepositoryLoader.Load(test.Root);
@@ -338,17 +351,19 @@ public class GuestConfigurationTests
     [Fact]
     public void Only_a_guest_octopushy_configures_with_its_own_key_changes_its_provisioning_hash()
     {
-        using var plain = TestRepository.Minimal();
         using var declared = Repository();
+        using var renamed = Repository();
         using var managed = WithManagedKey();
+        Edit(renamed, GuestFile, "access/app/ssh-key", "access/app/other-key");
         string Hash(TestRepository test)
         {
             var repository = LabRepositoryLoader.Load(test.Root);
             return ProvisionInputs.Build(repository, repository.Guest(Address)!, "c").Hash;
         }
 
-        Assert.Equal(Hash(plain), Hash(declared));
-        Assert.NotEqual(Hash(plain), Hash(managed));
+        // Which key the guest names is how a playbook logs in, and nothing about the machine.
+        Assert.Equal(Hash(declared), Hash(renamed));
+        Assert.NotEqual(Hash(declared), Hash(managed));
     }
 
     [Fact]

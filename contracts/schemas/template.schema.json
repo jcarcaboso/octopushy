@@ -24,8 +24,8 @@
           "properties": {
             "build": {
               "type": "object",
-              "properties": { "recipe": { "$ref": "common.schema.json#/$defs/id" } },
-              "required": ["recipe"],
+              "properties": { "workflow": { "$ref": "common.schema.json#/$defs/workflowRef" } },
+              "required": ["workflow"],
               "additionalProperties": false
             }
           },
