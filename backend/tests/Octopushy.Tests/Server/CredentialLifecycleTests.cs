@@ -89,36 +89,11 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Targeted_guest_retry_keeps_the_original_credential_version()
-    {
-        using var repository = Definitions.GuestFilesystemTests.Repository();
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        using var client = await SignInAsync(server);
-        var agent = await server.ConnectAgentAsync("home");
-        await server.SyncAndTrustAsync(client);
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
-        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
-        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
-        var growth = await agent.NextAsync("grow");
-        await agent.ReportAsync(growth, Outcome.Failed, error: "controlled known failure");
-        await server.TickAsync();
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Writer, value = "new-access" })).EnsureSuccessStatusCode();
-        (await client.PostAsJsonAsync("/api/variables/promote", new { key = Writer, version = 2, expectedCurrentVersion = 1, verificationNote = "fixture writer rotation" })).EnsureSuccessStatusCode();
-        (await client.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
-        var retry = await agent.NextAsync("grow");
-        Assert.Equal(growth.Secrets["proxmox.token"], retry.Secrets["proxmox.token"]);
-        Assert.NotEqual(growth.AttemptId, retry.AttemptId);
-        run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Single(run.Steps.Single(s => s.Name == StepNames.Apply).Attempts);
-    }
-
-    [Fact]
     public async Task A_matching_worker_without_the_executor_has_a_specific_queue_reason()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectAgentAsync("home");
-        server.Services.GetRequiredService<AgentConnections>().Add(new AgentSession(agent.Id, "native-only", ["proxmox", "nixos-rootfs"]));
+        server.Services.GetRequiredService<AgentConnections>().Add(new AgentSession(agent.Id, "native-only", ["proxmox"]));
         await server.SyncAndTrustAsync();
         await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);

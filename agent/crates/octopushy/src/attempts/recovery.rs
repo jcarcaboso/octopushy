@@ -5,7 +5,7 @@
 //! - A `queued` marker without a result never started: failed.
 //! - A `running` marker without a result died mid-attempt: uncertain for
 //!   mutations (`opentofu/apply`, `proxmox/set-protection`,
-//!   `nixos-rootfs/grow`, `guest/install-disk-reporter`, `ansible/run`), failed otherwise.
+//!   `guest/install-disk-reporter`, `ansible/run`), failed otherwise.
 //! - A workspace without a marker never got past setup and is removed.
 //! - A marker that exists but cannot be read says nothing about what the
 //!   attempt was doing: uncertain, never failed.

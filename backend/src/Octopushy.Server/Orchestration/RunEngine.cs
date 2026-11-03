@@ -132,45 +132,6 @@ public sealed partial class RunEngine(
     public Task CancelAsync(Guid runId, string reason, CancellationToken cancellationToken) =>
         WithDbAsync(db => CancelInternalAsync(db, runId, reason, cancellationToken), cancellationToken);
 
-    /// <summary>Retry only a known failed guest step, preserving the approved infrastructure work.</summary>
-    public Task RetryFilesystemAsync(Guid runId, CancellationToken cancellationToken) =>
-        WithDbAsync(async db =>
-        {
-            var run = await LoadRunAsync(db, runId, cancellationToken);
-            var failed = run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => s.Status == StepStatuses.Failed);
-            if (run.Status != RunStatuses.Failed || failed?.Name is not (StepNames.Verify or StepNames.GrowRoot or StepNames.VerifyRoot)
-                // Only a mutating attempt can leave an unknown change behind; a read-only one that lost its agent changed nothing.
-                || run.Steps.SelectMany(s => s.Attempts).Any(a => a.Status == AttemptStatuses.Uncertain && a.Mutating))
-            {
-                throw new RunException("Only a known failed guest verification or filesystem step can be retried. Inspect uncertain outcomes and plan again.");
-            }
-
-            if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
-                throw new RunException(trustReason);
-
-            var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
-            if (!resource.Valid || resource.MissingSince is not null || resource.RetiredAt is not null
-                || resource.DesiredInputsHash != run.InputsHash
-                || await db.Runs.AnyAsync(r => r.ResourceId == run.ResourceId && r.Id != run.Id && r.CreatedAt > run.CreatedAt, cancellationToken))
-            {
-                throw new RunException("This run is no longer current. Plan the current desired configuration instead.");
-            }
-
-            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal))
-            {
-                step.Status = StepStatuses.Pending;
-                step.Detail = null;
-                step.FinishedAt = null;
-                step.StartedAt = null;
-                step.Outputs = null;
-            }
-            run.Status = RunStatuses.Running;
-            run.FinishedAt = null;
-            run.Detail = null;
-            await db.SaveChangesAsync(cancellationToken);
-            signal.Wake();
-        }, cancellationToken);
-
     /// <summary>Closes a run whose outcome is uncertain, after the user has looked at it.</summary>
     public Task CloseUncertainAsync(Guid runId, string user, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
@@ -410,8 +371,8 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         var deletes = outputs?["counts"]?["delete"]?.GetValue<int>() ?? 0;
-        // Output-only plans can still need privileged apply, and a no-op rootfs
-        // run or reporter setup still has privileged guest-agent work. Manual means manual for all.
+        // Output-only plans can still need privileged apply, and a no-op run with
+        // reporter setup still has privileged guest-agent work. Manual means manual for all.
         var resourceChanges = (outputs?["changes"] as JsonArray)?.Count ?? 0;
         var policy = context.Policy!;
         var privilegedRemains = run.Steps.Any(s => s.Kind == StepKinds.Agent && !StepStatuses.IsDone(s.Status)
@@ -539,14 +500,14 @@ public sealed partial class RunEngine(
                 resource.CheckedAt = now;
                 if (outputs?["hasChanges"]?.GetValue<bool>() == false)
                 {
-                    if (run.Operation == Operations.Provision && RunContext.Parse(run.Context).RootDiskBytes is null)
+                    if (run.Operation == Operations.Provision)
                     {
                         resource.SyncedInputsHash = run.InputsHash;
                     }
 
                     var planContext = RunContext.Parse(run.Context);
                     var needsGuestApproval = run.Operation == Operations.Provision
-                        && (planContext.RootDiskBytes is not null || planContext.DiskReporter is not null);
+                        && planContext.DiskReporter is not null;
                     foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply
                         || s.Name == StepNames.Approval && !needsGuestApproval))
                     {
@@ -569,8 +530,7 @@ public sealed partial class RunEngine(
                 resource.AppliedInputsHash = run.InputsHash;
                 resource.AppliedRevisionId = run.RevisionId;
                 resource.AppliedAt = now;
-                if (context.RootDiskBytes is null)
-                    resource.SyncedInputsHash = run.InputsHash;
+                resource.SyncedInputsHash = run.InputsHash;
                 resource.Outputs = outputs?["outputs"]?.ToJsonString();
                 if (resource.BoundVmid is null)
                 {
@@ -587,10 +547,6 @@ public sealed partial class RunEngine(
                 resource.Outputs = null;
                 break;
             case StepNames.Verify:
-                resource.VerifiedAt = now;
-                break;
-            case StepNames.VerifyRoot:
-                resource.SyncedInputsHash = run.InputsHash;
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:

@@ -275,26 +275,6 @@ public class InstallationTrustTests(PostgresFixture postgres)
         Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync()));
     }
 
-    [Fact]
-    public async Task A_filesystem_retry_rechecks_the_source_before_reopening_a_failed_step()
-    {
-        using var repository = Definitions.GuestFilesystemTests.Repository();
-        await using var server = await ServerHarness.StartAsync(postgres, repository);
-        using var client = await AuthenticateAsync(server);
-        await server.SyncAndTrustAsync(client);
-        var agent = await server.ConnectAgentAsync("home");
-        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact());
-        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
-        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
-        await agent.ReportAsync(await agent.NextAsync("grow"), Outcome.Failed, error: "known guest failure");
-        var failed = await server.LatestRunAsync(Guest);
-        await UpdateSourceAsync(client, repository.Root + "/.");
-        var response = await client.PostAsync($"/api/runs/{failed.Id}/retry-filesystem", null);
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("current repository source", await response.Content.ReadAsStringAsync());
-        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest)).Status);
-    }
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -79,8 +79,6 @@ public sealed record RunContext
     /// <summary>The versions a rotation of the guest's key works with.</summary>
     public AccessRotationContext? AccessRotation { get; init; }
 
-    public long? RootDiskBytes { get; init; }
-
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
     public DateTimeOffset? ScheduledFor { get; init; }
 
@@ -207,8 +205,6 @@ public static class StepNames
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";
-    public const string GrowRoot = "grow-root";
-    public const string VerifyRoot = "verify-root";
     public const string InstallDiskReporter = "install-disk-reporter";
     /// <summary>Shows what a configure run will do, with no secrets and no contact with the guest.</summary>
     public const string Preview = "preview";

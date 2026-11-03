@@ -168,7 +168,6 @@ public sealed record RecipeDefinition(
     string? InputsSchema,
     string Verify,
     string? Image,
-    string? GuestFilesystem = null,
     ConfigureRecipe? Configure = null);
 
 /// <summary>What a recipe with <c>operation: configure</c> offers.</summary>

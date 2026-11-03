@@ -8,33 +8,7 @@ import { RunPage } from "./RunPage";
 const sha = "3f6c2a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615e4d3";
 const created = "2026-10-20T08:00:00Z";
 
-it.each(["grow-root", "verify"])("retries a failed %s step without requesting another infrastructure plan", async (name) => {
-  const detail = runDetail({ status: "failed", currentStep: name });
-  detail.steps = [{ ...detail.steps[0], name, kind: "agent", status: "failed", plan: null, approval: null }];
-  const { requests } = mockApi({
-    "GET /api/runs/run-1": () => detail,
-    "POST /api/runs/run-1/retry-filesystem": () => undefined,
-  });
-  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  await userEvent.click(await screen.findByRole("button", { name: "Retry guest step" }));
-  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
-  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-filesystem"]);
-});
-
-it.each([
-  { lost: "read-only", mutating: false, offered: true },
-  { lost: "mutating", mutating: true, offered: false },
-])("offers the guest retry after a lost $lost attempt only when it could not have changed anything", async ({ mutating, offered }) => {
-  const detail = runDetail({ status: "failed", currentStep: "verify-root" });
-  const lost = { ...detail.steps[0].attempts[0], id: "attempt-lost", status: "uncertain", mutating };
-  detail.steps = [{ ...detail.steps[0], name: "verify-root", kind: "agent", status: "failed", plan: null, approval: null, attempts: [lost] }];
-  mockApi({ "GET /api/runs/run-1": () => detail });
-  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  await screen.findByText(/Independently measures guest disk/);
-  expect(screen.queryByRole("button", { name: "Retry guest step" }) !== null).toBe(offered);
-});
-
-it("retries a failed stage of a pipeline, names its stage, and never offers the guest retry", async () => {
+it("retries a failed stage of a pipeline and names its stage", async () => {
   const detail = runDetail({ operation: "pipeline", status: "failed", currentStep: null });
   detail.steps = [{ ...detail.steps[0], name: "playbook", stage: "deploy", kind: "agent", status: "failed", plan: null, approval: null }];
   const { requests } = mockApi({
@@ -46,7 +20,6 @@ it("retries a failed stage of a pipeline, names its stage, and never offers the 
   await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/retry-stage"]);
   expect(screen.getByText("deploy")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Retry guest step" })).toBeNull();
 });
 
 it("offers no stage retry once a change may have been lost", async () => {

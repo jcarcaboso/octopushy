@@ -83,7 +83,7 @@ At startup the enrolled state directory, work directory and provider cache are
 resolved to canonical absolute paths, including relative paths and symlinks.
 Container mounts and OpenTofu's repository root therefore use the same paths.
 The runtime is probed once: if that probe fails, the agent warns and omits
-`opentofu` from `Hello`, while native `proxmox` and `nixos-rootfs` remain advertised.
+`opentofu` from `Hello`, while native `proxmox` remains advertised.
 Fix the tool/runtime and restart the agent to advertise OpenTofu again. A successful
 version probe does not prove image pulls, provider access or backend connectivity.
 

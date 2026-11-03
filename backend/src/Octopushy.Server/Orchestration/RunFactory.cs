@@ -125,8 +125,6 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Recipe.Verify,
-            RootDiskBytes = inputs.Recipe.GuestFilesystem is null ? null
-                : checked(guest.Json["hardware"]!["disks"]![0]!["size"]!.GetValue<long>() * 1024 * 1024 * 1024),
             DiskReporter = installReporter ? new DiskReporterContext(
                 $"{reporter.PublicUrl.TrimEnd('/')}/api/guests/{resource.Id}/disk-usage",
                 reporter.BinaryUrl,
@@ -139,9 +137,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         run.InputsHash = retire ? RetireHash(inputs.Hash) : inputs.Hash;
         var steps = retire
             ? new[] { StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.VerifyAbsent }
-            : context.RootDiskBytes is not null
-                ? [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot]
-                : [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify];
+            : [StepNames.Plan, StepNames.Approval, StepNames.Unprotect, StepNames.Apply, StepNames.Verify];
         AddSteps(run, steps);
         if (context.DiskReporter is { } setup)
         {

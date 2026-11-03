@@ -126,22 +126,18 @@ public class SharedCredentialTests(PostgresFixture postgres)
     [InlineData(StepNames.Apply, "pending")]
     [InlineData(StepNames.Unprotect, "pending")]
     [InlineData(StepNames.Reprotect, "pending")]
-    [InlineData(StepNames.GrowRoot, "pending")]
-    [InlineData(StepNames.VerifyRoot, "pending")]
     [InlineData(StepNames.InstallDiskReporter, "pending")]
     [InlineData(StepNames.InstallDiskReporter, "stale")]
     [InlineData(StepNames.InstallDiskReporter, "missing-artifact")]
     [InlineData(StepNames.InstallDiskReporter, "corrupt-artifact")]
     [InlineData(StepNames.Apply, "denied")]
-    [InlineData(StepNames.VerifyRoot, "stale")]
-    [InlineData(StepNames.GrowRoot, "status")]
     [InlineData(StepNames.Unprotect, "missing-artifact")]
     [InlineData(StepNames.Apply, "corrupt-artifact")]
-    [InlineData(StepNames.VerifyRoot, "corrupt-artifact")]
-    [InlineData(StepNames.GrowRoot, "plan-failed")]
+    [InlineData(StepNames.Unprotect, "status")]
+    [InlineData(StepNames.Reprotect, "plan-failed")]
     public async Task Shared_credentials_never_bypass_approval_or_saved_plan_checks_in_builder_or_dispatch(string name, string invalid)
     {
-        using var repo = SharedRepository(rootFilesystem: true);
+        using var repo = SharedRepository();
         repo.Write("labs/home/lab.yaml",
             "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
         await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
@@ -200,9 +196,9 @@ public class SharedCredentialTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task One_exact_version_survives_promotion_restart_and_retry_then_revocation_blocks_without_fallback()
+    public async Task One_exact_version_survives_promotion_and_restart_then_revocation_blocks_without_fallback()
     {
-        using var repo = SharedRepository(rootFilesystem: true);
+        using var repo = SharedRepository();
         const string installation = "labs/home/proxmox/korriban/installation.yaml";
         repo.Write(installation, File.ReadAllText(Path.Combine(repo.Root, installation))
             .Replace($"store: {Shared} }}", $"store: {Shared}, version: 2 }}"));
@@ -238,82 +234,22 @@ public class SharedCredentialTests(PostgresFixture postgres)
         var apply = await worker.NextAsync("apply");
         Assert.Equal("shared-v2", apply.Secrets["proxmox.token"]);
         await worker.ReportAsync(apply, Outcome.Succeeded);
-        var verify = await worker.NextAsync("verify-guest");
-        Assert.Equal("shared-v2", Assert.Single(verify.Secrets).Value);
-        await worker.ReportAsync(verify, Outcome.Succeeded);
-        var grow = await worker.NextAsync("grow");
-        Assert.Equal("shared-v2", Assert.Single(grow.Secrets).Value);
-        await worker.ReportAsync(grow, Outcome.Failed, error: "fixture guest unit not ready");
-        await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         var context = RunContext.Parse(run.Context);
         Assert.Equal(2, context.SecretVersions[SharedRole]);
         Assert.Equal(2, Assert.Single(context.RequestedSecretVersions).Value);
         Assert.Equal(SharedRole, Assert.Single(context.RequestedSecretVersions).Key);
-        (await resumed.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
-        var retry = await worker.NextAsync("grow");
-        Assert.Equal("shared-v2", Assert.Single(retry.Secrets).Value);
-        await worker.ReportAsync(retry, Outcome.Failed, error: "still not ready");
-        await server.TickAsync();
         (await resumed.PostAsJsonAsync("/api/variables/revoke", new
         { key = Shared, version = 2, reason = "fixture revoke pinned shared token" })).EnsureSuccessStatusCode();
         var releases = await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Shared));
-        (await resumed.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
         await server.TickAsync();
         run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains("v2: revoked", run.Detail);
         Assert.Equal(2, RunContext.Parse(run.Context).SecretVersions[SharedRole]);
-        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "grow");
+        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "verify-guest");
         Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Shared)));
         Assert.False(await server.QueryAsync(db => db.SecretResolutions.AnyAsync(r => r.Key == Shared && r.Version != 2)));
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Noop_shared_rootfs_still_requires_manual_approval_and_a_saved_plan(bool artifact)
-    {
-        using var repo = SharedRepository(rootFilesystem: true);
-        repo.Write("labs/home/lab.yaml",
-            "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
-        await using var server = await ServerHarness.StartAsync(postgres, repo, withSecrets: false);
-        await server.SetSecretAsync(Shared, "shared-v1");
-        await server.SetSecretAsync("opentofu/pg", "fixture-backend");
-        using var http = await LoginAsync(server);
-        var worker = await server.ConnectAgentAsync("home");
-        await server.SyncAndTrustAsync(http);
-        var preview = await worker.NextAsync("preview");
-        Assert.True(JsonNode.Parse(preview.InputJson)!["retainNoChangesPlan"]!.GetValue<bool>());
-        await worker.ReportAsync(preview, Outcome.Succeeded, FakeAgent.Plan(), artifacts: artifact ? [FakeAgent.PlanArtifact()] : []);
-        await server.TickAsync();
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(StepStatuses.Skipped, run.Steps.Single(s => s.Name == StepNames.Apply).Status);
-        if (!artifact)
-        {
-            Assert.Equal(RunStatuses.Failed, run.Status);
-            Assert.Contains("saved plan", run.Detail);
-            Assert.DoesNotContain(worker.TakeAssignments(), a => a.Executor == "nixos-rootfs");
-            return;
-        }
-        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
-        Assert.Empty(worker.TakeAssignments());
-        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
-        Assert.True(approval.ApprovalRequired);
-        (await http.PostAsJsonAsync($"/api/runs/{run.Id}/steps/{approval.Id}/approve",
-            new { planSha256 = approval.PlanSha256 })).EnsureSuccessStatusCode();
-        await worker.ReportAsync(await worker.NextAsync("verify-guest"), Outcome.Succeeded);
-        var grow = await worker.NextAsync("grow");
-        Assert.Equal("shared-v1", Assert.Single(grow.Secrets).Value);
-        await worker.ReportAsync(grow, Outcome.Succeeded);
-        var verify = await worker.NextAsync("verify");
-        Assert.Equal("shared-v1", Assert.Single(verify.Secrets).Value);
-        Assert.Equal("nixos-rootfs", verify.Executor);
-        Assert.False(AssignmentBuilder.ActionFor(StepNames.VerifyRoot).Mutating);
-        Assert.Equal(SecretNames.ProxmoxPrivilegedToken, AssignmentBuilder.TokenFor(StepNames.VerifyRoot));
-        await worker.ReportAsync(verify, Outcome.Succeeded);
-        await server.TickAsync();
-        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
     }
 
     [Theory]
@@ -393,9 +329,9 @@ public class SharedCredentialTests(PostgresFixture postgres)
         { key = Shared, version, expectedCurrentVersion = current, verificationNote = "fixture shared access verified" })).EnsureSuccessStatusCode();
     }
 
-    private static TestRepository SharedRepository(bool rootFilesystem = false)
+    private static TestRepository SharedRepository()
     {
-        var repo = rootFilesystem ? Definitions.GuestFilesystemTests.Repository() : TestRepository.Minimal();
+        var repo = TestRepository.Minimal();
         const string installation = "labs/home/proxmox/korriban/installation.yaml";
         repo.Write(installation, File.ReadAllText(Path.Combine(repo.Root, installation))
             .Replace("readOnlyToken: { store: proxmox/korriban/read-only-token }\n  privilegedToken: { store: proxmox/korriban/privileged-token }",

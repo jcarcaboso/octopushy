@@ -315,7 +315,6 @@ public sealed partial class LabRepositoryLoader
             inputs,
             json["verify"]?.GetValue<string>() ?? "proxmox",
             json["image"]?.GetValue<string>(),
-            json["guestFilesystem"]?.GetValue<string>(),
             ParseConfigure(json));
     }
 
@@ -353,10 +352,6 @@ public sealed partial class LabRepositoryLoader
     private void CheckRecipe(RecipeDefinition recipe)
     {
         var address = $"recipes/{recipe.Id}";
-        if (recipe.GuestFilesystem is not null && recipe.Verify != "proxmox")
-        {
-            Error(recipe.File, null, "guestFilesystem requires verify: proxmox.", address);
-        }
         var rootPath = Path.Combine(_root, recipe.Root);
         if (!Directory.Exists(rootPath))
         {
@@ -750,14 +745,6 @@ public sealed partial class LabRepositoryLoader
             {
                 Error(guest.File, LineOf(guest.File, error.Pointer), $"{Describe(error.Pointer)}{error.Message} (recipe {recipe.Id})", guest.Address);
             }
-        }
-
-        if (recipe?.GuestFilesystem is not null
-            && (guest.Json["hardware"]?["disks"] is not JsonArray disks || disks.Count == 0
-                || disks[0]?["size"] is not JsonValue size || !size.TryGetValue<int>(out var gib)
-                || gib < 2 || gib > 65536))
-        {
-            Error(guest.File, null, "guestFilesystem requires hardware.disks[0].size in GiB (2–65536).", guest.Address);
         }
 
         if (settings is not null && guest.StateBackend is { } backend && !settings.StateBackends.ContainsKey(backend))

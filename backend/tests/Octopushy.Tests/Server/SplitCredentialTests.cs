@@ -56,22 +56,18 @@ public class SplitCredentialTests(PostgresFixture postgres)
     [InlineData(StepNames.Apply, "pending")]
     [InlineData(StepNames.Unprotect, "pending")]
     [InlineData(StepNames.Reprotect, "pending")]
-    [InlineData(StepNames.GrowRoot, "pending")]
-    [InlineData(StepNames.VerifyRoot, "pending")]
     [InlineData(StepNames.InstallDiskReporter, "pending")]
     [InlineData(StepNames.InstallDiskReporter, "stale")]
     [InlineData(StepNames.InstallDiskReporter, "missing-artifact")]
     [InlineData(StepNames.InstallDiskReporter, "corrupt-artifact")]
     [InlineData(StepNames.Apply, "denied")]
-    [InlineData(StepNames.VerifyRoot, "stale")]
-    [InlineData(StepNames.GrowRoot, "status")]
     [InlineData(StepNames.Apply, "missing-artifact")]
     [InlineData(StepNames.Apply, "corrupt-artifact")]
-    [InlineData(StepNames.VerifyRoot, "corrupt-artifact")]
-    [InlineData(StepNames.GrowRoot, "plan-failed")]
+    [InlineData(StepNames.Unprotect, "status")]
+    [InlineData(StepNames.Reprotect, "plan-failed")]
     public async Task Direct_builder_refuses_privileged_release_without_exact_successful_approval(string name, string invalid)
     {
-        using var repo = Definitions.GuestFilesystemTests.Repository();
+        using var repo = TestRepository.Minimal();
         repo.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
         await using var server = await ServerHarness.StartAsync(postgres, repo);
         using var http = await LoginAsync(server);
@@ -119,45 +115,6 @@ public class SplitCredentialTests(PostgresFixture postgres)
             .BuildAsync(attempt, step, run, RunContext.Parse(run.Context), worker.Id, CancellationToken.None));
         Assert.Equal(0, await server.QueryAsync(d => d.SecretResolutions.CountAsync(r => r.Key == Writer)));
         Assert.Equal(0, await server.QueryAsync(d => d.SecretResolutions.CountAsync(r => r.AttemptId == attempt.Id)));
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Noop_rootfs_preserves_manual_approval_and_fails_closed_without_retained_plan(bool artifact)
-    {
-        using var repo = Definitions.GuestFilesystemTests.Repository();
-        repo.Write("labs/home/lab.yaml", "schemaVersion: 1\nexecution: { agentLabels: [home] }\npolicy: { approval: manual }");
-        await using var server = await ServerHarness.StartAsync(postgres, repo);
-        using var http = await LoginAsync(server);
-        var worker = await server.ConnectAgentAsync("home");
-        await server.SyncAndTrustAsync(http);
-        var preview = await worker.NextAsync("preview");
-        Assert.True(JsonNode.Parse(preview.InputJson)!["retainNoChangesPlan"]!.GetValue<bool>());
-        await worker.ReportAsync(preview, Outcome.Succeeded, FakeAgent.Plan(), artifacts: artifact ? [FakeAgent.PlanArtifact()] : []);
-        await server.TickAsync();
-        var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.Equal(StepStatuses.Skipped, run.Steps.Single(s => s.Name == StepNames.Apply).Status);
-        Assert.Equal(0, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Writer)));
-        if (!artifact)
-        {
-            Assert.Equal(RunStatuses.Failed, run.Status);
-            Assert.Contains("saved plan", run.Detail);
-            Assert.DoesNotContain(worker.TakeAssignments(), a => a.Executor == "nixos-rootfs");
-            return;
-        }
-        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
-        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
-        Assert.True(approval.ApprovalRequired);
-        (await http.PostAsJsonAsync($"/api/runs/{run.Id}/steps/{approval.Id}/approve",
-            new { planSha256 = approval.PlanSha256 })).EnsureSuccessStatusCode();
-        await worker.ReportAsync(await worker.NextAsync("verify-guest"), Outcome.Succeeded);
-        var grow = await worker.NextAsync("grow");
-        Assert.Equal("octopushy@pve!writer=writer-token", grow.Secrets["proxmox.token"]);
-        await worker.ReportAsync(grow, Outcome.Succeeded);
-        var verify = await worker.NextAsync("verify");
-        Assert.Equal(grow.Secrets["proxmox.token"], verify.Secrets["proxmox.token"]);
-        Assert.False(AssignmentBuilder.ActionFor(StepNames.VerifyRoot).Mutating);
     }
 
     [Theory]
@@ -309,9 +266,9 @@ public class SplitCredentialTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Distinct_exact_versions_survive_promotion_restart_retry_and_revoke_without_rebinding()
+    public async Task Distinct_exact_versions_survive_promotion_and_restart_and_revoking_one_blocks_without_rebinding()
     {
-        using var repo = Definitions.GuestFilesystemTests.Repository();
+        using var repo = TestRepository.Minimal();
         const string installation = "labs/home/proxmox/korriban/installation.yaml";
         repo.Write(installation, File.ReadAllText(Path.Combine(repo.Root, installation))
             .Replace($"store: {Reader} }}", $"store: {Reader}, version: 2 }}")
@@ -335,31 +292,18 @@ public class SplitCredentialTests(PostgresFixture postgres)
         var apply = await worker.NextAsync("apply");
         Assert.Equal("writer-v3", apply.Secrets["proxmox.token"]);
         await worker.ReportAsync(apply, Outcome.Succeeded);
-        var verify = await worker.NextAsync("verify-guest");
-        Assert.Equal("reader-v2", verify.Secrets["proxmox.token"]);
-        await worker.ReportAsync(verify, Outcome.Succeeded);
-        var grow = await worker.NextAsync("grow");
-        Assert.Equal("writer-v3", grow.Secrets["proxmox.token"]);
-        await worker.ReportAsync(grow, Outcome.Failed, error: "fixture guest unit not ready");
-        await server.TickAsync();
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         var context = RunContext.Parse(run.Context);
         Assert.Equal(2, context.SecretVersions[SecretNames.ProxmoxReadOnlyToken]);
         Assert.Equal(3, context.SecretVersions[SecretNames.ProxmoxPrivilegedToken]);
-        (await resumed.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
-        var retry = await worker.NextAsync("grow");
-        Assert.Equal("writer-v3", retry.Secrets["proxmox.token"]);
-        await worker.ReportAsync(retry, Outcome.Failed, error: "still not ready");
-        await server.TickAsync();
-        (await resumed.PostAsJsonAsync("/api/variables/revoke", new { key = Writer, version = 3, reason = "fixture revoke pinned writer" })).EnsureSuccessStatusCode();
-        var releases = await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Writer));
-        (await resumed.PostAsync($"/api/runs/{run.Id}/retry-filesystem", null)).EnsureSuccessStatusCode();
+        (await resumed.PostAsJsonAsync("/api/variables/revoke", new { key = Reader, version = 2, reason = "fixture revoke pinned reader" })).EnsureSuccessStatusCode();
+        var releases = await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Reader));
         await server.TickAsync();
         run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
-        Assert.Contains("v3: revoked", run.Detail);
-        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "grow");
-        Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Writer)));
+        Assert.Contains("v2: revoked", run.Detail);
+        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "verify-guest");
+        Assert.Equal(releases, await server.QueryAsync(db => db.SecretResolutions.CountAsync(r => r.Key == Reader)));
     }
 
     private static async Task StageAndPromoteAsync(HttpClient http, string key, int version, int current, string value)

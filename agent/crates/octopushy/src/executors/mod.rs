@@ -4,7 +4,6 @@
 
 pub mod ansible;
 pub mod guest;
-pub mod nixos_rootfs;
 pub mod opentofu;
 pub mod proxmox;
 
@@ -24,7 +23,6 @@ use crate::tools::ToolRuntime;
 pub const EXECUTORS: &[&str] = &[
     "opentofu",
     "proxmox",
-    "nixos-rootfs",
     "guest",
     "ansible",
 ];
@@ -36,7 +34,6 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
         (executor, action),
         ("opentofu", "apply")
             | ("proxmox", "set-protection")
-            | ("nixos-rootfs", "grow")
             | ("guest", "install-disk-reporter")
             | ("ansible", "run")
     ) || cfg!(test) && (executor, action) == ("test", "mutate")
@@ -193,7 +190,6 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
         "proxmox" => proxmox::run(cfg, ctx).await,
         "guest" => guest::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
-        "nixos-rootfs" => nixos_rootfs::run(cfg, ctx).await,
         "ansible" => ansible::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,

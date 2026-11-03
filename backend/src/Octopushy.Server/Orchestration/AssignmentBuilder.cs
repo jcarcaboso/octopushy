@@ -40,8 +40,6 @@ public sealed partial class AssignmentBuilder(
         StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
         StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
         StepNames.Observe => new StepAction("proxmox", "observe", false),
-        StepNames.GrowRoot => new StepAction("nixos-rootfs", "grow", true),
-        StepNames.VerifyRoot => new StepAction("nixos-rootfs", "verify", false),
         StepNames.InstallDiskReporter => new StepAction("guest", "install-disk-reporter", true),
         StepNames.Preview => new StepAction("ansible", "preview", false),
         StepNames.Playbook or StepNames.PlaybookApproved or StepNames.AuthorizeKey or StepNames.RemoveKey => new StepAction("ansible", "run", true),
@@ -62,9 +60,8 @@ public sealed partial class AssignmentBuilder(
             : new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList();
     }
 
-    // Credential purpose is independent of retry safety: verify-root uses guest-agent exec.
     public static string TokenFor(string stepName) => stepName is
-        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect or StepNames.GrowRoot or StepNames.VerifyRoot
+        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect
         or StepNames.InstallDiskReporter
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
@@ -112,12 +109,8 @@ public sealed partial class AssignmentBuilder(
                 throw new AssignmentException("The guest is missing or retired.");
             // Approval alone does not establish root/guest readiness. Do not resolve
             // even Proxmox plaintext when a direct builder caller skips these gates.
-            var prerequisites = new[] { StepNames.Verify, StepNames.GrowRoot, StepNames.VerifyRoot };
-            var readiness = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && prerequisites.Contains(s.Name)).ToListAsync(cancellationToken);
-            if (!readiness.Any(s => s.Name == StepNames.Verify && s.Status == StepStatuses.Succeeded)
-                || context.RootDiskBytes is not null && (!readiness.Any(s => s.Name == StepNames.GrowRoot) || !readiness.Any(s => s.Name == StepNames.VerifyRoot))
-                || readiness.Any(s => s.Status != StepStatuses.Succeeded))
-                throw new AssignmentException("Reporter setup requires successful guest and root verification.");
+            if (!await db.Steps.AsNoTracking().AnyAsync(s => s.RunId == run.Id && s.Name == StepNames.Verify && s.Status == StepStatuses.Succeeded, cancellationToken))
+                throw new AssignmentException("Reporter setup requires successful guest verification.");
         }
         var names = SecretsFor(stepName, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
@@ -174,7 +167,7 @@ public sealed partial class AssignmentBuilder(
                 ["destroy"] = run.Operation == Operations.Retire,
             };
             if (run.Operation == Operations.Provision
-                && (context.RootDiskBytes is not null || context.DiskReporter is not null))
+                && context.DiskReporter is not null)
                 input["retainNoChangesPlan"] = true;
             assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
             if (stepName == StepNames.Apply)
@@ -206,11 +199,6 @@ public sealed partial class AssignmentBuilder(
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = stepName == StepNames.Reprotect,
             };
-            if (action.Executor == "nixos-rootfs")
-            {
-                input["diskBytes"] = context.RootDiskBytes ?? throw new AssignmentException("Missing root disk capacity.");
-                input["address"] = context.Address;
-            }
             if (stepName == StepNames.InstallDiskReporter && run is not null)
             {
                 var reporter = context.DiskReporter

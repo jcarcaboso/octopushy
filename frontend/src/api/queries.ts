@@ -332,14 +332,6 @@ export function useCloseRun() {
   });
 }
 
-export function useRetryFilesystem() {
-  const refresh = useRefreshRuns();
-  return useMutation({
-    mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/retry-filesystem", { params: { path: { id } } })),
-    onSettled: () => refresh(),
-  });
-}
-
 export function useRetryStage() {
   const refresh = useRefreshRuns();
   return useMutation({

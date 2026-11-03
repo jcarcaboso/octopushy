@@ -304,13 +304,6 @@ public static partial class Endpoints
         })
         .WithName("cancelRun");
 
-        group.MapPost("/{id:guid}/retry-filesystem", async (Guid id, RunEngine engine, CancellationToken ct) =>
-        {
-            await engine.RetryFilesystemAsync(id, ct);
-            return TypedResults.NoContent();
-        })
-        .WithName("retryFilesystem");
-
         group.MapPost("/{id:guid}/retry-stage", async (Guid id, RunEngine engine, CancellationToken ct) =>
         {
             await engine.RetryStageAsync(id, ct);

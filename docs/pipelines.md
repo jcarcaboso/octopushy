@@ -53,7 +53,7 @@ recipe decides how, and a router is out of scope.
   `onChange`, on the guest's connection: its address, user, SSH key and pin. `secrets` and `secretFiles` on the stage work
   as they do in `setup`. `{{ octopushy.guest_directory }}` is the service's folder.
 - **An OpenTofu stage** is a recipe with `operation: stage`, which is a root module like a provision recipe's, but not
-  `verify` or `guestFilesystem`. Its inputs are its variables. OpenTofu warns about one it does not declare, and goes on.
+  `verify`. Its inputs are its variables. OpenTofu warns about one it does not declare, and goes on.
   It has a state of its own and, in step 1, **no credentials of any kind**: no Proxmox token and no backend environment.
 - **Files.** Anything else in the service's folder reaches a playbook through `guest_directory`.
 

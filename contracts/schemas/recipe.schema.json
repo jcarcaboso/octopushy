@@ -59,7 +59,6 @@
       }
     },
     "verify": { "enum": ["proxmox", "none"] },
-    "guestFilesystem": { "description": "Explicitly authorizes native online root growth and capacity verification through the Proxmox guest agent, including reconciliation after an infrastructure no-op. Only the supported NixOS ext4 layout is accepted.", "enum": ["nixos-ext4-root"] },
     "image": { "description": "Overrides the server's default image for the executor. Ignored by an agent with the local tool runtime.", "type": "string" }
   },
   "required": ["schemaVersion", "operation", "executor", "root"],
@@ -67,7 +66,7 @@
     {
       "if": { "properties": { "operation": { "const": "configure" } }, "required": ["operation"] },
       "then": {
-        "properties": { "executor": { "const": "ansible" }, "verify": false, "guestFilesystem": false },
+        "properties": { "executor": { "const": "ansible" }, "verify": false },
         "required": ["actions"]
       },
       "else": {
@@ -76,7 +75,7 @@
     },
     {
       "if": { "properties": { "operation": { "const": "stage" } }, "required": ["operation"] },
-      "then": { "properties": { "verify": false, "guestFilesystem": false } }
+      "then": { "properties": { "verify": false } }
     }
   ],
   "additionalProperties": false

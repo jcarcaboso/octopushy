@@ -1,8 +1,7 @@
 schemaVersion: 1
-description: Proxmox VM provisioning with native online growth of the supported NixOS ext4 root disk.
+description: Proxmox VM provisioning for a NixOS guest.
 operation: provision
 executor: opentofu
 root: ../../modules/opentofu/proxmox-vm
 inputs: ../proxmox-vm/inputs.schema.json
 verify: proxmox
-guestFilesystem: nixos-ext4-root

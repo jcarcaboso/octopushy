@@ -89,9 +89,7 @@ All actions take a `connection` and the secret `proxmox.token`, formatted
 selects the pinned read-only credential for `observe`, `verify-guest`, and
 `verify-absent`; `set-protection` receives the pinned privileged credential only
 after the run's approval gate. OpenTofu `preview` also receives read-only, while
-`apply`, **both** `nixos-rootfs` actions, and `guest` / `install-disk-reporter`
-receive privileged. Root verification uses QGA command execution, even though its
-retry classification is read-only. In shared mode, these actions use the same
+`apply` and `guest` / `install-disk-reporter` receive privileged. In shared mode, these actions use the same
 pinned token, with the approval gate unchanged for privileged work.
 See [credential roles and rollout limits](../../../docs/proxmox-credentials.md).
 
@@ -454,39 +452,3 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.
 With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
 restart for attempts it lost.
-
-## `nixos-rootfs`
-
-An explicitly advertised capability, selected only by recipes opting into
-`guestFilesystem: nixos-ext4-root`. See
-[supported layout and recovery](../../../docs/guest-filesystem-growth.md).
-
-Actions: `grow` (mutating), `verify` (read-only). Uses only `proxmox.token`
-and the existing connection TLS/CA policy, never OpenTofu backend credentials.
-Both actions take:
-
-```json
-{
-  "connection": { "endpoint": "https://pve.example:8006/", "verifyTls": true },
-  "node": "pve",
-  "vmid": 9210,
-  "name": "opy-service-01",
-  "address": "home/pve/opy-service-01",
-  "diskBytes": 27917287424,
-  "waitSeconds": 180
-}
-```
-
-The VM name, Octopushy tag, and exact managed-by description must match before
-any guest command is submitted. A fixed argument-array command uses QEMU
-guest-agent execution and the native NixOS operation lock. No caller-supplied
-script or path is accepted. Its stdout reports `diskBytes`, `partitionBytes`,
-`filesystemBytes` (ext4 block count × block size), `usableBytes` (filesystem
-statistics), `uuid`, and `changed`. Verification must report `changed: false`.
-
-There is one command submission per attempt; status is polled by PID.
-Lost submission/status responses, deadline expiry, or signals after a growth
-submission are `uncertain`. Native lock contention and completed nonzero
-commands are known failures; capacity checks still run on a retry. A completed
-growth process and a successful infrastructure apply are not substitutes for
-the subsequent independent `verify` step.
