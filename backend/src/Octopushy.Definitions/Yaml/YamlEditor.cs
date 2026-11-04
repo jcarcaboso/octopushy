@@ -440,7 +440,7 @@ public static class YamlEditor
     }
 
     /// <summary>A value on one line in flow style: <c>{ a: 1, b: [x, y] }</c>.</summary>
-    private static string RenderFlow(JsonNode? node) => node switch
+    internal static string RenderFlow(JsonNode? node) => node switch
     {
         JsonObject { Count: 0 } => "{}",
         JsonObject o => "{ " + string.Join(", ", o.Select(p => $"{RenderKey(p.Key)}: {RenderFlow(p.Value)}")) + " }",
@@ -449,9 +449,9 @@ public static class YamlEditor
         _ => RenderScalar(node, null, flow: true),
     };
 
-    private static string RenderKey(string key) => PlainReadsAs(key, flow: true) ? key : DoubleQuoted(key);
+    internal static string RenderKey(string key) => PlainReadsAs(key, flow: true) ? key : DoubleQuoted(key);
 
-    private static string RenderScalar(JsonNode? value, ScalarStyle? style, bool flow)
+    internal static string RenderScalar(JsonNode? value, ScalarStyle? style, bool flow)
     {
         if (value is null)
             return "null";
