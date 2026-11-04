@@ -340,6 +340,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listWorkflows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/repository": {
         parameters: {
             query?: never;
@@ -692,6 +708,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChanges"];
+        put?: never;
+        post: operations["commitChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/changes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChange"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/changes/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["dismissChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/changes/form/{resourceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChangeForm"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/changes/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables": {
         parameters: {
             query?: never;
@@ -859,6 +955,93 @@ export interface components {
             /** Format: date-time */
             boundAt: null | string;
         };
+        ChangeDto: {
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            resourceKind: string;
+            /** Format: uuid */
+            resourceId: string;
+            address: string;
+            author: string;
+            message: string;
+            baseCommit: string;
+            commit: null | string;
+            commitUrl: null | string;
+            /** Format: uuid */
+            revisionId: null | string;
+            status: string;
+            detail: null | string;
+            files: string[];
+            runs: components["schemas"]["RunSummaryDto"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            syncedAt: null | string;
+            /** Format: date-time */
+            updatedAt: string;
+            supersededBy?: null | string;
+            supersededByUrl?: null | string;
+            dismissedBy?: null | string;
+            /** Format: date-time */
+            dismissedAt?: null | string;
+            /** @default false */
+            final: boolean;
+            /** @default false */
+            notCommitted: boolean;
+        };
+        ChangeFormDto: {
+            /** Format: uuid */
+            resourceId: string;
+            resourceKind: string;
+            address: string;
+            name: string;
+            baseCommit: null | string;
+            file: null | string;
+            text: null | string;
+            workflow: null | string;
+            resolved: null | components["schemas"]["WorkflowVersionDto"];
+            hardware: null | components["schemas"]["JsonNode"];
+            network: null | components["schemas"]["JsonNode"];
+            inputs: null | components["schemas"]["JsonNode"];
+            blockedReason: null | string;
+            canRemove: boolean;
+            upgrade: null | components["schemas"]["WorkflowVersionDto"];
+            fieldIssues: components["schemas"]["FieldIssueDto"][];
+        };
+        ChangePreviewDto: {
+            kind: string;
+            address: string;
+            subject: string;
+            message: string;
+            baseCommit: string;
+            files: string[];
+            diff: string;
+            valid: boolean;
+            issues: components["schemas"]["IssueDto"][];
+            fieldIssues: components["schemas"]["FieldIssueDto"][];
+            refused: null | string;
+        };
+        ChangeRefusedDto: {
+            /** Format: uuid */
+            changeId: null | string;
+            reason: string;
+            message: string;
+            issues: components["schemas"]["IssueDto"][];
+            fieldIssues: components["schemas"]["FieldIssueDto"][];
+            status?: null | string;
+        };
+        ChangeRequest: {
+            /** Format: uuid */
+            resourceId: string;
+            baseCommit: string;
+            /** @default edit */
+            kind: string;
+            workflow?: null | string;
+            hardware?: null | components["schemas"]["JsonObject"];
+            network?: null | components["schemas"]["JsonObject"];
+            inputs?: null | components["schemas"]["JsonObject"];
+        };
         ChangedPath: {
             path: string;
             change: string;
@@ -987,6 +1170,10 @@ export interface components {
             valid: boolean;
             newIssues: components["schemas"]["IssueDto"][];
             formatIssues: components["schemas"]["IssueDto"][];
+        };
+        FieldIssueDto: {
+            pointer: string;
+            message: string;
         };
         FollowedSecretDto: {
             key: string;
@@ -1127,6 +1314,7 @@ export interface components {
             address: null | string;
         };
         JsonNode: unknown;
+        JsonObject: Record<string, never>;
         LabDto: {
             /** Format: uuid */
             id: string;
@@ -1610,6 +1798,11 @@ export interface components {
             missing: components["schemas"]["MissingVariableDto"][];
             system: components["schemas"]["SystemVariableDto"][];
         };
+        WorkflowCatalogDto: {
+            source: string;
+            repository: null | string;
+            workflows: components["schemas"]["WorkflowSummaryDto"][];
+        };
         WorkflowDto: {
             reference: string;
             resolved: null | string;
@@ -1628,6 +1821,12 @@ export interface components {
             id: string;
             releases: components["schemas"]["WorkflowReleaseDto"][];
         };
+        WorkflowSummaryDto: {
+            id: string;
+            manages: null | string;
+            description: null | string;
+            versions: components["schemas"]["WorkflowVersionDto"][];
+        };
         WorkflowUseDto: {
             address: string;
             kind: string;
@@ -1636,6 +1835,18 @@ export interface components {
             commit: null | string;
             problem: null | string;
             newerMajor: null | string;
+        };
+        WorkflowVersionDto: {
+            id: string;
+            version: string;
+            commit: null | string;
+            usable: boolean;
+            issue: null | string;
+            manages: null | string;
+            description: null | string;
+            inputs: null | components["schemas"]["JsonNode"];
+            ui: null | components["schemas"]["JsonNode"];
+            secrets: string[];
         };
         WorkflowsSourceDto: {
             source: string;
@@ -2681,6 +2892,55 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listWorkflows: {
+        parameters: {
+            query?: {
+                id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCatalogDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
             };
             /** @description Conflict */
             409: {
@@ -4088,6 +4348,319 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listChanges: {
+        parameters: {
+            query?: {
+                resourceId?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDto"][];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    commitChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRefusedDto"];
+                };
+            };
+        };
+    };
+    getChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    dismissChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getChangeForm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeFormDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    previewChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePreviewDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRefusedDto"];
                 };
             };
         };

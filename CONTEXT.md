@@ -142,6 +142,13 @@ Recording a change made in Octopushy's interface as a Git commit, which then
 follows the normal change-detection flow.
 _Avoid_: Editing the snapshot directly when Git has not changed
 
+**Change**:
+A structured edit of one guest or service made in a form, such as its memory, its inputs, an upgrade to a newer major of
+its workflow, or the removal of a guest's folder. Octopushy writes it as one commit to the lab repository, compare-and-swap
+against the commit the form was loaded from, syncs it at once, and follows it through the revision and the runs it
+proposes. It touches only the resource's own folder.
+_Avoid_: Editing the definition in the database, which never happens; draft, which is the repository editor's unpublished edits
+
 **Draft**:
 Unpublished edits to repository files on top of a base revision. When explicitly
 published, the draft is validated, merged with any newer commits, and committed.

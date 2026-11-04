@@ -75,6 +75,132 @@ public sealed class RepositoryDraft
     public string? PublishedBy { get; set; }
 }
 
+/// <summary>What a change from the UI is, and where it stands. See <see cref="ResourceChange"/>.</summary>
+public static class ChangeKinds
+{
+    public const string Edit = "edit";
+    /// <summary>An edit that moves the workflow reference to a newer major of the same workflow.</summary>
+    public const string Upgrade = "upgrade";
+    /// <summary>Deletes the guest's folder; its retire run follows under its policy.</summary>
+    public const string Remove = "remove";
+}
+
+public static class ChangeStatuses
+{
+    /// <summary>Recorded, and being pushed: the push may or may not have reached the branch. Reconciliation settles it.</summary>
+    public const string Committing = "committing";
+    /// <summary>A push was attempted and its outcome could not be checked. Reconciliation settles it; a person may dismiss it.</summary>
+    public const string Uncertain = "uncertain";
+    /// <summary>
+    /// A push was attempted, and none of its commits is on the branch (yet). Each sync looks again, by reachability, and takes a
+    /// late arrival through the normal checks; a person may dismiss it.
+    /// </summary>
+    public const string Unknown = "unknown";
+    /// <summary>
+    /// A person stopped waiting for an uncertain or unknown change, and is recorded with it. It proves nothing: a push was
+    /// attempted, so each sync still looks for its commits, and one that arrives moves it on.
+    /// </summary>
+    public const string Dismissed = "dismissed";
+    public const string Committed = "committed";
+    public const string Synced = "synced";
+    public const string Planning = "planning";
+    public const string WaitingForApproval = "waiting-for-approval";
+    public const string Applying = "applying";
+    public const string Applied = "applied";
+    public const string Failed = "failed";
+    /// <summary>Refused before anything was committed: the form was stale, it did not validate, or committing is not allowed.</summary>
+    public const string Refused = "refused";
+    /// <summary>Committed and synced, and the revision proposes no run for the resource: nothing it is built from changed.</summary>
+    public const string NoChange = "no-change";
+    /// <summary>A later commit set the resource otherwise, or restored it, before this change was applied: it is never applied.</summary>
+    public const string Superseded = "superseded";
+
+    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
+
+    /// <summary>
+    /// Definitely not committed: refused before any push was attempted. Nothing else proves it, a dismissal included. What a
+    /// change prepared, such as generated values, can be cleaned up then and only then.
+    /// </summary>
+    public static bool IsNotCommitted(ResourceChange change) => change.Status == Refused && change.CandidateCommits.Count == 0;
+
+    /// <summary>A push was attempted and has not been settled yet.</summary>
+    public static bool IsUnsettled(string status) => status is Committing or Uncertain or Unknown;
+}
+
+/// <summary>
+/// A structured edit made in the UI, written by Octopushy as one commit to the lab repository, then followed through the
+/// revision it became and the runs that revision proposed for its resource. Git stays the source of truth: this row records
+/// who asked for what and where it got to, never the definition itself.
+/// </summary>
+public sealed class ResourceChange
+{
+    public Guid Id { get; set; }
+
+    /// <summary><see cref="ChangeKinds"/>.</summary>
+    public required string Kind { get; set; }
+
+    /// <summary><c>guest</c> or <c>service</c>.</summary>
+    public required string ResourceKind { get; set; }
+
+    public Guid ResourceId { get; set; }
+
+    public required string Address { get; set; }
+
+    public required string Author { get; set; }
+
+    /// <summary>The commit the form was loaded from: the change is refused if a file it touches differs from it.</summary>
+    public required string BaseCommit { get; set; }
+
+    /// <summary>The commit's subject line.</summary>
+    public required string Message { get; set; }
+
+    /// <summary>The files the change writes or deletes, all inside the resource's own folder.</summary>
+    public List<string> Files { get; set; } = [];
+
+    /// <summary>
+    /// What the change wrote, by section (<c>workflow</c>, <c>hardware</c>, <c>network</c>, <c>inputs</c>), as JSON: a later
+    /// revision carries the change only while the resource still has these values. Null for a removal.
+    /// </summary>
+    public string? Edited { get; set; }
+
+    /// <summary>The commit pushed; null when the change was refused, or while it is being pushed.</summary>
+    public string? Commit { get; set; }
+
+    /// <summary>The commit that set the resource otherwise before this change was applied.</summary>
+    public string? SupersededBy { get; set; }
+
+    /// <summary>
+    /// Every commit an attempt prepared and was about to push, recorded before that push. The change's commit is the one of
+    /// these the branch reaches; a commit's message is never used to find it.
+    /// </summary>
+    public List<string> CandidateCommits { get; set; } = [];
+
+    /// <summary>When reconciliation last checked the change against the branch; it checks the longest unchecked first.</summary>
+    public DateTimeOffset? CheckedAt { get; set; }
+
+    public string? DismissedBy { get; set; }
+
+    public DateTimeOffset? DismissedAt { get; set; }
+
+    /// <summary>The first revision loaded that contains the commit.</summary>
+    public Guid? RevisionId { get; set; }
+
+    /// <summary>The runs that revision proposed for the resource.</summary>
+    public List<Guid> RunIds { get; set; } = [];
+
+    /// <summary><see cref="ChangeStatuses"/>.</summary>
+    public string Status { get; set; } = ChangeStatuses.Committed;
+
+    /// <summary>Why it was refused or failed, or what it waits for.</summary>
+    public string? Detail { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset? SyncedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 /// <summary>
 /// A commit of the lab repository as Octopushy read it, with what each workflow reference resolved to. Its identity is the
 /// source, the commit and <see cref="WorkflowsDigest"/>: a new release tag that changes a resolution is a new revision of the
@@ -116,6 +242,25 @@ public sealed class DefinitionRevision
     public int WarningCount { get; set; }
 
     /// <summary>JSON array of issues.</summary>
+    public string Issues { get; set; } = "[]";
+
+    /// <summary>
+    /// When the revision's inventory was applied: the desired inputs recorded and the runs proposed, in one transaction with
+    /// the head moving to it. A head revision without it is applied again.
+    /// </summary>
+    public DateTimeOffset? InventoryAppliedAt { get; set; }
+}
+
+/// <summary>
+/// The errors Octopushy recorded for a resource when it applied one revision, such as a removal that cannot be planned: what
+/// that revision did to the resource, kept apart from the resource's current issues, which a later revision replaces.
+/// </summary>
+public sealed class RevisionIssues
+{
+    public Guid ResourceId { get; set; }
+
+    public Guid RevisionId { get; set; }
+
     public string Issues { get; set; } = "[]";
 }
 
@@ -225,6 +370,12 @@ public sealed class Resource
 
     /// <summary>JSON array of the issues that affect this resource.</summary>
     public string Issues { get; set; } = "[]";
+
+    /// <summary>
+    /// The identity of the resource's current desired work: new each time new work is recorded, kept while the same work is
+    /// proposed again. The run that stands for the work carries it.
+    /// </summary>
+    public Guid? DesiredOccurrence { get; set; }
 
     public string? DesiredInputsHash { get; set; }
 
@@ -473,6 +624,9 @@ public sealed class Run
     public string? Detail { get; set; }
 
     public string? InputsHash { get; set; }
+
+    /// <summary>For a provision or retire run proposed for a resource's desired work, that work's occurrence.</summary>
+    public Guid? Occurrence { get; set; }
 
     /// <summary>JSON: what the run's steps are built from, without secret values.</summary>
     public string Context { get; set; } = "{}";

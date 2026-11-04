@@ -114,6 +114,7 @@ public sealed class WorkflowReader
         // The inputs schema is part of the workflow, so it lives in the workflow's folder.
         string? inputs = null;
         JsonSchema? schema = null;
+        JsonObject? schemaJson = null;
         if (json["inputs"] is JsonValue inputsValue)
         {
             inputs = Resolve(directory, inputsValue.GetValue<string>(), allowModules: false, out var why);
@@ -128,7 +129,9 @@ public sealed class WorkflowReader
             {
                 try
                 {
-                    schema = SchemaCatalog.BuildUntrusted(File.ReadAllText(Path.Combine(_root, inputs)));
+                    var schemaText = File.ReadAllText(Path.Combine(_root, inputs));
+                    schema = SchemaCatalog.BuildUntrusted(schemaText);
+                    schemaJson = JsonNode.Parse(schemaText) as JsonObject;
                 }
                 catch (Exception e) when (e is System.Text.Json.JsonException or JsonSchemaException or InvalidOperationException or ArgumentException)
                 {
@@ -267,6 +270,7 @@ public sealed class WorkflowReader
         {
             Valid = errors == 0,
             Schema = schema,
+            SchemaJson = schemaJson,
         };
     }
 

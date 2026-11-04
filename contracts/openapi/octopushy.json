@@ -1236,6 +1236,65 @@
         }
       }
     },
+    "/api/workflows": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "operationId": "listWorkflows",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowCatalogDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/repository": {
       "get": {
         "tags": [
@@ -2889,6 +2948,384 @@
         }
       }
     },
+    "/api/changes": {
+      "get": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "listChanges",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChangeDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "commitChange",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRefusedDto"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/changes/{id}": {
+      "get": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "getChange",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/changes/{id}/dismiss": {
+      "post": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "dismissChange",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/changes/form/{resourceId}": {
+      "get": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "getChangeForm",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeFormDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/changes/preview": {
+      "post": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "previewChange",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRefusedDto"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePreviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variables": {
       "get": {
         "tags": [
@@ -3611,6 +4048,433 @@
           }
         }
       },
+      "ChangeDto": {
+        "required": [
+          "id",
+          "kind",
+          "resourceKind",
+          "resourceId",
+          "address",
+          "author",
+          "message",
+          "baseCommit",
+          "commit",
+          "commitUrl",
+          "revisionId",
+          "status",
+          "detail",
+          "files",
+          "runs",
+          "createdAt",
+          "syncedAt",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "resourceKind": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "commitUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "revisionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "syncedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supersededBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "supersededByUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "dismissedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "dismissedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "final": {
+            "type": "boolean",
+            "default": false
+          },
+          "notCommitted": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "ChangeFormDto": {
+        "required": [
+          "resourceId",
+          "resourceKind",
+          "address",
+          "name",
+          "baseCommit",
+          "file",
+          "text",
+          "workflow",
+          "resolved",
+          "hardware",
+          "network",
+          "inputs",
+          "blockedReason",
+          "canRemove",
+          "upgrade",
+          "fieldIssues"
+        ],
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceKind": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "file": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflow": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "resolved": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowVersionDto"
+              }
+            ]
+          },
+          "hardware": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "network": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "inputs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "blockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "canRemove": {
+            "type": "boolean"
+          },
+          "upgrade": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowVersionDto"
+              }
+            ]
+          },
+          "fieldIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldIssueDto"
+            }
+          }
+        }
+      },
+      "ChangePreviewDto": {
+        "required": [
+          "kind",
+          "address",
+          "subject",
+          "message",
+          "baseCommit",
+          "files",
+          "diff",
+          "valid",
+          "issues",
+          "fieldIssues",
+          "refused"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diff": {
+            "type": "string"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "fieldIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldIssueDto"
+            }
+          },
+          "refused": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ChangeRefusedDto": {
+        "required": [
+          "changeId",
+          "reason",
+          "message",
+          "issues",
+          "fieldIssues"
+        ],
+        "type": "object",
+        "properties": {
+          "changeId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "fieldIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldIssueDto"
+            }
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ChangeRequest": {
+        "required": [
+          "resourceId",
+          "baseCommit"
+        ],
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "default": "edit"
+          },
+          "workflow": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hardware": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "network": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "inputs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "ChangedPath": {
         "required": [
           "path",
@@ -4192,6 +5056,21 @@
             "items": {
               "$ref": "#/components/schemas/IssueDto"
             }
+          }
+        }
+      },
+      "FieldIssueDto": {
+        "required": [
+          "pointer",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "pointer": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -4916,6 +5795,9 @@
         }
       },
       "JsonNode": { },
+      "JsonObject": {
+        "type": "object"
+      },
       "LabDto": {
         "required": [
           "id",
@@ -6910,6 +7792,31 @@
           }
         }
       },
+      "WorkflowCatalogDto": {
+        "required": [
+          "source",
+          "repository",
+          "workflows"
+        ],
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "repository": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSummaryDto"
+            }
+          }
+        }
+      },
       "WorkflowDto": {
         "required": [
           "reference",
@@ -6991,6 +7898,38 @@
           }
         }
       },
+      "WorkflowSummaryDto": {
+        "required": [
+          "id",
+          "manages",
+          "description",
+          "versions"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "manages": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowVersionDto"
+            }
+          }
+        }
+      },
       "WorkflowUseDto": {
         "required": [
           "address",
@@ -7035,6 +7974,82 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "WorkflowVersionDto": {
+        "required": [
+          "id",
+          "version",
+          "commit",
+          "usable",
+          "issue",
+          "manages",
+          "description",
+          "inputs",
+          "ui",
+          "secrets"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "usable": {
+            "type": "boolean"
+          },
+          "issue": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "manages": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "inputs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "ui": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -7108,10 +8123,16 @@
       "name": "Runs"
     },
     {
+      "name": "Workflows"
+    },
+    {
       "name": "Repository"
     },
     {
       "name": "Agents"
+    },
+    {
+      "name": "Changes"
     },
     {
       "name": "Variables"

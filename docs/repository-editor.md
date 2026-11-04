@@ -48,6 +48,9 @@ The commit is authored by the signed-in operator (`<name>@octopushy.invalid`) an
 committed by "Octopushy editor". A published commit is an ordinary new revision:
 Octopushy loads it at the next sync and proposes the runs it implies.
 
+Forms on the guest and service pages commit through the same publish path, one change at a time: see
+[changes from the UI](changes-from-the-ui.md).
+
 ## Enabling publishing
 
 Drafts always work. Pushing is opt-in on the controller, and uses the configured
@@ -56,6 +59,9 @@ repository credential, which must be allowed to push to the branch:
 ```
 Octopushy__RepositoryEditor__PublishEnabled=true
 ```
+
+The same setting allows [changes from the UI](changes-from-the-ui.md). For GitHub, the repository credential is then a
+deploy key with **write access** to the lab repository: a read-only key fetches, and every push is refused.
 
 ## Content Security Policy
 

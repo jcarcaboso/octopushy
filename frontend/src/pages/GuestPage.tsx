@@ -19,6 +19,7 @@ import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { ServicesCard } from "../components/ServicesCard";
+import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
@@ -127,15 +128,18 @@ export function GuestPage() {
           </span>
         }
         actions={
-          <button
-            type="button"
-            className="button button--primary"
-            onClick={() => plan.mutate(id, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
-            disabled={plan.isPending}
-          >
-            <Play size={15} aria-hidden="true" />
-            {plan.isPending ? "Starting…" : data.missingSince && !data.retiredAt ? "Plan removal" : "Plan now"}
-          </button>
+          <>
+            {data.missingSince || data.retiredAt ? null : <ChangeActions resourceId={guest.id} kind="guest" />}
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => plan.mutate(id, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
+              disabled={plan.isPending}
+            >
+              <Play size={15} aria-hidden="true" />
+              {plan.isPending ? "Starting…" : data.missingSince && !data.retiredAt ? "Plan removal" : "Plan now"}
+            </button>
+          </>
         }
       />
       <div className="stack stack--large">
@@ -161,6 +165,7 @@ export function GuestPage() {
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>
+            <RecentChanges resourceId={guest.id} />
             {data.services.length > 0 ? <ServicesCard services={data.services} /> : null}
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${guest.name}`} showAddress={false} />

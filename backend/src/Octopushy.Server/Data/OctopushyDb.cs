@@ -10,6 +10,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<RepositoryDraft> RepositoryDrafts => Set<RepositoryDraft>();
 
+    public DbSet<ResourceChange> Changes => Set<ResourceChange>();
+
+    public DbSet<RevisionIssues> RevisionIssues => Set<RevisionIssues>();
+
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
 
     public DbSet<WorkflowReleaseRecord> WorkflowReleases => Set<WorkflowReleaseRecord>();
@@ -61,6 +65,24 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.Property(x => x.Title).HasMaxLength(120);
             e.HasIndex(x => x.UpdatedAt);
+        });
+
+        model.Entity<ResourceChange>(e =>
+        {
+            e.ToTable("changes");
+            e.Property(x => x.Message).HasMaxLength(500);
+            e.Property(x => x.Edited).HasColumnType("jsonb");
+            e.HasIndex(x => x.CheckedAt);
+            e.HasIndex(x => new { x.ResourceId, x.CreatedAt });
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.Commit);
+        });
+
+        model.Entity<RevisionIssues>(e =>
+        {
+            e.ToTable("revision_issues");
+            e.HasKey(x => new { x.ResourceId, x.RevisionId });
+            e.Property(x => x.Issues).HasColumnType("jsonb");
         });
 
         model.Entity<DefinitionRevision>(e =>

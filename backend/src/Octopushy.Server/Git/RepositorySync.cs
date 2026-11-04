@@ -1,8 +1,11 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
+using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
+using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
 
@@ -19,12 +22,16 @@ public sealed class RepositorySync(
     WorkflowsMirrors workflowMirrors,
     RevisionCache revisions,
     RunEngine engine,
+    IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RepositorySync> logger) : BackgroundService
 {
     public const string CredentialKey = "system/git/credential";
 
     private readonly SemaphoreSlim _trigger = new(0, 1);
+
+    // One sync at a time: two that overlap could record an older head after a newer one.
+    private readonly SemaphoreSlim _running = new(1, 1);
 
     /// <summary>Asks for a fetch now instead of at the next poll.</summary>
     public void Trigger()
@@ -41,6 +48,23 @@ public sealed class RepositorySync(
         }
     }
 
+    /// <summary>
+    /// Syncs now and returns once the head is read and applied, as <b>Sync now</b> does but without waiting for the background
+    /// loop: a change from the UI follows its commit into a revision at once. It never runs beside the loop's own sync.
+    /// </summary>
+    public async Task SyncNowAsync(CancellationToken cancellationToken)
+    {
+        await _running.WaitAsync(cancellationToken);
+        try
+        {
+            await SyncOnceAsync(cancellationToken);
+        }
+        finally
+        {
+            _running.Release();
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -48,7 +72,15 @@ public sealed class RepositorySync(
             var poll = TimeSpan.FromSeconds(60);
             try
             {
-                poll = await SyncOnceAsync(stoppingToken);
+                await _running.WaitAsync(stoppingToken);
+                try
+                {
+                    poll = await SyncOnceAsync(stoppingToken);
+                }
+                finally
+                {
+                    _running.Release();
+                }
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
@@ -88,7 +120,11 @@ public sealed class RepositorySync(
             await using var scope = scopes.CreateAsyncScope();
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
+            // Changes whose push is not confirmed, or whose commit is being followed, picked before the fetch: everything they
+            // hold was pushed before it began, so the head it returns can judge them.
+            var watched = await ChangeReconciler.SelectAsync(engine, options.Value.Changes.ReconcileBatch, cancellationToken);
             var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
+            await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
             // The workflows repository is the one this commit names, fetched on the same poll as the branch.
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));
@@ -98,6 +134,9 @@ public sealed class RepositorySync(
             var repository = resolved.Repository;
             await engine.ExecuteAsync(async (db, services) =>
             {
+                // The head moving to a revision, and that revision's inventory (desired inputs and proposed runs), are one
+                // transaction: a crash between them used to leave a head whose runs were never proposed, and the next sync skipped it.
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
                 var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
                 if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch)
                     return false;
@@ -112,9 +151,10 @@ public sealed class RepositorySync(
                 var loaded = await RepositoryTrust.CurrentRevisions(db)
                     .Where(r => r.Commit == head && r.WorkflowsDigest == resolved.Digest)
                     .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-                if (loaded is not null && current.HeadRevisionId == loaded.Id)
+                if (loaded is not null && current.HeadRevisionId == loaded.Id && loaded.InventoryAppliedAt is not null)
                 {
                     await db.SaveChangesAsync(cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
                     return false;
                 }
                 var revision = loaded ?? new DefinitionRevision
@@ -138,6 +178,9 @@ public sealed class RepositorySync(
                 current.HeadRevisionId = revision.Id;
                 await db.SaveChangesAsync(cancellationToken);
                 await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, cancellationToken);
+                revision.InventoryAppliedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
                 return true;
             }, cancellationToken);
             await PruneAsync(cancellationToken);

@@ -21,6 +21,8 @@ import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
 import { OperatorAccessPage } from "./pages/OperatorAccessPage";
 import { EditorPage } from "./pages/EditorPage";
+import { ChangeEditorPage } from "./pages/ChangeEditorPage";
+import { ChangePage } from "./pages/ChangePage";
 import { PageSkeleton } from "./components/States";
 
 // Monaco is large, so the draft workspace and the editor load only when a draft is opened.
@@ -41,7 +43,10 @@ export function AppRoutes() {
         <Route index element={<OverviewPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="guests/:id" element={<GuestPage />} />
+        <Route path="guests/:id/change" element={<ChangeEditorPage />} />
         <Route path="services/:id" element={<ServicePage />} />
+        <Route path="services/:id/change" element={<ChangeEditorPage />} />
+        <Route path="changes/:id" element={<ChangePage />} />
         <Route path="installations/:id" element={<InstallationPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunPage />} />

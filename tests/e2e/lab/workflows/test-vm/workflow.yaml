@@ -2,6 +2,14 @@ schemaVersion: 1
 version: "1.0"
 manages: vm
 description: Stands in for a VM with terraform_data, so a run needs no real Proxmox.
+inputs: inputs.schema.json        # the guest's form
+ui:                               # hints for that form; see docs/workflows.md
+  order: [hardware, network, inputs]
+  fields:
+    hardware.cores: { label: Cores }
+    hardware.memory: { label: Memory, help: In MiB. The VM is resized in place. }
+    hardware.disks[].size: { label: Size, help: In GiB. }
+    network: { order: [mode, bridge, address, gateway] }
 stages:
   - name: machine
     executor: opentofu

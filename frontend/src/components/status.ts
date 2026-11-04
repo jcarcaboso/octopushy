@@ -43,6 +43,19 @@ const statuses: Record<string, StatusStyle> = {
   retired: { label: "Retired", tone: "muted", icon: "archive" },
   cancelled: { label: "Cancelled", tone: "muted", icon: "minus" },
   skipped: { label: "Skipped", tone: "muted", icon: "minus" },
+  // A change from the UI, from its commit to the end of its runs.
+  committing: { label: "Committing", tone: "info", icon: "spinner" },
+  committed: { label: "Committed", tone: "info", icon: "clock" },
+  synced: { label: "Synced", tone: "info", icon: "clock" },
+  planning: { label: "Planning", tone: "info", icon: "spinner" },
+  "waiting-for-approval": { label: "Waiting for approval", tone: "attention", icon: "hand" },
+  applying: { label: "Applying", tone: "info", icon: "spinner" },
+  applied: { label: "Applied", tone: "success", icon: "check" },
+  refused: { label: "Refused", tone: "danger", icon: "ban" },
+  "no-change": { label: "No change", tone: "muted", icon: "minus" },
+  superseded: { label: "Superseded", tone: "muted", icon: "archive" },
+  unknown: { label: "Not on the branch", tone: "uncertain", icon: "question" },
+  dismissed: { label: "Dismissed", tone: "muted", icon: "minus" },
 };
 
 export function statusStyle(status: string): StatusStyle {

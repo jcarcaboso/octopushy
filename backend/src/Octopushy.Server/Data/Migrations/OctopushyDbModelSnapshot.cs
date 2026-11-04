@@ -297,6 +297,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("error_count");
 
+                    b.Property<DateTimeOffset?>("InventoryAppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("inventory_applied_at");
+
                     b.Property<string>("Issues")
                         .IsRequired()
                         .HasColumnType("jsonb")
@@ -863,6 +867,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("desired_inputs_hash");
 
+                    b.Property<Guid?>("DesiredOccurrence")
+                        .HasColumnType("uuid")
+                        .HasColumnName("desired_occurrence");
+
                     b.Property<Guid?>("DesiredRevisionId")
                         .HasColumnType("uuid")
                         .HasColumnName("desired_revision_id");
@@ -984,6 +992,151 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("resources", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ResourceChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("address");
+
+                    b.Property<string>("Author")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("author");
+
+                    b.Property<string>("BaseCommit")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("base_commit");
+
+                    b.PrimitiveCollection<List<string>>("CandidateCommits")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("candidate_commits");
+
+                    b.Property<DateTimeOffset?>("CheckedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("checked_at");
+
+                    b.Property<string>("Commit")
+                        .HasColumnType("text")
+                        .HasColumnName("commit");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text")
+                        .HasColumnName("detail");
+
+                    b.Property<DateTimeOffset?>("DismissedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dismissed_at");
+
+                    b.Property<string>("DismissedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("dismissed_by");
+
+                    b.Property<string>("Edited")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("edited");
+
+                    b.PrimitiveCollection<List<string>>("Files")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("files");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("message");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("ResourceKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("resource_kind");
+
+                    b.Property<Guid?>("RevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revision_id");
+
+                    b.PrimitiveCollection<List<Guid>>("RunIds")
+                        .IsRequired()
+                        .HasColumnType("uuid[]")
+                        .HasColumnName("run_ids");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("SupersededBy")
+                        .HasColumnType("text")
+                        .HasColumnName("superseded_by");
+
+                    b.Property<DateTimeOffset?>("SyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("synced_at");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_changes");
+
+                    b.HasIndex("CheckedAt")
+                        .HasDatabaseName("ix_changes_checked_at");
+
+                    b.HasIndex("Commit")
+                        .HasDatabaseName("ix_changes_commit");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_changes_status");
+
+                    b.HasIndex("ResourceId", "CreatedAt")
+                        .HasDatabaseName("ix_changes_resource_id_created_at");
+
+                    b.ToTable("changes", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.RevisionIssues", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<Guid>("RevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revision_id");
+
+                    b.Property<string>("Issues")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("issues");
+
+                    b.HasKey("ResourceId", "RevisionId")
+                        .HasName("pk_revision_issues");
+
+                    b.ToTable("revision_issues", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.Run", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1022,6 +1175,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnName("number");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Number"));
+
+                    b.Property<Guid?>("Occurrence")
+                        .HasColumnType("uuid")
+                        .HasColumnName("occurrence");
 
                     b.Property<string>("Operation")
                         .IsRequired()

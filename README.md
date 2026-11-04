@@ -18,6 +18,14 @@ Milestone 1 has shipped, up to release 0.5.0:
   [services](docs/workflows.md#services-and-their-runs) of OpenTofu and Ansible stages.
 - Actions on a schedule declared in Git, and SSH access keys that Octopushy manages and rotates.
 - A [repository editor](docs/repository-editor.md) that publishes drafts as commits.
+
+Since 0.5.0, on `main`:
+
+- [Changes from the UI](docs/changes-from-the-ui.md): a guest or service is edited from its workflow's inputs schema, upgraded
+  to a newer major, or a guest removed, and each change is one commit to the lab repository, compare-and-swap against the
+  commit its form was loaded from and authored by the operator. Octopushy syncs it at once, and its change page follows it
+  through plan and approval to applied. This needs `Octopushy__RepositoryEditor__PublishEnabled=true` and a repository
+  credential that can push, such as a deploy key with write access.
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
@@ -26,8 +34,8 @@ Milestone 1 has shipped, up to release 0.5.0:
 
 Octopushy is becoming an engine only. Workflows live in their own repository,
 `jcarcaboso/octopushy-lab`, where each whole workflow is versioned `M.m` and released by tags; `homelab-config` holds only
-data, and names that repository in its `octopushy.yaml`; and every change made in the UI will become a commit. The plan
-and its phases are in [workflows migration](docs/workflows-migration.md).
+data, and names that repository in its `octopushy.yaml`; and every change made in the UI becomes a commit. The plan and its
+phases are in [workflows migration](docs/workflows-migration.md).
 
 Service workflows, the NixOS modules and their tests live in `jcarcaboso/octopushy-lab`.
 

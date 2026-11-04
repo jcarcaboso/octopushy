@@ -12,6 +12,7 @@ using Octopushy.Server;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Api;
 using Octopushy.Server.Auth;
+using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Inventory;
@@ -56,7 +57,10 @@ builder.Services.AddSingleton<RunFactory>();
 builder.Services.AddSingleton<RunEngine>();
 builder.Services.AddScoped<AssignmentBuilder>();
 builder.Services.AddScoped<InventoryUpdater>();
+builder.Services.AddSingleton<InventoryFaults>();
 builder.Services.AddSingleton<Planner>();
+builder.Services.AddSingleton<WorkflowCatalog>();
+builder.Services.AddSingleton<ChangeService>();
 if (!generatingDocument && settings.RunBackgroundServices)
 {
     builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySync>());

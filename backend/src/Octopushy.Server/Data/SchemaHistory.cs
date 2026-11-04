@@ -7,9 +7,10 @@ namespace Octopushy.Server.Data;
 public sealed class FreshDatabaseRequiredException(string message) : Exception(message);
 
 /// <summary>
-/// This release starts its schema again from one <c>Initial</c> migration. A database created by an
-/// earlier release records migrations this one does not have, and migrating it would try to create
-/// tables that already exist, or worse, run against a schema it does not know. So it is refused.
+/// Release 0.5.0 started the schema again from one <c>Initial</c> migration, and later releases add migrations after it,
+/// so a 0.5.0 database is upgraded in place. A database created by a release before 0.5.0 records migrations this one does
+/// not have, and migrating it would try to create tables that already exist, or worse, run against a schema it does not
+/// know. So it is refused.
 /// </summary>
 public static class SchemaHistory
 {

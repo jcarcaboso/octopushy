@@ -19,8 +19,11 @@ public sealed record ChangedPath(string Path, string Change);
 
 public sealed record DraftUpdate(string Head, IReadOnlyList<string> Conflicts);
 
-/// <summary>A publish candidate: <paramref name="Commit"/> on top of <paramref name="Remote"/>, or the conflicts that block it.</summary>
-public sealed record PublishCandidate(string Remote, string? Commit, IReadOnlyList<string> Conflicts);
+/// <summary>
+/// A publish candidate: <paramref name="Commit"/> on top of <paramref name="Remote"/>, or the conflicts that block it, or
+/// <paramref name="Unchanged"/> when the draft makes no change to the branch as it is now.
+/// </summary>
+public sealed record PublishCandidate(string Remote, string? Commit, IReadOnlyList<string> Conflicts, bool Unchanged = false);
 
 public sealed class DraftChangedException() : GitException("The draft changed since it was loaded. Reload it and make the edit again.");
 
@@ -283,7 +286,7 @@ public sealed partial class RepositoryMirror
 
             if (tree == await TreeOfAsync(remote, ct))
             {
-                throw new GitException("The draft makes no change to the current branch.");
+                return new(remote, null, [], Unchanged: true);
             }
 
             var commit = (await _git.RunAsync(["-C", _mirror, "commit-tree", tree, "-p", remote, "-m", message],
@@ -325,6 +328,37 @@ public sealed partial class RepositoryMirror
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>The unified diff between two commits, as Git shows it.</summary>
+    public async Task<string> DiffAsync(string fromCommit, string toCommit, CancellationToken ct)
+    {
+        CheckCommit(fromCommit);
+        CheckCommit(toCommit);
+        return await _git.RunAsync(["-C", _mirror, "diff", "--no-color", "--no-ext-diff", "--no-renames", "--no-textconv", "-U3",
+            fromCommit, toCommit, "--"], cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// The commits that contain <paramref name="commit"/> on the way to <paramref name="head"/>, <paramref name="head"/> included;
+    /// none when <paramref name="head"/> does not contain it.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> DescendantsAsync(string commit, string head, CancellationToken ct)
+    {
+        CheckCommit(commit);
+        CheckCommit(head);
+        var output = await _git.RunAsync(["-C", _mirror, "rev-list", "--ancestry-path", $"{commit}..{head}", "--"], cancellationToken: ct);
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    /// <summary>Whether <paramref name="ancestor"/> is <paramref name="commit"/> or one of its ancestors.</summary>
+    public async Task<bool> IsAncestorAsync(string ancestor, string commit, CancellationToken ct)
+    {
+        CheckCommit(ancestor);
+        CheckCommit(commit);
+        var (exitCode, _) = await _git.RunAcceptingAsync(["-C", _mirror, "merge-base", "--is-ancestor", ancestor, commit], MergeConflicts,
+            cancellationToken: ct);
+        return exitCode == 0;
     }
 
     private async Task CheckDraftHeadAsync(Guid id, string expectedHead, CancellationToken ct)
