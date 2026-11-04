@@ -164,6 +164,33 @@ describe("SchemaForm", () => {
     expect(seen.value).toEqual({ inputs: { sites: [{ name: "B", settings: { port: 3 } }] } });
   });
 
+  it("keeps each item's fields with it when the items are reordered from outside, unsaved YAML included", async () => {
+    const schema: Schema = {
+      type: "object",
+      properties: { inputs: { type: "object", properties: { sites: { type: "array",
+        items: { type: "object", properties: { name: { type: "string" }, settings: { type: "object" } } } } } } },
+    };
+    function Reorder() {
+      const [value, setValue] = useState<JsonObject>({ inputs: { sites: [{ name: "A", settings: { port: 1 } }, { name: "B", settings: { port: 2 } }] } });
+      const reverse = () => setValue((v) => ({ inputs: { sites: [...((v.inputs as JsonObject).sites as JsonObject[])].reverse() } }));
+      return (
+        <>
+          <button type="button" onClick={reverse}>Reverse</button>
+          <SchemaForm schema={schema} value={value} onChange={setValue} />
+        </>
+      );
+    }
+    render(<Reorder />);
+    // An unsaved draft in A's YAML, which does not parse yet.
+    await userEvent.type(within(group(/^sites\[1\]/)).getByLabelText(/^settings/), "{enter}more: [[");
+    await userEvent.click(screen.getByRole("button", { name: "Reverse" }));
+
+    expect(within(group(/^sites\[1\]/)).getByLabelText(/^name/)).toHaveValue("B");
+    expect(within(group(/^sites\[1\]/)).getByLabelText(/^settings/)).toHaveValue("port: 2");
+    expect(within(group(/^sites\[2\]/)).getByLabelText(/^name/)).toHaveValue("A");
+    expect(within(group(/^sites\[2\]/)).getByLabelText(/^settings/)).toHaveValue("port: 1\nmore: [");
+  });
+
   it("shows a YAML part's new value when it changes from outside", async () => {
     const schema: Schema = { type: "object", properties: { inputs: { type: "object", properties: { settings: { type: "object" } } } } };
     function Outside() {

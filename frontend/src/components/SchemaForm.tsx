@@ -412,6 +412,33 @@ function ExtraKeys({ pointer, value, allowed, onChange }: { pointer: string; val
 
 let itemCount = 0;
 
+interface Pair {
+  key: string;
+  value: JsonValue;
+}
+
+/**
+ * The keys for `items`: each item keeps the key of an equal value it had before, the first unused one, so a reorder moves
+ * keys with their items; an item whose value is new takes the key left at its place, else a new one. Returns `pairs` itself
+ * when nothing changed.
+ */
+function paired(pairs: Pair[], items: JsonValue[]): Pair[] {
+  if (pairs.length === items.length && pairs.every((p, i) => sameJson(p.value, items[i]))) return pairs;
+  const free = pairs.map((p) => ({ ...p, used: false }));
+  const result: (Pair | null)[] = items.map((value) => {
+    const same = free.find((p) => !p.used && sameJson(p.value, value));
+    if (!same) return null;
+    same.used = true;
+    return { key: same.key, value };
+  });
+  return result.map((pair, i) => {
+    if (pair) return pair;
+    const atPlace = free[i] && !free[i].used ? free[i] : undefined;
+    if (atPlace) atPlace.used = true;
+    return { key: atPlace?.key ?? itemKey(), value: items[i] };
+  });
+}
+
 /** A key for an array item that stays with it when items before it are removed. */
 function itemKey(): string {
   itemCount += 1;
@@ -421,12 +448,12 @@ function itemKey(): string {
 function ArrayField(props: ResolvedProps) {
   const { root, disabled } = useForm();
   const items = Array.isArray(props.value) ? props.value : [];
-  // One key per item, kept alongside the array: removing an item takes its key, so the fields of the items after it,
-  // and what they hold, such as YAML being typed, stay with their own items.
-  const [keys, setKeys] = useState<string[]>(() => items.map(() => itemKey()));
-  if (keys.length !== items.length) {
-    setKeys(keys.length > items.length ? keys.slice(0, items.length) : [...keys, ...items.slice(keys.length).map(() => itemKey())]);
-  }
+  // One key per item, paired with the item's value: removing, adding or reordering items, here or from outside, keeps each
+  // key, and so each item's fields and what they hold, such as YAML being typed, with its own item.
+  const [pairs, setPairs] = useState<Pair[]>(() => items.map((value) => ({ key: itemKey(), value })));
+  const matched = paired(pairs, items);
+  if (matched !== pairs) setPairs(matched);
+  const keys = matched.map((p) => p.key);
   const itemSchema = resolve(props.schema.items, root);
   const itemKind = kindOf(itemSchema).kind;
   const id = useId();
@@ -451,15 +478,20 @@ function ArrayField(props: ResolvedProps) {
     );
   }
 
-  const set = (index: number, next: JsonValue | undefined) => props.onChange(items.map((v, i) => (i === index ? (next ?? null) : v)));
+  const set = (index: number, next: JsonValue | undefined) => {
+    const updated = items.map((v, i) => (i === index ? (next ?? null) : v));
+    setPairs(matched.map((p, i) => (i === index ? { key: p.key, value: updated[i] } : p)));
+    props.onChange(updated);
+  };
   const remove = (index: number) => {
     const next = items.filter((_, i) => i !== index);
-    setKeys(keys.filter((_, i) => i !== index));
+    setPairs(matched.filter((_, i) => i !== index));
     props.onChange(next.length === 0 && props.value === undefined ? undefined : next);
   };
   const add = () => {
-    setKeys([...keys, itemKey()]);
-    props.onChange([...items, initialValue(itemSchema, root) ?? null]);
+    const value = initialValue(itemSchema, root) ?? null;
+    setPairs([...matched, { key: itemKey(), value }]);
+    props.onChange([...items, value]);
   };
   const help = helpOf(props.schema, props.hints);
   const title = labelOf(props.schema, props.hints, props.name);
