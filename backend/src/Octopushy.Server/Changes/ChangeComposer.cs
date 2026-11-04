@@ -10,7 +10,7 @@ namespace Octopushy.Server.Changes;
 
 /// <summary>Why a change was not committed, with a short code a form can act on (<see cref="ChangeRefusal.Reasons"/>).</summary>
 public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<Api.IssueDto>? issues = null, IReadOnlyList<FieldIssueDto>? fieldIssues = null,
-    bool unverified = false)
+    bool unverified = false, int? nextVmid = null)
     : Exception(message)
 {
     /// <summary>The push failed and the branch could not be read to see whether it landed after all.</summary>
@@ -34,6 +34,10 @@ public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<A
         public const string Unsupported = "unsupported";
         /// <summary>The push itself failed, as when the credential cannot write.</summary>
         public const string PushFailed = "push-failed";
+        /// <summary>A deploy's folder, or a store key it would generate a value for, is already there.</summary>
+        public const string Exists = "exists";
+        /// <summary>A new guest's VMID is observed, declared or held by another deploy: the refusal offers the next free one.</summary>
+        public const string VmidTaken = "vmid-taken";
     }
 
     public string Reason { get; } = reason;
@@ -41,6 +45,11 @@ public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<A
     public IReadOnlyList<Api.IssueDto> Issues { get; } = issues ?? [];
 
     public IReadOnlyList<FieldIssueDto> FieldIssues { get; } = fieldIssues ?? [];
+
+    /// <summary>For <see cref="Reasons.VmidTaken"/>, the next free VMID.</summary>
+    public int? NextVmid { get; } = nextVmid;
+
+    public ChangeRefusedDto Dto(Guid? changeId = null, string? status = null) => new(changeId, Reason, Message, Issues, FieldIssues, status, NextVmid);
 }
 
 /// <summary>A change as one commit: the files it writes or deletes, the message, and what it touches for compare-and-swap.</summary>
@@ -163,7 +172,7 @@ public static class ChangeComposer
     }
 
     /// <summary>The commit message: the subject, every difference when there are several, and the trailer that names the change.</summary>
-    private static string Message(string subject, IReadOnlyList<string> differences, Guid id)
+    internal static string Message(string subject, IReadOnlyList<string> differences, Guid id)
     {
         var message = new StringBuilder(subject).Append("\n\n");
         foreach (var difference in differences.Take(50))
@@ -221,5 +230,5 @@ public static class ChangeComposer
         _ => value.ToJsonString(),
     }, 40);
 
-    private static string Truncate(string text, int length) => text.Length <= length ? text : text[..(length - 1)] + "…";
+    internal static string Truncate(string text, int length) => text.Length <= length ? text : text[..(length - 1)] + "…";
 }

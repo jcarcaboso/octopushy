@@ -45,6 +45,7 @@ public sealed partial class RunEngine(
     ArtifactStore artifacts,
     OrchestratorSignal signal,
     RevisionCache revisions,
+    RepositoryMirror mirror,
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RunEngine> logger)
@@ -293,7 +294,7 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (context.Stages is not null ? DecidePipelineApproval(run, step, context)
+                    if (context.Stages is not null ? await DecidePipelineApprovalAsync(db, run, step, context, cancellationToken)
                         : context.Ansible is not null ? DecideConfigureApproval(run, step, context)
                         : await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
@@ -458,8 +459,17 @@ public sealed partial class RunEngine(
                     : $"Approval is automatic (set by {policy.ApprovalSetBy}).") + vmNote;
             step.Status = StepStatuses.Succeeded;
             step.StartedAt = step.FinishedAt = clock.GetUtcNow();
+            if (run.Operation == Operations.Provision)
+                await PreApproveAsync(db, run, step, context, null, needed: false, cancellationToken);
             return true;
         }
+
+        // A deploy that asked to approve its plan in the same click: only a first plan that does nothing but create.
+        var preApproval = run.Operation == Operations.Provision
+            ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs) ?? (removesVm ? "It destroys a VM." : null), needed: true, cancellationToken)
+            : (false, null);
+        if (preApproval.Approved)
+            return true;
 
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();
@@ -467,7 +477,7 @@ public sealed partial class RunEngine(
             ? $"The plan destroys a VM and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
             : (destructiveManual && !manual
                 ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."
-                : $"Approval is manual (set by {policy.ApprovalSetBy}).") + vmNote;
+                : $"Approval is manual (set by {policy.ApprovalSetBy}).") + vmNote + DeclinedNote(preApproval.Declined);
         return false;
     }
 
@@ -703,6 +713,9 @@ public sealed partial class RunEngine(
             step.Detail ??= status == RunStatuses.Cancelled ? "The run was cancelled." : "An earlier step did not succeed.";
         }
     }
+
+    /// <summary>Why a deploy's approval in the same click did not cover this plan, for the step's detail.</summary>
+    private static string DeclinedNote(string? declined) => declined is null ? "" : $" Not approved at deploy: {declined}";
 
     private static void SetDetail(Run run, string detail)
     {

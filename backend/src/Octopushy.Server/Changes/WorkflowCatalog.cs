@@ -21,7 +21,8 @@ public sealed record WorkflowVersionDto(
     string? Description,
     JsonNode? Inputs,
     JsonNode? Ui,
-    IReadOnlyList<string> Secrets);
+    IReadOnlyList<string> Secrets,
+    bool Setup = false);
 
 /// <summary>A workflow and its versions, newest first.</summary>
 public sealed record WorkflowSummaryDto(string Id, string? Manages, string? Description, IReadOnlyList<WorkflowVersionDto> Versions);
@@ -99,7 +100,8 @@ public sealed class WorkflowCatalog(RevisionCache revisions, WorkflowsMirrors mi
         workflow.Description,
         workflow.SchemaJson?.DeepClone(),
         workflow.Ui?.DeepClone(),
-        workflow.Secrets);
+        workflow.Secrets,
+        workflow.Setup is not null);
 
     private async Task<WorkflowVersionDto> ReleaseAsync(string repository, WorkflowReleaseRecord record, bool available, CancellationToken ct)
     {

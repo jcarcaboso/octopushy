@@ -43,7 +43,7 @@ public static class ChangeEndpoints
             }
             catch (ChangeRefusal refusal)
             {
-                return TypedResults.Conflict(new ChangeRefusedDto(null, refusal.Reason, refusal.Message, refusal.Issues, refusal.FieldIssues));
+                return TypedResults.Conflict(refusal.Dto());
             }
         }).WithName("previewChange");
 
@@ -58,6 +58,44 @@ public static class ChangeEndpoints
             var (change, refused) = await changes.CommitAsync(request, actor, ct);
             return change is not null ? TypedResults.Ok(change) : TypedResults.Conflict(refused!);
         }).WithName("commitChange");
+    }
+
+    /// <summary>The workflow wizard: where a guest or service can be deployed, the next free VMID, and the deploy itself.</summary>
+    public static void MapDeploy(this RouteGroupBuilder api)
+    {
+        var group = api.MapGroup("/deploy").WithTags("Deploy");
+
+        group.MapGet("/targets", async (OctopushyDb db, ChangeService changes, CancellationToken ct) =>
+                TypedResults.Ok(await changes.TargetsAsync(db, ct)))
+            .WithName("getDeployTargets");
+
+        group.MapGet("/vmid", async Task<Results<Ok<NextVmidDto>, NotFound>> (string installation, int? from, OctopushyDb db, ChangeService changes,
+                CancellationToken ct) =>
+                await changes.NextVmidAsync(db, installation, from, ct) is { } next ? TypedResults.Ok(next) : TypedResults.NotFound())
+            .WithName("getNextVmid");
+
+        group.MapPost("/preview", async Task<Results<Ok<ChangePreviewDto>, Conflict<ChangeRefusedDto>, ProblemHttpResult>> (
+            DeployRequest request, OctopushyDb db, ChangeService changes, CancellationToken ct) =>
+        {
+            try
+            {
+                return TypedResults.Ok(await changes.PreviewDeployAsync(db, request, ct));
+            }
+            catch (ChangeRefusal refusal)
+            {
+                return TypedResults.Conflict(refusal.Dto());
+            }
+        }).WithName("previewDeploy");
+
+        group.MapPost("", async Task<Results<Ok<ChangeDto>, Conflict<ChangeRefusedDto>, ProblemHttpResult>> (
+            DeployRequest request, HttpContext http, ChangeService changes, CancellationToken ct) =>
+        {
+            var actor = http.User.Identity?.Name;
+            if (string.IsNullOrWhiteSpace(actor))
+                return TypedResults.Problem(statusCode: 400, title: "An authenticated operator is required.");
+            var (change, refused) = await changes.DeployAsync(request, actor, ct);
+            return change is not null ? TypedResults.Ok(change) : TypedResults.Conflict(refused!);
+        }).WithName("deploy");
     }
 
     private static string? Malformed(ChangeRequest request) =>

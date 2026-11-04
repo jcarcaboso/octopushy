@@ -83,6 +83,28 @@ public static class ChangeKinds
     public const string Upgrade = "upgrade";
     /// <summary>Deletes the guest's folder; its retire run follows under its policy.</summary>
     public const string Remove = "remove";
+    /// <summary>Writes a new guest's folder, from the workflow wizard.</summary>
+    public const string CreateGuest = "create-guest";
+    /// <summary>Writes a new service's folder under a guest, from the workflow wizard.</summary>
+    public const string CreateService = "create-service";
+
+    public static bool IsCreate(string kind) => kind is CreateGuest or CreateService;
+}
+
+/// <summary>
+/// Where a deploy's "approve the plan in the same click" stands. It covers the change's first plan only, and only when that
+/// plan does nothing but create. See docs/changes-from-the-ui.md.
+/// </summary>
+public static class PreApprovals
+{
+    /// <summary>Asked for at deploy; no plan has been decided yet.</summary>
+    public const string Requested = "requested";
+    /// <summary>The first plan was approved at deploy, as the operator who deployed.</summary>
+    public const string Approved = "approved";
+    /// <summary>The first plan did not qualify, so it waits for approval as usual; the detail says why.</summary>
+    public const string Declined = "declined";
+    /// <summary>The policy approved the first plan on its own, so nothing waited.</summary>
+    public const string NotNeeded = "not-needed";
 }
 
 public static class ChangeStatuses
@@ -142,7 +164,8 @@ public sealed class ResourceChange
     /// <summary><c>guest</c> or <c>service</c>.</summary>
     public required string ResourceKind { get; set; }
 
-    public Guid ResourceId { get; set; }
+    /// <summary>The guest or service; for a create, null until the revision that holds the new folder is loaded.</summary>
+    public Guid? ResourceId { get; set; }
 
     public required string Address { get; set; }
 
@@ -193,6 +216,24 @@ public sealed class ResourceChange
 
     /// <summary>Why it was refused or failed, or what it waits for.</summary>
     public string? Detail { get; set; }
+
+    /// <summary>For a new guest, the VMID it declares: held against other deploys until the change is settled.</summary>
+    public int? Vmid { get; set; }
+
+    /// <summary><see cref="PreApprovals"/>, or null when the deploy did not ask to approve its plan in the same click.</summary>
+    public string? PreApproval { get; set; }
+
+    /// <summary>What happened to the pre-approval, such as why the plan did not qualify.</summary>
+    public string? PreApprovalDetail { get; set; }
+
+    /// <summary>The run whose plan the pre-approval was decided for. It is decided once, for that run only.</summary>
+    public Guid? PreApprovalRunId { get; set; }
+
+    /// <summary>Store keys the deploy generated values for. Deleted again if nothing was committed.</summary>
+    public List<string> GeneratedKeys { get; set; } = [];
+
+    /// <summary>Enrollment tokens the deploy created. Revoked again if nothing was committed.</summary>
+    public List<Guid> GeneratedTokens { get; set; } = [];
 
     public DateTimeOffset CreatedAt { get; set; }
 

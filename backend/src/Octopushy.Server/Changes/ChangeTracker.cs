@@ -183,6 +183,17 @@ public static class ChangeTracker
     private static async Task<(string Status, string? Detail)?> FollowAsync(OctopushyDb db, RepositoryMirror mirror, RevisionCache revisions,
         ResourceChange change, DefinitionRevision revision, DateTimeOffset now, CancellationToken ct)
     {
+        // A new guest or service is a resource once the revision that holds its folder is loaded.
+        if (change.ResourceId is null)
+        {
+            var created = await db.Resources.AsNoTracking()
+                .Where(r => r.Address == change.Address && r.Kind == change.ResourceKind && r.RetiredAt == null)
+                .OrderByDescending(r => r.FirstSeenAt).FirstOrDefaultAsync(ct);
+            if (created is null)
+                return (ChangeStatuses.Synced, $"{Short(revision.Commit)} is loaded, and {change.Address} is not listed yet.");
+            change.ResourceId = created.Id;
+        }
+
         var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == change.ResourceId, ct);
         var candidates = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
             .Where(r => r.ResourceId == change.ResourceId && r.CreatedAt >= change.CreatedAt)

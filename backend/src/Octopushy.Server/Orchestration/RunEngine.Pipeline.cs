@@ -15,7 +15,7 @@ public sealed partial class RunEngine
     /// what it means elsewhere: a workflow that declares a stage destructive, and a plan that deletes.
     /// A plan's replace counts too: a provision run holds a replaced VM by another rule, and a stage has none.
     /// </summary>
-    private bool DecidePipelineApproval(Run run, Step step, RunContext context)
+    private async Task<bool> DecidePipelineApprovalAsync(OctopushyDb db, Run run, Step step, RunContext context, CancellationToken cancellationToken)
     {
         step.StartedAt ??= clock.GetUtcNow();
         // Each plan's effects refuse this already; asked again so no path offers it for approval.
@@ -61,13 +61,19 @@ public sealed partial class RunEngine
                     : $"Approval is automatic (set by {policy.ApprovalSetBy}).";
             step.Status = StepStatuses.Succeeded;
             step.FinishedAt = clock.GetUtcNow();
+            await PreApproveAsync(db, run, step, context, null, needed: false, cancellationToken);
             return true;
         }
 
+        // A deploy that asked to approve its plan in the same click: only a first pipeline that does nothing but create.
+        var preApproval = await PreApproveAsync(db, run, step, context, PipelineMoreThanCreate(run, document), needed: true, cancellationToken);
+        if (preApproval.Approved)
+            return true;
+
         step.Status = StepStatuses.AwaitingApproval;
-        step.Detail = manual
+        step.Detail = (manual
             ? $"Approval is manual (set by {policy.ApprovalSetBy})."
-            : $"Destructive is manual (set by {policy.DestructiveSetBy}): {string.Join("; ", document.Destructive)}.";
+            : $"Destructive is manual (set by {policy.DestructiveSetBy}): {string.Join("; ", document.Destructive)}.") + DeclinedNote(preApproval.Declined);
         return false;
     }
 

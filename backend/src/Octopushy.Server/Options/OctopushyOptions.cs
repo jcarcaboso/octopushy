@@ -71,6 +71,12 @@ public sealed class AgentChannelOptions
 
     public int EnrollmentTokenMinutes { get; set; } = 60;
 
+    /// <summary>
+    /// How long an enrollment token a deploy generates lives: long enough for the guest to be approved, provisioned and set
+    /// up, which can wait on a person. A week at most.
+    /// </summary>
+    public int GeneratedEnrollmentTokenMinutes { get; set; } = 3 * 24 * 60;
+
     public int CertificateDays { get; set; } = 30;
 }
 

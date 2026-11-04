@@ -788,6 +788,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/deploy/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getDeployTargets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deploy/vmid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNextVmid"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deploy/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewDeploy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["deploy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables": {
         parameters: {
             query?: never;
@@ -961,7 +1025,7 @@ export interface components {
             kind: string;
             resourceKind: string;
             /** Format: uuid */
-            resourceId: string;
+            resourceId: null | string;
             address: string;
             author: string;
             message: string;
@@ -989,6 +1053,11 @@ export interface components {
             final: boolean;
             /** @default false */
             notCommitted: boolean;
+            /** Format: int32 */
+            vmid?: null | number;
+            preApproval?: null | string;
+            preApprovalDetail?: null | string;
+            generatedKeys?: null | string[];
         };
         ChangeFormDto: {
             /** Format: uuid */
@@ -1021,6 +1090,9 @@ export interface components {
             issues: components["schemas"]["IssueDto"][];
             fieldIssues: components["schemas"]["FieldIssueDto"][];
             refused: null | string;
+            generated?: null | components["schemas"]["GeneratedValueDto"][];
+            /** Format: int32 */
+            nextVmid?: null | number;
         };
         ChangeRefusedDto: {
             /** Format: uuid */
@@ -1030,6 +1102,8 @@ export interface components {
             issues: components["schemas"]["IssueDto"][];
             fieldIssues: components["schemas"]["FieldIssueDto"][];
             status?: null | string;
+            /** Format: int32 */
+            nextVmid?: null | number;
         };
         ChangeRequest: {
             /** Format: uuid */
@@ -1095,6 +1169,58 @@ export interface components {
         DecisionRequest: {
             planSha256: null | string;
             note: null | string;
+        };
+        DeployGuestDto: {
+            address: string;
+            name: string;
+            workflow: null | string;
+            valid: boolean;
+        };
+        DeployHostDto: {
+            name: string;
+            declared: boolean;
+            observed: boolean;
+            status: null | string;
+        };
+        DeployInstallationDto: {
+            address: string;
+            lab: string;
+            name: string;
+            type: string;
+            managed: boolean;
+            reason: null | string;
+            hosts: components["schemas"]["DeployHostDto"][];
+            guests: components["schemas"]["DeployGuestDto"][];
+            agentLabels: string[];
+            /** Format: date-time */
+            observedAt: null | string;
+        };
+        DeployRequest: {
+            kind: string;
+            baseCommit: string;
+            parent: string;
+            name: string;
+            workflow: string;
+            host?: null | string;
+            /** Format: int32 */
+            vmid?: null | number;
+            template?: null | string;
+            hardware?: null | components["schemas"]["JsonObject"];
+            network?: null | components["schemas"]["JsonObject"];
+            inputs?: null | components["schemas"]["JsonObject"];
+            secrets?: null | {
+                [key: string]: components["schemas"]["SecretChoice"];
+            };
+            accessUser?: null | string;
+            hostKey?: null | string;
+            /** @default false */
+            approveAtDeploy: boolean;
+        };
+        DeployTargetsDto: {
+            baseCommit: null | string;
+            blockedReason: null | string;
+            installations: components["schemas"]["DeployInstallationDto"][];
+            templates: string[];
         };
         DraftChangesRequest: {
             expectedHead: string;
@@ -1182,6 +1308,12 @@ export interface components {
             /** Format: int32 */
             startedVersion: null | number;
             pending: boolean;
+        };
+        GeneratedValueDto: {
+            secret: string;
+            key: string;
+            generator: string;
+            detail: string;
         };
         GuestConfigurationDto: {
             workflow: string;
@@ -1372,6 +1504,13 @@ export interface components {
         MissingVariableDto: {
             key: string;
             usedBy: string[];
+        };
+        NextVmidDto: {
+            installation: string;
+            /** Format: int32 */
+            vmid: number;
+            /** Format: int32 */
+            from: number;
         };
         ObserveErrorDto: {
             /** Format: uuid */
@@ -1599,6 +1738,12 @@ export interface components {
             reference: string;
             commit: string;
             repository: null | string;
+        };
+        SecretChoice: {
+            store?: null | string;
+            generate?: null | string;
+            labels?: null | string[];
+            name?: null | string;
         };
         ServiceDetailDto: {
             service: components["schemas"]["ServiceSummaryDto"];
@@ -1847,6 +1992,8 @@ export interface components {
             inputs: null | components["schemas"]["JsonNode"];
             ui: null | components["schemas"]["JsonNode"];
             secrets: string[];
+            /** @default false */
+            setup: boolean;
         };
         WorkflowsSourceDto: {
             source: string;
@@ -4634,6 +4781,212 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChangePreviewDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRefusedDto"];
+                };
+            };
+        };
+    };
+    getDeployTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeployTargetsDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getNextVmid: {
+        parameters: {
+            query: {
+                installation: string;
+                from?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NextVmidDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    previewDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeployRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePreviewDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRefusedDto"];
+                };
+            };
+        };
+    };
+    deploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeployRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDto"];
                 };
             };
             /** @description Bad Request */

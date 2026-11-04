@@ -1052,6 +1052,16 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("files");
 
+                    b.PrimitiveCollection<List<string>>("GeneratedKeys")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("generated_keys");
+
+                    b.PrimitiveCollection<List<Guid>>("GeneratedTokens")
+                        .IsRequired()
+                        .HasColumnType("uuid[]")
+                        .HasColumnName("generated_tokens");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1063,7 +1073,19 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("message");
 
-                    b.Property<Guid>("ResourceId")
+                    b.Property<string>("PreApproval")
+                        .HasColumnType("text")
+                        .HasColumnName("pre_approval");
+
+                    b.Property<string>("PreApprovalDetail")
+                        .HasColumnType("text")
+                        .HasColumnName("pre_approval_detail");
+
+                    b.Property<Guid?>("PreApprovalRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pre_approval_run_id");
+
+                    b.Property<Guid?>("ResourceId")
                         .HasColumnType("uuid")
                         .HasColumnName("resource_id");
 
@@ -1097,6 +1119,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<int?>("Vmid")
+                        .HasColumnType("integer")
+                        .HasColumnName("vmid");
 
                     b.HasKey("Id")
                         .HasName("pk_changes");

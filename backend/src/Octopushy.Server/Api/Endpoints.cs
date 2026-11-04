@@ -32,6 +32,7 @@ public static partial class Endpoints
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));
         api.MapRepositoryEditor();
         api.MapChanges();
+        api.MapDeploy();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
 
@@ -373,7 +374,7 @@ public static partial class Endpoints
                 }
                 if (update.Labels is { } labels)
                 {
-                    if (labels.Any(l => !LabelPattern().IsMatch(l)))
+                    if (labels.Any(l => !EnrollmentTokens.IsLabel(l)))
                     {
                         return TypedResults.Problem(title: "Labels are lowercase letters, digits, '.', '_', and '-'.", statusCode: 400);
                     }
@@ -433,26 +434,14 @@ public static partial class Endpoints
 
         group.MapPost("/tokens", async Task<Results<Ok<CreatedToken>, ProblemHttpResult>> (TokenRequest request, OctopushyDb db, AgentCertificateAuthority ca, IOptions<OctopushyOptions> options, TimeProvider clock, CancellationToken ct) =>
         {
-            if (request.Labels.Any(l => !LabelPattern().IsMatch(l)))
+            if (request.Labels.Any(l => !EnrollmentTokens.IsLabel(l)))
             {
                 return TypedResults.Problem(title: "Labels are lowercase letters, digits, '.', '_', and '-'.", statusCode: 400);
             }
 
-            var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-            var now = clock.GetUtcNow();
-            var token = new EnrollmentToken
-            {
-                Id = Guid.CreateVersion7(),
-                TokenHash = EnrollmentService.TokenHash(secret),
-                Name = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim(),
-                Labels = request.Labels.Distinct().Order().ToArray(),
-                MaxConcurrency = Math.Clamp(request.MaxConcurrency ?? 2, 1, 64),
-                CreatedAt = now,
-                ExpiresAt = now.AddMinutes(Math.Clamp(request.ExpiresInMinutes ?? options.Value.AgentChannel.EnrollmentTokenMinutes, 5, 7 * 24 * 60)),
-            };
-            db.EnrollmentTokens.Add(token);
+            var (token, value) = EnrollmentTokens.Create(db, ca, request.Name, request.Labels, request.MaxConcurrency ?? 2,
+                request.ExpiresInMinutes ?? options.Value.AgentChannel.EnrollmentTokenMinutes, clock.GetUtcNow());
             await db.SaveChangesAsync(ct);
-            var value = $"opy1.{secret}.{ca.Fingerprint}";
             var server = options.Value.AgentChannel.PublicUrl ?? $"https://{System.Net.Dns.GetHostName()}:{options.Value.AgentChannel.Port}";
             var name = token.Name is null ? "" : $" --name {token.Name}";
             return TypedResults.Ok(new CreatedToken(token.Id, value, $"octopushy agent enroll --server {server} --token {value}{name}", token.ExpiresAt, ca.Fingerprint));
@@ -718,7 +707,4 @@ public static partial class Endpoints
             await views.LatestRevisionAsync(ct),
             workflows ? await views.WorkflowsAsync(settings, ct) : null);
     }
-
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]*$")]
-    private static partial Regex LabelPattern();
 }
