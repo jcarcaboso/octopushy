@@ -561,8 +561,12 @@ export function useDiscardDraft() {
 
 // Changes from the UI: each is a commit to the lab repository, followed through its revision and runs.
 
-const finalChange = new Set(["applied", "failed", "refused", "no-change", "superseded", "dismissed"]);
+const finalChange = new Set(["applied", "failed", "refused", "no-change", "superseded"]);
 
+/**
+ * Whether a status can no longer change. A dismissed change can: a dismissal only stops the waiting, and a commit of it that
+ * arrives later moves it on. Pages follow the API's `final` flag; this is the same list, for when only a status is known.
+ */
 export function isChangeFinished(status: string): boolean {
   return finalChange.has(status);
 }
@@ -585,7 +589,7 @@ export function useChange(id: string) {
     queryFn: () => unwrap(api.GET("/api/changes/{id}", { params: { path: { id } } })),
     refetchInterval: (query) => {
       const data = query.state.data as Change | undefined;
-      return data && isChangeFinished(data.status) ? false : 2_500;
+      return data?.final ? false : 2_500;
     },
   });
 }
@@ -598,7 +602,7 @@ export function useChanges(resourceId: string, limit = 5) {
   });
 }
 
-/** Settles a change whose push is unsettled as not committed; refused while its commit is on the branch. */
+/** Stops waiting for a change whose push is unsettled. It proves nothing; refused while its commit is on the branch. */
 export function useDismissChange() {
   const client = useQueryClient();
   return useMutation({

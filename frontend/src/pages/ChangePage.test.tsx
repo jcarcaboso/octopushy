@@ -2,6 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Change, RunDetail } from "../api/types";
+import { isChangeFinished } from "../api/queries";
 import { mockApi, renderAt } from "../test/utils";
 import { ChangePage } from "./ChangePage";
 
@@ -93,7 +94,7 @@ describe("ChangePage", () => {
 
   it("shows a change that was applied", async () => {
     mockApi({
-      "GET /api/changes/change-1": () => change({ status: "applied", detail: "Run #7 succeeded.", runs: [{ ...change().runs[0], status: "succeeded" }] }),
+      "GET /api/changes/change-1": () => change({ status: "applied", final: true, detail: "Run #7 succeeded.", runs: [{ ...change().runs[0], status: "succeeded" }] }),
       "GET /api/runs/run-7": () => run("succeeded"),
     });
     renderAt(<ChangePage />, route);
@@ -117,7 +118,7 @@ describe("ChangePage", () => {
   it("says a refused change committed nothing", async () => {
     mockApi({
       "GET /api/changes/change-1": () =>
-        change({ status: "refused", detail: "pve01-ai changed since the form was loaded; reload it.", commit: null, commitUrl: null, revisionId: null, runs: [] }),
+        change({ status: "refused", final: true, notCommitted: true, detail: "pve01-ai changed since the form was loaded; reload it.", commit: null, commitUrl: null, revisionId: null, runs: [] }),
     });
     renderAt(<ChangePage />, route);
     expect(await screen.findByText("Refused: nothing was committed")).toBeInTheDocument();
@@ -129,7 +130,7 @@ describe("ChangePage", () => {
     const later = "7777777777777777777777777777777777777777";
     mockApi({
       "GET /api/changes/change-1": () =>
-        change({ status: "superseded", detail: "Superseded by 7777777777: it sets hardware otherwise.", runs: [], revisionId: null,
+        change({ status: "superseded", final: true, detail: "Superseded by 7777777777: it sets hardware otherwise.", runs: [], revisionId: null,
           supersededBy: later, supersededByUrl: `https://github.com/jcarcaboso/homelab-config/commit/${later}` }),
     });
     renderAt(<ChangePage />, route);
@@ -149,7 +150,7 @@ describe("ChangePage", () => {
     const { requests } = mockApi({
       "GET /api/changes/change-1": () => current,
       "POST /api/changes/change-1/dismiss": () =>
-        (current = { ...unknown, status: "dismissed", dismissedBy: "ops", detail: "Settled as not committed.", final: true, notCommitted: true }),
+        (current = { ...unknown, status: "dismissed", dismissedBy: "ops", detail: "Octopushy stopped waiting for it.", final: false, notCommitted: false }),
     });
     renderAt(<ChangePage />, route);
     expect(await screen.findByText("Its commit is not on the branch (yet)")).toBeInTheDocument();
@@ -157,6 +158,17 @@ describe("ChangePage", () => {
     expect(await screen.findByText("Dismissed by ops")).toBeInTheDocument();
     expect(requests.some((r) => r.method === "POST" && r.path === "/api/changes/change-1/dismiss")).toBe(true);
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    // Dismissing proves nothing: the page says so, and keeps following the change for a late arrival.
+    expect(screen.getByText(/not proof that nothing was committed/)).toBeInTheDocument();
+    expect(screen.getByText("Updating")).toBeInTheDocument();
+    expect(screen.queryByText(/settled as not committed/i)).toBeNull();
+  });
+
+  it("follows a change until the API says it is final, whatever its status", async () => {
+    expect(isChangeFinished("dismissed")).toBe(false);
+    mockApi({ "GET /api/changes/change-1": () => change({ status: "dismissed", detail: "Stopped waiting.", commit: null, runs: [], dismissedBy: "ops" }) });
+    renderAt(<ChangePage />, route);
+    expect(await screen.findByText("Updating")).toBeInTheDocument();
   });
 
   it("shows a change being pushed", async () => {
@@ -167,7 +179,7 @@ describe("ChangePage", () => {
   });
 
   it("says when the revision proposed no run", async () => {
-    mockApi({ "GET /api/changes/change-1": () => change({ status: "no-change", detail: "abc proposes no run.", runs: [] }) });
+    mockApi({ "GET /api/changes/change-1": () => change({ status: "no-change", final: true, detail: "abc proposes no run.", runs: [] }) });
     renderAt(<ChangePage />, route);
     expect(await screen.findByText("The revision proposes no run: nothing a run is built from changed.")).toBeInTheDocument();
   });

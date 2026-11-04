@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { isNotFound } from "../api/client";
-import { isChangeFinished, useChange, useDismissChange, useRun } from "../api/queries";
+import { useChange, useDismissChange, useRun } from "../api/queries";
 import type { Change, RunSummary } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
@@ -159,14 +159,14 @@ function Unsettled({ change }: { change: Change }) {
       actions={
         <button type="button" className="button" disabled={dismiss.isPending}
           onClick={() => {
-            if (window.confirm("Dismiss this change as not committed? If its commit reaches the branch later, it is not followed.")) dismiss.mutate(change.id);
+            if (window.confirm("Stop waiting for this change? This does not mean nothing was committed: if one of its commits reaches the branch later, it is followed again.")) dismiss.mutate(change.id);
           }}>
           {dismiss.isPending ? "Dismissing…" : "Dismiss"}
         </button>
       }
     >
       <p>{change.detail}</p>
-      <p>Each sync looks for the commits its push prepared on the branch. Dismiss it once you know it will not arrive: it is then settled as not committed.</p>
+      <p>Each sync looks for the commits its push prepared on the branch. Dismissing it stops the waiting, and is not proof that nothing was committed: a commit of it that arrives later is still followed.</p>
       <ErrorMessage error={dismiss.error} />
     </Callout>
   );
@@ -178,7 +178,8 @@ export function ChangePage() {
 
   if (isPending) return <PageSkeleton rows={3} />;
   if (!change) return isNotFound(error) ? <NotFound what="change" /> : <ErrorMessage error={error} title="The change could not be loaded" />;
-  const live = !isChangeFinished(change.status);
+  // The API says when a change can no longer move; a dismissed one can, so it is still followed.
+  const live = !change.final;
   return (
     <>
       <PageHeader
@@ -224,7 +225,10 @@ export function ChangePage() {
         ) : null}
         {change.status === "uncertain" || change.status === "unknown" ? <Unsettled change={change} /> : null}
         {change.status === "dismissed" ? (
-          <Callout kind="info" title={`Dismissed by ${change.dismissedBy ?? "someone"}`}>{change.detail}</Callout>
+          <Callout kind="info" title={`Dismissed by ${change.dismissedBy ?? "someone"}`}>
+            <p>{change.detail}</p>
+            <p>Octopushy stopped waiting for it. This is not proof that nothing was committed: each sync still looks for its commits, and one that arrives is followed again.</p>
+          </Callout>
         ) : null}
         {change.status === "refused" ? (
           <Callout kind="danger" title="Refused: nothing was committed">
