@@ -26,6 +26,10 @@ Since 0.5.0, on `main`:
   commit its form was loaded from and authored by the operator. Octopushy syncs it at once, and its change page follows it
   through plan and approval to applied. This needs `Octopushy__RepositoryEditor__PublishEnabled=true` and a repository
   credential that can push, such as a deploy key with write access.
+- A [workflow wizard](docs/changes-from-the-ui.md#the-workflow-wizard), **Deploy**: pick a workflow, an installation, host
+  and name, fill in its form, and deploy a new guest or service as one commit. A workflow can ask for generated values, such
+  as the next free VMID or a one-time agent enrollment token put in the store, and a deploy can approve its first plan in the
+  same click when that plan only creates.
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.

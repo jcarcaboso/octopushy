@@ -338,8 +338,8 @@ snapshot to reuse.
   as its variables, an Ansible stage as extra vars. There are no per-stage inputs.
 - **The schema is also the form.** Forms for guests and services are rendered from it, with the optional `ui` hints, so a
   new field in a workflow appears in the UI without an engine change: see [the form](#the-form-ui-hints) and
-  [changes from the UI](changes-from-the-ui.md). The server stores and serves `ui` and does not interpret it; only the
-  form reads it.
+  [changes from the UI](changes-from-the-ui.md). The server stores and serves `ui`; only the form reads it, except that a
+  deploy generates a secret only where `ui.secrets` asks for that generator ([generated values](#generated-values)).
 - **Secrets** are extra vars filled from the variable store. A workflow lists the ones a guest or service must provide in
   `secrets`; the guest or service provides each in `secrets` (the value) or `secretFiles` (the path of a private file
   holding it). Only the steps that run a playbook receive them, never a preview or an OpenTofu stage. A Proxmox token is
@@ -386,6 +386,57 @@ ui:
 | `order` | an object | Its properties in this order; those not listed follow in the schema's order |
 | `group` | any field | Fields of one object with the same group are shown together, under the group's name |
 | `widget` | any field | `text`, `textarea`, `select`, `radio`, `checkboxes`, `yaml` (edit it as YAML) or `hidden` (not shown, value kept) |
+
+### Generated values
+
+The [workflow wizard](changes-from-the-ui.md#the-workflow-wizard) deploys a new guest or service from a workflow. A workflow
+asks it for generated values with more `ui` hints. Each one is generic: nothing in the engine names a workflow.
+
+```yaml
+ui:
+  vmid: { generate: next-vmid }                  # propose the next free VMID; from: 200 starts looking there
+  template: fedora-44                            # the template a new guest starts from
+  access: { user: ops }                          # the login the setup stage uses on a new guest
+  secrets:
+    worker_enrollment_token:
+      generate: agent-enrollment-token           # a one-time enrollment token, made at deploy
+      labels: inputs.worker_agent_labels         # the token's labels, read from this field of the form
+      name: inputs.worker_agent_name             # the agent's name, read from this field; the guest's name otherwise
+      help: Made at deploy and stored for this guest.
+    admin_password: { generate: random-password, length: 32 }
+```
+
+| Hint | What the wizard does |
+|---|---|
+| `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not declared by a guest at the head commit, not bound to or reserved by a guest, and not held by a deploy that is not settled. The person can change it. |
+| `template` | Starts the template choice there. |
+| `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot. |
+| `secrets.<name>.generate` | Offers to generate the secret instead of naming a store key: `agent-enrollment-token` or `random-password`. |
+| `secrets.<name>.labels`, `.name` | For `agent-enrollment-token`: dotted paths into the form whose values start the token's labels and name. Without `labels`, the lab's agent labels. |
+| `secrets.<name>.length` | For `random-password`: 16 to 128 characters, 32 by default. |
+| `secrets.<name>.label`, `.help` | Shown on the secret's choice. |
+
+**The VMID is checked again when the deploy is committed,** against the branch the push lands on. If it was taken since the
+review, nothing is committed and the refusal offers the next free one to review again with: the number is never changed
+after the review.
+
+**A generated secret** is made when the deploy is committed, never at the review:
+
+- `agent-enrollment-token` creates a token as **Agents** does, with the labels and name shown in the review. It lives for
+  `Octopushy__AgentChannel__GeneratedEnrollmentTokenMinutes`, three days by default and a week at most, so the guest can wait
+  for an approval, be provisioned and be set up. A token that expired before setup enrolled is made again under **Agents**,
+  and its new value set in the same key.
+- `random-password` is 32 random URL-safe characters, or `length`.
+
+Each goes into the variable store as a secret, under `guests/<lab>/<installation>/<guest>/<name>`, or
+`services/<address>/<name>` for a service: the address keeps two guests of one name on two installations apart. The new
+definition references it, `{ store: … }`. The value is never shown, returned by the API, logged, or written to Git. A key that
+is already in the store refuses the deploy rather than replacing it. **If nothing is committed,** because the push or the
+validation refused it, the stored values are deleted and the token is revoked.
+
+The server generates a value only where the workflow's `ui.secrets` asks for that generator for that secret; any other secret
+names an existing store key. The managed SSH key a guest's setup logs in with is not a generated value here: Octopushy makes
+it for every guest that needs one ([guest configuration](guest-configuration.md)).
 
 ### How a workflow runs
 
