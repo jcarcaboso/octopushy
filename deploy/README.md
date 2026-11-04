@@ -50,6 +50,16 @@ podman compose up -d                      # or: docker compose up -d
   server refuses to start rather than create a new CA, which would leave every enrolled
   agent untrusted. Restore the entries from a database backup.
 
+## Changes from the UI
+
+Forms commit to the lab repository only with `Octopushy__RepositoryEditor__PublishEnabled: "true"` in the backend's
+environment, and a repository credential that can push: for GitHub, a deploy key with write access. Without either, the forms
+open read-only. See [changes from the UI](../docs/changes-from-the-ui.md).
+
+## Upgrading from 0.5.0
+
+The releases after 0.5.0 add migrations after its `Initial`, so a 0.5.0 database is upgraded in place: `migrate` applies them.
+
 ## Starting again with a fresh database
 
 Release 0.5.0 starts its database schema again from one migration. It cannot upgrade a

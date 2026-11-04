@@ -298,6 +298,11 @@ is in the two other repositories: their CI, and converting the recipes into work
 
 ### Phase 3: change from the UI, and one-click deployment
 
+**3A, changes from the UI, is built** ([changes-from-the-ui.md](changes-from-the-ui.md)): forms rendered from the inputs
+schema with `ui` hints, the compare-and-swap commit through the editor's publish path with immediate sync, upgrades to a newer
+major, removing a guest, and the change page. What is left of Phase 3 is the wizard with its generated values (3B), and the
+acceptance on real Proxmox.
+
 - **UI changes as commits.**
   - Form editing for guests and services, rendered from the workflow's `inputs` schema.
   - A compare-and-swap commit through the existing `RepositoryMirror.Write` path, with immediate sync.

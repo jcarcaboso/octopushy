@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "test-vm",
+  "description": "Validates { hardware, network, inputs } from a guest, as a VM workflow's schema would, so the guest's form has fields.",
+  "type": "object",
+  "properties": {
+    "hardware": {
+      "type": "object",
+      "properties": {
+        "cores": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "memory": { "description": "MiB", "type": "integer", "minimum": 256 },
+        "disks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "size": { "description": "GiB", "type": "integer", "minimum": 1 },
+              "datastore": { "type": "string" }
+            },
+            "required": ["size"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["cores", "memory"],
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "bridge": { "type": "string" },
+        "mode": { "enum": ["static", "dhcp"] },
+        "address": { "$ref": "#/$defs/ipv4Cidr" },
+        "gateway": { "type": "string" },
+        "vlan": { "type": "integer", "minimum": 1, "maximum": 4094 }
+      },
+      "required": ["bridge", "mode"],
+      "additionalProperties": false
+    },
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "motd": { "description": "A line the test module records; changes nothing real.", "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "ipv4Cidr": { "type": "string", "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$" }
+  }
+}

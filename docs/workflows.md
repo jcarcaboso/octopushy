@@ -150,7 +150,7 @@ version: "1.0"                    # M.m, quoted
 manages: vm                       # vm | service; containers come later
 description: A Fedora VM, set up by Ansible with a set of tools.
 inputs: inputs.schema.json        # validates { hardware, network, inputs } from the guest
-ui: {}                            # optional hints for the form; stored and served, never interpreted
+ui: {}                            # optional hints for the form; see the form: ui hints
 secrets: [machine_tools_token]    # what a guest has to provide in secrets or secretFiles
 stages:
   - name: machine                 # the OpenTofu stage that makes the VM: always first
@@ -336,15 +336,56 @@ snapshot to reuse.
   Ansible stage. OpenTofu warns about a variable a root does not declare, and goes on.
 - **A service's inputs** are `inputs` from `service.yaml`, validated as `{ inputs }`. Every stage gets them: an OpenTofu stage
   as its variables, an Ansible stage as extra vars. There are no per-stage inputs.
-- **The schema is also the form.** Forms for guests and services will be rendered from it, with the optional `ui` hints,
-  so a new field in a workflow appears in the UI without an engine change. Octopushy stores and serves `ui`, and does not
-  interpret it.
+- **The schema is also the form.** Forms for guests and services are rendered from it, with the optional `ui` hints, so a
+  new field in a workflow appears in the UI without an engine change: see [the form](#the-form-ui-hints) and
+  [changes from the UI](changes-from-the-ui.md). The server stores and serves `ui` and does not interpret it; only the
+  form reads it.
 - **Secrets** are extra vars filled from the variable store. A workflow lists the ones a guest or service must provide in
   `secrets`; the guest or service provides each in `secrets` (the value) or `secretFiles` (the path of a private file
   holding it). Only the steps that run a playbook receive them, never a preview or an OpenTofu stage. A Proxmox token is
   never one, and a name may be set only once across `inputs`, `secrets` and `secretFiles`.
 - **Extra vars** whose names start with `ansible_` or `octopushy` are refused: they are how Octopushy pins a connection.
   `{{ octopushy.guest_directory }}` is the guest's folder, or for a service stage the service's.
+
+### The form: `ui` hints
+
+A guest's form is its workflow's inputs schema, rendered as fields over `{ hardware, network, inputs }`; a service's is
+`{ inputs }`. The form renders:
+
+- objects with `properties`, nested to any depth, and arrays whose `items` is one schema, of values or of objects, with
+  add and remove;
+- `string`, `integer`, `number` and `boolean`, `enum` as a choice (an array of `enum` items as checkboxes), and `const`;
+- local `$ref`s into `$defs` or `definitions`, with the keywords next to a `$ref` applying too;
+- `title` and `description` as label and help, `required` as a mark, `default` for a new item, `minimum` and `maximum`,
+  and `pattern` and `format` as hints. The server stays authoritative: it validates every change.
+
+Keywords that only constrain values, such as `if`/`then`/`else`, `allOf`, `not`, `dependentSchemas`, `dependentRequired`,
+`contains` and `uniqueItems`, are left to the server, and what it finds is shown next to the field. **Anything the form does
+not render**, such as `oneOf`, `anyOf`, a list of types, `patternProperties`, or an object with no `properties`, is edited as
+YAML for that part of the value, and keys of an object that its schema does not name are kept in a YAML box of their own.
+Nothing is silently dropped.
+
+`ui` in `workflow.yaml` is optional and small. Every hint is optional, and unknown ones are ignored:
+
+```yaml
+ui:
+  order: [hardware, network, inputs]          # the form's sections, top to bottom
+  fields:                                     # hints per field, by dotted path; [] is an array's items
+    hardware.memory: { label: Memory, help: In MiB. }
+    hardware.disks[].size: { label: Size, help: In GiB. }
+    inputs: { order: [worker_server_url, worker_agent_version] }
+    inputs.worker_server_url: { group: Server }
+    inputs.worker_agent_digest: { group: Server }
+    inputs.machine_t3_settings: { widget: yaml }
+```
+
+| Hint | For | What it does |
+|---|---|---|
+| `label` | any field | Shown instead of the property's name or the schema's `title` |
+| `help` | any field | Shown under it instead of the schema's `description` |
+| `order` | an object | Its properties in this order; those not listed follow in the schema's order |
+| `group` | any field | Fields of one object with the same group are shown together, under the group's name |
+| `widget` | any field | `text`, `textarea`, `select`, `radio`, `checkboxes`, `yaml` (edit it as YAML) or `hidden` (not shown, value kept) |
 
 ### How a workflow runs
 
