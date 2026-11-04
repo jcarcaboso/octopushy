@@ -4660,6 +4660,18 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "reviewedRelease": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reviewDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -5140,6 +5152,19 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "vmidProblem": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -5241,6 +5266,18 @@
           "approveAtDeploy": {
             "type": "boolean",
             "default": false
+          },
+          "reviewedRelease": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reviewDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         },
         "additionalProperties": false
@@ -6608,12 +6645,21 @@
             "type": "string"
           },
           "vmid": {
-            "type": "integer",
+            "type": [
+              "null",
+              "integer"
+            ],
             "format": "int32"
           },
           "from": {
             "type": "integer",
             "format": "int32"
+          },
+          "problem": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

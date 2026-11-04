@@ -408,17 +408,31 @@ ui:
 
 | Hint | What the wizard does |
 |---|---|
-| `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not declared by a guest at the head commit, not bound to or reserved by a guest, and not held by a deploy that is not settled. The person can change it. |
+| `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not written in any `guest.yaml` under it at the head commit, valid or not, not bound to or reserved by a guest, and not held by a deploy that is not settled. The person can change it. |
 | `template` | Starts the template choice there. |
 | `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot. |
 | `secrets.<name>.generate` | Offers to generate the secret instead of naming a store key: `agent-enrollment-token` or `random-password`. |
 | `secrets.<name>.labels`, `.name` | For `agent-enrollment-token`: dotted paths into the form whose values start the token's labels and name. Without `labels`, the lab's agent labels. |
 | `secrets.<name>.length` | For `random-password`: 16 to 128 characters, 32 by default. |
 | `secrets.<name>.label`, `.help` | Shown on the secret's choice. |
+| `secrets.<name>.requiredWhen: { pointer, value }` | The secret is required when the value at the JSON pointer into `{ hardware, network, inputs }` is `value`, or is an array that holds it, such as `{ pointer: /inputs/machine_features, value: tailscale }`. Otherwise it is optional. The server enforces it. |
 
 **The VMID is checked again when the deploy is committed,** against the branch the push lands on. If it was taken since the
 review, nothing is committed and the refusal offers the next free one to review again with: the number is never changed
 after the review.
+
+**Free VMIDs are known only from a reliable observation.** Offering a VMID, and committing one, generated or typed, needs the
+installation's latest successful observation to be:
+
+- **recent:** no older than `Octopushy__Deploy__ObservationMaxAgeMinutes`, by default three observation intervals
+  (`Octopushy__Scheduling__ObserveMinutes`, 5), so 15 minutes;
+- **newer than any failed observation;**
+- **complete:** every host it lists online, every host `installation.yaml` declares listed, and a cluster quorate.
+
+Otherwise nothing is offered or committed. The reason names the installation and when it was last observed, such as *"home/
+pve01 has not been observed successfully since 2026-11-04 08:00 UTC, more than 15 minutes ago. Refresh its observation
+first."*, and the wizard offers **Observe now**. A `guest.yaml` under the installation that is not YAML at all refuses too:
+the VMID it holds is unknown. A guest that is YAML but fails validation still holds the VMID it names.
 
 **A generated secret** is made when the deploy is committed, never at the review:
 

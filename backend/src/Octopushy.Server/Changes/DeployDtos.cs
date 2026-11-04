@@ -16,7 +16,8 @@ public sealed record SecretChoice(string? Store = null, string? Generate = null,
 /// installation <c>Parent</c> (<c>lab/installation</c>), or <c>create-service</c>, under the guest <c>Parent</c>.
 /// <c>Workflow</c> is <c>id@M</c> or <c>id@M.m</c>. A guest needs <c>Host</c> and <c>Vmid</c>; <c>AccessUser</c> and
 /// <c>HostKey</c> (a store key) are how a workflow's setup stage logs in. <c>ApproveAtDeploy</c> approves the first plan in
-/// the same click, when it only creates. <c>BaseCommit</c> is the commit the wizard was loaded from.
+/// the same click, when it only creates. <c>BaseCommit</c> is the commit the wizard was loaded from. <c>ReviewedRelease</c>
+/// and <c>ReviewDigest</c> are what the review returned: a deploy whose workflow release or files differ is refused.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record DeployRequest(
@@ -34,7 +35,9 @@ public sealed record DeployRequest(
     IReadOnlyDictionary<string, SecretChoice>? Secrets = null,
     string? AccessUser = null,
     string? HostKey = null,
-    bool ApproveAtDeploy = false);
+    bool ApproveAtDeploy = false,
+    string? ReviewedRelease = null,
+    string? ReviewDigest = null);
 
 /// <summary>
 /// A value a deploy generates when it is committed, as the review shows it: the secret, the store key it goes in, the
@@ -51,7 +54,8 @@ public sealed record DeployGuestDto(string Address, string Name, string? Workflo
 /// <summary>
 /// An installation a guest can be deployed to. <c>Managed</c> is false for one with <c>manage: false</c>, which
 /// <c>Reason</c> explains: nothing can be deployed there. <c>AgentLabels</c> are its lab's, which an enrollment token a deploy
-/// generates starts with.
+/// generates starts with. <c>VmidProblem</c> says why its free VMIDs cannot be known now, such as an observation that is
+/// missing, failed, too old or incomplete; <c>Id</c> is the installation to observe again.
 /// </summary>
 public sealed record DeployInstallationDto(
     string Address,
@@ -63,7 +67,9 @@ public sealed record DeployInstallationDto(
     IReadOnlyList<DeployHostDto> Hosts,
     IReadOnlyList<DeployGuestDto> Guests,
     IReadOnlyList<string> AgentLabels,
-    DateTimeOffset? ObservedAt);
+    DateTimeOffset? ObservedAt,
+    Guid? Id = null,
+    string? VmidProblem = null);
 
 /// <summary>
 /// Where the wizard can deploy, read at the head commit (<c>BaseCommit</c>): the installations and their hosts and guests, and
@@ -73,6 +79,6 @@ public sealed record DeployTargetsDto(string? BaseCommit, string? BlockedReason,
 
 /// <summary>
 /// The smallest VMID at or above <c>From</c> that is free on the installation now: not observed anywhere on it, not declared
-/// at the head commit, and not held by a deploy in progress.
+/// at the head commit, and not held by a deploy in progress. Null, with <c>Problem</c>, when that cannot be known reliably.
 /// </summary>
-public sealed record NextVmidDto(string Installation, int Vmid, int From);
+public sealed record NextVmidDto(string Installation, int? Vmid, int From, string? Problem = null);

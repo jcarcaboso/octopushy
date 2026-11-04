@@ -114,4 +114,7 @@ export interface DeployRequest {
   accessUser?: string | null;
   hostKey?: string | null;
   approveAtDeploy?: boolean;
+  /** What the review returned: a deploy whose workflow release or files differ from it is refused. */
+  reviewedRelease?: string | null;
+  reviewDigest?: string | null;
 }

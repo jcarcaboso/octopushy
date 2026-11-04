@@ -69,6 +69,8 @@ export interface SecretHint {
   name?: string;
   label?: string;
   help?: string;
+  /** Required when the value at a JSON pointer into `{ hardware, network, inputs }` is `value`, or is an array that holds it. */
+  requiredWhen?: { pointer: string; value: JsonValue };
 }
 
 /** What a workflow's `ui` asks of a new guest or service beyond its form. Every hint is optional. */
@@ -104,10 +106,33 @@ export function readDeployHints(ui: unknown): DeployHints {
       if (!isObject(value)) continue;
       const hint: SecretHint = {};
       for (const key of ["generate", "labels", "name", "label", "help"] as const) if (typeof value[key] === "string") hint[key] = value[key] as string;
+      const when = value.requiredWhen;
+      if (isObject(when) && typeof when.pointer === "string" && "value" in when) hint.requiredWhen = { pointer: when.pointer, value: when.value };
       hints.secrets[name] = hint;
     }
   }
   return hints;
+}
+
+/** The value at a JSON pointer into the form's value, such as `/inputs/machine_features`. */
+export function valueAtPointer(value: JsonObject, pointer: string): JsonValue | undefined {
+  let node: JsonValue | undefined = value;
+  for (const raw of pointer.split("/").slice(1)) {
+    const part = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(node)) node = /^\d+$/.test(part) ? node[Number(part)] : undefined;
+    else if (isObject(node)) node = node[part];
+    else return undefined;
+    if (node === undefined) return undefined;
+  }
+  return node;
+}
+
+/** Whether a secret's `requiredWhen` holds for the form's value, as the server decides it. */
+export function requiredByForm(hint: SecretHint | undefined, value: JsonObject): boolean {
+  if (!hint?.requiredWhen) return false;
+  const found = valueAtPointer(value, hint.requiredWhen.pointer);
+  const same = (a: JsonValue | undefined) => JSON.stringify(a) === JSON.stringify(hint.requiredWhen!.value);
+  return same(found) || (Array.isArray(found) && found.some(same));
 }
 
 /** The value at a dotted path of the form, such as `inputs.worker_agent_labels`. */

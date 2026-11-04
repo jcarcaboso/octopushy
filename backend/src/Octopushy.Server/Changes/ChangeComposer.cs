@@ -38,6 +38,11 @@ public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<A
         public const string Exists = "exists";
         /// <summary>A new guest's VMID is observed, declared or held by another deploy: the refusal offers the next free one.</summary>
         public const string VmidTaken = "vmid-taken";
+        /// <summary>
+        /// Which VMIDs are free on the installation cannot be known: its observation is missing, failed, too old or incomplete,
+        /// or a guest.yaml under it cannot be read.
+        /// </summary>
+        public const string VmidsUnknown = "vmids-unknown";
     }
 
     public string Reason { get; } = reason;

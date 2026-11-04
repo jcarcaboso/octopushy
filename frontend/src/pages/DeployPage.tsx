@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Rocket, RotateCcw, Search, Wand2 } from "lucide-
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { changeRefusal, errorMessage } from "../api/client";
-import { useDeploy, useDeployTargets, useNextVmid, usePreviewDeploy, useVariables, useWorkflows } from "../api/queries";
+import { useDeploy, useDeployTargets, useNextVmid, useObserveInstallation, usePreviewDeploy, useVariables, useWorkflows } from "../api/queries";
 import type {
   ChangePreview,
   DeployInstallation,
@@ -30,6 +30,7 @@ import {
   newestPerMajor,
   readDeployHints,
   referenceOf,
+  requiredByForm,
   valueAt,
   type DeployHints,
 } from "../lib/deploy";
@@ -126,6 +127,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   const preview = usePreviewDeploy();
   const deploy = useDeploy();
   const variables = useVariables();
+  const observe = useObserveInstallation();
 
   const [step, setStep] = useState<Step>("workflow");
   const [chosen, setChosen] = useState<Chosen | null>(null);
@@ -134,6 +136,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   const [guest, setGuest] = useState("");
   const [name, setName] = useState("");
   const [vmid, setVmid] = useState("");
+  const [vmidProblem, setVmidProblem] = useState<string | null>(null);
   const [template, setTemplate] = useState("");
   const [value, setValue] = useState<JsonObject>({});
   const [yamlErrors, setYamlErrors] = useState<string[]>([]);
@@ -143,9 +146,14 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   const [approve, setApprove] = useState(false);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
   const [reviewed, setReviewed] = useState<ChangePreview | null>(null);
-  const [notice, setNotice] = useState<{ kind: "warning" | "danger"; title: string; text: string; nextVmid?: number | null; stale?: boolean } | null>(
-    null,
-  );
+  const [notice, setNotice] = useState<{
+    kind: "warning" | "danger";
+    title: string;
+    text: string;
+    nextVmid?: number | null;
+    stale?: boolean;
+    observe?: boolean;
+  } | null>(null);
 
   const version = chosen?.version ?? null;
   const isService = version?.manages === "service";
@@ -177,7 +185,13 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
     if (!address) return;
     nextVmid.mutate(
       { installation: address, from: hints.vmid?.from ?? null },
-      { onSuccess: (next) => setVmid(String(next.vmid)) },
+      {
+        onSuccess: (next) => {
+          // Without a recent, complete observation, no number is offered: the problem says what to do.
+          setVmidProblem(next.problem ?? null);
+          setVmid(next.vmid === null ? "" : String(next.vmid));
+        },
+      },
     );
   };
 
@@ -186,6 +200,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
     const declared = choice.hosts.filter((h) => h.declared);
     setHost(declared.length === 1 ? declared[0]!.name : "");
     setGuest("");
+    setVmidProblem(choice.vmidProblem ?? null);
     if (!isService && hints.vmid?.generate === generators.nextVmid) proposeVmid(choice.address);
   };
 
@@ -202,7 +217,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
       const labels = valueAt(value, hint.labels);
       const agentName = valueAt(value, hint.name);
       next[secret] = {
-        mode: hint.generate ? "generate" : version.secrets.includes(secret) ? "store" : "none",
+        mode: hint.generate ? "generate" : version.secrets.includes(secret) || requiredByForm(hint, value) ? "store" : "none",
         store: "",
         labels: (Array.isArray(labels) ? labels.filter((l): l is string => typeof l === "string") : (target?.agentLabels ?? [])).join(", "),
         agentName: typeof agentName === "string" && agentName ? agentName : name,
@@ -244,6 +259,8 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
           }),
       secrets: Object.keys(choices).length > 0 ? choices : null,
       approveAtDeploy: approve,
+      reviewedRelease: reviewed?.reviewedRelease ?? null,
+      reviewDigest: reviewed?.reviewDigest ?? null,
       ...overrides,
     };
   };
@@ -268,7 +285,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
         const refusal = changeRefusal(e);
         if (refusal) setIssues(refusal.fieldIssues);
         setNotice({ kind: refusal?.reason === "stale" ? "warning" : "danger", title: "This cannot be deployed", text: errorMessage(e),
-          nextVmid: refusal?.nextVmid, stale: refusal?.reason === "stale" });
+          nextVmid: refusal?.nextVmid, stale: refusal?.reason === "stale", observe: refusal?.reason === "vmids-unknown" });
       },
     });
   };
@@ -291,17 +308,26 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
           text: errorMessage(e),
           nextVmid: refusal?.nextVmid,
           stale: refusal?.reason === "stale",
+          observe: refusal?.reason === "vmids-unknown",
         });
       },
     });
   };
+
+  const observeNow = () => {
+    if (!target?.id) return;
+    observe.mutate(target.id);
+  };
+
+  /** Whether a secret must be given: the workflow requires it, or the form chose what needs it. */
+  const isRequired = (secret: string) => Boolean(version?.secrets.includes(secret)) || requiredByForm(hints.secrets[secret], value);
 
   const whereReady =
     namePattern.test(name.trim()) &&
     (isService ? Boolean(guest) : Boolean(target?.managed) && Boolean(host) && Number.parseInt(vmid, 10) >= 100);
   const secretsReady =
     version !== null &&
-    Object.entries(secrets).every(([secret, state]) => (state.mode === "store" ? state.store.trim().length > 0 : state.mode === "generate" || !version.secrets.includes(secret)));
+    Object.entries(secrets).every(([secret, state]) => (state.mode === "store" ? state.store.trim().length > 0 : state.mode === "generate" || !isRequired(secret)));
   const reached = steps.findIndex((s) => s.id === step);
 
   return (
@@ -346,6 +372,11 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                 <button type="button" className="button" onClick={() => applyVmid(notice.nextVmid!)} disabled={busy}>
                   <Wand2 size={15} aria-hidden="true" />
                   Use VMID {notice.nextVmid} and review again
+                </button>
+              ) : notice.observe && target?.id ? (
+                <button type="button" className="button" onClick={observeNow} disabled={observe.isPending}>
+                  <RotateCcw size={15} aria-hidden="true" />
+                  {observe.isPending ? "Asking…" : `Observe ${installation} now`}
                 </button>
               ) : notice.stale ? (
                 <button type="button" className="button" onClick={reload} disabled={reloading}>
@@ -436,6 +467,16 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                       {hints.vmid?.generate === generators.nextVmid ? "The next free VMID, proposed by the workflow. " : ""}
                       Free means not observed anywhere on {installation}, not declared, and not held by another deploy. It is checked again when deployed.
                     </span>
+                    {vmidProblem ? (
+                      <span className="field__error" role="alert">
+                        {vmidProblem}{" "}
+                        {target.id ? (
+                          <button type="button" className="link-button" onClick={observeNow} disabled={observe.isPending}>
+                            {observe.isSuccess ? "Observation asked for; try Next free in a moment" : observe.isPending ? "Asking…" : "Observe now"}
+                          </button>
+                        ) : null}
+                      </span>
+                    ) : null}
                     <FieldErrors issues={issueAt("/vmid")} />
                   </div>
                   {targets.templates.length > 0 ? (
@@ -527,7 +568,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
               </p>
               {Object.keys(secrets).length === 0 ? <p>This workflow takes no secrets.</p> : null}
               {Object.entries(secrets).map(([secret, state]) => (
-                <SecretField key={secret} secret={secret} state={state} required={version.secrets.includes(secret)} hint={hints.secrets[secret] ?? {}}
+                <SecretField key={secret} secret={secret} state={state} required={isRequired(secret)} hint={hints.secrets[secret] ?? {}}
                   keys={(variables.data?.entries ?? []).map((v) => v.key)} storeKey={`${isService ? "services" : "guests"}/${address}/${secret}`}
                   issues={issueAt(`/secrets/${secret}`)} onChange={(next) => setSecrets((current) => ({ ...current, [secret]: next }))} />
               ))}

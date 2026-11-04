@@ -62,7 +62,9 @@ public sealed record ChangePreviewDto(
     IReadOnlyList<FieldIssueDto> FieldIssues,
     string? Refused,
     IReadOnlyList<GeneratedValueDto>? Generated = null,
-    int? NextVmid = null);
+    int? NextVmid = null,
+    string? ReviewedRelease = null,
+    string? ReviewDigest = null);
 
 /// <summary>
 /// A change and where it stands: <c>committing</c> (recorded, being pushed), <c>uncertain</c> or <c>unknown</c> (a push was

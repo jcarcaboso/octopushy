@@ -47,10 +47,13 @@ public sealed partial class ChangeService
         string Folder,
         string File,
         string Installation,
+        string InstallationFolder,
+        IReadOnlyCollection<string> DeclaredHosts,
         LabRepository Repository,
         RepositorySettings Settings,
         WorkflowReference Reference,
         WorkflowVersionDto Workflow,
+        string Release,
         IReadOnlyList<string> AgentLabels);
 
     /// <summary>A value to generate at commit, into <paramref name="Key"/>.</summary>
@@ -90,9 +93,11 @@ public sealed partial class ChangeService
                 .Select(g => new DeployGuestDto(g.Address, g.Id, g.WorkflowReference.ToString(), repository.IsValid(g.Address))).ToList();
             // Observed only by its definition, or by the server's record of it, which outlives a definition that stops saying so.
             var managed = installation.Managed && !await RecordedObservedOnlyAsync(db, installation.Address, ct);
+            var resourceId = await InstallationIdAsync(db, installation.Address, ct);
             installations.Add(new DeployInstallationDto(installation.Address, installation.Lab, installation.DisplayName, installation.Type,
                 managed, managed ? null : ObservedOnly(installation.Address), hosts, guests, LabLabels(repository, installation.Lab),
-                observation?.ObservedAt));
+                observation?.ObservedAt, resourceId,
+                managed ? await ObservationProblemAsync(db, installation.Address, installation.Hosts.Keys.ToList(), ct) : null));
         }
 
         return new DeployTargetsDto(head.Commit, blocked, installations, repository.Templates.Keys.Order(StringComparer.Ordinal).ToList());
@@ -105,11 +110,19 @@ public sealed partial class ChangeService
         if (head is null)
             return null;
         var repository = await revisions.GetAsync(head, ct);
-        if (repository.Installation(installation) is null)
+        if (repository.Installation(installation) is not { } defined)
             return null;
         var floor = Math.Clamp(from ?? VmidFloor, VmidFloor, MaxVmid);
-        var taken = await TakenVmidsAsync(db, installation, repository, null, ct);
-        return new NextVmidDto(installation, NextFree(taken, floor), floor);
+        try
+        {
+            var taken = await TakenVmidsAsync(db, installation, FolderOf(defined), defined.Hosts.Keys.ToList(), head.Commit, null, ct);
+            return new NextVmidDto(installation, NextFree(taken, floor), floor);
+        }
+        catch (ChangeRefusal unknown)
+        {
+            // Without a reliable picture of the installation, no number is offered.
+            return new NextVmidDto(installation, null, floor, unknown.Message);
+        }
     }
 
     /// <summary>What deploying <paramref name="request"/> would commit, with nothing committed and nothing generated.</summary>
@@ -135,7 +148,7 @@ public sealed partial class ChangeService
             {
                 try
                 {
-                    await CheckVmidAsync(db, target, request.Vmid!.Value, target.Repository, null, ct);
+                    await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, ct);
                 }
                 catch (ChangeRefusal taken)
                 {
@@ -147,7 +160,8 @@ public sealed partial class ChangeService
             var message = composed.Message.Replace(id.ToString(), "<given when committed>", StringComparison.Ordinal);
             return new ChangePreviewDto(composed.Kind, composed.Address, composed.Subject, message, request.BaseCommit, composed.Files, diff,
                 validation.Valid, validation.NewIssues.Concat(validation.FormatIssues).ToList(), fieldIssues, refused,
-                generations.Select(g => new GeneratedValueDto(g.Secret, g.Key, g.Generator, g.Detail)).ToList(), next);
+                generations.Select(g => new GeneratedValueDto(g.Secret, g.Key, g.Generator, g.Detail)).ToList(), next,
+                target.Release, ReviewDigest(target, composed));
         }
         finally
         {
@@ -174,8 +188,9 @@ public sealed partial class ChangeService
                 target = await DeployTargetAsync(db, request, ct);
                 (composed, var generations) = await ComposeDeployAsync(db, request, id, target, ct);
                 var deployed = target;
+                CheckReviewed(request, deployed, composed);
                 if (deployed.ResourceKind == ResourceKinds.Guest)
-                    await CheckVmidAsync(db, deployed, request.Vmid!.Value, deployed.Repository, null, ct);
+                    await CheckVmidAsync(db, deployed, request.Vmid!.Value, deployed.Settings.HeadCommit ?? request.BaseCommit, null, ct);
                 // On record before anything is generated or pushed, with every key it may fill: whatever happens to this
                 // request, the branch never moves, and no value is left in the store, without a change that says why.
                 change = RecordDeploy(id, deployed, composed, request, actor);
@@ -189,8 +204,7 @@ public sealed partial class ChangeService
                 Func<PublishCandidate, Task>? check = deployed.ResourceKind != ResourceKinds.Guest ? null : async candidate =>
                 {
                     // At the commit the push lands on: the number reviewed must still be free, or nothing is committed.
-                    var at = (await revisions.ResolveAsync(candidate.Remote, releases, ct)).Repository;
-                    await CheckVmidAsync(db, deployed, request.Vmid!.Value, at, id, ct);
+                    await CheckVmidAsync(db, deployed, request.Vmid!.Value, candidate.Remote, id, ct);
                 };
                 var commit = await PushAsync(db, services, deployed.Settings, deployed.Address, composed, change, request.BaseCommit, actor, check, ct);
                 // The push happened: what follows is recorded even if the request is gone by now.
@@ -294,7 +308,8 @@ public sealed partial class ChangeService
             throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, $"The commit the wizard was loaded from, {request.BaseCommit[..10]}, is not known here; reload it.");
         }
 
-        string resourceKind, address, folder, file, installationAddress;
+        string resourceKind, address, folder, file, installationAddress, installationFolder;
+        IReadOnlyCollection<string> declaredHosts;
         if (request.Kind == ChangeKinds.CreateGuest)
         {
             var installation = repository.Installation(request.Parent?.Trim() ?? "")
@@ -317,6 +332,8 @@ public sealed partial class ChangeService
                     fieldIssues: [new FieldIssueDto("/template", "Choose a template the repository defines.")]);
             resourceKind = ResourceKinds.Guest;
             installationAddress = installation.Address;
+            installationFolder = FolderOf(installation);
+            declaredHosts = installation.Hosts.Keys.ToList();
             address = $"{installation.Address}/{name}";
             folder = $"{Path.GetDirectoryName(installation.File)!.Replace('\\', '/')}/guests/{name}";
             file = $"{folder}/guest.yaml";
@@ -335,6 +352,9 @@ public sealed partial class ChangeService
                 throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "A service has inputs and secrets only: no host, VMID, template, hardware, network or access.");
             resourceKind = ResourceKinds.Service;
             installationAddress = guest.InstallationAddress;
+            var parent = repository.Installation(guest.InstallationAddress)!;
+            installationFolder = FolderOf(parent);
+            declaredHosts = parent.Hosts.Keys.ToList();
             address = $"{guest.Address}/{name}";
             folder = $"{guest.Directory}/services/{name}";
             file = $"{folder}/service.yaml";
@@ -351,8 +371,8 @@ public sealed partial class ChangeService
 
         var (reference, workflow) = await ResolveWorkflowAsync(db, request.Workflow, resourceKind == ResourceKinds.Guest ? WorkflowKinds.Vm : WorkflowKinds.Service, ct);
         var lab = address.Split('/')[0];
-        return new DeployTarget(request.Kind, resourceKind, address, name, folder, file, installationAddress, repository, settings, reference, workflow,
-            LabLabels(repository, lab));
+        return new DeployTarget(request.Kind, resourceKind, address, name, folder, file, installationAddress, installationFolder, declaredHosts, repository,
+            settings, reference, workflow, $"{workflow.Id}@{workflow.Version} at {workflow.Commit ?? "the lab repository"}", LabLabels(repository, lab));
     }
 
     /// <summary>The release a deploy's reference resolves to now, as the wizard offered it.</summary>
@@ -461,6 +481,20 @@ public sealed partial class ChangeService
         foreach (var name in target.Workflow.Secrets.Where(n => !chosen.ContainsKey(n)))
             throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"{target.Reference.Id} needs the secret {name}: choose a store key for it, or have one generated.",
                 fieldIssues: [new FieldIssueDto($"/secrets/{name}", "Choose a store key, or have one generated.")]);
+        // A secret the workflow needs only with some inputs, such as a feature that is selected.
+        var instance = new JsonObject
+        {
+            ["hardware"] = request.Hardware?.DeepClone(),
+            ["network"] = request.Network?.DeepClone(),
+            ["inputs"] = request.Inputs?.DeepClone(),
+        };
+        foreach (var (name, hint) in hints ?? [])
+        {
+            if (chosen.ContainsKey(name) || RequiredWhen(hint?["requiredWhen"], instance) is not { } condition)
+                continue;
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"{target.Reference.Id} needs the secret {name} {condition}: choose a store key for it.",
+                fieldIssues: [new FieldIssueDto($"/secrets/{name}", $"Required {condition}.")]);
+        }
         var secrets = new JsonObject();
         var generations = new List<Generation>();
         foreach (var (name, choice) in chosen.OrderBy(p => target.Workflow.Secrets.Contains(p.Key) ? 0 : 1).ThenBy(p => p.Key, StringComparer.Ordinal))
@@ -570,9 +604,9 @@ public sealed partial class ChangeService
     }
 
     /// <summary>Refuses a VMID that is not free on the installation, offering the next free one.</summary>
-    private async Task CheckVmidAsync(OctopushyDb db, DeployTarget target, int vmid, LabRepository declaredAt, Guid? except, CancellationToken ct)
+    private async Task CheckVmidAsync(OctopushyDb db, DeployTarget target, int vmid, string declaredAt, Guid? except, CancellationToken ct)
     {
-        var taken = await TakenVmidsAsync(db, target.Installation, declaredAt, except, ct);
+        var taken = await TakenVmidsAsync(db, target.Installation, target.InstallationFolder, target.DeclaredHosts, declaredAt, except, ct);
         if (!taken.TryGetValue(vmid, out var why))
             return;
         var next = NextFree(taken, Math.Max(VmidFloor, vmid));
@@ -582,12 +616,16 @@ public sealed partial class ChangeService
     }
 
     /// <summary>
-    /// Every VMID taken on an installation, with why: observed anywhere on it (a cluster shares its VMIDs), declared by a guest
-    /// at <paramref name="declaredAt"/>, bound to or reserved by a guest, or held by a deploy that is not settled yet.
+    /// Every VMID taken on an installation, with why: observed anywhere on it (a cluster shares its VMIDs), written in any
+    /// <c>guest.yaml</c> under it at <paramref name="declaredAt"/>, valid or not, bound to or reserved by a guest, or held by a
+    /// deploy that is not settled yet. It fails closed: without a successful, complete and recent observation, or with a
+    /// <c>guest.yaml</c> that cannot be read, which VMIDs are free is not known, and it refuses (<c>vmids-unknown</c>).
     /// </summary>
-    private static async Task<Dictionary<int, string>> TakenVmidsAsync(OctopushyDb db, string installation, LabRepository declaredAt, Guid? except,
-        CancellationToken ct)
+    private async Task<Dictionary<int, string>> TakenVmidsAsync(OctopushyDb db, string installation, string folder, IReadOnlyCollection<string> declaredHosts,
+        string declaredAt, Guid? except, CancellationToken ct)
     {
+        if (await ObservationProblemAsync(db, installation, declaredHosts, ct) is { } problem)
+            throw new ChangeRefusal(ChangeRefusal.Reasons.VmidsUnknown, problem, fieldIssues: [new FieldIssueDto("/vmid", problem)]);
         var taken = new Dictionary<int, string>();
         var observation = await ObservationAsync(db, installation, ct);
         foreach (var vm in (observation?.Data["guests"] as JsonArray ?? []).OfType<JsonObject>())
@@ -596,8 +634,8 @@ public sealed partial class ChangeService
                 taken.TryAdd(vmid, $"observed on {vm["host"]?.ToString() ?? "a host"}{(vm["name"]?.ToString() is { Length: > 0 } n ? $" as {n}" : "")}");
         }
 
-        foreach (var guest in declaredAt.Guests.Where(g => g.InstallationAddress == installation))
-            taken.TryAdd(guest.Vmid, $"declared by {guest.Address}");
+        foreach (var (vmid, file) in await WrittenVmidsAsync(installation, folder, declaredAt, ct))
+            taken.TryAdd(vmid, $"written in {file}");
         var resources = await db.Resources.AsNoTracking()
             .Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null
                         && (r.BoundInstallation == installation && r.BoundVmid != null || r.ReservedInstallation == installation && r.ReservedVmid != null))
@@ -611,13 +649,124 @@ public sealed partial class ChangeService
         }
 
         var prefix = installation + "/";
-        var settled = new[] { ChangeStatuses.Applied, ChangeStatuses.Failed, ChangeStatuses.Refused, ChangeStatuses.NoChange };
+        var settled = new[] { ChangeStatuses.Applied, ChangeStatuses.Failed, ChangeStatuses.Refused, ChangeStatuses.NoChange, ChangeStatuses.Superseded };
         var deploys = await db.Changes.AsNoTracking()
             .Where(c => c.Kind == ChangeKinds.CreateGuest && c.Vmid != null && c.Address.StartsWith(prefix) && !settled.Contains(c.Status) && c.Id != except)
             .Select(c => new { c.Address, c.Vmid }).ToListAsync(ct);
         foreach (var deploy in deploys)
             taken.TryAdd(deploy.Vmid!.Value, $"held by the deploy of {deploy.Address}");
         return taken;
+    }
+
+    /// <summary>
+    /// The VMID written in every <c>guest.yaml</c> under the installation at <paramref name="commit"/>, read as plain YAML so a
+    /// guest that fails validation still holds its number. A file that is not YAML at all refuses: what it holds is unknown.
+    /// </summary>
+    private async Task<IReadOnlyList<(int Vmid, string File)>> WrittenVmidsAsync(string installation, string folder, string commit, CancellationToken ct)
+    {
+        var guests = $"{folder}/guests/";
+        var files = (await mirror.TreeAsync(commit, ct))
+            .Where(f => f.Path.StartsWith(guests, StringComparison.Ordinal) && f.Path.EndsWith("/guest.yaml", StringComparison.Ordinal)
+                        && f.Path.Count(c => c == '/') == guests.Count(c => c == '/') + 1)
+            .Select(f => f.Path).ToList();
+        var written = new List<(int, string)>();
+        foreach (var file in files)
+        {
+            JsonNode? root;
+            try
+            {
+                var text = (await mirror.ReadFileAsync(commit, file, ct))?.Text
+                    ?? throw new YamlReadException("it is not a text file", null);
+                root = YamlDocumentReader.Read(text).Root;
+            }
+            catch (YamlReadException e)
+            {
+                throw new ChangeRefusal(ChangeRefusal.Reasons.VmidsUnknown,
+                    $"{file} cannot be read ({e.Message}), so the VMID it holds on {installation} is unknown. Fix it before deploying there.");
+            }
+
+            var vmid = root?["vmid"];
+            if (vmid is JsonValue number && number.TryGetValue<int>(out var n))
+                written.Add((n, file));
+            else if (vmid is JsonValue text && text.TryGetValue<string>(out var digits) && int.TryParse(digits, out var parsed))
+                written.Add((parsed, file));
+        }
+
+        return written;
+    }
+
+    /// <summary>How old an installation's observation may be for its free VMIDs to be trusted.</summary>
+    private TimeSpan ObservationMaxAge => TimeSpan.FromMinutes(Math.Max(1,
+        options.Value.Deploy.ObservationMaxAgeMinutes ?? 3 * Math.Max(1, options.Value.Scheduling.ObserveMinutes)));
+
+    /// <summary>
+    /// Why the installation's latest observation cannot say which VMIDs are free, or null: there is none, a later one failed,
+    /// it is older than <see cref="ObservationMaxAge"/>, or it did not see every host (one offline or missing, or a cluster
+    /// without quorum).
+    /// </summary>
+    private async Task<string?> ObservationProblemAsync(OctopushyDb db, string installation, IReadOnlyCollection<string> declaredHosts, CancellationToken ct)
+    {
+        var resource = await db.Resources.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null, ct);
+        if (resource is null)
+            return $"{installation} is not in the inventory yet: sync the repository, then observe it.";
+        var observation = await ObservationAsync(db, installation, ct);
+        if (observation is not { } latest)
+            return resource.ObserveErrorAt is { } never
+                ? $"{installation} has never been observed successfully; the last attempt, at {Time(never)}, failed: {resource.ObserveError}. "
+                  + "Which VMIDs are free cannot be known: observe it first."
+                : $"{installation} has never been observed successfully, so which VMIDs are free cannot be known. Observe it first.";
+        if (resource.ObserveErrorAt is { } failed && failed >= latest.ObservedAt)
+            return $"{installation} has not been observed successfully since {Time(latest.ObservedAt)}: the observation at {Time(failed)} failed "
+                   + $"({resource.ObserveError}). Refresh its observation first.";
+        var age = clock.GetUtcNow() - latest.ObservedAt;
+        if (age > ObservationMaxAge)
+            return $"{installation} has not been observed successfully since {Time(latest.ObservedAt)}, more than {(int)ObservationMaxAge.TotalMinutes} "
+                   + "minutes ago. Refresh its observation first.";
+        var hosts = (latest.Data["hosts"] as JsonArray ?? []).OfType<JsonObject>().ToList();
+        var offline = hosts.Where(h => h["online"] is JsonValue o && o.TryGetValue<bool>(out var up) && !up).Select(h => h["name"]?.ToString() ?? "?").ToList();
+        var missing = declaredHosts.Where(d => hosts.All(h => h["name"]?.ToString() != d)).ToList();
+        if (offline.Count > 0 || missing.Count > 0)
+            return $"{installation}'s last observation, at {Time(latest.ObservedAt)}, did not see every host"
+                   + (offline.Count > 0 ? $" ({string.Join(", ", offline)} offline)" : "")
+                   + (missing.Count > 0 ? $" ({string.Join(", ", missing)} not listed)" : "")
+                   + ", so the VMIDs it shows may be incomplete. Observe it again once every host is up.";
+        if (latest.Data["cluster"] is JsonObject cluster && cluster["quorate"] is JsonValue q && q.TryGetValue<bool>(out var quorate) && !quorate)
+            return $"{installation}'s cluster was not quorate at its last observation, {Time(latest.ObservedAt)}, so the VMIDs it shows may be stale. "
+                   + "Observe it again once it is.";
+        return null;
+    }
+
+    private static string Time(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
+
+    private static string FolderOf(InstallationDefinition installation) => Path.GetDirectoryName(installation.File)!.Replace('\\', '/');
+
+    private static Task<Guid?> InstallationIdAsync(OctopushyDb db, string installation, CancellationToken ct) =>
+        db.Resources.AsNoTracking().Where(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null)
+            .Select(r => (Guid?)r.Id).FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// What binds a deploy to its review: the workflow release it resolved to, and every file it writes. A deploy commits only
+    /// what was reviewed.
+    /// </summary>
+    private static string ReviewDigest(DeployTarget target, ComposedChange composed)
+    {
+        var text = new System.Text.StringBuilder(target.Release).Append('\n');
+        foreach (var change in composed.Changes.OrderBy(c => c.Path, StringComparer.Ordinal))
+            text.Append(change.Path).Append('\0').Append(change.Content ?? "").Append('\0');
+        return Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text.ToString())));
+    }
+
+    /// <summary>Refuses a deploy whose workflow release, or whose files, differ from what was reviewed.</summary>
+    private static void CheckReviewed(DeployRequest request, DeployTarget target, ComposedChange composed)
+    {
+        if (request.ReviewDigest is null)
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, "Review the deploy first: a deploy commits only what was reviewed.");
+        if (request.ReviewedRelease != target.Release)
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Stale,
+                $"The workflow release changed since the review: it was {request.ReviewedRelease ?? "not named"}, it is {target.Release} now. Review again.");
+        if (request.ReviewDigest != ReviewDigest(target, composed))
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, "What the deploy would commit is not what was reviewed. Review again.");
     }
 
     private static int NextFree(IReadOnlyDictionary<int, string> taken, int from)
@@ -639,6 +788,33 @@ public sealed partial class ChangeService
         var latest = await db.Observations.AsNoTracking().Where(o => o.ResourceId == id).OrderByDescending(o => o.ObservedAt)
             .Select(o => new { o.Data, o.ObservedAt }).FirstOrDefaultAsync(ct);
         return latest is not null && JsonNode.Parse(latest.Data) is JsonObject data ? (data, latest.ObservedAt) : null;
+    }
+
+    /// <summary>
+    /// Whether a <c>requiredWhen</c> hint, <c>{ pointer, value }</c>, holds for the form's value: the value at the JSON pointer
+    /// into <c>{ hardware, network, inputs }</c> is <c>value</c>, or is an array that holds it. Returns how to say so, or null.
+    /// </summary>
+    public static string? RequiredWhen(JsonNode? hint, JsonObject instance)
+    {
+        if (hint is not JsonObject condition || condition["pointer"]?.GetValueKind() != JsonValueKind.String || !condition.ContainsKey("value"))
+            return null;
+        var pointer = condition["pointer"]!.GetValue<string>();
+        JsonNode? node = instance;
+        foreach (var part in pointer.Split('/').Skip(1).Select(p => p.Replace("~1", "/").Replace("~0", "~")))
+        {
+            node = node switch
+            {
+                JsonObject o => o[part],
+                JsonArray a when int.TryParse(part, out var i) && i >= 0 && i < a.Count => a[i],
+                _ => null,
+            };
+            if (node is null)
+                return null;
+        }
+
+        var wanted = condition["value"];
+        var holds = YamlEditor.Same(node, wanted) || node is JsonArray items && items.Any(i => YamlEditor.Same(i, wanted));
+        return holds ? $"when {pointer} {(node is JsonArray ? "includes" : "is")} {wanted?.ToJsonString()}" : null;
     }
 
     private static Task<bool> RecordedObservedOnlyAsync(OctopushyDb db, string installation, CancellationToken ct) =>

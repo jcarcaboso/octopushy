@@ -80,6 +80,7 @@ public class DeployTests(PostgresFixture postgres)
               secrets:
                 enroll_token: { generate: agent-enrollment-token, labels: inputs.labels }
                 admin_password: { generate: random-password, length: 24 }
+                ts_key: { requiredWhen: { pointer: /inputs/features, value: tailscale } }
             stages:
               - name: machine
                 executor: opentofu
@@ -135,6 +136,23 @@ public class DeployTests(PostgresFixture postgres)
             TestWorkflows.Run(work.Root, "push", "--quiet", "origin", "HEAD:main");
         }
 
+        /// <summary>Records a successful observation of korriban at <paramref name="at"/>, as an agent would report one.</summary>
+        public Task ObserveAsync(DateTimeOffset? at = null, bool online = true, params (int Vmid, string Name)[] vms) =>
+            Server.WithDbAsync(async db =>
+            {
+                var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
+                db.Observations.Add(new Observation
+                {
+                    Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = at ?? DateTimeOffset.UtcNow,
+                    Data = new JsonObject
+                    {
+                        ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = online }),
+                        ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject { ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = "korriban" }).ToArray()),
+                    }.ToJsonString(),
+                });
+                await db.SaveChangesAsync();
+            });
+
         public async Task<DeployTargetsDto> TargetsAsync() => (await Client.GetFromJsonAsync<DeployTargetsDto>("/api/deploy/targets"))!;
 
         public async ValueTask DisposeAsync()
@@ -145,7 +163,7 @@ public class DeployTests(PostgresFixture postgres)
         }
     }
 
-    private async Task<Setup> StartAsync(TestRepository? lab = null, bool agent = false)
+    private async Task<Setup> StartAsync(TestRepository? lab = null, bool agent = false, bool observe = true)
     {
         var server = await ServerHarness.StartAsync(postgres, lab ?? Lab(),
             settings: new() { ["Octopushy:RepositoryEditor:PublishEnabled"] = "true" });
@@ -159,7 +177,11 @@ public class DeployTests(PostgresFixture postgres)
         var fake = agent ? await server.ConnectAgentAsync("home") : null;
         var client = await InstallationTrustTests.AuthenticateAsync(server);
         await server.SyncAndTrustAsync(client);
-        return new Setup { Server = server, Client = client, Remote = remote, Agent = fake };
+        var setup = new Setup { Server = server, Client = client, Remote = remote, Agent = fake };
+        // Free VMIDs are only known from a recent, successful and complete observation.
+        if (observe)
+            await setup.ObserveAsync();
+        return setup;
     }
 
     private static DeployRequest Guest(string baseCommit, int vmid, string name = "new-01", string workflow = "test-vm@1", string parent = Installation,
@@ -169,16 +191,28 @@ public class DeployTests(PostgresFixture postgres)
             Network: new JsonObject { ["bridge"] = "vmbr0", ["mode"] = "static", ["address"] = "10.1.0.40/24", ["gateway"] = "10.1.0.1" },
             Inputs: inputs, Secrets: secrets, ApproveAtDeploy: approve);
 
+    /// <summary>The request as the wizard sends it after its review: bound to the release and files the review showed.</summary>
+    private static async Task<DeployRequest> ReviewedAsync(Setup setup, DeployRequest request)
+    {
+        if (request.ReviewDigest is not null)
+            return request;
+        var response = await setup.Client.PostAsJsonAsync("/api/deploy/preview", request);
+        if (!response.IsSuccessStatusCode)
+            return request;
+        var preview = (await response.Content.ReadFromJsonAsync<ChangePreviewDto>())!;
+        return request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest };
+    }
+
     private static async Task<ChangeDto> DeployAsync(Setup setup, DeployRequest request)
     {
-        var response = await setup.Client.PostAsJsonAsync("/api/deploy", request);
+        var response = await setup.Client.PostAsJsonAsync("/api/deploy", await ReviewedAsync(setup, request));
         Assert.True(response.IsSuccessStatusCode, $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
         return (await response.Content.ReadFromJsonAsync<ChangeDto>())!;
     }
 
     private static async Task<ChangeRefusedDto> RefusedAsync(Setup setup, DeployRequest request, string path = "/api/deploy")
     {
-        var response = await setup.Client.PostAsJsonAsync(path, request);
+        var response = await setup.Client.PostAsJsonAsync(path, path == "/api/deploy" ? await ReviewedAsync(setup, request) : request);
         Assert.True(response.StatusCode == HttpStatusCode.Conflict, $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
         return (await response.Content.ReadFromJsonAsync<ChangeRefusedDto>())!;
     }
@@ -289,7 +323,7 @@ public class DeployTests(PostgresFixture postgres)
     {
         await using var setup = await StartAsync();
         async Task<int> NextAsync(int from) =>
-            (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from={from}"))!.Vmid;
+            (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from={from}"))!.Vmid!.Value;
 
         Assert.Equal(100, await NextAsync(0));
         Assert.Equal(311, await NextAsync(310));
@@ -344,6 +378,7 @@ public class DeployTests(PostgresFixture postgres)
             secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken) });
         var preview = await PreviewAsync(setup, request);
         Assert.Null(preview.Refused);
+        request = request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest };
 
         // Someone declares 311 on the branch between the review and the deploy.
         setup.PushElsewhere("labs/home/proxmox/korriban/guests/other-01/guest.yaml",
@@ -351,7 +386,7 @@ public class DeployTests(PostgresFixture postgres)
         var moved = setup.RemoteHead;
         var refused = await RefusedAsync(setup, request);
         Assert.Equal(ChangeRefusal.Reasons.VmidTaken, refused.Reason);
-        Assert.Contains("declared by home/korriban/other-01", refused.Message);
+        Assert.Contains("written in labs/home/proxmox/korriban/guests/other-01/guest.yaml", refused.Message);
         Assert.Equal(312, refused.NextVmid);
         Assert.Equal(moved, setup.RemoteHead);
 
@@ -496,6 +531,139 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
         Assert.Null(run.Steps.Single(s => s.Name == StepNames.Approval).Decision);
     }
+
+    [Fact]
+    public async Task Without_a_recent_complete_observation_no_vmid_is_offered_or_committed()
+    {
+        await using var setup = await StartAsync(observe: false);
+        async Task<NextVmidDto> NextAsync() => (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        async Task ExpectAsync(string problem)
+        {
+            var next = await NextAsync();
+            Assert.Null(next.Vmid);
+            Assert.Contains(problem, next.Problem);
+            Assert.Contains(problem, (await setup.TargetsAsync()).Installations.Single(i => i.Address == Installation).VmidProblem);
+            var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 400));
+            Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
+            Assert.Contains(problem, refused.Message);
+        }
+
+        // Never observed.
+        await ExpectAsync("home/korriban has never been observed successfully");
+        // Observed, but longer ago than three observation intervals.
+        await setup.ObserveAsync(DateTimeOffset.UtcNow.AddMinutes(-16));
+        await ExpectAsync("has not been observed successfully since");
+        await ExpectAsync("more than 15 minutes ago");
+        // Recent, but a host was offline, so its VMs may be missing.
+        await setup.ObserveAsync(DateTimeOffset.UtcNow.AddMinutes(-1), online: false);
+        await ExpectAsync("did not see every host (korriban offline)");
+        // Complete, but a later observation failed.
+        await setup.ObserveAsync(DateTimeOffset.UtcNow.AddMinutes(-1));
+        Assert.Equal(100, (await NextAsync()).Vmid);
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
+            installation.ObserveError = "The Proxmox API did not answer.";
+            installation.ObserveErrorAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        });
+        await ExpectAsync("failed (The Proxmox API did not answer.)");
+        Assert.Equal(setup.RemoteHead, (await setup.TargetsAsync()).BaseCommit);
+    }
+
+    [Fact]
+    public async Task A_vm_that_appeared_after_the_review_refuses_the_deploy()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        Assert.Null(preview.Refused);
+        // The next observation shows a VM at 311 that someone made by hand since the review.
+        await setup.ObserveAsync(null, true, (311, "made-by-hand"));
+        var refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.VmidTaken, refused.Reason);
+        Assert.Contains("observed on korriban as made-by-hand", refused.Message);
+        Assert.Equal(312, refused.NextVmid);
+    }
+
+    [Fact]
+    public async Task A_guest_that_fails_validation_still_holds_its_vmid_and_one_that_is_not_yaml_stops_allocation()
+    {
+        await using var setup = await StartAsync();
+        // Invalid: a field the guest schema does not know. Its VMID is still taken.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/broken-01/guest.yaml",
+            "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 340\nworkflow: test-vm@1\ncolour: blue\n");
+        await setup.Server.SyncAsync();
+        Assert.False((await setup.Server.ResourceAsync("home/korriban/broken-01")).Valid);
+        Assert.Equal(341, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from=340"))!.Vmid);
+
+        // Not YAML at all: what it holds is unknown, so nothing is allocated on the installation.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/garbled-01/guest.yaml", "vmid: [342\n  : {\n");
+        await setup.Server.SyncAsync();
+        var next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        Assert.Null(next.Vmid);
+        Assert.Contains("labs/home/proxmox/korriban/guests/garbled-01/guest.yaml cannot be read", next.Problem);
+        var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 400));
+        Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
+    }
+
+    [Fact]
+    public async Task A_deploy_commits_only_what_was_reviewed()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        Assert.StartsWith("test-vm@1.0 at ", preview.ReviewedRelease);
+        Assert.Matches("^[0-9a-f]{64}$", preview.ReviewDigest!);
+        var head = setup.RemoteHead;
+
+        // Posted as is: a request that names no review.
+        var unreviewed = await setup.Client.PostAsJsonAsync("/api/deploy", request);
+        Assert.Equal(HttpStatusCode.Conflict, unreviewed.StatusCode);
+        Assert.Contains("Review the deploy first", (await unreviewed.Content.ReadFromJsonAsync<ChangeRefusedDto>())!.Message);
+        var other = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = new string('0', 64) });
+        Assert.Contains("What the deploy would commit is not what was reviewed", other.Message);
+        Assert.Equal(head, setup.RemoteHead);
+
+        // A new release of the workflow between the review and the deploy: the reference now resolves to it.
+        setup.PushElsewhere("workflows/test-vm/workflow.yaml",
+            setup.RemoteFile("workflows/test-vm/workflow.yaml").Replace("version: \"1.0\"", "version: \"1.1\""));
+        await setup.Server.SyncAsync();
+        var changed = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.Stale, changed.Reason);
+        Assert.Contains($"The workflow release changed since the review: it was {preview.ReviewedRelease}, it is test-vm@1.1 at ", changed.Message);
+    }
+
+    [Fact]
+    public async Task A_secret_a_workflow_needs_only_with_a_feature_is_required_when_that_feature_is_chosen()
+    {
+        await using var setup = await StartAsync();
+        var token = new SecretChoice(Generate: SecretGenerators.AgentEnrollmentToken);
+        var request = Guest(setup.RemoteHead, 320, workflow: "agent-vm@1", inputs: new JsonObject { ["features"] = new JsonArray("tailscale") },
+            secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = token });
+        var refused = await RefusedAsync(setup, request, "/api/deploy/preview");
+        Assert.Equal(ChangeRefusal.Reasons.Invalid, refused.Reason);
+        Assert.Contains("needs the secret ts_key when /inputs/features includes \"tailscale\"", refused.Message);
+        Assert.Contains(refused.FieldIssues, i => i.Pointer == "/secrets/ts_key");
+        Assert.Equal(ChangeRefusal.Reasons.Invalid, (await RefusedAsync(setup, request)).Reason);
+
+        var supplied = await PreviewAsync(setup, request with
+        {
+            Secrets = new Dictionary<string, SecretChoice> { ["enroll_token"] = token, ["ts_key"] = new(Store: "shared/tailscale-key") },
+        });
+        Assert.Contains("+  ts_key: { store: shared/tailscale-key }", supplied.Diff);
+        await PreviewAsync(setup, request with { Inputs = new JsonObject { ["features"] = new JsonArray("console") } });
+    }
+
+    [Theory]
+    [InlineData("""{ "pointer": "/inputs/features", "value": "tailscale" }""", """{ "inputs": { "features": ["tailscale"] } }""", true)]
+    [InlineData("""{ "pointer": "/inputs/features", "value": "tailscale" }""", """{ "inputs": { "features": ["console"] } }""", false)]
+    [InlineData("""{ "pointer": "/inputs/mode", "value": "join" }""", """{ "inputs": { "mode": "join" } }""", true)]
+    [InlineData("""{ "pointer": "/inputs/mode", "value": "join" }""", """{ "inputs": {} }""", false)]
+    [InlineData("""{ "pointer": "/inputs/a~1b", "value": 2 }""", """{ "inputs": { "a/b": 2 } }""", true)]
+    [InlineData("""{ "value": 2 }""", """{ "inputs": {} }""", false)]
+    public void RequiredWhen_reads_a_pointer_and_a_value(string hint, string instance, bool required) =>
+        Assert.Equal(required, ChangeService.RequiredWhen(JsonNode.Parse(hint), JsonNode.Parse(instance)!.AsObject()) is not null);
 
     [Fact]
     public async Task A_generator_is_used_only_where_the_workflow_asks_for_it()

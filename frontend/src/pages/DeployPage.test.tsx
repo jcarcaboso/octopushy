@@ -25,7 +25,10 @@ const catalog: WorkflowCatalog = {
         ui: {
           vmid: { generate: "next-vmid" },
           access: { user: "ops" },
-          secrets: { worker_enrollment_token: { generate: "agent-enrollment-token", labels: "inputs.worker_agent_labels" } },
+          secrets: {
+            worker_enrollment_token: { generate: "agent-enrollment-token", labels: "inputs.worker_agent_labels" },
+            worker_extra_key: { requiredWhen: { pointer: "/inputs/worker_agent_labels", value: "extra" } },
+          },
         },
       })),
     },
@@ -48,7 +51,7 @@ const targets: DeployTargets = {
       address: "home/pve01", lab: "home", name: "pve01", type: "standalone", managed: true, reason: null,
       hosts: [{ name: "pve01", declared: true, observed: true, status: "online" }],
       guests: [{ address: "home/pve01/w1", name: "w1", workflow: "octopushy-worker@1", valid: true }],
-      agentLabels: ["home"], observedAt: "2026-11-04T09:00:00Z",
+      agentLabels: ["home"], observedAt: "2026-11-04T09:00:00Z", id: "inst-pve01", vmidProblem: null,
     },
     {
       address: "home/ziost", lab: "home", name: "ziost", type: "standalone", managed: false,
@@ -74,6 +77,7 @@ function preview(overrides: Partial<ChangePreview> = {}): ChangePreview {
     kind: "create-guest", address: "home/pve01/w2", subject: "w2: deploy octopushy-worker@1 on home/pve01, host pve01, VMID 311",
     message: "w2: deploy octopushy-worker@1\n\nOctopushy-Change: <given when committed>\n", baseCommit: base, files: [file], diff, valid: true,
     issues: [], fieldIssues: [], refused: null, nextVmid: null,
+    reviewedRelease: `octopushy-worker@1.1 at ${base}`, reviewDigest: "d".repeat(64),
     generated: [{ secret: "worker_enrollment_token", key: "guests/home/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
       detail: "a one-time enrollment token for an agent named w2, labels [home], valid for 72 hours" }],
     ...overrides,
@@ -133,6 +137,10 @@ async function toReview(user: ReturnType<typeof userEvent.setup>) {
   expect(within(token).getByText("guests/home/pve01/w2/worker_enrollment_token")).toBeInTheDocument();
   expect(within(token).getByLabelText("Labels")).toHaveValue("home");
   expect(screen.getByLabelText("Login")).toHaveValue("ops");
+  // Needed only when the form selects what uses it: optional here, and left out.
+  const extra = screen.getByRole("group", { name: /worker_extra_key/ });
+  expect(within(extra).getByText("optional")).toBeInTheDocument();
+  expect(within(extra).getByRole("radio", { name: "Leave it out" })).toBeChecked();
   expect(screen.getByLabelText("Host key, as a store key")).toHaveValue("guests/home/pve01/w2/host-key");
   await user.click(screen.getByRole("button", { name: /Review the deploy/ }));
 }
@@ -169,7 +177,9 @@ describe("DeployPage", () => {
     await user.click(screen.getByRole("button", { name: "Deploy and approve" }));
     expect(await screen.findByText("The change page")).toBeInTheDocument();
     const deployed = requests.find((r) => r.method === "POST" && r.path === "/api/deploy")!.body as Record<string, unknown>;
-    expect(deployed).toMatchObject({ approveAtDeploy: true, name: "w2", vmid: 311 });
+    // Bound to what was reviewed: the release and the files.
+    expect(deployed).toMatchObject({ approveAtDeploy: true, name: "w2", vmid: 311, reviewedRelease: `octopushy-worker@1.1 at ${base}`,
+      reviewDigest: "d".repeat(64) });
   });
 
   it("deploys without approval when the box is left unticked", async () => {
@@ -199,6 +209,23 @@ describe("DeployPage", () => {
     await waitFor(() =>
       expect(requests.filter((r) => r.path === "/api/deploy/preview").at(-1)!.body).toMatchObject({ vmid: 312 }));
     expect(screen.queryByText("The change page")).not.toBeInTheDocument();
+  });
+
+  it("offers no VMID without a usable observation, and asks for one", async () => {
+    const user = userEvent.setup();
+    const problem = "home/pve01 has not been observed successfully since 2026-11-04 08:00 UTC, more than 15 minutes ago. Refresh its observation first.";
+    const { requests } = api({ "GET /api/deploy/vmid": () => ({ installation: "home/pve01", vmid: null, from: 100, problem }),
+      "POST /api/installations/inst-pve01/observe": () => undefined });
+    renderWizard();
+    await user.click(await screen.findByRole("radio", { name: /octopushy-worker/ }));
+    await user.click(screen.getByRole("button", { name: /Next: where/ }));
+    await user.click(screen.getByRole("radio", { name: /home\/pve01/ }));
+    expect(await screen.findByText(problem, { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText("VMID")).toHaveValue("");
+    await user.type(screen.getByLabelText("Name"), "w2");
+    expect(screen.getByRole("button", { name: /Next: form/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Observe now" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "POST" && r.path === "/api/installations/inst-pve01/observe")).toBe(true));
   });
 
   it("does not let an invalid deploy past its review", async () => {

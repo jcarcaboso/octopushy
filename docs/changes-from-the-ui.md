@@ -300,6 +300,12 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
 - on an installation with `manage: false`, saying so (`observed-only`), as every change there is;
 - when its VMID is taken (`vmid-taken`), checked at the review and again at the commit the push lands on, with the next free
   one offered: the number is never changed after the review;
+- when which VMIDs are free cannot be known (`vmids-unknown`): the installation has no successful, complete and recent
+  observation, or a `guest.yaml` under it cannot be read ([generated values](workflows.md#generated-values)). The wizard says
+  why and offers **Observe now**;
+- when what it would commit is not what was reviewed (`stale`): the review returns the workflow release it resolved to and a
+  digest of the files, and the deploy sends both back. A new release of the workflow, or any other difference in the file,
+  refuses it with *"The workflow release changed since the review … Review again."*;
 - when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
 
 A deploy is recorded `committing` before anything is generated or pushed, with the store keys it will fill, and each
@@ -317,8 +323,10 @@ is decided once, when the first plan of the deploy reaches its approval. It appr
 noted *"Approved at deploy"*, only when all of these hold:
 
 - **The plan only creates.** Every change it lists is a create: no update, delete, replace or import, and at least one. For a
-  service's pipeline, every OpenTofu stage only creates and no stage is destructive; an Ansible stage of a new service, which
-  has nothing before it, is not counted as more.
+  service, only a pipeline made entirely of OpenTofu stages qualifies, each plan checked change by change. **Decided by the
+  owner:** a pipeline with an Ansible stage is never approved at deploy. A playbook's preview says what it might change, never
+  that it only creates, and the workflow's own `destructive` flag is not proof. Such a pipeline waits for approval, and says
+  why: *"Stage deploy runs Ansible, whose preview cannot be shown to only create."*
 - **It is the deploy's own plan:** the provision run, or for a service the pipeline, that the change's revision proposed for
   the new guest or service, and the first one.
 - **What an approval meets holds:** the run is of the current head revision, its installation is trusted and not observed

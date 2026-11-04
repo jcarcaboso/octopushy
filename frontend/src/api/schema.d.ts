@@ -1093,6 +1093,8 @@ export interface components {
             generated?: null | components["schemas"]["GeneratedValueDto"][];
             /** Format: int32 */
             nextVmid?: null | number;
+            reviewedRelease?: null | string;
+            reviewDigest?: null | string;
         };
         ChangeRefusedDto: {
             /** Format: uuid */
@@ -1194,6 +1196,9 @@ export interface components {
             agentLabels: string[];
             /** Format: date-time */
             observedAt: null | string;
+            /** Format: uuid */
+            id?: null | string;
+            vmidProblem?: null | string;
         };
         DeployRequest: {
             kind: string;
@@ -1215,6 +1220,8 @@ export interface components {
             hostKey?: null | string;
             /** @default false */
             approveAtDeploy: boolean;
+            reviewedRelease?: null | string;
+            reviewDigest?: null | string;
         };
         DeployTargetsDto: {
             baseCommit: null | string;
@@ -1508,9 +1515,10 @@ export interface components {
         NextVmidDto: {
             installation: string;
             /** Format: int32 */
-            vmid: number;
+            vmid: null | number;
             /** Format: int32 */
             from: number;
+            problem?: null | string;
         };
         ObserveErrorDto: {
             /** Format: uuid */

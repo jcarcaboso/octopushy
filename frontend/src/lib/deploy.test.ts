@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowSummary, WorkflowVersion } from "../api/types";
-import { defaultsOf, newestPerMajor, readDeployHints, referenceOf, valueAt } from "./deploy";
+import { defaultsOf, newestPerMajor, readDeployHints, referenceOf, requiredByForm, valueAt } from "./deploy";
 
 function version(v: string, usable = true): WorkflowVersion {
   return { id: "fedora-vm", version: v, commit: null, usable, issue: null, manages: "vm", description: null, inputs: null, ui: null, secrets: [], setup: false };
@@ -38,5 +38,14 @@ describe("deploy helpers", () => {
       secrets: { token: { generate: "agent-enrollment-token", labels: "inputs.labels" } } });
     expect(valueAt({ inputs: { labels: ["a"] } }, "inputs.labels")).toEqual(["a"]);
     expect(valueAt({ inputs: {} }, "inputs.labels.x")).toBeUndefined();
+  });
+
+  it("requires a secret when the form holds what its requiredWhen names, as the server does", () => {
+    const hint = readDeployHints({ secrets: { key: { requiredWhen: { pointer: "/inputs/features", value: "tailscale" } } } }).secrets.key;
+    expect(requiredByForm(hint, { inputs: { features: ["tailscale", "t3"] } })).toBe(true);
+    expect(requiredByForm(hint, { inputs: { features: ["t3"] } })).toBe(false);
+    expect(requiredByForm(hint, {})).toBe(false);
+    const mode = readDeployHints({ secrets: { key: { requiredWhen: { pointer: "/inputs/a~1b", value: "x" } } } }).secrets.key;
+    expect(requiredByForm(mode, { inputs: { "a/b": "x" } })).toBe(true);
   });
 });
