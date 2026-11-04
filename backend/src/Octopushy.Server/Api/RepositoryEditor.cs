@@ -222,58 +222,82 @@ public static partial class RepositoryEditor
                     var settings = await db.RepositorySettings.AsNoTracking().SingleAsync(s => s.Id == 1, ct);
                     if (draft.HeadCommit != request.ExpectedHead) throw new DraftChangedException();
                     if (PublishBlockedReason(draft, settings, options.Value, changedFiles: null) is { } blocked) throw new GitException(blocked);
-                    var credential = GitCredential.None;
-                    if (settings.CredentialKind != "none")
-                    {
-                        var stored = await services.GetRequiredService<VariableStore>().GetAsync(RepositorySync.CredentialKey, ct)
-                            ?? throw new GitException("The configured repository credential is missing.");
-                        credential = new(settings.CredentialKind, settings.CredentialUsername, stored.Value);
-                    }
-                    var author = new CommitAuthor(actor, $"{EmailUnsafe().Replace(actor.ToLowerInvariant(), "-")}@octopushy.invalid");
+                    var credential = await CredentialAsync(services.GetRequiredService<VariableStore>(), settings, ct);
                     var revisions = services.GetRequiredService<RevisionCache>();
                     var releases = WorkflowReleaseBook.Of(db, services.GetRequiredService<WorkflowsMirrors>());
-                    // ponytail: one bounded fetch/merge/validate/push loop under the engine gate; a branch
-                    // that keeps moving fails after a few attempts and keeps the draft.
-                    for (var attempt = 1; ; attempt++)
-                    {
-                        var candidate = await mirror.PreparePublishAsync(settings.Url!, settings.Branch, credential,
-                            draft.BaseCommit, draft.HeadCommit, message, author, ct);
-                        if (candidate.Conflicts.Count > 0)
-                            throw new GitException($"The branch changed and {candidate.Conflicts.Count} file(s) conflict with the draft: "
-                                + $"{string.Join(", ", candidate.Conflicts.Take(5))}. Sync the repository, then update the draft to resolve them.");
-                        var validation = await ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
-                        if (!validation.Valid)
+                    var candidate = await PushDraftAsync(mirror, settings, credential, draft.BaseCommit, draft.HeadCommit, message, AuthorOf(actor),
+                        async candidate =>
                         {
-                            var first = validation.NewIssues.Concat(validation.FormatIssues).Where(i => i.Severity == "error")
-                                .Take(3).Select(i => $"{i.File}{(i.Line is { } line ? $":{line}" : "")}: {i.Message}");
-                            throw new GitException($"The draft does not validate: {string.Join("; ", first)}");
-                        }
-                        try
-                        {
-                            await mirror.PushAsync(settings.Url!, settings.Branch, credential, candidate.Remote, candidate.Commit!, ct);
-                        }
-                        catch (GitException) when (attempt < PushAttempts)
-                        {
-                            // Retry only when the branch moved under the push; any other failure is reported.
-                            if (await mirror.FetchAsync(settings.Url!, settings.Branch, credential, ct) == candidate.Remote) throw;
-                            continue;
-                        }
-                        // The published commit and its parent are on the branch, so the draft keeps
-                        // showing exactly what it published after its own ref is gone.
-                        draft.BaseCommit = candidate.Remote;
-                        draft.HeadCommit = candidate.Commit!;
-                        draft.PublishedCommit = candidate.Commit;
-                        draft.PublishedAt = draft.UpdatedAt = clock.GetUtcNow();
-                        draft.PublishedBy = actor;
-                        await db.SaveChangesAsync(ct);
-                        await mirror.DeleteDraftAsync(id, ct);
-                        sync.Trigger();
-                        return TypedResults.Ok(new DraftPublishedDto(candidate.Commit!, Summary(draft, settings, await CountChangesAsync(mirror, draft, ct))));
-                    }
+                            if (candidate.Unchanged)
+                                throw new GitException("The draft makes no change to the current branch.");
+                            if (candidate.Conflicts.Count > 0)
+                                throw new GitException($"The branch changed and {candidate.Conflicts.Count} file(s) conflict with the draft: "
+                                    + $"{string.Join(", ", candidate.Conflicts.Take(5))}. Sync the repository, then update the draft to resolve them.");
+                            var validation = await ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
+                            if (!validation.Valid)
+                            {
+                                var first = validation.NewIssues.Concat(validation.FormatIssues).Where(i => i.Severity == "error")
+                                    .Take(3).Select(i => $"{i.File}{(i.Line is { } line ? $":{line}" : "")}: {i.Message}");
+                                throw new GitException($"The draft does not validate: {string.Join("; ", first)}");
+                            }
+                        }, ct);
+                    // The published commit and its parent are on the branch, so the draft keeps
+                    // showing exactly what it published after its own ref is gone.
+                    draft.BaseCommit = candidate.Remote;
+                    draft.HeadCommit = candidate.Commit!;
+                    draft.PublishedCommit = candidate.Commit;
+                    draft.PublishedAt = draft.UpdatedAt = clock.GetUtcNow();
+                    draft.PublishedBy = actor;
+                    await db.SaveChangesAsync(ct);
+                    await mirror.DeleteDraftAsync(id, ct);
+                    sync.Trigger();
+                    return TypedResults.Ok(new DraftPublishedDto(candidate.Commit!, Summary(draft, settings, await CountChangesAsync(mirror, draft, ct))));
                 }, ct);
             }
             catch (GitException e) { return TypedResults.Problem(statusCode: 409, title: e.Message); }
         }).WithName("publishDraft");
+    }
+
+    /// <summary>Who a commit is attributed to: the signed-in operator, at an address that cannot receive mail.</summary>
+    internal static CommitAuthor AuthorOf(string actor) =>
+        new(actor, $"{EmailUnsafe().Replace(actor.ToLowerInvariant(), "-")}@octopushy.invalid");
+
+    /// <summary>The configured repository credential, used to fetch and to push.</summary>
+    internal static async Task<GitCredential> CredentialAsync(VariableStore store, RepositorySettings settings, CancellationToken ct)
+    {
+        if (settings.CredentialKind == "none")
+            return GitCredential.None;
+        var stored = await store.GetAsync(RepositorySync.CredentialKey, ct)
+            ?? throw new GitException("The configured repository credential is missing.");
+        return new(settings.CredentialKind, settings.CredentialUsername, stored.Value);
+    }
+
+    /// <summary>
+    /// Publishes a draft as one commit on the branch: fetches it, builds the commit on top of where it is now, merging when it
+    /// moved since <paramref name="baseCommit"/>, lets <paramref name="check"/> refuse the candidate by throwing, and pushes with
+    /// a lease, never forcing. When the branch moves during the push, it tries again, up to three times. This is the only way
+    /// Octopushy writes to the lab repository: the editor's drafts and the changes made in forms both go through it.
+    /// </summary>
+    internal static async Task<PublishCandidate> PushDraftAsync(RepositoryMirror mirror, RepositorySettings settings, GitCredential credential,
+        string baseCommit, string draftHead, string message, CommitAuthor author, Func<PublishCandidate, Task> check, CancellationToken ct)
+    {
+        // ponytail: one bounded fetch/merge/validate/push loop under the engine gate; a branch
+        // that keeps moving fails after a few attempts and keeps the draft.
+        for (var attempt = 1; ; attempt++)
+        {
+            var candidate = await mirror.PreparePublishAsync(settings.Url!, settings.Branch, credential, baseCommit, draftHead, message, author, ct);
+            await check(candidate);
+            try
+            {
+                await mirror.PushAsync(settings.Url!, settings.Branch, credential, candidate.Remote, candidate.Commit!, ct);
+                return candidate;
+            }
+            catch (GitException) when (attempt < PushAttempts)
+            {
+                // Retry only when the branch moved under the push; any other failure is reported.
+                if (await mirror.FetchAsync(settings.Url!, settings.Branch, credential, ct) == candidate.Remote) throw;
+            }
+        }
     }
 
     internal static string Status(RepositoryDraft draft, RepositorySettings? settings) =>

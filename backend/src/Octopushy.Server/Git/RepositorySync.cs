@@ -26,6 +26,9 @@ public sealed class RepositorySync(
 
     private readonly SemaphoreSlim _trigger = new(0, 1);
 
+    // One sync at a time: two that overlap could record an older head after a newer one.
+    private readonly SemaphoreSlim _running = new(1, 1);
+
     /// <summary>Asks for a fetch now instead of at the next poll.</summary>
     public void Trigger()
     {
@@ -41,6 +44,23 @@ public sealed class RepositorySync(
         }
     }
 
+    /// <summary>
+    /// Syncs now and returns once the head is read and applied, as <b>Sync now</b> does but without waiting for the background
+    /// loop: a change from the UI follows its commit into a revision at once. It never runs beside the loop's own sync.
+    /// </summary>
+    public async Task SyncNowAsync(CancellationToken cancellationToken)
+    {
+        await _running.WaitAsync(cancellationToken);
+        try
+        {
+            await SyncOnceAsync(cancellationToken);
+        }
+        finally
+        {
+            _running.Release();
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -48,7 +68,15 @@ public sealed class RepositorySync(
             var poll = TimeSpan.FromSeconds(60);
             try
             {
-                poll = await SyncOnceAsync(stoppingToken);
+                await _running.WaitAsync(stoppingToken);
+                try
+                {
+                    poll = await SyncOnceAsync(stoppingToken);
+                }
+                finally
+                {
+                    _running.Release();
+                }
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {

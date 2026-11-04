@@ -75,6 +75,85 @@ public sealed class RepositoryDraft
     public string? PublishedBy { get; set; }
 }
 
+/// <summary>What a change from the UI is, and where it stands. See <see cref="ResourceChange"/>.</summary>
+public static class ChangeKinds
+{
+    public const string Edit = "edit";
+    /// <summary>An edit that moves the workflow reference to a newer major of the same workflow.</summary>
+    public const string Upgrade = "upgrade";
+    /// <summary>Deletes the guest's folder; its retire run follows under its policy.</summary>
+    public const string Remove = "remove";
+}
+
+public static class ChangeStatuses
+{
+    public const string Committed = "committed";
+    public const string Synced = "synced";
+    public const string Planning = "planning";
+    public const string WaitingForApproval = "waiting-for-approval";
+    public const string Applying = "applying";
+    public const string Applied = "applied";
+    public const string Failed = "failed";
+    /// <summary>Refused before anything was committed: the form was stale, it did not validate, or committing is not allowed.</summary>
+    public const string Refused = "refused";
+    /// <summary>Committed and synced, and the revision proposes no run for the resource: nothing it is built from changed.</summary>
+    public const string NoChange = "no-change";
+
+    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange;
+}
+
+/// <summary>
+/// A structured edit made in the UI, written by Octopushy as one commit to the lab repository, then followed through the
+/// revision it became and the runs that revision proposed for its resource. Git stays the source of truth: this row records
+/// who asked for what and where it got to, never the definition itself.
+/// </summary>
+public sealed class ResourceChange
+{
+    public Guid Id { get; set; }
+
+    /// <summary><see cref="ChangeKinds"/>.</summary>
+    public required string Kind { get; set; }
+
+    /// <summary><c>guest</c> or <c>service</c>.</summary>
+    public required string ResourceKind { get; set; }
+
+    public Guid ResourceId { get; set; }
+
+    public required string Address { get; set; }
+
+    public required string Author { get; set; }
+
+    /// <summary>The commit the form was loaded from: the change is refused if a file it touches differs from it.</summary>
+    public required string BaseCommit { get; set; }
+
+    /// <summary>The commit's subject line.</summary>
+    public required string Message { get; set; }
+
+    /// <summary>The files the change writes or deletes, all inside the resource's own folder.</summary>
+    public List<string> Files { get; set; } = [];
+
+    /// <summary>The commit pushed; null when the change was refused.</summary>
+    public string? Commit { get; set; }
+
+    /// <summary>The first revision loaded that contains the commit.</summary>
+    public Guid? RevisionId { get; set; }
+
+    /// <summary>The runs that revision proposed for the resource.</summary>
+    public List<Guid> RunIds { get; set; } = [];
+
+    /// <summary><see cref="ChangeStatuses"/>.</summary>
+    public string Status { get; set; } = ChangeStatuses.Committed;
+
+    /// <summary>Why it was refused or failed, or what it waits for.</summary>
+    public string? Detail { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset? SyncedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 /// <summary>
 /// A commit of the lab repository as Octopushy read it, with what each workflow reference resolved to. Its identity is the
 /// source, the commit and <see cref="WorkflowsDigest"/>: a new release tag that changes a resolution is a new revision of the

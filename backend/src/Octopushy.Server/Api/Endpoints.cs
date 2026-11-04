@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Server.Agents;
+using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Inventory;
@@ -30,6 +31,7 @@ public static partial class Endpoints
         MapRuns(api);
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));
         api.MapRepositoryEditor();
+        api.MapChanges();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
     }
 

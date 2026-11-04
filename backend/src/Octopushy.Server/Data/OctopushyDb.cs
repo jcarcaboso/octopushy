@@ -10,6 +10,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<RepositoryDraft> RepositoryDrafts => Set<RepositoryDraft>();
 
+    public DbSet<ResourceChange> Changes => Set<ResourceChange>();
+
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
 
     public DbSet<WorkflowReleaseRecord> WorkflowReleases => Set<WorkflowReleaseRecord>();
@@ -61,6 +63,14 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.Property(x => x.Title).HasMaxLength(120);
             e.HasIndex(x => x.UpdatedAt);
+        });
+
+        model.Entity<ResourceChange>(e =>
+        {
+            e.ToTable("changes");
+            e.Property(x => x.Message).HasMaxLength(500);
+            e.HasIndex(x => new { x.ResourceId, x.CreatedAt });
+            e.HasIndex(x => x.Commit);
         });
 
         model.Entity<DefinitionRevision>(e =>
