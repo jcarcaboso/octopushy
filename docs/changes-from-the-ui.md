@@ -152,12 +152,16 @@ cancelled on purpose is not proposed again. So:
 - a later revision that changes nothing for the resource keeps the occurrence, and its run;
 - coming back to inputs that ran before, as from 2048 to 4096 and back, is new work, and so is rolling the branch back to a
   commit whose revision is reused: an old run for those inputs does not stand in for it;
-- a folder deleted, restored and deleted again is a second removal, whatever the clock said in between;
+- a folder deleted, restored and deleted again is a second removal, whatever the clock said in between, and even when the
+  restored definition was invalid and nothing was provisioned: a resource that comes back loses its removal's occurrence;
+- a run planned by hand (**Plan now**, **Plan removal**) for the work already recorded carries that work's occurrence, so
+  cancelling it on purpose is not undone by the next sync;
 - work recorded without its run is proposed, keeping its occurrence, even by a later revision that changes nothing for it.
 
-The migration that adds occurrences gives each resource's current work one, and stamps it on the run that stood for that work
-by the earlier rules: a retire run made since a deleted guest went missing, or a run with those inputs for the revision that
-recorded them. The migration that adds the marker sets it
+The migration that adds occurrences gives each resource's current work one, and stamps it only on the run that clearly stood
+for that work: the latest run matching it by the earlier rules (a retire run made since a deleted guest went missing, or a run
+with those inputs for the revision that recorded them), and only if no provision or retire run with other inputs came after
+it. After a rollback to the same commit the original run is history, so nothing is stamped and the next sync proposes the work. The migration that adds the marker sets it
 on every existing revision except the head, which the next sync, the first at startup included, applies again in this way.
 
 ## What it needs
@@ -204,7 +208,8 @@ the definition itself is only ever in Git.
 there is not `no-change`: the change waits, `synced`, until the next sync applies the revision and proposes its runs. That only
 happens while it is the head. Once the head has moved on, the change moves to the first applied revision after it that contains
 its commit, held to what it wrote like any other (it is `superseded` if that revision has other values), and follows that
-revision's runs. The unapplied revision is never applied or marked.
+revision's runs together with the unapplied revision's own, since the successor keeps that work rather than proposing it
+again. The unapplied revision is never applied or marked.
 
 **Which revision.** A change follows the first revision that contains its commit, looked up directly among the commits that
 lead from it to the branch head, however many revisions came in between. That revision is accepted only if the
