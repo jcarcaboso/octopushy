@@ -6,10 +6,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cache = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "octopushy-run");
-const shots = resolve(here, "../../../../.dev/run/shots");
-const base = "http://127.0.0.1:5175";
+const defaultShots = resolve(here, "../../../../.dev/run/shots");
+const defaultBase = "http://127.0.0.1:5175";
 
-export async function open({ width = 1400, height = 800 } = {}) {
+/**
+ * Signs in to the light stack by default; pass `base`, `user` and `password` for another, such as a demo, and `shots`
+ * for where screenshots go.
+ */
+export async function open({ width = 1400, height = 800, base = defaultBase, user = "run", password = "octopushy-run", shots = defaultShots } = {}) {
   const { chromium } = await import(join(cache, "tool/node_modules/playwright/index.mjs"));
   // The sandbox cannot start on this Fedora host.
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
@@ -22,8 +26,8 @@ export async function open({ width = 1400, height = 800 } = {}) {
   page.on("response", (r) => r.status() >= 400 && problems.push(`http ${r.status()} ${r.request().method()} ${r.url()}`));
 
   await page.goto(`${base}/login`);
-  await page.getByLabel("User name").fill("run");
-  await page.getByLabel("Password").fill("octopushy-run");
+  await page.getByLabel("User name").fill(user);
+  await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 
