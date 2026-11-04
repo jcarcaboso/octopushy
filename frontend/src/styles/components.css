@@ -1391,3 +1391,58 @@ a.badge:hover {
   padding: 0;
   list-style: none;
 }
+
+/* The workflow wizard */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.wizard-steps__step {
+  color: var(--text-muted);
+}
+
+.wizard-steps__step--current {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.wizard-steps__step--done {
+  color: var(--success-fg);
+}
+
+.workflow-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.workflow-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.workflow-card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+
+.workflow-card--disabled {
+  opacity: 0.65;
+}
+
+.workflow-card__title {
+  font-weight: 650;
+}

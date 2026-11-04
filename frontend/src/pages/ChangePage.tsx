@@ -14,7 +14,20 @@ import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { operationLabel } from "../lib/format";
 import { StepTimeline } from "./run/StepTimeline";
 
-const kindLabels: Record<string, string> = { edit: "Edit", upgrade: "Upgrade", remove: "Removal" };
+const kindLabels: Record<string, string> = {
+  edit: "Edit",
+  upgrade: "Upgrade",
+  remove: "Removal",
+  "create-guest": "New guest",
+  "create-service": "New service",
+};
+
+const preApprovalLabels: Record<string, string> = {
+  requested: "Asked for: the first plan is approved at deploy if it only creates",
+  approved: "Approved at deploy",
+  declined: "Not approved at deploy: waits for approval",
+  "not-needed": "Not needed: nothing waited for approval",
+};
 
 /** Where a change is on its way, as the steps of the normal process: each is done, the current one, or still to come. */
 const stages = [
@@ -66,8 +79,20 @@ function Progress({ change }: { change: Change }) {
   );
 }
 
-function resourcePath(change: Change): string {
-  return `/${change.resourceKind === "service" ? "services" : "guests"}/${change.resourceId}`;
+/** The resource's page; a new guest or service has none until its revision is loaded. */
+function resourcePath(change: Change): string | null {
+  return change.resourceId ? `/${change.resourceKind === "service" ? "services" : "guests"}/${change.resourceId}` : null;
+}
+
+function ResourceLink({ change }: { change: Change }) {
+  const path = resourcePath(change);
+  return path ? (
+    <Link to={path} className="mono break">
+      {change.address}
+    </Link>
+  ) : (
+    <span className="mono break">{change.address}</span>
+  );
 }
 
 function Facts({ change }: { change: Change }) {
@@ -77,13 +102,29 @@ function Facts({ change }: { change: Change }) {
         { term: "Kind", value: kindLabels[change.kind] ?? change.kind },
         {
           term: change.resourceKind === "service" ? "Service" : "Guest",
-          value: (
-            <Link to={resourcePath(change)} className="mono break">
-              {change.address}
-            </Link>
-          ),
+          value: <ResourceLink change={change} />,
         },
+        ...(change.vmid ? [{ term: "VMID", value: <span className="mono">{change.vmid}</span> }] : []),
         { term: "Author", value: change.author },
+        ...(change.preApproval
+          ? [{ term: "Approve at deploy", value: <span>{preApprovalLabels[change.preApproval] ?? change.preApproval}</span> }]
+          : []),
+        ...(change.generatedKeys && change.generatedKeys.length > 0
+          ? [
+              {
+                term: "Generated",
+                value: (
+                  <ul className="plain-list">
+                    {change.generatedKeys.map((k) => (
+                      <li key={k} className="mono small break">
+                        {k}
+                      </li>
+                    ))}
+                  </ul>
+                ),
+              },
+            ]
+          : []),
         {
           term: "Commit",
           value: change.commit ? (
@@ -185,7 +226,7 @@ export function ChangePage() {
       <PageHeader
         eyebrow={
           <>
-            <Link to={resourcePath(change)}>{change.address}</Link> / Change
+            <ResourceLink change={change} /> / Change
           </>
         }
         title={change.message}
@@ -233,6 +274,15 @@ export function ChangePage() {
         {change.status === "refused" ? (
           <Callout kind="danger" title="Refused: nothing was committed">
             {change.detail}
+          </Callout>
+        ) : null}
+        {change.preApproval === "declined" ? (
+          <Callout kind="warning" title="Not approved at deploy">
+            {change.preApprovalDetail}
+          </Callout>
+        ) : change.preApproval === "approved" ? (
+          <Callout kind="success" title="Approved at deploy">
+            {change.preApprovalDetail}
           </Callout>
         ) : null}
         <Progress change={change} />

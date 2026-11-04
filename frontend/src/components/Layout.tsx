@@ -7,6 +7,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Rocket,
   Server,
   TriangleAlert,
   User,
@@ -18,6 +19,7 @@ import { shortCommit } from "../lib/format";
 const nav = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/inventory", label: "Inventory", icon: Server },
+  { to: "/deploy", label: "Deploy", icon: Rocket },
   { to: "/runs", label: "Runs", icon: CirclePlay },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/variables", label: "Variables", icon: KeyRound },
