@@ -89,6 +89,15 @@ public static class ChangeStatuses
 {
     /// <summary>Recorded, and being pushed: the push may or may not have reached the branch. Reconciliation settles it.</summary>
     public const string Committing = "committing";
+    /// <summary>A push was attempted and its outcome could not be checked. Reconciliation settles it; a person may dismiss it.</summary>
+    public const string Uncertain = "uncertain";
+    /// <summary>
+    /// A push was attempted, and none of its commits is on the branch (yet). Each sync looks again, by reachability, and takes a
+    /// late arrival through the normal checks; a person may dismiss it.
+    /// </summary>
+    public const string Unknown = "unknown";
+    /// <summary>A person settled an uncertain or unknown change as not committed, and is recorded with it.</summary>
+    public const string Dismissed = "dismissed";
     public const string Committed = "committed";
     public const string Synced = "synced";
     public const string Planning = "planning";
@@ -103,7 +112,16 @@ public static class ChangeStatuses
     /// <summary>A later commit set the resource otherwise, or restored it, before this change was applied: it is never applied.</summary>
     public const string Superseded = "superseded";
 
-    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
+    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded or Dismissed;
+
+    /// <summary>
+    /// Definitely not committed: refused before any push was attempted, or dismissed by a person. What a change prepared, such
+    /// as generated values, can be cleaned up then and only then.
+    /// </summary>
+    public static bool IsNotCommitted(string status) => status is Refused or Dismissed;
+
+    /// <summary>A push was attempted and has not been settled yet.</summary>
+    public static bool IsUnsettled(string status) => status is Committing or Uncertain or Unknown;
 }
 
 /// <summary>
@@ -147,6 +165,16 @@ public sealed class ResourceChange
 
     /// <summary>The commit that set the resource otherwise before this change was applied.</summary>
     public string? SupersededBy { get; set; }
+
+    /// <summary>
+    /// Every commit an attempt prepared and was about to push, recorded before that push. The change's commit is the one of
+    /// these the branch reaches; a commit's message is never used to find it.
+    /// </summary>
+    public List<string> CandidateCommits { get; set; } = [];
+
+    public string? DismissedBy { get; set; }
+
+    public DateTimeOffset? DismissedAt { get; set; }
 
     /// <summary>The first revision loaded that contains the commit.</summary>
     public Guid? RevisionId { get; set; }
@@ -208,6 +236,25 @@ public sealed class DefinitionRevision
     public int WarningCount { get; set; }
 
     /// <summary>JSON array of issues.</summary>
+    public string Issues { get; set; } = "[]";
+
+    /// <summary>
+    /// When the revision's inventory was applied: the desired inputs recorded and the runs proposed, in one transaction with
+    /// the head moving to it. A head revision without it is applied again.
+    /// </summary>
+    public DateTimeOffset? InventoryAppliedAt { get; set; }
+}
+
+/// <summary>
+/// The errors Octopushy recorded for a resource when it applied one revision, such as a removal that cannot be planned: what
+/// that revision did to the resource, kept apart from the resource's current issues, which a later revision replaces.
+/// </summary>
+public sealed class RevisionIssues
+{
+    public Guid ResourceId { get; set; }
+
+    public Guid RevisionId { get; set; }
+
     public string Issues { get; set; } = "[]";
 }
 

@@ -12,6 +12,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ResourceChange> Changes => Set<ResourceChange>();
 
+    public DbSet<RevisionIssues> RevisionIssues => Set<RevisionIssues>();
+
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
 
     public DbSet<WorkflowReleaseRecord> WorkflowReleases => Set<WorkflowReleaseRecord>();
@@ -73,6 +75,13 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasIndex(x => new { x.ResourceId, x.CreatedAt });
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.Commit);
+        });
+
+        model.Entity<RevisionIssues>(e =>
+        {
+            e.ToTable("revision_issues");
+            e.HasKey(x => new { x.ResourceId, x.RevisionId });
+            e.Property(x => x.Issues).HasColumnType("jsonb");
         });
 
         model.Entity<DefinitionRevision>(e =>

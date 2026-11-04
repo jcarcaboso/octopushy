@@ -23,6 +23,10 @@ public static class ChangeEndpoints
                 await changes.GetAsync(id, ct) is { } change ? TypedResults.Ok(change) : TypedResults.NotFound())
             .WithName("getChange");
 
+        group.MapPost("/{id:guid}/dismiss", async (Guid id, HttpContext http, ChangeService changes, CancellationToken ct) =>
+                TypedResults.Ok(await changes.DismissAsync(id, http.User.Identity!.Name!, ct)))
+            .WithName("dismissChange");
+
         group.MapGet("/form/{resourceId:guid}", async Task<Results<Ok<ChangeFormDto>, NotFound>> (Guid resourceId, OctopushyDb db,
                 ChangeService changes, CancellationToken ct) =>
                 await changes.FormAsync(db, resourceId, ct) is { } form ? TypedResults.Ok(form) : TypedResults.NotFound())

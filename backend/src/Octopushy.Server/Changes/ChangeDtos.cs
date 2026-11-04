@@ -63,9 +63,12 @@ public sealed record ChangePreviewDto(
     string? Refused);
 
 /// <summary>
-/// A change and where it stands: <c>committing</c> (recorded, being pushed), <c>committed</c>, <c>synced</c>, <c>planning</c>,
-/// <c>waiting-for-approval</c>, <c>applying</c>, then <c>applied</c>, <c>failed</c>, <c>no-change</c>, <c>superseded</c> (a
-/// later commit set the resource otherwise first; <c>SupersededBy</c> names it), or <c>refused</c> before anything was committed.
+/// A change and where it stands: <c>committing</c> (recorded, being pushed), <c>uncertain</c> or <c>unknown</c> (a push was
+/// attempted and is not settled), <c>committed</c>, <c>synced</c>, <c>planning</c>, <c>waiting-for-approval</c>, <c>applying</c>,
+/// then <c>applied</c>, <c>failed</c>, <c>no-change</c>, <c>superseded</c> (a later commit set the resource otherwise first;
+/// <c>SupersededBy</c> names it), <c>refused</c> (nothing was pushed) or <c>dismissed</c> (a person settled it as not committed).
+/// <c>Final</c> says the status will not change; <c>NotCommitted</c> says it is definitely not committed, which is
+/// <c>refused</c> or <c>dismissed</c> only.
 /// </summary>
 public sealed record ChangeDto(
     Guid Id,
@@ -87,11 +90,18 @@ public sealed record ChangeDto(
     DateTimeOffset? SyncedAt,
     DateTimeOffset UpdatedAt,
     string? SupersededBy = null,
-    string? SupersededByUrl = null);
+    string? SupersededByUrl = null,
+    string? DismissedBy = null,
+    DateTimeOffset? DismissedAt = null,
+    bool Final = false,
+    bool NotCommitted = false);
 
 /// <summary>
 /// Why a change was refused (HTTP 409), with nothing committed: <c>Reason</c> is <c>disabled</c>, <c>observed-only</c>,
 /// <c>unavailable</c>, <c>stale</c>, <c>invalid</c>, <c>no-change</c>, <c>unsupported</c> or <c>push-failed</c>. A refusal once
 /// the edit was made is recorded, as <c>ChangeId</c>; one refused before that, such as with committing off, is not.
 /// </summary>
-public sealed record ChangeRefusedDto(Guid? ChangeId, string Reason, string Message, IReadOnlyList<IssueDto> Issues, IReadOnlyList<FieldIssueDto> FieldIssues);
+/// <param name="Status">The recorded change's status: <c>refused</c> when nothing was pushed, which is final; <c>uncertain</c> or
+/// <c>unknown</c> when a push was attempted, which reconciliation or a person settles.</param>
+public sealed record ChangeRefusedDto(Guid? ChangeId, string Reason, string Message, IReadOnlyList<IssueDto> Issues, IReadOnlyList<FieldIssueDto> FieldIssues,
+    string? Status = null);

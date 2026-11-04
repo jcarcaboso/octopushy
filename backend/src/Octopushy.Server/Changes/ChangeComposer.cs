@@ -9,9 +9,13 @@ using Octopushy.Server.Git;
 namespace Octopushy.Server.Changes;
 
 /// <summary>Why a change was not committed, with a short code a form can act on (<see cref="ChangeRefusal.Reasons"/>).</summary>
-public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<Api.IssueDto>? issues = null, IReadOnlyList<FieldIssueDto>? fieldIssues = null)
+public sealed class ChangeRefusal(string reason, string message, IReadOnlyList<Api.IssueDto>? issues = null, IReadOnlyList<FieldIssueDto>? fieldIssues = null,
+    bool unverified = false)
     : Exception(message)
 {
+    /// <summary>The push failed and the branch could not be read to see whether it landed after all.</summary>
+    public bool Unverified { get; } = unverified;
+
     public static class Reasons
     {
         /// <summary>Committing from the UI is off, or the repository cannot be pushed to.</summary>

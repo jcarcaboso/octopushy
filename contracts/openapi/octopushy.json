@@ -3141,6 +3141,67 @@
         }
       }
     },
+    "/api/changes/{id}/dismiss": {
+      "post": {
+        "tags": [
+          "Changes"
+        ],
+        "operationId": "dismissChange",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/changes/form/{resourceId}": {
       "get": {
         "tags": [
@@ -4102,6 +4163,27 @@
               "null",
               "string"
             ]
+          },
+          "dismissedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "dismissedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "final": {
+            "type": "boolean",
+            "default": false
+          },
+          "notCommitted": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -4327,6 +4409,12 @@
             "items": {
               "$ref": "#/components/schemas/FieldIssueDto"
             }
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

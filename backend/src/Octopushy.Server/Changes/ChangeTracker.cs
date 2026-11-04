@@ -29,7 +29,8 @@ public static class ChangeTracker
         if (change.RevisionId is null && await RevisionOfAsync(db, mirror, change, commit, ct) is { } found)
         {
             change.SyncedAt ??= now;
-            if (found.Commit != commit && await LostAsync(revisions, change, found, ct) is { } lost)
+            // Always compared, on the change's own commit too: a commit found by reconciliation is held to what the change wrote.
+            if (await LostAsync(revisions, change, found, ct) is { } lost)
             {
                 Supersede(change, found.Commit, lost, now);
                 return;
@@ -167,7 +168,7 @@ public static class ChangeTracker
         if (runs.Count == 0)
         {
             // An empty list is not "nothing to do" by itself: what the server recorded for the resource says why there is none.
-            if (Problem(resource) is { } problem)
+            if (await ProblemAsync(db, change, revision, ct) is { } problem)
                 return (ChangeStatuses.Failed, change.Kind == ChangeKinds.Remove ? problem : $"{problem} ({change.ResourceKind} at {Short(revision.Commit)})");
             if (owed is not null)
                 return (ChangeStatuses.Planning, owed);
@@ -217,14 +218,17 @@ public static class ChangeTracker
         }
     }
 
-    /// <summary>The first error the server recorded on the resource, such as a removal that cannot be planned.</summary>
-    private static string? Problem(Resource? resource)
+    /// <summary>
+    /// The first error the server recorded for the resource when it applied <paramref name="revision"/>, such as a removal that
+    /// cannot be planned. Errors of other revisions, earlier or later, are not this change's.
+    /// </summary>
+    private static async Task<string?> ProblemAsync(OctopushyDb db, ResourceChange change, DefinitionRevision revision, CancellationToken ct)
     {
-        if (resource is null)
+        var recorded = await db.RevisionIssues.AsNoTracking().FirstOrDefaultAsync(i => i.ResourceId == change.ResourceId && i.RevisionId == revision.Id, ct);
+        if (recorded is null)
             return null;
-        var issues = JsonSerializer.Deserialize<List<DefinitionIssue>>(resource.Issues, InventoryUpdater.IssueJson) ?? [];
-        return issues.FirstOrDefault(i => i.Severity == IssueSeverity.Error)?.Message
-            ?? (resource.Valid || resource.MissingSince is not null ? null : "The definition is invalid; see its issues.");
+        var issues = JsonSerializer.Deserialize<List<DefinitionIssue>>(recorded.Issues, InventoryUpdater.IssueJson) ?? [];
+        return issues.FirstOrDefault(i => i.Severity == IssueSeverity.Error)?.Message;
     }
 
     /// <summary>

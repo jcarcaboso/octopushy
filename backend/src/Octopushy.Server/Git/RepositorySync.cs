@@ -121,7 +121,7 @@ public sealed class RepositorySync(
             // Changes recorded before a push whose request ended without saying how it went: the branch now says.
             await engine.ExecuteAsync(async (db, _) =>
             {
-                await ChangeReconciler.ReconcileAsync(db, mirror, settings.Branch, clock.GetUtcNow(), cancellationToken);
+                await ChangeReconciler.ReconcileAsync(db, mirror, settings.Branch, head, clock.GetUtcNow(), cancellationToken);
                 return 0;
             }, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
@@ -133,6 +133,9 @@ public sealed class RepositorySync(
             var repository = resolved.Repository;
             await engine.ExecuteAsync(async (db, services) =>
             {
+                // The head moving to a revision, and that revision's inventory (desired inputs and proposed runs), are one
+                // transaction: a crash between them used to leave a head whose runs were never proposed, and the next sync skipped it.
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
                 var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
                 if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch)
                     return false;
@@ -147,9 +150,10 @@ public sealed class RepositorySync(
                 var loaded = await RepositoryTrust.CurrentRevisions(db)
                     .Where(r => r.Commit == head && r.WorkflowsDigest == resolved.Digest)
                     .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
-                if (loaded is not null && current.HeadRevisionId == loaded.Id)
+                if (loaded is not null && current.HeadRevisionId == loaded.Id && loaded.InventoryAppliedAt is not null)
                 {
                     await db.SaveChangesAsync(cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
                     return false;
                 }
                 var revision = loaded ?? new DefinitionRevision
@@ -173,6 +177,9 @@ public sealed class RepositorySync(
                 current.HeadRevisionId = revision.Id;
                 await db.SaveChangesAsync(cancellationToken);
                 await services.GetRequiredService<InventoryUpdater>().ApplyAsync(db, revision, repository, cancellationToken);
+                revision.InventoryAppliedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
                 return true;
             }, cancellationToken);
             await PruneAsync(cancellationToken);

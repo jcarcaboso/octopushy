@@ -7,6 +7,7 @@ using Octopushy.Agent.V1;
 using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 using Octopushy.Tests.Definitions;
 
@@ -92,13 +93,13 @@ public class ChangeTests(PostgresFixture postgres)
         public string RemoteFile(string path) => TestWorkflows.Run(Remote.Root, "show", $"main:{path}");
 
         /// <summary>Someone else's commit, pushed straight to the remote.</summary>
-        public void PushElsewhere(string path, string content)
+        public void PushElsewhere(string path, string content, string? message = null)
         {
             using var work = new TestRepository();
             TestWorkflows.Run(work.Root, "clone", "--quiet", Remote.Root, ".");
             work.Write(path, content);
             TestWorkflows.Run(work.Root, "add", "-A");
-            TestWorkflows.Run(work.Root, "-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "--quiet", "-m", $"Edit {path}");
+            TestWorkflows.Run(work.Root, "-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "--quiet", "-m", message ?? $"Edit {path}");
             TestWorkflows.Run(work.Root, "push", "--quiet", "origin", "HEAD:main");
         }
 
@@ -416,30 +417,190 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_change_whose_commit_never_reached_the_branch_fails_once_its_push_cannot_still_land()
+    public async Task An_unsettled_change_is_found_only_by_its_own_commits_stays_unknown_until_then_and_can_be_dismissed()
     {
         await using var setup = await StartAsync();
         var form = await setup.FormAsync();
-        var recent = Guid.CreateVersion7();
-        var old = Guid.CreateVersion7();
+        // Commits an attempt prepared, the way a push makes them, not on the branch yet.
+        string Prepared(string memory)
+        {
+            using var work = new TestRepository();
+            TestWorkflows.Run(work.Root, "clone", "--quiet", setup.Remote.Root, ".");
+            work.Write(GuestFile, Commented.Replace("memory: 2048 ", $"memory: {memory} "));
+            TestWorkflows.Run(work.Root, "-c", "user.name=Ops", "-c", "user.email=ops@octopushy.invalid", "commit", "--quiet", "-am", "Prepared");
+            var commit = TestWorkflows.Run(work.Root, "rev-parse", "HEAD").Trim();
+            TestWorkflows.Run(work.Root, "push", "--quiet", "origin", $"{commit}:refs/heads/prepared-{memory}");
+            return commit;
+        }
+
+        var late = Prepared("4096");
+        var other = Prepared("8192");
+        var arriving = await PendingAsync(setup, form, candidates: [late]);
+        var wrong = await PendingAsync(setup, form, candidates: [other]);
+        var never = await PendingAsync(setup, form, candidates: [new string('e', 40)]);
+        var unpushed = await PendingAsync(setup, form);
+
+        await setup.Server.SyncAsync();
+        async Task<ChangeDto> Get(Guid id) => (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+        foreach (var id in new[] { arriving, wrong, never })
+        {
+            var pending = await Get(id);
+            Assert.Equal(ChangeStatuses.Unknown, pending.Status);
+            Assert.False(pending.Final);
+            Assert.False(pending.NotCommitted);
+        }
+
+        var refused = await Get(unpushed);
+        Assert.Equal(ChangeStatuses.Refused, refused.Status);
+        Assert.True(refused.Final && refused.NotCommitted);
+
+        // A late arrival is taken, by reachability, and held to what the change wrote like any other.
+        TestWorkflows.Run(setup.Remote.Root, "update-ref", "refs/heads/main", late);
+        await setup.Server.SyncAsync();
+        var arrived = await Get(arriving);
+        Assert.Equal(late, arrived.Commit);
+        Assert.Equal(ChangeStatuses.Planning, arrived.Status);
+        TestWorkflows.Run(setup.Remote.Root, "update-ref", "refs/heads/main", other);
+        await setup.Server.SyncAsync();
+        var held = await Get(wrong);
+        Assert.Equal(other, held.Commit);
+        Assert.Equal(ChangeStatuses.Superseded, held.Status);
+
+        // A person settles the one that will not arrive, and is recorded with it.
+        var dismissed = await (await setup.Client.PostAsync($"/api/changes/{never}/dismiss", null)).Content.ReadFromJsonAsync<ChangeDto>();
+        Assert.Equal(ChangeStatuses.Dismissed, dismissed!.Status);
+        Assert.Equal("ops", dismissed.DismissedBy);
+        Assert.True(dismissed.Final && dismissed.NotCommitted);
+        Assert.Equal(HttpStatusCode.Conflict, (await setup.Client.PostAsync($"/api/changes/{arriving}/dismiss", null)).StatusCode);
+    }
+
+    /// <summary>A change on record as if its request had ended mid-push, wanting memory 4096.</summary>
+    private static async Task<Guid> PendingAsync(Setup setup, ChangeFormDto form, string status = "committing", TimeSpan? age = null,
+        List<string>? candidates = null)
+    {
+        var id = Guid.CreateVersion7();
+        var at = DateTimeOffset.UtcNow - (age ?? TimeSpan.FromMinutes(1));
         await setup.Server.WithDbAsync(async db =>
         {
-            foreach (var (id, age) in new[] { (recent, TimeSpan.FromMinutes(1)), (old, ChangeReconciler.Timeout + TimeSpan.FromMinutes(1)) })
-                db.Changes.Add(new ResourceChange
-                {
-                    Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
-                    BaseCommit = form.BaseCommit!, Message = "krb-app-01: memory 2048 → 4096", Status = ChangeStatuses.Committing,
-                    CreatedAt = DateTimeOffset.UtcNow - age, UpdatedAt = DateTimeOffset.UtcNow - age,
-                });
+            db.Changes.Add(new ResourceChange
+            {
+                Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
+                BaseCommit = form.BaseCommit!, Message = "krb-app-01: memory 2048 → 4096", Status = status, Files = [GuestFile],
+                Edited = """{"hardware":{"cores":2,"memory":4096}}""", CreatedAt = at, UpdatedAt = at, CandidateCommits = candidates ?? [],
+            });
+            await db.SaveChangesAsync();
+        });
+        return id;
+    }
+
+    [Fact]
+    public async Task A_commit_that_quotes_a_change_in_its_message_is_never_taken_for_its_commit()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        var id = await PendingAsync(setup, form);
+        // Someone's commit quotes the change and sets memory otherwise.
+        setup.PushElsewhere(GuestFile, Commented.Replace("memory: 2048 ", "memory: 8192 ").TrimEnd('\n'),
+            $"Resize by hand, instead of\n\nOctopushy-Change: {id}");
+
+        await setup.Server.SyncAsync();
+        var change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+        Assert.Null(change.Commit);
+        Assert.NotEqual(ChangeStatuses.Committed, change.Status);
+        Assert.NotEqual(ChangeStatuses.Applied, change.Status);
+        Assert.Empty(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_push_that_landed_but_lost_its_acknowledgement_is_a_success()
+    {
+        await using var setup = await StartAsync();
+        // The remote takes the update, then its receive-pack dies before saying so.
+        setup.AfterNextPush("kill -9 $PPID");
+        var form = await setup.FormAsync();
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(setup.RemoteHead, change.Commit);
+        Assert.Contains("  memory: 4096 ", setup.RemoteFile(GuestFile));
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+        Assert.Single(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_crash_between_recording_a_revision_and_proposing_its_runs_is_finished_by_the_next_sync()
+    {
+        await using var setup = await StartAsync();
+        var faults = setup.Server.Services.GetRequiredService<InventoryFaults>();
+        faults.BeforeRuns = () => throw new IOException("The server stopped here.");
+        var form = await setup.FormAsync();
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(ChangeStatuses.Committed, change.Status);
+        Assert.Null(change.RevisionId);
+
+        faults.BeforeRuns = null;
+        await setup.Server.SyncAsync();
+        change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{change.Id}"))!;
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+        var run = Assert.Single(change.Runs);
+        Assert.Equal(change.Commit, run.Commit);
+    }
+
+    [Fact]
+    public async Task A_head_revision_without_its_inventory_marker_is_applied_again_and_only_what_is_missing_is_proposed()
+    {
+        await using var setup = await StartAsync();
+        var head = await setup.Server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).AsNoTracking().SingleAsync());
+        Assert.NotNull(head.InventoryAppliedAt);
+        // What a crash left before the marker existed: the head and its desired inputs recorded, its run never proposed.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == head.Id)).InventoryAppliedAt = null;
             await db.SaveChangesAsync();
         });
 
         await setup.Server.SyncAsync();
-        var settled = await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().ToDictionaryAsync(c => c.Id));
-        Assert.Equal(ChangeStatuses.Committing, settled[recent].Status);
-        Assert.Equal(ChangeStatuses.Failed, settled[old].Status);
-        Assert.Equal("Its commit never reached main: the push did not finish, and nothing was committed.", settled[old].Detail);
-        Assert.Null(settled[old].Commit);
+        var run = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(head.Id, run.RevisionId);
+        Assert.NotNull((await setup.Server.QueryAsync(db => db.Revisions.AsNoTracking().SingleAsync(r => r.Id == head.Id))).InventoryAppliedAt);
+
+        // Applied once more, it proposes nothing it already has.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            (await db.Revisions.SingleAsync(r => r.Id == head.Id)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        await setup.Server.SyncAsync();
+        Assert.Equal(1, await setup.Server.QueryAsync(db => db.Runs.CountAsync()));
+    }
+
+    [Fact]
+    public async Task A_later_revisions_error_is_not_the_earlier_changes_failure()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        // A pin to the version it already resolves to proposes no run.
+        setup.PushElsewhere(GuestFile, Commented.Replace("workflow: test-vm@1", "workflow: test-vm@1.0").TrimEnd('\n'));
+        var pinned = setup.RemoteHead;
+        var id = Guid.CreateVersion7();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Changes.Add(new ResourceChange
+            {
+                Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
+                BaseCommit = form.BaseCommit!, Message = "krb-app-01: workflow test-vm@1 → test-vm@1.0", Status = ChangeStatuses.Committed,
+                Files = [GuestFile], Commit = pinned, Edited = """{"workflow":"test-vm@1.0"}""",
+                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        });
+        await setup.Server.SyncAsync();
+        // A later commit breaks the guest, before anyone looked at the change.
+        setup.PushElsewhere(GuestFile, Commented.Replace("workflow: test-vm@1", "workflow: test-vm@1.0").Replace("cores: 2", "cores: 0").TrimEnd('\n'));
+        await setup.Server.SyncAsync();
+        Assert.False((await setup.Server.ResourceAsync(Guest)).Valid);
+
+        var change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+        Assert.Equal(ChangeStatuses.NoChange, change.Status);
     }
 
     [Fact]

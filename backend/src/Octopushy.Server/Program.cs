@@ -57,6 +57,7 @@ builder.Services.AddSingleton<RunFactory>();
 builder.Services.AddSingleton<RunEngine>();
 builder.Services.AddScoped<AssignmentBuilder>();
 builder.Services.AddScoped<InventoryUpdater>();
+builder.Services.AddSingleton<InventoryFaults>();
 builder.Services.AddSingleton<Planner>();
 builder.Services.AddSingleton<WorkflowCatalog>();
 builder.Services.AddSingleton<ChangeService>();

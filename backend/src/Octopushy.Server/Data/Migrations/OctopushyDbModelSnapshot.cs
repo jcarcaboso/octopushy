@@ -297,6 +297,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("error_count");
 
+                    b.Property<DateTimeOffset?>("InventoryAppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("inventory_applied_at");
+
                     b.Property<string>("Issues")
                         .IsRequired()
                         .HasColumnType("jsonb")
@@ -1006,6 +1010,11 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("base_commit");
 
+                    b.PrimitiveCollection<List<string>>("CandidateCommits")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("candidate_commits");
+
                     b.Property<string>("Commit")
                         .HasColumnType("text")
                         .HasColumnName("commit");
@@ -1017,6 +1026,14 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("Detail")
                         .HasColumnType("text")
                         .HasColumnName("detail");
+
+                    b.Property<DateTimeOffset?>("DismissedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dismissed_at");
+
+                    b.Property<string>("DismissedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("dismissed_by");
 
                     b.Property<string>("Edited")
                         .HasColumnType("jsonb")
@@ -1086,6 +1103,27 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_changes_resource_id_created_at");
 
                     b.ToTable("changes", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.RevisionIssues", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<Guid>("RevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revision_id");
+
+                    b.Property<string>("Issues")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("issues");
+
+                    b.HasKey("ResourceId", "RevisionId")
+                        .HasName("pk_revision_issues");
+
+                    b.ToTable("revision_issues", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Run", b =>

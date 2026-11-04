@@ -13,7 +13,8 @@ namespace Octopushy.Server.Inventory;
 /// retired, and a retire run for each guest whose folder was deleted. Each installation whose
 /// definition changed is observed again.
 /// </summary>
-public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, TimeProvider clock, ILogger<InventoryUpdater> logger)
+public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engine, RevisionCache revisions, InventoryFaults faults, TimeProvider clock,
+    ILogger<InventoryUpdater> logger)
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
@@ -126,6 +127,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         var currentSourceIds = await RepositoryTrust.CurrentRevisions(db).Select(r => r.Id).ToListAsync(cancellationToken);
 
         var runs = new List<Run>();
+        // The resources whose issues this revision set, kept per revision for what follows a change through it.
+        var examined = byAddress.Values.Where(r => seen.Contains(r.Id)).ToList();
         if (repository.RepositoryValid)
         {
             foreach (var resource in byAddress.Values.Where(r => !seen.Contains(r.Id) && r.RetiredAt is null))
@@ -142,6 +145,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 }
                 catch (RunException error)
                 {
+                    examined.Add(resource);
                     logger.LogWarning("The removal of {Address} cannot be planned: {Error}", resource.Address, error.Message);
                     resource.Issues = JsonSerializer.Serialize(new[] { new DefinitionIssue(IssueSeverity.Error, resource.DefinitionFile ?? resource.Address,
                         null, $"The folder was deleted, but its removal cannot be planned: {error.Message}", resource.Address) }, IssueJson);
@@ -165,7 +169,11 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             var guest = repository.Guest(resource.Address)!;
             var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id));
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
-            if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty))
+            // Applying a revision again, as for a head whose inventory was not marked applied, proposes what this revision was
+            // to propose and nothing it already has: a desired hash recorded for it without its run is finished here.
+            var unfinished = resource.DesiredRevisionId == revision.Id && !await db.Runs.AnyAsync(r => r.ResourceId == resource.Id
+                && r.RevisionId == revision.Id && (r.Operation == Operations.Provision || r.Operation == Operations.Retire), cancellationToken);
+            if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty) && !unfinished)
             {
                 // Only promote a real replacement already proposed by discovery. Metadata
                 // or policy-only revisions leave the older pinned plan/approval intact.
@@ -212,11 +220,42 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             changedInstallations.Add((resource, RunFactory.Observation(repository, installation, revision)));
         }
 
+        await RecordIssuesAsync(db, revision, examined, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
+        if (faults.BeforeRuns is { } fault)
+            await fault();
         await engine.AddRunsAsync(db, runs, cancellationToken);
         foreach (var (resource, context) in changedInstallations)
         {
             await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
+        }
+    }
+
+    /// <summary>The errors each examined resource has after this revision, kept for this revision alone.</summary>
+    private static async Task RecordIssuesAsync(OctopushyDb db, DefinitionRevision revision, IEnumerable<Resource> examined, CancellationToken cancellationToken)
+    {
+        var ids = examined.Select(r => r.Id).ToList();
+        var recorded = await db.RevisionIssues.Where(i => i.RevisionId == revision.Id && ids.Contains(i.ResourceId))
+            .ToDictionaryAsync(i => i.ResourceId, cancellationToken);
+        foreach (var resource in examined)
+        {
+            var errors = (JsonSerializer.Deserialize<List<DefinitionIssue>>(resource.Issues, IssueJson) ?? [])
+                .Where(i => i.Severity == IssueSeverity.Error).ToList();
+            recorded.TryGetValue(resource.Id, out var row);
+            if (errors.Count == 0)
+            {
+                if (row is not null)
+                    db.RevisionIssues.Remove(row);
+                continue;
+            }
+
+            if (row is null)
+            {
+                row = new RevisionIssues { ResourceId = resource.Id, RevisionId = revision.Id };
+                db.RevisionIssues.Add(row);
+            }
+
+            row.Issues = JsonSerializer.Serialize(errors, IssueJson);
         }
     }
 
