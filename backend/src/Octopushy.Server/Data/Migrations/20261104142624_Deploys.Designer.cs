@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261104114154_Deploys")]
+    [Migration("20261104142624_Deploys")]
     partial class Deploys
     {
         /// <inheritdoc />
@@ -1507,6 +1507,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<Guid?>("GenerationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generation_id");
 
                     b.Property<string>("RevocationNote")
                         .HasColumnType("text")

@@ -184,11 +184,12 @@ public sealed class RepositorySync(
                 return true;
             }, cancellationToken);
             // What deploys generated and nothing at this head uses any more: on every sync, so a removal that failed is retried.
-            if (GeneratedValues.ReferencedKeys(repository) is { } referenced)
+            // Against the head this sync has just fetched, every definition file read as plain YAML, valid or not.
+            if (GeneratedValues.ReferencedKeys(repository.Root) is { } referenced)
             {
                 await engine.ExecuteAsync(async (db, _) =>
                 {
-                    await GeneratedValues.CleanUpAsync(db, referenced, logger, clock.GetUtcNow());
+                    await GeneratedValues.CleanUpAsync(db, mirror, referenced, logger, clock.GetUtcNow());
                     return 0;
                 }, cancellationToken);
             }

@@ -138,17 +138,22 @@ public class DeployTests(PostgresFixture postgres)
 
         /// <summary>Records a successful observation of korriban at <paramref name="at"/>, as an agent would report one.</summary>
         public Task ObserveAsync(DateTimeOffset? at = null, bool online = true, params (int Vmid, string Name)[] vms) =>
+            ObserveRawAsync(new JsonObject
+            {
+                ["cluster"] = null,
+                ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = online }),
+                ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject { ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = "korriban" }).ToArray()),
+                ["vmAudit"] = true,
+            }, at);
+
+        /// <summary>Records an observation of korriban with exactly <paramref name="data"/>.</summary>
+        public Task ObserveRawAsync(JsonObject data, DateTimeOffset? at = null) =>
             Server.WithDbAsync(async db =>
             {
                 var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
                 db.Observations.Add(new Observation
                 {
-                    Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = at ?? DateTimeOffset.UtcNow,
-                    Data = new JsonObject
-                    {
-                        ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = online }),
-                        ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject { ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = "korriban" }).ToArray()),
-                    }.ToJsonString(),
+                    Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = at ?? DateTimeOffset.UtcNow, Data = data.ToJsonString(),
                 });
                 await db.SaveChangesAsync();
             });
@@ -335,6 +340,8 @@ public class DeployTests(PostgresFixture postgres)
                 Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow,
                 Data = new JsonObject
                 {
+                    ["cluster"] = null,
+                    ["vmAudit"] = true,
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(new JsonObject { ["vmid"] = 311, ["name"] = "homeassistant", ["host"] = "korriban" },
                         new JsonObject { ["vmid"] = 100, ["name"] = "template", ["host"] = "korriban", ["template"] = true }),
@@ -469,6 +476,7 @@ public class DeployTests(PostgresFixture postgres)
         bool token = false, bool tokenUsed = false, int? vmid = null)
     {
         var id = Guid.CreateVersion7();
+        var generation = Guid.CreateVersion7();
         var marker = $"Generated at deploy for {address} (agent-enrollment-token, change {id}).";
         Guid? tokenId = null;
         await setup.Server.WithDbAsync(async db =>
@@ -491,14 +499,14 @@ public class DeployTests(PostgresFixture postgres)
 
             db.GeneratedValues.Add(new GeneratedValue
             {
-                Id = Guid.CreateVersion7(), ChangeId = id, Secret = "enroll_token", Key = key, Generator = SecretGenerators.AgentEnrollmentToken,
+                Id = generation, ChangeId = id, Secret = "enroll_token", Key = key, Generator = SecretGenerators.AgentEnrollmentToken,
                 State = GeneratedValueStates.Created, StoreVersion = 1, StoreDescription = marker, TokenId = tokenId, CreatedAt = now, UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
         await using var scope = setup.Server.Services.CreateAsyncScope();
         await scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>().SetAsync(key, "a generated value", Visibilities.Secret, marker,
-            CancellationToken.None);
+            CancellationToken.None, generation);
         return (id, tokenId);
     }
 
@@ -558,15 +566,21 @@ public class DeployTests(PostgresFixture postgres)
         var entry = await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Key));
         Assert.Contains(b.ToString(), entry.Description);
 
-        // A person who sets a key a dismissed deploy generated, by hand, keeps it too.
+        // A person who deletes a key a dismissed deploy generated and sets it again by hand keeps it too, even at version 1
+        // and with the very same description copied over: the version was not made by that deploy.
         const string Manual = "guests/home/korriban/manual-01/enroll_token";
         var (c, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Manual, address: "home/korriban/manual-01");
+        var copied = (await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Manual))).Description;
         await setup.Server.WithDbAsync(async db =>
         {
-            var written = await db.StoreEntries.SingleAsync(e => e.Key == Manual);
-            written.Description = "Set by hand";
-            await db.SaveChangesAsync();
+            await db.StoreVersions.Where(v => v.Key == Manual).ExecuteDeleteAsync();
+            await db.StoreEntries.Where(e => e.Key == Manual).ExecuteDeleteAsync();
         });
+        await using (var scope = setup.Server.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>().SetAsync(Manual, "set by hand", Visibilities.Secret, copied,
+                CancellationToken.None);
+        var replaced = await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Manual));
+        Assert.Equal((1, copied), (replaced.LatestVersion, replaced.Description));
         await setup.Server.SyncAsync();
         Assert.Equal(GeneratedValueStates.Kept, (await ValueOfAsync(setup, c)).State);
         Assert.True(await StoredAsync(setup, Manual));
@@ -645,6 +659,70 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Contains("was used, so it stays", value.Detail);
         Assert.False(await StoredAsync(setup, Key));
         Assert.True(await setup.Server.QueryAsync(db => db.EnrollmentTokens.AnyAsync(t => t.Id == token)));
+    }
+
+    [Fact]
+    public void A_store_reference_counts_in_any_definition_file_valid_or_not_and_an_unreadable_one_keeps_everything()
+    {
+        using var lab = new TestRepository();
+        lab.Write("octopushy.yaml", "schemaVersion: 1\n");
+        // Not a valid guest, with the reference in JSON style: it still names the key.
+        lab.Write("labs/home/proxmox/korriban/guests/odd-01/guest.yaml", """{ "colour": "blue", "secrets": { "pw": { "store": "guests/home/korriban/odd-01/password" } } }""");
+        lab.Write("labs/home/proxmox/korriban/guests/deep-01/guest.yaml", "list:\n  - nested: [ { store: 'guests/home/korriban/deep-01/key' } ]\n");
+        var keys = GeneratedValues.ReferencedKeys(lab.Root)!;
+        Assert.Contains("guests/home/korriban/odd-01/password", keys);
+        Assert.Contains("guests/home/korriban/deep-01/key", keys);
+
+        lab.Write("labs/home/proxmox/korriban/guests/garbled-01/guest.yaml", "secrets: [\n  : {\n");
+        Assert.Null(GeneratedValues.ReferencedKeys(lab.Root));
+    }
+
+    [Fact]
+    public async Task Dismissing_a_deploy_removes_nothing_by_itself()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Unknown, Key);
+        var dismissed = await setup.Client.PostAsync($"/api/changes/{id}/dismiss", null);
+        Assert.True(dismissed.IsSuccessStatusCode, await dismissed.Content.ReadAsStringAsync());
+        // A push was attempted: one of its commits could still land, so the dismissal itself takes nothing away.
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+        Assert.True(await StoredAsync(setup, Key));
+
+        // The next sync reads the branch it has just fetched, which now references the key: it stays.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/lost-01/guest.yaml",
+            $"schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 330\ncolour: blue\nsecrets: {{ enroll_token: {{ store: {Key} }} }}\n");
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+        Assert.True(await StoredAsync(setup, Key));
+    }
+
+    [Fact]
+    public async Task A_key_a_commit_of_an_open_change_references_is_not_removed()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string File = "labs/home/proxmox/korriban/guests/other-01/guest.yaml";
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+        // Another change, not settled, recorded a commit that references the key; the branch head does not.
+        setup.PushElsewhere(File, $"schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 340\nsecrets: {{ x: {{ store: {Key} }} }}\n");
+        await setup.Server.SyncAsync();
+        var referencing = setup.RemoteHead;
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.Changes.Add(new ResourceChange
+            {
+                Id = Guid.CreateVersion7(), Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/other-01", Author = "ops",
+                BaseCommit = referencing, Message = "other-01: edit", Status = ChangeStatuses.Uncertain, Files = [File], CandidateCommits = [referencing],
+                CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+        TestWorkflows.Run(setup.Remote.Root, "update-ref", "refs/heads/main", $"{referencing}^");
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+        Assert.True(await StoredAsync(setup, Key));
     }
 
     [Theory]
@@ -750,6 +828,80 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(setup.RemoteHead, (await setup.TargetsAsync()).BaseCommit);
     }
 
+    [Theory]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [] }""", "did not say whether it holds VM.Audit on /vms")]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": false }""", "lacks VM.Audit on /vms")]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban" }], "guests": [], "vmAudit": true }""", "korriban without an online state")]
+    [InlineData("""{ "cluster": null, "hosts": [], "guests": [], "vmAudit": true }""", "lists no host")]
+    [InlineData("""{ "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""", "does not say whether it is a cluster")]
+    [InlineData("""{ "cluster": { "name": "c" }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""",
+        "does not say whether its cluster is quorate")]
+    [InlineData("""{ "cluster": { "name": "c", "quorate": false }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""",
+        "cluster was not quorate")]
+    public async Task An_observation_that_cannot_show_it_saw_every_vm_offers_no_vmid(string data, string problem)
+    {
+        await using var setup = await StartAsync(observe: false);
+        // The observation lists no VM, as Proxmox lists none a token may not audit: VMID 100 may well be taken.
+        await setup.ObserveRawAsync(JsonNode.Parse(data)!.AsObject());
+        var next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        Assert.Null(next.Vmid);
+        Assert.Contains(problem, next.Problem);
+        var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 100));
+        Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
+        Assert.Contains(problem, refused.Message);
+    }
+
+    [Fact]
+    public async Task An_observation_dated_ahead_of_the_servers_clock_is_not_trusted()
+    {
+        await using var setup = await StartAsync(observe: false);
+        // A little drift is tolerated.
+        await setup.ObserveAsync(DateTimeOffset.UtcNow.AddSeconds(30));
+        Assert.Equal(100, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!.Vmid);
+        // One dated half an hour ahead would pass any age check with a clock set back: it is refused.
+        await setup.ObserveAsync(DateTimeOffset.UtcNow.AddMinutes(30));
+        var next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        Assert.Null(next.Vmid);
+        Assert.Contains("after the server's time now", next.Problem);
+    }
+
+    [Fact]
+    public async Task A_host_added_on_the_branch_after_the_review_is_checked_against_the_observation_before_the_push()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        Assert.Null(preview.Refused);
+        // Before the push, and before any sync: the installation gains a host the last observation never saw.
+        var installation = setup.RemoteFile("labs/home/proxmox/korriban/installation.yaml");
+        setup.PushElsewhere("labs/home/proxmox/korriban/installation.yaml", installation.Replace("hosts:\n", "hosts:\n  dagobah: {}\n"));
+        var refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
+        Assert.Contains("dagobah not listed", refused.Message);
+        Assert.DoesNotContain(NewFile, TestWorkflows.Run(setup.Remote.Root, "ls-tree", "-r", "--name-only", "main"));
+    }
+
+    [Fact]
+    public async Task A_workflow_changed_on_the_branch_without_a_sync_is_not_what_lands()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        // A compatible 1.1 of the local workflow, pushed after the review and never synced: test-vm@1 would land as 1.1.
+        setup.PushElsewhere("workflows/test-vm/workflow.yaml",
+            setup.RemoteFile("workflows/test-vm/workflow.yaml").Replace("version: \"1.0\"", "version: \"1.1\""));
+        var refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.Stale, refused.Reason);
+        Assert.Contains("at the commit this deploy would land it is test-vm@1.1 from the lab repository", refused.Message);
+        Assert.DoesNotContain(NewFile, TestWorkflows.Run(setup.Remote.Root, "ls-tree", "-r", "--name-only", "main"));
+
+        // Its files changed without a new version: that is another release too.
+        setup.PushElsewhere("workflows/test-vm/workflow.yaml",
+            setup.RemoteFile("workflows/test-vm/workflow.yaml").Replace("version: \"1.1\"", "version: \"1.0\"").Replace("A test VM.", "A test VM, changed."));
+        refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Contains("The workflow release changed since the review", refused.Message);
+    }
+
     [Fact]
     public async Task A_vm_that_appeared_after_the_review_refuses_the_deploy()
     {
@@ -792,7 +944,7 @@ public class DeployTests(PostgresFixture postgres)
         await using var setup = await StartAsync();
         var request = Guest(setup.RemoteHead, 311);
         var preview = await PreviewAsync(setup, request);
-        Assert.StartsWith("test-vm@1.0 at ", preview.ReviewedRelease);
+        Assert.StartsWith("test-vm@1.0 from the lab repository, files ", preview.ReviewedRelease);
         Assert.Matches("^[0-9a-f]{64}$", preview.ReviewDigest!);
         var head = setup.RemoteHead;
 
@@ -810,7 +962,7 @@ public class DeployTests(PostgresFixture postgres)
         await setup.Server.SyncAsync();
         var changed = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
         Assert.Equal(ChangeRefusal.Reasons.Stale, changed.Reason);
-        Assert.Contains($"The workflow release changed since the review: it was {preview.ReviewedRelease}, it is test-vm@1.1 at ", changed.Message);
+        Assert.Contains($"The workflow release changed since the review: it was {preview.ReviewedRelease}, it is test-vm@1.1 from the lab repository", changed.Message);
     }
 
     [Fact]

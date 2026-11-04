@@ -104,6 +104,31 @@ async fn observe_standalone_and_offline_hosts() {
 }
 
 #[tokio::test]
+async fn observe_says_whether_the_token_can_audit_every_vm() {
+    let m = mock(Fixture::example()).await;
+    let (r, _) = exec(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+    )
+    .await;
+    assert_eq!(r.unwrap().outputs["vmAudit"], true);
+
+    // Without VM.Audit on /vms, Proxmox lists only some guests: the observation says so.
+    let mut fixture = Fixture::example();
+    fixture.privileges = Some(vec!["Sys.Audit".into()]);
+    let m = mock(fixture).await;
+    let (r, lines) = exec(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+    )
+    .await;
+    assert_eq!(r.unwrap().outputs["vmAudit"], false);
+    assert!(lines.iter().any(|l| l.contains("VM.Audit on /vms")));
+}
+
+#[tokio::test]
 async fn wrong_token_and_unreachable_api_fail() {
     let m = mock(Fixture::example()).await;
     let bad = "octopushy@pve!agent=wrong-wrong-wrong";

@@ -351,6 +351,17 @@ public sealed partial class RepositoryMirror
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
+    /// <summary>The commit of <paramref name="branch"/> as it was last fetched, or null when it has not been.</summary>
+    public async Task<string?> BranchHeadAsync(string branch, CancellationToken ct)
+    {
+        if (!BranchPattern().IsMatch(branch))
+            throw new GitException($"'{branch}' is not a valid branch name.");
+        var (exitCode, output) = await _git.RunAcceptingAsync(["-C", _mirror, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branch}^{{commit}}"],
+            new HashSet<int> { 1 }, cancellationToken: ct);
+        var commit = output.Trim();
+        return exitCode == 0 && commit.Length > 0 ? commit : null;
+    }
+
     /// <summary>Whether <paramref name="ancestor"/> is <paramref name="commit"/> or one of its ancestors.</summary>
     public async Task<bool> IsAncestorAsync(string ancestor, string commit, CancellationToken ct)
     {

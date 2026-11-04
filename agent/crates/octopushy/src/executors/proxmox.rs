@@ -135,6 +135,22 @@ async fn observe(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         })
         .collect();
     let guests: Vec<Value> = vms.iter().map(guest_json).collect();
+    // `/cluster/resources` silently leaves out guests the token may not audit. Whether the list
+    // is every VM is only known from the token's own privileges on `/vms`; unknown counts as no.
+    let vm_audit = match c.permissions(Some("/vms")).await {
+        Ok(permissions) => Some(permissions.has("/vms", "VM.Audit")),
+        Err(e) => {
+            ctx.log.agent(format!(
+                "the token's privileges on /vms could not be read: {e}"
+            ));
+            None
+        }
+    };
+    if vm_audit != Some(true) {
+        ctx.log.agent(
+            "the token cannot be shown to hold VM.Audit on /vms: the guests listed may not be every VM",
+        );
+    }
     ctx.log.agent(format!(
         "{} hosts ({} online), {} guests",
         hosts.len(),
@@ -147,6 +163,7 @@ async fn observe(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         "cluster": cluster.map(|c| json!({ "name": c.name, "quorate": c.quorate })),
         "hosts": hosts,
         "guests": guests,
+        "vmAudit": vm_audit,
     })))
 }
 

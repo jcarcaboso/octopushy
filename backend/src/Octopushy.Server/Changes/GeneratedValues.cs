@@ -1,45 +1,52 @@
-using System.Text.RegularExpressions;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
-using Octopushy.Definitions;
+using Octopushy.Definitions.Yaml;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Changes;
 
 /// <summary>
 /// Removes what deploys generated once nothing can use it. Every trigger comes through <see cref="CleanUpAsync"/>, with the same
-/// guards: each sync, a deploy refused before its push, and a dismissal. A value is removed only when all of these hold:
+/// guards: each sync, and a deploy refused before its push. A value is removed only when all of these hold:
 /// <list type="bullet">
 /// <item>its change is final, so its status will not change again;</item>
-/// <item>no definition at the branch head references its key, so a dismissed change whose commit turns up later, or an applied
-/// guest, keeps what it uses;</item>
+/// <item>no definition at the branch head references its key: every <c>store</c> in any definition file, valid or not, so a
+/// dismissed change whose commit turns up later, or an applied guest, keeps what it uses;</item>
+/// <item>no change that is not final references it in a commit it recorded, pushed or about to be;</item>
 /// <item>no run that has not finished uses its key.</item>
 /// </list>
-/// What is removed is only what the value owns: the store version it wrote, while that version is still the one present and the
-/// entry still carries the description naming its change, and its enrollment token, unless the token was used. Each removal
-/// is its own transaction. One that fails stays pending, with its error, and each sync tries it again.
+/// What is removed is only what the value owns: the store version it wrote, identified by the generation id that version was
+/// created with, while it is still the one present, and its enrollment token, unless the token was used. Each removal is its own
+/// transaction. One that fails stays pending, with its error, and each sync tries it again. Drafts of the repository editor and
+/// branches other than the one Octopushy reads are not looked at: a value referenced only there can be removed.
 /// </summary>
-public static partial class GeneratedValues
+public static class GeneratedValues
 {
+    /// <summary>Definition files: what a store reference in the lab repository can be written in.</summary>
+    private static readonly string[] DefinitionFolders = ["labs", "templates"];
+
     /// <summary>
-    /// Every store key a definition at <paramref name="head"/> may reference: those it read, and, so that a definition that does
-    /// not validate still counts, every <c>store:</c> written in any YAML file under <c>labs/</c>. Null when the snapshot cannot be
-    /// read, and then nothing is removed.
+    /// Every store key a definition file in the snapshot at <paramref name="root"/> references: each <c>store</c> anywhere in
+    /// <c>octopushy.yaml</c> and the YAML under <c>labs/</c> and <c>templates/</c>, read as plain YAML whether the file validates
+    /// or not. Null, so that nothing is removed, when the snapshot or any of those files cannot be read.
     /// </summary>
-    public static IReadOnlySet<string>? ReferencedKeys(LabRepository head)
+    public static IReadOnlySet<string>? ReferencedKeys(string root)
     {
-        var keys = head.StoreUses.Select(u => u.Key).ToHashSet(StringComparer.Ordinal);
-        var labs = Path.Combine(head.Root, "labs");
-        if (!Directory.Exists(head.Root))
+        if (!Directory.Exists(root))
             return null;
-        if (!Directory.Exists(labs))
-            return keys;
+        var keys = new HashSet<string>(StringComparer.Ordinal);
         try
         {
-            foreach (var file in Directory.EnumerateFiles(labs, "*.yaml", SearchOption.AllDirectories))
+            var files = DefinitionFolders.Select(f => Path.Combine(root, f)).Where(Directory.Exists)
+                .SelectMany(f => Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories))
+                .Where(f => f.EndsWith(".yaml", StringComparison.Ordinal) || f.EndsWith(".yml", StringComparison.Ordinal))
+                .Append(Path.Combine(root, "octopushy.yaml")).Where(File.Exists);
+            foreach (var file in files)
             {
-                foreach (Match match in StoreReference().Matches(File.ReadAllText(file)))
-                    keys.Add(match.Groups["key"].Value);
+                if (!Collect(File.ReadAllText(file), keys))
+                    return null;
             }
         }
         catch (IOException)
@@ -50,15 +57,50 @@ public static partial class GeneratedValues
         return keys;
     }
 
-    [GeneratedRegex(@"\bstore\s*:\s*[""']?(?<key>[A-Za-z0-9][A-Za-z0-9._/-]*)")]
-    private static partial Regex StoreReference();
+    /// <summary>Adds every <c>store</c> string in a YAML text to <paramref name="keys"/>; false when the text is not YAML.</summary>
+    public static bool Collect(string text, ISet<string> keys)
+    {
+        JsonNode? root;
+        try
+        {
+            root = YamlDocumentReader.Read(text).Root;
+        }
+        catch (YamlReadException)
+        {
+            return false;
+        }
+
+        Walk(root, keys);
+        return true;
+
+        static void Walk(JsonNode? node, ISet<string> keys)
+        {
+            switch (node)
+            {
+                case JsonObject o:
+                    foreach (var (key, value) in o)
+                    {
+                        if (key == "store" && value is JsonValue v && v.TryGetValue<string>(out var stored))
+                            keys.Add(stored);
+                        Walk(value, keys);
+                    }
+
+                    break;
+                case JsonArray a:
+                    foreach (var item in a)
+                        Walk(item, keys);
+                    break;
+            }
+        }
+    }
 
     /// <summary>How long a removal waits for a row someone else holds, before it is left for the next sync.</summary>
     private const string LockTimeout = "5s";
 
-    /// <param name="referenced">Every store key a definition at the branch head references.</param>
+    /// <param name="referenced">Every store key a definition at the branch head references (<see cref="ReferencedKeys"/>).</param>
     /// <param name="change">Only this change's values; every change's when null.</param>
-    public static async Task CleanUpAsync(OctopushyDb db, IReadOnlySet<string> referenced, ILogger logger, DateTimeOffset now, Guid? change = null)
+    public static async Task CleanUpAsync(OctopushyDb db, RepositoryMirror mirror, IReadOnlySet<string> referenced, ILogger logger, DateTimeOffset now,
+        Guid? change = null)
     {
         var finals = ChangeStatuses.Final;
         var values = await db.GeneratedValues
@@ -70,6 +112,14 @@ public static partial class GeneratedValues
         if (values.Count == 0)
             return;
         var inUse = await KeysOfUnfinishedRunsAsync(db);
+        // What changes that are not final may still bring to the branch: a key one of their commits references is not removed.
+        if (await KeysOfOpenChangesAsync(db, mirror) is not { } open)
+        {
+            logger.LogWarning("A commit of an open change could not be read; no generated value is removed until it can.");
+            return;
+        }
+
+        inUse.UnionWith(open);
         foreach (var value in values)
         {
             if (value.State == GeneratedValueStates.Planned)
@@ -125,12 +175,15 @@ public static partial class GeneratedValues
         {
             var key = value.Key;
             var marker = value.StoreDescription;
+            var generation = value.Id;
             var entry = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == key, CancellationToken.None);
+            var ours = entry is not null && entry.LatestVersion == version && entry.CurrentVersion == version
+                && await db.StoreVersions.AnyAsync(v => v.Key == key && v.Version == version && v.GenerationId == generation, CancellationToken.None);
             if (entry is null)
                 notes.Add($"{key} was already gone.");
-            else if (entry.Description != marker || entry.LatestVersion != version || entry.CurrentVersion != version)
+            else if (!ours)
             {
-                // Someone wrote the key since: a person, or a later deploy of the same name. It is theirs now.
+                // Someone wrote the key since: a person, or a later deploy of the same name, whatever its description. It is theirs.
                 kept = true;
                 notes.Add($"{key} was written again since, so it is left as it is.");
             }
@@ -141,10 +194,12 @@ public static partial class GeneratedValues
             }
             else
             {
-                // Only while it is still exactly what this value wrote; anything else is left alone.
-                var owned = db.StoreEntries.Where(e => e.Key == key && e.LatestVersion == version && e.CurrentVersion == version && e.Description == marker);
+                // Only while it is still exactly the version this value wrote; anything else is left alone.
+                var owned = db.StoreEntries.Where(e => e.Key == key && e.LatestVersion == version && e.CurrentVersion == version
+                    && db.StoreVersions.Any(v => v.Key == key && v.Version == version && v.GenerationId == generation));
                 await db.StoreVersions.Where(v => v.Key == key && owned.Any()).ExecuteDeleteAsync(CancellationToken.None);
-                var deleted = await owned.ExecuteDeleteAsync(CancellationToken.None);
+                var deleted = await db.StoreEntries.Where(e => e.Key == key && e.LatestVersion == version && e.CurrentVersion == version)
+                    .ExecuteDeleteAsync(CancellationToken.None);
                 if (deleted == 0)
                 {
                     await transaction.RollbackAsync(CancellationToken.None);
@@ -176,6 +231,39 @@ public static partial class GeneratedValues
         value.CleanupPending = false;
         value.CleanupError = null;
         value.UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Every store key referenced in the files of a change that is not final, at each commit it recorded: those it pushed or
+    /// was about to push, and the one that landed. Null when one of those cannot be read, so nothing is removed.
+    /// </summary>
+    private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror)
+    {
+        var finals = ChangeStatuses.Final;
+        var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status))
+            .Select(c => new { c.Commit, c.CandidateCommits, c.Files }).ToListAsync(CancellationToken.None);
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var change in open)
+        {
+            foreach (var commit in change.CandidateCommits.Append(change.Commit).OfType<string>().Distinct())
+            {
+                foreach (var file in change.Files.Where(f => f.EndsWith(".yaml", StringComparison.Ordinal) || f.EndsWith(".yml", StringComparison.Ordinal)))
+                {
+                    try
+                    {
+                        // A file the commit deletes holds nothing.
+                        if ((await mirror.ReadFileAsync(commit, file, CancellationToken.None))?.Text is { } text && !Collect(text, keys))
+                            return null;
+                    }
+                    catch (GitException)
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+
+        return keys;
     }
 
     /// <summary>Every store key a run that has not finished was built with.</summary>

@@ -326,21 +326,24 @@ public sealed partial class ChangeService(
             change.Detail = $"Dismissed by {actor}: none of its commits is on {settings.Branch} now, so Octopushy stopped waiting for it. This is "
                 + "not proof that nothing was committed: each sync still looks for its commits, and one that arrives is followed.";
             await db.SaveChangesAsync(ct);
-            // What a deploy generated goes now, under the same guards as at every sync: nothing at the head may reference it.
-            if (await HeadReferencedKeysAsync(db, ct) is { } referenced)
-                await GeneratedValues.CleanUpAsync(db, referenced, logger, now, change.Id);
+            // A dismissal alone never removes what a deploy generated: one of its commits may still land. Each sync removes it
+            // under the usual guards, against the head it has just fetched.
             return await DtoAsync(db, change, ct);
         }, ct);
 
-    /// <summary>Every store key a definition at the head revision may reference, or null when it cannot be read.</summary>
+    /// <summary>
+    /// Every store key a definition file at the branch as last fetched references, or null when it cannot be read. The mirror
+    /// fetches the branch before every push, so this is at least as new as that push saw.
+    /// </summary>
     private async Task<IReadOnlySet<string>?> HeadReferencedKeysAsync(OctopushyDb db, CancellationToken ct)
     {
-        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
-        if (head is null)
+        var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
+        if (settings is null)
             return null;
         try
         {
-            return GeneratedValues.ReferencedKeys(await revisions.GetAsync(head, ct));
+            var head = await mirror.BranchHeadAsync(settings.Branch, ct) ?? settings.HeadCommit;
+            return head is null ? null : GeneratedValues.ReferencedKeys(await mirror.SnapshotAsync(head, ct));
         }
         catch (GitException)
         {

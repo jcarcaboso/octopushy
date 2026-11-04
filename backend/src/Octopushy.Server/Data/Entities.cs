@@ -253,9 +253,10 @@ public static class GeneratedValueStates
 }
 
 /// <summary>
-/// One value a deploy generated, and exactly what it owns: the store version it wrote, under a description that names its
-/// change, and the enrollment token it created. Each is recorded in the same save that makes it. Cleanup removes only that
-/// version, while it is still the one present, and only an unused token; nothing someone else wrote is ever touched.
+/// One value a deploy generated, and exactly what it owns: the store version it wrote, which carries this value's id as its
+/// <see cref="StoreVersion.GenerationId"/>, and the enrollment token it created. Each is recorded in the same save that makes
+/// it. Cleanup removes only that version, while it is still the one present, and only an unused token; nothing someone else
+/// wrote is ever touched.
 /// </summary>
 public sealed class GeneratedValue
 {
@@ -276,7 +277,7 @@ public sealed class GeneratedValue
     /// <summary>The store version it wrote; null until it is written.</summary>
     public int? StoreVersion { get; set; }
 
-    /// <summary>The description it wrote the entry with, naming its change: the entry is this value's only while it holds it.</summary>
+    /// <summary>The description it wrote the entry with, naming its change, for people. Ownership is the version's generation id.</summary>
     public required string StoreDescription { get; set; }
 
     /// <summary>The enrollment token it created, for <c>agent-enrollment-token</c>.</summary>
@@ -1077,6 +1078,12 @@ public sealed class StoreVersion
     public string? ActivationNote { get; set; }
 
     public DateTimeOffset? RevokedAt { get; set; }
+
+    /// <summary>
+    /// The <see cref="GeneratedValue"/> that wrote this version, for a value a deploy generated: what its cleanup owns. Set when
+    /// the version is created and never changed, so a key deleted and written again, whatever its description, is not its.
+    /// </summary>
+    public Guid? GenerationId { get; set; }
 
     public string? RevokedBy { get; set; }
 

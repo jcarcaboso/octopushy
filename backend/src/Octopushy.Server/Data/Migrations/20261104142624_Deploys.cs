@@ -11,6 +11,12 @@ namespace Octopushy.Server.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.AddColumn<Guid>(
+                name: "generation_id",
+                table: "store_versions",
+                type: "uuid",
+                nullable: true);
+
             migrationBuilder.AlterColumn<Guid>(
                 name: "resource_id",
                 table: "changes",
@@ -84,6 +90,10 @@ namespace Octopushy.Server.Data.Migrations
         {
             migrationBuilder.DropTable(
                 name: "generated_values");
+
+            migrationBuilder.DropColumn(
+                name: "generation_id",
+                table: "store_versions");
 
             migrationBuilder.DropColumn(
                 name: "pre_approval",

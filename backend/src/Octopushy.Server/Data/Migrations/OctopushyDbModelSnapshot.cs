@@ -1520,6 +1520,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("GenerationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generation_id");
+
                     b.Property<string>("RevocationNote")
                         .HasColumnType("text")
                         .HasColumnName("revocation_note");
