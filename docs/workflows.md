@@ -426,8 +426,12 @@ installation's latest successful observation to be:
 
 - **recent:** no older than `Octopushy__Deploy__ObservationMaxAgeMinutes`, by default three observation intervals
   (`Octopushy__Scheduling__ObserveMinutes`, 5), so 15 minutes;
-- **newer than any failed observation;**
-- **complete:** every host it lists online, every host `installation.yaml` declares listed, and a cluster quorate.
+- **newer than any failed observation, and not dated ahead of the server's clock** by more than two minutes;
+- **able to see every VM:** Proxmox lists only the guests a token may audit, so the observation records whether its token
+  holds `VM.Audit` on `/vms`, read from `/access/permissions`. Without it, or if that was not read, the observation could be
+  missing VMs: give the observing token `VM.Audit` on `/vms`;
+- **complete:** it lists hosts, each with an explicit online state and online; every host `installation.yaml` declares at the
+  commit being checked is listed; and it says whether it is a cluster, and a cluster says it is quorate.
 
 Otherwise nothing is offered or committed. The reason names the installation and when it was last observed, such as *"home/
 pve01 has not been observed successfully since 2026-11-04 08:00 UTC, more than 15 minutes ago. Refresh its observation
@@ -445,9 +449,10 @@ the VMID it holds is unknown. A guest that is YAML but fails validation still ho
 Each goes into the variable store as a secret, under `guests/<lab>/<installation>/<guest>/<name>`, or
 `services/<address>/<name>` for a service: the address keeps two guests of one name on two installations apart. The new
 definition references it, `{ store: … }`. The value is never shown, returned by the API, logged, or written to Git. A key that
-is already in the store refuses the deploy rather than replacing it. Each value records what it wrote: the store version and
-its token. Once its change is final and nothing at the branch head references the key, cleanup removes exactly that version,
-while it is still the one present, and revokes the token unless it was used. A removal that fails is retried at every sync
+is already in the store refuses the deploy rather than replacing it. Each value records what it wrote: the store version, tagged
+with the value's id, and its token. Once its change is final, and nothing at the branch head, no open change and no unfinished
+run references the key, cleanup removes exactly that version, while it is still the one present, and revokes the token unless
+it was used. A removal that fails is retried at every sync
 ([how generated values are removed](changes-from-the-ui.md#the-workflow-wizard)).
 
 The server generates a value only where the workflow's `ui.secrets` asks for that generator for that secret; any other secret

@@ -304,27 +304,41 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
   observation, or a `guest.yaml` under it cannot be read ([generated values](workflows.md#generated-values)). The wizard says
   why and offers **Observe now**;
 - when what it would commit is not what was reviewed (`stale`): the review returns the workflow release it resolved to and a
-  digest of the files, and the deploy sends both back. A new release of the workflow, or any other difference in the file,
-  refuses it with *"The workflow release changed since the review … Review again."*;
+  digest of the files, and the deploy sends both back. A release is a tag's commit for a workflows repository, and the
+  workflow folder's files for a workflow kept in the lab repository. Before **every** push attempt, the commit it would land
+  is read again: what the new resource's reference resolves to there, and its file there, must be what was reviewed. A
+  workflow changed on the branch since the review, even without a sync and even at the same version, refuses it with *"The
+  workflow release changed since the review … Review again."*. The installation is read from that commit too, so a host
+  added since the review must be in the observation;
 - when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
 
 A deploy is recorded `committing` before anything is generated or pushed, with a record of each value it will make. Each
 part of a value is recorded in the same save that makes it: the enrollment token's id, and the store version it writes,
-under a description that names the change. A deploy's commit is found as every change's is: by the candidate commits it
+tagged with the value's own id, which the version keeps and nothing can set afterwards. A deploy's commit is found as every
+change's is: by the candidate commits it
 pushed. Its status follows the same model: `refused` when nothing was pushed, `uncertain` or `unknown` after a push attempt
 until reconciliation finds its commit or a person dismisses it.
 
-**Generated values are removed under one rule, whatever triggers it:** at every sync, right after a deploy is refused before
-its push, and when it is dismissed. A value goes only when all of these hold:
+**Generated values are removed under one rule, whatever triggers it:** at every sync, against the branch head that sync has
+just fetched, and right after a deploy is refused before any push. A dismissal removes nothing by itself: a push was
+attempted, so one of its commits may still land, and the next sync applies the rule. A value goes only when all of these
+hold:
 
 - its change is final, so its status cannot change again;
-- no definition at the branch head references its key. Every `store:` written in any definition file counts, valid or not.
+- no definition file at the branch head references its key: every `store` anywhere in `octopushy.yaml` and the YAML under
+  `labs/` and `templates/`, read as plain YAML, valid or not. If one of those files is not YAML at all, nothing is removed.
   So a dismissed change whose commit turns up on the branch later keeps the secrets its definition uses, and so does an
   applied guest;
+- no change that is not final references the key in a commit it recorded, pushed or about to be;
 - no run that has not finished uses the key.
 
-What goes is only what the value owns: the store version it wrote, while that version is still the one present and the entry
-still has its description. A key someone wrote since, a person or a later deploy of the same name, is never touched. Its
+**What is not looked at:** drafts of the [repository editor](repository-editor.md), and branches other than the one
+Octopushy reads. A generated key referenced only there can be removed; set it again under **Variables** before such a draft
+or branch is merged.
+
+What goes is only what the value owns: the store version it wrote, identified by the value's id that the version was created
+with, while that version is still the one present. A key someone wrote since, a person or a later deploy of the same name, is
+never touched, even at version 1 with the same description. Its
 enrollment token is revoked unless it was used: a used token stays, and removing it would not affect the agent it enrolled. A
 key a run was given keeps its history; revoke it under **Variables**. Each removal is its own transaction, with a short lock
 timeout. One that fails stays pending with its error, each sync tries it again, and the change page says *"2 generated
