@@ -69,19 +69,21 @@ public static class YamlWriter
             return;
         }
 
-        // A mapping in a block sequence: its first key on the dash's line, the rest under it.
+        // A mapping or a sequence in a block sequence: its first line on the dash's line, the rest under it.
         var entries = new StringBuilder();
-        var first = true;
-        foreach (var (k, v) in item!.AsObject())
+        switch (item)
         {
-            Entry(entries, k, v, indent + 2, $"{path}.{k}", comments);
-            if (first)
-            {
-                entries.Remove(0, indent + 2).Insert(0, dash);
-                first = false;
-            }
+            case JsonObject o:
+                foreach (var (k, v) in o)
+                    Entry(entries, k, v, indent + 2, $"{path}.{k}", comments);
+                break;
+            case JsonArray a:
+                for (var i = 0; i < a.Count; i++)
+                    Item(entries, a[i], indent + 2, $"{path}[{i}]", comments);
+                break;
         }
 
+        entries.Remove(0, indent + 2).Insert(0, dash);
         text.Append(entries);
     }
 

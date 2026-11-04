@@ -47,4 +47,33 @@ public class YamlWriterTests
             """.ReplaceLineEndings("\n"), text);
         Assert.True(YamlEditor.Same(YamlDocumentReader.Read(text).Root, document));
     }
+
+    [Fact]
+    public void A_sequence_in_a_sequence_too_long_for_one_line_is_written_as_a_block()
+    {
+        const string Low = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:0001";
+        const string High = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:ffff";
+        var document = new JsonObject
+        {
+            ["inputs"] = new JsonObject
+            {
+                ["ranges"] = new JsonArray(new JsonArray(Low, High), new JsonArray("a", "b")),
+                ["deep"] = new JsonArray(new JsonArray(new JsonArray(Low, High, Low))),
+            },
+        };
+        var text = YamlWriter.Write(document);
+        Assert.Equal($"""
+            inputs:
+              ranges:
+                - - {Low}
+                  - {High}
+                - [a, b]
+              deep:
+                - - - {Low}
+                    - {High}
+                    - {Low}
+
+            """.ReplaceLineEndings("\n"), text);
+        Assert.True(YamlEditor.Same(YamlDocumentReader.Read(text).Root, document));
+    }
 }

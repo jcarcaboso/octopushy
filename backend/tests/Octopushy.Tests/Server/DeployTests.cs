@@ -293,6 +293,17 @@ public class DeployTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_long_list_in_a_list_is_reviewed_and_written_as_a_block()
+    {
+        await using var setup = await StartAsync();
+        const string Low = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:0001";
+        const string High = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:ffff";
+        var preview = await PreviewAsync(setup, Guest(setup.RemoteHead, 311,
+            inputs: new JsonObject { ["ranges"] = new JsonArray(new JsonArray(Low, High)) }));
+        Assert.Contains($"+  ranges:\n+    - - {Low}\n+      - {High}\n", preview.Diff);
+    }
+
+    [Fact]
     public async Task A_pinned_reference_is_written_as_chosen()
     {
         await using var setup = await StartAsync();

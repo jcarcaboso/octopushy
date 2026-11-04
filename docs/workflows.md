@@ -435,8 +435,15 @@ installation's latest successful observation to be:
   - `Sys.Audit` on `/access`, so the ACL list it reads leaves nothing out;
   - no ACL below `/vms`, or on a pool, which could narrow what the token sees.
 
-  A token with full privileges and no ACL on single VMs or pools qualifies. One that does not is never trusted for free
-  VMIDs: give the observing token those privileges, or remove the narrower ACLs;
+  A token with full privileges and no ACL on single VMs or pools qualifies. One without those privileges is never trusted
+  for free VMIDs: give the observing token those privileges.
+
+  > **Known limitation: any ACL on a single VM or on a pool stops VMID allocation on that installation,** even with a full
+  > Administrator token. The check cannot tell an ACL that narrows what the token sees from one that does not, so it fails
+  > closed. The reason the wizard shows names the ACL paths, such as *"ACLs on /vms/150, /pool/lab may narrow what the token
+  > sees below /vms"*. Do not remove ACLs you rely on to work around it. Until an authoritative check of one VMID's
+  > availability replaces this proof (a listed follow-up), such an installation cannot be deployed to from the wizard;
+  > deploy there in Git, with a VMID you know is free;
 - **complete:** it lists hosts, each with an explicit online state and online; every host `installation.yaml` declares at the
   commit being checked is listed; and it says whether it is a cluster, and a cluster says it is quorate.
 

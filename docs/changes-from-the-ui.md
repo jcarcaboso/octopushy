@@ -302,7 +302,10 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
   one offered: the number is never changed after the review;
 - when which VMIDs are free cannot be known (`vmids-unknown`): the installation has no successful, complete and recent
   observation, or a `guest.yaml` under it cannot be read ([generated values](workflows.md#generated-values)). The wizard says
-  why and offers **Observe now**;
+  why and offers **Observe now**. **Known limitation:** an installation with any ACL on a single VM (`/vms/<id>`) or on a
+  pool is always `vmids-unknown`, even for a full Administrator token, because such an ACL could hide VMs from the
+  observation. The reason names the ACL paths. Keep the ACLs you need, and deploy to that installation in Git until a
+  per-VMID availability check exists ([Not yet](#not-yet));
 - when what it would commit is not what was reviewed (`stale`): the review returns the workflow release it resolved to and a
   digest of the files, and the deploy sends both back. A release is a tag's commit for a workflows repository, which pins
   its modules too. For a workflow kept in the lab repository, it is what its runs take, by the same definition as their
@@ -381,3 +384,6 @@ spent on that one decision: it never covers a later plan, a setup run, a retire,
 - Removing a service: deleting a service's folder removes nothing yet ([services](workflows.md#removal)).
 - Approving a deploy's setup run in the same click: a guest's setup is a later run, so it waits for approval as the policy says.
 - Deploying several guests at once, such as a cluster.
+- An authoritative check that one VMID is free, independent of ACLs, such as Proxmox's `/cluster/nextid?vmid=<n>` asked by an
+  agent before the commit. It would let the wizard deploy to installations with ACLs on single VMs or pools, which the
+  observation-based check refuses today.
