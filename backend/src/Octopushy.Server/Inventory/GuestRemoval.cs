@@ -66,9 +66,10 @@ public static class GuestRemoval
 
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
             $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
-        // The same removal is this time the folder is gone; restoring it and deleting it again is another.
-        var sameWork = !force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id;
-        if (sameWork && await ProposedAsync(db, resource, run.InputsHash!, ct))
+        // The same removal is this time the folder is gone; restoring it, valid or not, and deleting it again is another, since
+        // a return clears the occurrence. Planned by hand, the same removal keeps its occurrence.
+        var sameWork = resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id;
+        if (!force && sameWork && await ProposedAsync(db, resource, run.InputsHash!, ct))
             return null;
         Record(resource, run.InputsHash!, lastDefined.Id, run, sameWork);
         return run;

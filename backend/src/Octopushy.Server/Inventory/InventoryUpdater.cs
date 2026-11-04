@@ -86,6 +86,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
 
             seen.Add(resource.Id);
             resource.LastRevisionId = revision.Id;
+            // Back from missing, valid or not: the removal it had is over, and a later one is another occurrence.
+            if (resource.MissingSince is not null)
+                resource.DesiredOccurrence = null;
             resource.MissingSince = null;
             resource.Valid = entry.Valid;
             resource.Definition = entry.Json?.ToJsonString();

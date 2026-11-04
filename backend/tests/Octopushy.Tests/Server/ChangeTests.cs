@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Changes;
@@ -911,6 +912,148 @@ public class ChangeTests(PostgresFixture postgres)
         await setup.Server.SyncAsync();
         var retires = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.Operation == Operations.Retire).ToListAsync());
         Assert.Contains(retires, r => !RunStatuses.IsTerminal(r.Status) && RunContext.Parse(r.Context).DefinitionRemovedIn == head.Commit);
+    }
+
+    /// <summary>Takes the database down to the migration before occurrences and up again, as an upgrade from it would.</summary>
+    private static async Task ReapplyOccurrencesMigrationAsync(OctopushyDb db)
+    {
+        await db.Database.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261104142039_ChangeChecks");
+        await db.Database.MigrateAsync();
+    }
+
+    [Fact]
+    public async Task Manual_plan_must_certify_recovered_work_even_when_cancelled()
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.RevisionId == change.RevisionId).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        var resource = await setup.Server.ResourceAsync(Guest);
+        // A person plans the recovered work, then cancels it on purpose.
+        var manual = await setup.Server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource.Id, CancellationToken.None);
+        Assert.Equal(resource.DesiredOccurrence, (await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == manual))).Occurrence);
+        await setup.Server.Engine.CancelAsync(manual, "Cancelled by a person", CancellationToken.None);
+        var before = await setup.Server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == resource.Id));
+
+        await setup.Server.SyncAsync();
+        Assert.Equal(before, await setup.Server.QueryAsync(db => db.Runs.CountAsync(r => r.ResourceId == resource.Id)));
+    }
+
+    [Fact]
+    public async Task Removing_after_an_invalid_restore_must_get_a_new_occurrence()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(agent: holder);
+        await ProvisionAsync(setup, holder.Agent!);
+        var definition = setup.RemoteFile(GuestFile);
+        setup.DeleteElsewhere(Folder, "Remove the guest");
+        await setup.Server.SyncAsync();
+        var first = await setup.Server.ResourceAsync(Guest);
+        var retire = await setup.Server.LatestRunAsync(Guest, Operations.Retire);
+        // Restored with a definition that is invalid, so nothing is provisioned, then removed again.
+        setup.PushElsewhere(GuestFile, definition.Replace("cores: 2", "cores: 0").TrimEnd('\n'));
+        await setup.Server.SyncAsync();
+        var restored = await setup.Server.ResourceAsync(Guest);
+        Assert.Null(restored.MissingSince);
+        Assert.False(restored.Valid);
+        Assert.Equal(RunStatuses.Cancelled, (await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == retire.Id))).Status);
+        setup.DeleteElsewhere(Folder, "Remove the guest again");
+        await setup.Server.SyncAsync();
+
+        var second = await setup.Server.ResourceAsync(Guest);
+        var retires = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.ResourceId == second.Id && r.Operation == Operations.Retire).ToListAsync());
+        Assert.Contains(retires, r => !RunStatuses.IsTerminal(r.Status));
+        Assert.NotEqual(first.DesiredOccurrence, second.DesiredOccurrence);
+    }
+
+    [Fact]
+    public async Task Occurrence_backfill_must_not_certify_a_rollback_with_its_historical_run()
+    {
+        await using var setup = await StartAsync();
+        var firstHead = setup.RemoteHead;
+        var first = await setup.Server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).AsNoTracking().SingleAsync());
+        await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, firstHead, Hardware: Hardware(2, 4096)));
+        setup.MoveMain(firstHead);
+        await setup.Server.SyncAsync();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.RevisionId == first.Id && r.Status != RunStatuses.Cancelled).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == first.Id)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+            await ReapplyOccurrencesMigrationAsync(db);
+        });
+
+        await setup.Server.SyncAsync();
+        var runs = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.Operation == Operations.Provision).ToListAsync());
+        Assert.Contains(runs, r => r.RevisionId == first.Id && !RunStatuses.IsTerminal(r.Status));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ordinary_current_work_is_backfilled_and_not_reproposed(bool removal)
+    {
+        await using var setup = await StartAsync();
+        if (removal)
+        {
+            setup.DeleteElsewhere(Folder, "Remove the guest");
+            await setup.Server.SyncAsync();
+        }
+
+        var before = await setup.Server.QueryAsync(db => db.Runs.CountAsync());
+        await setup.Server.WithDbAsync(async db =>
+        {
+            await ReapplyOccurrencesMigrationAsync(db);
+            (await RepositoryTrust.HeadRevisions(db).SingleAsync()).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        var resource = await setup.Server.ResourceAsync(Guest);
+        var witness = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.ResourceId == resource.Id && r.Occurrence == resource.DesiredOccurrence));
+        Assert.Equal(removal ? Operations.Retire : Operations.Provision, witness.Operation);
+        await setup.Server.SyncAsync();
+        Assert.Equal(before, await setup.Server.QueryAsync(db => db.Runs.CountAsync()));
+    }
+
+    [Fact]
+    public async Task Backfilled_work_with_no_matching_run_is_recovered()
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.RevisionId == change.RevisionId).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+            await ReapplyOccurrencesMigrationAsync(db);
+        });
+        var resource = await setup.Server.ResourceAsync(Guest);
+        Assert.False(await setup.Server.QueryAsync(db => db.Runs.AnyAsync(r => r.Occurrence == resource.DesiredOccurrence)));
+        await setup.Server.SyncAsync();
+        Assert.True(await setup.Server.QueryAsync(db => db.Runs.AnyAsync(r => r.Occurrence == resource.DesiredOccurrence && r.Status != RunStatuses.Cancelled)));
+    }
+
+    [Fact]
+    public async Task An_applied_successor_must_not_hide_the_unapplied_revisions_retained_run()
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        // The change's revision unapplied, with its run still queued; then a commit that changes nothing for the guest.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        setup.PushElsewhere(GuestFile, setup.RemoteFile(GuestFile).TrimEnd('\n') + "\ndescription: metadata only");
+        await setup.Server.SyncAsync();
+
+        var after = await setup.GetAsync(change.Id);
+        Assert.Equal(ChangeStatuses.Planning, after.Status);
+        Assert.False(after.Final);
+        Assert.Single(after.Runs);
     }
 
     [Fact]

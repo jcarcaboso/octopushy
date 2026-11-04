@@ -53,8 +53,11 @@ public static class ChangeTracker
                     return;
                 }
 
+                // The unapplied revision's own runs are the change's work, which the successor keeps: they stay followed.
+                var retained = await db.Runs.AsNoTracking().Where(r => r.ResourceId == change.ResourceId && r.RevisionId == revision.Id
+                    && r.CreatedAt >= change.CreatedAt).Select(r => r.Id).ToListAsync(ct);
                 change.RevisionId = successor.Id;
-                change.RunIds = [];
+                change.RunIds = [.. change.RunIds.Union(retained)];
                 revision = successor;
             }
 
@@ -179,7 +182,9 @@ public static class ChangeTracker
         // What the revision proposed for it: its own runs, or for a deleted folder the removal planned from the definition it
         // was last applied from. A run someone starts by hand at the same revision is theirs, not the change's.
         var runs = candidates.Where(r => r.Reason == "revision" && r.RevisionId == revision.Id
-            || r.Operation == Operations.Retire && RunContext.Parse(r.Context).DefinitionRemovedIn == revision.Commit).ToList();
+            || r.Operation == Operations.Retire && RunContext.Parse(r.Context).DefinitionRemovedIn == revision.Commit
+            // Runs it already follows, such as those of an unapplied revision whose work an applied successor keeps.
+            || change.RunIds.Contains(r.Id)).ToList();
         if (runs.Count == 0 && change.Kind == ChangeKinds.Remove)
         {
             // A removal already under way when the folder was deleted is the one the change waits for.
