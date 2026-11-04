@@ -140,6 +140,15 @@ public class YamlEditorTests
     }
 
     [Fact]
+    public void Explicit_nulls_stay_and_only_a_missing_key_is_removed()
+    {
+        const string text = "inputs: { feature: null, note: old }\n";
+        Assert.Equal(text, YamlEditor.Apply(text, Read(text)));
+        Assert.Equal("inputs: { feature: null, note: new }\n", Edit(text, d => d["inputs"]!["note"] = "new"));
+        Assert.Equal("inputs: { note: old }\n", Edit(text, d => d["inputs"]!.AsObject().Remove("feature")));
+    }
+
+    [Fact]
     public void An_edit_through_an_alias_is_refused_rather_than_written_wrong()
     {
         const string text = "base: &disk { size: 32 }\nhardware:\n  disks:\n    - *disk\n";

@@ -76,10 +76,13 @@ public static class YamlEditor
         return result;
     }
 
-    /// <summary>A copy of <paramref name="node"/> without object properties whose value is null: an unset field is left out.</summary>
+    /// <summary>
+    /// A copy of <paramref name="node"/> with every value JSON-backed. An explicit null stays a null: only a property that is
+    /// absent is removed from the file.
+    /// </summary>
     public static JsonNode? Normalize(JsonNode? node) => node switch
     {
-        JsonObject o => new JsonObject(o.Where(p => p.Value is not null).Select(p => KeyValuePair.Create(p.Key, Normalize(p.Value)))),
+        JsonObject o => new JsonObject(o.Select(p => KeyValuePair.Create(p.Key, Normalize(p.Value)))),
         JsonArray a => new JsonArray(a.Select(Normalize).ToArray()),
         null => null,
         _ => JsonNode.Parse(node.ToJsonString()),
