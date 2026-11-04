@@ -169,10 +169,10 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             var guest = repository.Guest(resource.Address)!;
             var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id));
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
-            // A desired hash only counts as proposed while a run for it exists, whichever revision recorded it: one recorded
-            // without its run, as a crash could leave before revisions were applied in one transaction, is proposed now, even
-            // by a later revision that changes nothing for the guest.
-            var unfinished = !await GuestRemoval.ProposedAsync(db, resource.Id, desired, cancellationToken);
+            // A desired hash only counts as proposed while a run exists for the revision that recorded it: one recorded without
+            // its run, as a crash could leave before revisions were applied in one transaction, is proposed now, even by a later
+            // revision that changes nothing for the guest. A run for the same inputs at an earlier time is not this work.
+            var unfinished = !await GuestRemoval.ProposedAsync(db, resource, desired, cancellationToken);
             if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty) && !unfinished)
             {
                 // Only promote a real replacement already proposed by discovery. Metadata

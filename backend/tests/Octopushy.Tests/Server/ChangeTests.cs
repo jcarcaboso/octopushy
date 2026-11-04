@@ -725,6 +725,116 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Returning_to_earlier_inputs_is_proposed_again_when_its_run_is_missing_whatever_ran_for_them_before()
+    {
+        await using var setup = await StartAsync();
+        await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        var back = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 2048)));
+        // The first run for 2048 was cancelled when 4096 superseded it; the run for coming back to 2048 is then lost.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.RevisionId == back.RevisionId).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == back.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+
+        await setup.Server.SyncAsync();
+        var runs = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().ToListAsync());
+        Assert.Contains(runs, r => r.RevisionId == back.RevisionId && r.Operation == Operations.Provision && !RunStatuses.IsTerminal(r.Status));
+    }
+
+    [Fact]
+    public async Task A_second_removal_is_proposed_again_when_its_run_is_missing_whatever_ran_for_the_first()
+    {
+        await using var setup = await StartAsync();
+        var definition = setup.RemoteFile(GuestFile);
+        setup.DeleteElsewhere(Folder, "Remove the guest");
+        await setup.Server.SyncAsync();
+        // Restored, which cancels that removal, then removed again.
+        setup.PushElsewhere(GuestFile, definition.TrimEnd('\n'));
+        await setup.Server.SyncAsync();
+        setup.DeleteElsewhere(Folder, "Remove the guest again");
+        await setup.Server.SyncAsync();
+        var head = await setup.Server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).AsNoTracking().SingleAsync());
+        var retires = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().Where(r => r.Operation == Operations.Retire).ToListAsync());
+        Assert.Equal(2, retires.Count);
+        Assert.Equal(retires[0].InputsHash, retires[1].InputsHash);
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.Operation == Operations.Retire && r.Status != RunStatuses.Cancelled).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == head.Id)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+
+        await setup.Server.SyncAsync();
+        var retire = await setup.Server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(head.Commit, RunContext.Parse(retire.Context).DefinitionRemovedIn);
+        Assert.False(RunStatuses.IsTerminal(retire.Status));
+    }
+
+    [Theory]
+    [InlineData(RunStatuses.Succeeded)]
+    [InlineData(RunStatuses.AwaitingApproval)]
+    [InlineData(RunStatuses.Running)]
+    public async Task Applying_an_unmarked_head_again_does_not_duplicate_the_work_it_has(string status)
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var run = await db.Runs.Include(r => r.Steps).SingleAsync(r => r.RevisionId == change.RevisionId);
+            run.Status = status;
+            if (status == RunStatuses.Running)
+                foreach (var step in run.Steps.Where(s => s.Kind == StepKinds.Approval))
+                    (step.Decision, step.Status) = ("approved", StepStatuses.Succeeded);
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        var before = await setup.Server.QueryAsync(db => db.Runs.CountAsync());
+        await setup.Server.SyncAsync();
+        await setup.Server.SyncAsync();
+        Assert.Equal(before, await setup.Server.QueryAsync(db => db.Runs.CountAsync()));
+        Assert.NotNull(await setup.Server.QueryAsync(db => db.Revisions.Where(r => r.Id == change.RevisionId).Select(r => r.InventoryAppliedAt).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task A_change_on_a_revision_whose_inventory_is_not_applied_waits_rather_than_ending_no_change()
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.RevisionId == change.RevisionId).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            var record = await db.Changes.SingleAsync(c => c.Id == change.Id);
+            (record.Status, record.RevisionId, record.RunIds) = (ChangeStatuses.Committed, null, []);
+            await db.SaveChangesAsync();
+        });
+
+        var waiting = await setup.GetAsync(change.Id);
+        Assert.NotEqual(ChangeStatuses.NoChange, waiting.Status);
+        Assert.False(waiting.Final);
+        await setup.Server.SyncAsync();
+        var followed = await setup.GetAsync(change.Id);
+        Assert.Equal(ChangeStatuses.Planning, followed.Status);
+        Assert.Single(followed.Runs);
+    }
+
+    [Fact]
+    public async Task A_head_fetched_before_a_push_does_not_make_that_change_unknown()
+    {
+        await using var setup = await StartAsync();
+        var before = setup.RemoteHead;
+        var mirror = setup.Server.Services.GetRequiredService<RepositoryMirror>();
+        // A sync picks what to check, then fetches the older head; meanwhile this change is pushed and recorded.
+        var watched = await ChangeReconciler.SelectAsync(setup.Server.Engine, 100, CancellationToken.None);
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, before, Hardware: Hardware(2, 4096)));
+        Assert.DoesNotContain(watched, w => w.Id == change.Id);
+        await ChangeReconciler.ReconcileAsync(setup.Server.Engine, mirror, "main", watched, before, TimeProvider.System, CancellationToken.None);
+        Assert.Equal(ChangeStatuses.Planning, (await setup.GetAsync(change.Id)).Status);
+    }
+
+    [Fact]
     public async Task A_later_revisions_error_is_not_the_earlier_changes_failure()
     {
         await using var setup = await StartAsync();

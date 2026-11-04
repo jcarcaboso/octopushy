@@ -46,6 +46,11 @@ public static class ChangeTracker
             if (followed is null)
                 return;
             (status, detail) = followed.Value;
+            // A revision whose inventory is not applied yet may still propose runs: nothing final is read from it, such as
+            // no-change from an empty run list, until the next sync applies it and marks it.
+            if (revision.InventoryAppliedAt is null && ChangeStatuses.IsFinal(status))
+                (status, detail) = (ChangeStatuses.Synced,
+                    $"Waiting for {Short(revision.Commit)} to be applied: its runs are proposed at the next sync.");
         }
 
         if (status != change.Status || detail != change.Detail)

@@ -120,9 +120,11 @@ public sealed class RepositorySync(
             await using var scope = scopes.CreateAsyncScope();
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
+            // Changes whose push is not confirmed, or whose commit is being followed, picked before the fetch: everything they
+            // hold was pushed before it began, so the head it returns can judge them.
+            var watched = await ChangeReconciler.SelectAsync(engine, options.Value.Changes.ReconcileBatch, cancellationToken);
             var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
-            // Changes whose push is not confirmed, or whose commit is being followed: the branch now says where they are.
-            await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, head, options.Value.Changes.ReconcileBatch, clock, cancellationToken);
+            await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
             // The workflows repository is the one this commit names, fetched on the same poll as the branch.
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));

@@ -18,12 +18,24 @@ public static class GuestRemoval
     /// one is already under way, or, unless <paramref name="force"/>, was already proposed for it.
     /// </summary>
     /// <summary>
-    /// Whether a run for exactly this desired work of the resource exists, of any status: work that was proposed and then
-    /// ran, failed or was cancelled is not proposed again by itself, but work recorded without a run is.
+    /// Whether a run exists for this occurrence of the resource's desired work, of any status: work proposed and then run,
+    /// failed or cancelled on purpose is not proposed again by itself, but work recorded without its run is. An occurrence is
+    /// what recorded the work, not only its inputs, so coming back to inputs that ran before is new work:
+    /// <list type="bullet">
+    /// <item>a removal is this time the folder is gone: a retire run with these inputs made since the resource went missing;</item>
+    /// <item>anything else is the revision that recorded the desired inputs: a run with these inputs for that revision, which a
+    /// later revision that changes nothing for the resource keeps.</item>
+    /// </list>
     /// </summary>
-    public static Task<bool> ProposedAsync(OctopushyDb db, Guid resourceId, string inputsHash, CancellationToken ct) =>
-        db.Runs.AnyAsync(r => r.ResourceId == resourceId && r.InputsHash == inputsHash
+    public static Task<bool> ProposedAsync(OctopushyDb db, Resource resource, string inputsHash, CancellationToken ct)
+    {
+        if (resource.MissingSince is { } since)
+            return db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.InputsHash == inputsHash && r.Operation == Operations.Retire
+                && r.CreatedAt >= since, ct);
+        var recordedBy = resource.DesiredRevisionId;
+        return db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.InputsHash == inputsHash && r.RevisionId == recordedBy
             && (r.Operation == Operations.Provision || r.Operation == Operations.Retire), ct);
+    }
 
     public static async Task<Run?> ProposeAsync(OctopushyDb db, RevisionCache revisions, RunFactory factory, Resource resource,
         DefinitionRevision removal, bool force, CancellationToken ct)
@@ -46,7 +58,7 @@ public static class GuestRemoval
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
             $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
         if (!force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id
-            && await ProposedAsync(db, resource.Id, run.InputsHash!, ct))
+            && await ProposedAsync(db, resource, run.InputsHash!, ct))
             return null;
         resource.DesiredInputsHash = run.InputsHash;
         resource.DesiredRevisionId = lastDefined.Id;

@@ -17,8 +17,10 @@ namespace Octopushy.Server.Changes;
 /// <item>Changes committed and still being followed: one whose commit the branch no longer reaches, as after a force-push, is
 /// <c>unknown</c> again, so it is not followed through a commit that is gone.</item>
 /// </list>
-/// Each sync checks a bounded batch, the longest unchecked first, so every change is reached in turn. The Git ancestry checks run
-/// outside the engine's gate: the changes are picked under it, and the results applied under it, unless a change moved meanwhile.
+/// Each sync checks a bounded batch, the longest unchecked first, so every change is reached in turn. The batch is picked under
+/// the engine's gate <b>before</b> the branch is fetched, so every commit it holds was pushed before the fetch began, and a push
+/// recorded while the sync waits is never judged against a head that predates it. The Git ancestry checks run outside the gate,
+/// and the results are applied under it, unless a change moved meanwhile.
 /// </summary>
 public static class ChangeReconciler
 {
@@ -28,20 +30,28 @@ public static class ChangeReconciler
     private static readonly string[] Following =
         [ChangeStatuses.Committed, ChangeStatuses.Synced, ChangeStatuses.Planning, ChangeStatuses.WaitingForApproval, ChangeStatuses.Applying];
 
-    private sealed record Picked(Guid Id, string Status, string? Commit, List<string> Candidates);
+    /// <summary>A change as it was when a sync picked it, before fetching.</summary>
+    public sealed record Picked(Guid Id, string Status, string? Commit, List<string> Candidates);
 
     private sealed record Checked(Picked Change, bool OnBranch, string? Landed);
 
-    public static async Task ReconcileAsync(RunEngine engine, RepositoryMirror mirror, string branch, string head, int batch, TimeProvider clock,
-        CancellationToken ct)
-    {
-        var picked = await engine.ExecuteAsync(async (db, _) => await db.Changes.AsNoTracking()
+    /// <summary>Picks the batch to check, under the engine's gate. Call it before fetching the branch.</summary>
+    public static Task<List<Picked>> SelectAsync(RunEngine engine, int batch, CancellationToken ct) =>
+        engine.ExecuteAsync(async (db, _) => await db.Changes.AsNoTracking()
             .Where(c => Unsettled.Contains(c.Status) && (c.Status != ChangeStatuses.Dismissed || c.CandidateCommits.Count > 0)
                 || Following.Contains(c.Status) && c.Commit != null)
             .OrderBy(c => c.CheckedAt != null).ThenBy(c => c.CheckedAt).ThenBy(c => c.CreatedAt)
             .Take(Math.Max(1, batch))
             .Select(c => new Picked(c.Id, c.Status, c.Commit, c.CandidateCommits))
             .ToListAsync(ct), ct);
+
+    /// <summary>
+    /// Checks <paramref name="picked"/>, selected before the fetch, against <paramref name="head"/>, what the fetch returned, and
+    /// applies the results under the engine's gate to the changes that have not moved since they were picked.
+    /// </summary>
+    public static async Task ReconcileAsync(RunEngine engine, RepositoryMirror mirror, string branch, IReadOnlyList<Picked> picked, string head,
+        TimeProvider clock, CancellationToken ct)
+    {
         if (picked.Count == 0)
             return;
 
