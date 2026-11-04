@@ -84,23 +84,32 @@ branch, and so does the first sync at startup.
   if the branch has other values by then, the change is `superseded`.
 - **None reachable makes it `unknown`**, *"not on the branch (yet)"*, and every sync looks again, so a late arrival is still
   taken. There is no timeout: a force-push, a clock that jumps or another instance would make one wrong.
+- **A committed change is checked too, until its follow-through ends.** If the branch no longer reaches its commit, as after
+  a force-push, it is `unknown` again, and is found again only if one of its commits comes back.
+- **Each sync checks a bounded batch** (`Octopushy__Changes__ReconcileBatch`, 100 by default), the changes checked longest
+  ago first, so every change is reached in turn. The Git ancestry checks run outside the engine's gate: the batch is picked
+  under it and the results applied under it, and a change that moved in between is left for the next sync.
 - **A `committing` change with no candidate** never reached a push, so it is `refused`: nothing was committed.
 
 An `unknown` or `uncertain` change can be **dismissed** from its page, once you know its commit will not arrive. Dismissing
 fetches the branch first and is refused while one of its candidates is on it; it records who dismissed it and when.
 
+**A dismissal only stops the waiting. It is not a guarantee that nothing was committed.** A push was attempted, and a push
+under way can still land after the branch was read; a dismissed change keeps being checked, and one of its commits that
+arrives makes it `committed` again, followed like any other, with who dismissed it kept on record. So a dismissed change is
+neither final nor `notCommitted`.
+
 ### Which transitions are final
 
 | Status | Final | Means for what the change prepared, such as generated values |
 |---|---|---|
-| `refused` | yes | **Definitely not committed**: refused before any push was attempted |
-| `dismissed` | yes | **Definitely not committed**: a person settled it so |
+| `refused` | yes | **Definitely not committed**: refused before any push was attempted. The only such state |
 | `applied`, `failed`, `no-change`, `superseded` | yes | Committed: it is in Git |
-| `committing`, `uncertain`, `unknown` | no | Not settled: it may still be on the branch |
+| `committing`, `uncertain`, `unknown`, `dismissed` | no | Not settled: a push was attempted, and its commit may still be on the branch |
 | `committed`, `synced`, `planning`, `waiting-for-approval`, `applying` | no | Committed, and being followed |
 
-The API says so in `final` and `notCommitted` on each change; `notCommitted` is true for `refused` and `dismissed` only, so
-cleanup that must happen only when nothing was committed waits for it.
+The API says so in `final` and `notCommitted` on each change. `notCommitted` is true only for a change `refused` before any
+push attempt, so cleanup that must happen only when nothing was committed waits for that, and never for a dismissal.
 
 Right after the push, Octopushy **syncs the repository at once**, as **Repository → Sync now** does, without waiting for the
 poll interval. A failed sync leaves the change committed; the next poll picks it up.
@@ -131,7 +140,12 @@ A sync that moves the head to a revision records the revision, moves the head, a
 of every resource and the runs they propose) in one database transaction, and marks the revision `inventory_applied_at` in
 it. A crash between those steps used to leave a head whose runs were never proposed, which the next sync then skipped; a
 change could end `no-change` with zero runs. Now a crash leaves nothing, and the next sync, the first at startup included,
-applies the revision. A head revision without the marker is applied again, and proposes only what it has not already.
+applies the revision. A head revision without the marker is applied again.
+
+Applying it again proposes what has no run yet, and nothing twice: a resource's desired inputs count as proposed only while a
+run for exactly those inputs exists, whichever revision recorded them. So work recorded without its run, a provisioning or a
+removal, is proposed even when a later revision changes nothing for that resource. The migration that adds the marker sets it
+on every existing revision except the head, which the next sync, the first at startup included, applies again in this way.
 
 ## What it needs
 
@@ -171,9 +185,10 @@ the definition itself is only ever in Git.
 | `no-change` | The revision proposed no run for the resource, and the server recorded no problem for the resource at that revision: nothing a run is built from changed. Errors are kept per resource and revision, so a later commit's error is never this change's |
 | `superseded` | A later commit set the resource otherwise before this change was applied, or for a removal defined it again. The change page names that commit. A superseded change is never shown applied by the later commit's runs |
 | `refused` | Refused before any push was attempted, such as a stale form, one that does not validate or changes nothing, or a missing credential: nothing was committed |
-| `dismissed` | A person settled an `uncertain` or `unknown` change as not committed; the change records who and when |
+| `dismissed` | A person stopped waiting for an `uncertain` or `unknown` change; the change records who and when. Not final, and not proof: a commit of it that arrives later moves it on |
 
-**Which revision.** A change follows the first revision that contains its commit. That revision is accepted only if the
+**Which revision.** A change follows the first revision that contains its commit, looked up directly among the commits that
+lead from it to the branch head, however many revisions came in between. That revision is accepted only if the
 resource's definition there still carries the change, checked on the change's own commit too; when a later commit landed
 before the sync, it is a descendant, checked the same way: each
 section the change wrote (`workflow`, `hardware`, `network`, `inputs`) has the values it wrote, or for a removal the resource
