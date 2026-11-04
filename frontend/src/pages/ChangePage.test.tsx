@@ -52,7 +52,7 @@ function run(status: string): RunDetail {
         attempts: [] },
     ],
     agentLabels: [],
-    agentLabelsSetBy: null,
+    agentLabelsSetBy: "home/lab.yaml",
     policy: null,
     canCancel: true,
     canClose: false,

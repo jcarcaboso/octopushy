@@ -51,9 +51,10 @@ export function ChangeEditorPage() {
   const location = useLocation();
   const kind = location.pathname.startsWith("/services/") ? "service" : "guest";
   const mode: Mode = params.get("mode") === "upgrade" ? "upgrade" : params.get("mode") === "remove" ? "remove" : "edit";
-  const { data: form, error, isPending, refetch, isFetching } = useChangeForm(id);
+  const { data: form, error, isPending, refetch, isFetching, isFetchedAfterMount } = useChangeForm(id, { fresh: true });
 
-  if (isPending) return <PageSkeleton rows={4} />;
+  // The guest's page may have read the form a while ago: the editor starts from the commit it reads now.
+  if (isPending || (!isFetchedAfterMount && isFetching)) return <PageSkeleton rows={4} />;
   if (!form) return isNotFound(error) ? <NotFound what={kind} /> : <ErrorMessage error={error} title="The form could not be loaded" />;
   // Each load of the form is its own editor: reloading it starts again from the new commit.
   return <Editor key={form.baseCommit ?? "none"} form={form} mode={mode} reload={() => void refetch()} reloading={isFetching} />;

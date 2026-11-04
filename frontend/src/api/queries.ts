@@ -568,13 +568,13 @@ export function isChangeFinished(status: string): boolean {
 }
 
 /** What the form for a guest or service starts from, read at the head commit. */
-export function useChangeForm(resourceId: string, options: { enabled?: boolean } = {}) {
+export function useChangeForm(resourceId: string, options: { fresh?: boolean } = {}) {
   return useQuery({
     queryKey: keys.changeForm(resourceId),
     queryFn: () => unwrap(api.GET("/api/changes/form/{resourceId}", { params: { path: { resourceId } } })),
-    enabled: options.enabled ?? true,
-    // A form keeps the commit it was loaded from; it is read again only when asked.
+    // A form keeps the commit it was loaded from; it is read again only when asked, or, with fresh, each time it opens.
     staleTime: Infinity,
+    refetchOnMount: options.fresh ? "always" : true,
     refetchOnWindowFocus: false,
   });
 }

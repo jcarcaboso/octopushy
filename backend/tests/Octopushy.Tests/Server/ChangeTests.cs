@@ -173,6 +173,7 @@ public class ChangeTests(PostgresFixture postgres)
         Assert.True(preview.Valid);
         Assert.Null(preview.Refused);
         Assert.Equal("krb-app-01: memory 2048 → 4096", preview.Subject);
+        Assert.Equal("krb-app-01: memory 2048 → 4096\n\nOctopushy-Change: <given when committed>\n", preview.Message);
         Assert.Contains("-  memory: 2048            # MiB\n+  memory: 4096            # MiB\n", preview.Diff);
         Assert.Equal(2, preview.Diff.Split('\n').Count(l => l.StartsWith('+') || l.StartsWith('-')) - 2);
         Assert.Equal(form.BaseCommit, setup.RemoteHead);
@@ -316,6 +317,23 @@ public class ChangeTests(PostgresFixture postgres)
         Assert.NotNull(form.Hardware);
         var refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
         Assert.Equal(ChangeRefusal.Reasons.Disabled, refused.Reason);
+        Assert.Equal(form.BaseCommit, setup.RemoteHead);
+    }
+
+    [Fact]
+    public async Task A_push_that_fails_is_refused_with_what_the_credential_needs()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            (await db.RepositorySettings.SingleAsync()).CredentialKind = "token";
+            await db.SaveChangesAsync();
+        });
+        var refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(ChangeRefusal.Reasons.PushFailed, refused.Reason);
+        Assert.Contains("The configured repository credential is missing.", refused.Message);
+        Assert.Contains("deploy key with write access", refused.Message);
         Assert.Equal(form.BaseCommit, setup.RemoteHead);
     }
 

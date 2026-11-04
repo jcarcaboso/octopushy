@@ -19,10 +19,14 @@ function Harness({ schema, initial, ui, issues, seen }: { schema: Schema; initia
   return (
     <SchemaForm schema={schema} ui={ui} value={value} issues={issues}
       onChange={(next) => {
-        seen.value = next;
+        record(seen, next);
         setValue(next);
       }} />
   );
+}
+
+function record(seen: { value: JsonObject | null }, value: JsonObject) {
+  seen.value = value;
 }
 
 function group(name: RegExp | string) {

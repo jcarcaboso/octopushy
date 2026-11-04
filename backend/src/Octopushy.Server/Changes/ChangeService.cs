@@ -96,7 +96,9 @@ public sealed partial class ChangeService(
             if (target.Settings.HeadCommit is { } synced && synced != request.BaseCommit
                 && (await mirror.ChangesAsync(request.BaseCommit, synced, ct)).FirstOrDefault(c => composed.Touches(c.Path)) is { } moved)
                 refused = Stale(composed, moved.Path, synced);
-            return new ChangePreviewDto(composed.Kind, composed.Address, composed.Subject, composed.Message, request.BaseCommit, composed.Files,
+            // The change's id is given when it is committed; this one only made the candidate.
+            var message = composed.Message.Replace(id.ToString(), "<given when committed>", StringComparison.Ordinal);
+            return new ChangePreviewDto(composed.Kind, composed.Address, composed.Subject, message, request.BaseCommit, composed.Files,
                 diff, validation.Valid, validation.NewIssues.Concat(validation.FormatIssues).ToList(), fieldIssues, refused);
         }
         finally
@@ -197,10 +199,10 @@ public sealed partial class ChangeService(
         try
         {
             var head = await mirror.WriteDraftAsync(id, baseCommit, composed.Changes, composed.Message, ct);
-            var credential = await RepositoryEditor.CredentialAsync(services.GetRequiredService<VariableStore>(), target.Settings, ct);
             var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
             try
             {
+                var credential = await RepositoryEditor.CredentialAsync(services.GetRequiredService<VariableStore>(), target.Settings, ct);
                 var candidate = await RepositoryEditor.PushDraftAsync(mirror, target.Settings, credential, baseCommit, head, composed.Message,
                     RepositoryEditor.AuthorOf(actor), async candidate =>
                     {
