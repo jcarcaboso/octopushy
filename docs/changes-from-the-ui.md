@@ -86,6 +86,8 @@ branch, and so does the first sync at startup.
   taken. There is no timeout: a force-push, a clock that jumps or another instance would make one wrong.
 - **A committed change is checked too, until its follow-through ends.** If the branch no longer reaches its commit, as after
   a force-push, it is `unknown` again, and is found again only if one of its commits comes back.
+- **The batch is picked before the branch is fetched,** under the engine's gate, so every commit it holds was pushed before the
+  fetch began. A change pushed while a sync waits is never judged against a head that predates it.
 - **Each sync checks a bounded batch** (`Octopushy__Changes__ReconcileBatch`, 100 by default), the changes checked longest
   ago first, so every change is reached in turn. The Git ancestry checks run outside the engine's gate: the batch is picked
   under it and the results applied under it, and a change that moved in between is left for the next sync.
@@ -142,9 +144,16 @@ it. A crash between those steps used to leave a head whose runs were never propo
 change could end `no-change` with zero runs. Now a crash leaves nothing, and the next sync, the first at startup included,
 applies the revision. A head revision without the marker is applied again.
 
-Applying it again proposes what has no run yet, and nothing twice: a resource's desired inputs count as proposed only while a
-run for exactly those inputs exists, whichever revision recorded them. So work recorded without its run, a provisioning or a
-removal, is proposed even when a later revision changes nothing for that resource. The migration that adds the marker sets it
+Applying it again proposes what has no run yet, and nothing twice. A resource's desired work counts as proposed only while a
+run exists for **this occurrence** of it, of any status, so work cancelled on purpose is not proposed again:
+
+- for provisioning, a run with those inputs for the revision that recorded them, which a later revision that changes nothing
+  for the resource keeps. Coming back to inputs that ran before, as from 2048 to 4096 and back, is new work, and an old run for
+  2048 does not stand in for it;
+- for a removal, a retire run with those inputs made since the guest's folder went missing this time. A folder deleted,
+  restored and deleted again is a second removal.
+
+So work recorded without its run is proposed, even when a later revision changes nothing for that resource. The migration that adds the marker sets it
 on every existing revision except the head, which the next sync, the first at startup included, applies again in this way.
 
 ## What it needs
@@ -186,6 +195,9 @@ the definition itself is only ever in Git.
 | `superseded` | A later commit set the resource otherwise before this change was applied, or for a removal defined it again. The change page names that commit. A superseded change is never shown applied by the later commit's runs |
 | `refused` | Refused before any push was attempted, such as a stale form, one that does not validate or changes nothing, or a missing credential: nothing was committed |
 | `dismissed` | A person stopped waiting for an `uncertain` or `unknown` change; the change records who and when. Not final, and not proof: a commit of it that arrives later moves it on |
+
+**A revision not applied yet decides nothing.** While the revision a change follows has no inventory marker, an empty run list
+there is not `no-change`: the change waits, `synced`, until the next sync applies the revision and proposes its runs.
 
 **Which revision.** A change follows the first revision that contains its commit, looked up directly among the commits that
 lead from it to the branch head, however many revisions came in between. That revision is accepted only if the
