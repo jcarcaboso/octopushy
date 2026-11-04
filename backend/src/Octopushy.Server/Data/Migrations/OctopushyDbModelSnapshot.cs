@@ -867,6 +867,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("desired_inputs_hash");
 
+                    b.Property<Guid?>("DesiredOccurrence")
+                        .HasColumnType("uuid")
+                        .HasColumnName("desired_occurrence");
+
                     b.Property<Guid?>("DesiredRevisionId")
                         .HasColumnType("uuid")
                         .HasColumnName("desired_revision_id");
@@ -1171,6 +1175,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnName("number");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Number"));
+
+                    b.Property<Guid?>("Occurrence")
+                        .HasColumnType("uuid")
+                        .HasColumnName("occurrence");
 
                     b.Property<string>("Operation")
                         .IsRequired()

@@ -169,9 +169,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             var guest = repository.Guest(resource.Address)!;
             var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id));
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
-            // A desired hash only counts as proposed while a run exists for the revision that recorded it: one recorded without
-            // its run, as a crash could leave before revisions were applied in one transaction, is proposed now, even by a later
-            // revision that changes nothing for the guest. A run for the same inputs at an earlier time is not this work.
+            // A desired hash only counts as proposed while a run exists for its occurrence: one recorded without its run, as a
+            // crash could leave before revisions were applied in one transaction, is proposed now, even by a later revision that
+            // changes nothing for the guest. A run for the same inputs at an earlier time is not this work.
             var unfinished = !await GuestRemoval.ProposedAsync(db, resource, desired, cancellationToken);
             if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty) && !unfinished)
             {
@@ -199,8 +199,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 continue;
             }
 
-            resource.DesiredInputsHash = desired;
-            resource.DesiredRevisionId = revision.Id;
+            // The same work proposed again, when it was recorded without its run, keeps its occurrence; new work gets a new one.
+            GuestRemoval.Record(resource, desired, revision.Id, proposed,
+                sameWork: resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty));
             await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
             runs.Add(proposed);
         }

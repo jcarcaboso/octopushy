@@ -42,6 +42,22 @@ public static class ChangeTracker
 
         if (change.RevisionId is { } revisionId && await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == revisionId, ct) is { } revision)
         {
+            // A revision left unapplied, as a crash could leave one before revisions were applied in one transaction, is applied
+            // again only while it is the head. Once the head has moved on, the change moves to the first applied revision after
+            // it that contains its commit, held to what it wrote like any other; the old one is never replayed.
+            if (revision.InventoryAppliedAt is null && await AppliedSuccessorAsync(db, mirror, commit, revision, ct) is { } successor)
+            {
+                if (await LostAsync(revisions, change, successor, ct) is { } lost)
+                {
+                    Supersede(change, successor.Commit, lost, now);
+                    return;
+                }
+
+                change.RevisionId = successor.Id;
+                change.RunIds = [];
+                revision = successor;
+            }
+
             var followed = await FollowAsync(db, mirror, revisions, change, revision, now, ct);
             if (followed is null)
                 return;
@@ -92,6 +108,32 @@ public static class ChangeTracker
 
         return await RepositoryTrust.CurrentRevisions(db).AsNoTracking()
             .Where(r => containing.Contains(r.Commit))
+            .OrderBy(r => r.Sequence).FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>
+    /// For an unapplied revision that is no longer the head, the first applied revision after it whose commit contains
+    /// <paramref name="commit"/>; null while it is the head, since the next sync applies it, or when there is none yet.
+    /// </summary>
+    private static async Task<DefinitionRevision?> AppliedSuccessorAsync(OctopushyDb db, RepositoryMirror mirror, string commit,
+        DefinitionRevision revision, CancellationToken ct)
+    {
+        var settings = await db.RepositorySettings.AsNoTracking().Where(s => s.Id == 1).Select(s => new { s.HeadRevisionId, s.HeadCommit })
+            .FirstOrDefaultAsync(ct);
+        if (settings?.HeadCommit is not { } head || settings.HeadRevisionId == revision.Id)
+            return null;
+        var containing = new List<string> { commit };
+        try
+        {
+            containing.AddRange(await mirror.DescendantsAsync(commit, head, ct));
+        }
+        catch (GitException)
+        {
+            return null;
+        }
+
+        return await RepositoryTrust.CurrentRevisions(db).AsNoTracking()
+            .Where(r => r.Sequence > revision.Sequence && r.InventoryAppliedAt != null && containing.Contains(r.Commit))
             .OrderBy(r => r.Sequence).FirstOrDefaultAsync(ct);
     }
 

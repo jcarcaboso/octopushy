@@ -14,29 +14,38 @@ namespace Octopushy.Server.Inventory;
 public static class GuestRemoval
 {
     /// <summary>
-    /// A retire run for <paramref name="resource"/>, deleted in <paramref name="removal"/>, or null when
-    /// one is already under way, or, unless <paramref name="force"/>, was already proposed for it.
-    /// </summary>
-    /// <summary>
     /// Whether a run exists for this occurrence of the resource's desired work, of any status: work proposed and then run,
-    /// failed or cancelled on purpose is not proposed again by itself, but work recorded without its run is. An occurrence is
-    /// what recorded the work, not only its inputs, so coming back to inputs that ran before is new work:
-    /// <list type="bullet">
-    /// <item>a removal is this time the folder is gone: a retire run with these inputs made since the resource went missing;</item>
-    /// <item>anything else is the revision that recorded the desired inputs: a run with these inputs for that revision, which a
-    /// later revision that changes nothing for the resource keeps.</item>
-    /// </list>
+    /// failed or cancelled on purpose is not proposed again by itself, but work recorded without its run is. Each new piece of
+    /// desired work gets its own occurrence id on the resource when it is recorded, and the run proposed for it carries that
+    /// id: coming back to inputs that ran before, rolling back to a commit whose revision is reused, or deleting a guest's
+    /// folder a second time, is new work that no earlier run stands in for, whatever the clock said. A later revision that
+    /// changes nothing for the resource keeps the occurrence, and with it the run.
     /// </summary>
     public static Task<bool> ProposedAsync(OctopushyDb db, Resource resource, string inputsHash, CancellationToken ct)
     {
-        if (resource.MissingSince is { } since)
-            return db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.InputsHash == inputsHash && r.Operation == Operations.Retire
-                && r.CreatedAt >= since, ct);
-        var recordedBy = resource.DesiredRevisionId;
-        return db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.InputsHash == inputsHash && r.RevisionId == recordedBy
-            && (r.Operation == Operations.Provision || r.Operation == Operations.Retire), ct);
+        if (resource.DesiredOccurrence is not { } occurrence)
+            return Task.FromResult(false);
+        return db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.InputsHash == inputsHash && r.Occurrence == occurrence, ct);
     }
 
+    /// <summary>
+    /// Records <paramref name="inputsHash"/> as the resource's desired work, recorded by <paramref name="revision"/>, and
+    /// stamps <paramref name="run"/> with its occurrence: the same occurrence when it is the same work proposed again, as when
+    /// recovering a revision applied in part, a new one otherwise.
+    /// </summary>
+    public static void Record(Resource resource, string inputsHash, Guid revision, Run run, bool sameWork)
+    {
+        if (!sameWork || resource.DesiredOccurrence is null)
+            resource.DesiredOccurrence = Guid.NewGuid();
+        resource.DesiredInputsHash = inputsHash;
+        resource.DesiredRevisionId = revision;
+        run.Occurrence = resource.DesiredOccurrence;
+    }
+
+    /// <summary>
+    /// A retire run for <paramref name="resource"/>, deleted in <paramref name="removal"/>, or null when
+    /// one is already under way, or, unless <paramref name="force"/>, was already proposed for it.
+    /// </summary>
     public static async Task<Run?> ProposeAsync(OctopushyDb db, RevisionCache revisions, RunFactory factory, Resource resource,
         DefinitionRevision removal, bool force, CancellationToken ct)
     {
@@ -57,11 +66,11 @@ public static class GuestRemoval
 
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
             $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
-        if (!force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id
-            && await ProposedAsync(db, resource, run.InputsHash!, ct))
+        // The same removal is this time the folder is gone; restoring it and deleting it again is another.
+        var sameWork = !force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id;
+        if (sameWork && await ProposedAsync(db, resource, run.InputsHash!, ct))
             return null;
-        resource.DesiredInputsHash = run.InputsHash;
-        resource.DesiredRevisionId = lastDefined.Id;
+        Record(resource, run.InputsHash!, lastDefined.Id, run, sameWork);
         return run;
     }
 }

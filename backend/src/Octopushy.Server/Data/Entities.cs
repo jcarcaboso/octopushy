@@ -371,6 +371,12 @@ public sealed class Resource
     /// <summary>JSON array of the issues that affect this resource.</summary>
     public string Issues { get; set; } = "[]";
 
+    /// <summary>
+    /// The identity of the resource's current desired work: new each time new work is recorded, kept while the same work is
+    /// proposed again. The run that stands for the work carries it.
+    /// </summary>
+    public Guid? DesiredOccurrence { get; set; }
+
     public string? DesiredInputsHash { get; set; }
 
     public Guid? DesiredRevisionId { get; set; }
@@ -618,6 +624,9 @@ public sealed class Run
     public string? Detail { get; set; }
 
     public string? InputsHash { get; set; }
+
+    /// <summary>For a provision or retire run proposed for a resource's desired work, that work's occurrence.</summary>
+    public Guid? Occurrence { get; set; }
 
     /// <summary>JSON: what the run's steps are built from, without secret values.</summary>
     public string Context { get; set; } = "{}";
