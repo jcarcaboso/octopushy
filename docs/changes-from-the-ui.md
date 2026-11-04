@@ -114,7 +114,7 @@ the definition itself is only ever in Git.
 | `applied` | Every run it proposed succeeded |
 | `failed` | A run failed or was cancelled, for example superseded by a later change |
 | `no-change` | The revision proposed no run for the resource: nothing a run is built from changed |
-| `refused` | Nothing was committed: the form was stale, the change did not validate, or committing is not allowed |
+| `refused` | Nothing was committed: the form was stale, the change did not validate or changed nothing, or the push failed |
 
 The runs a change follows are those its revision proposed for its resource: a guest's provision run, then its setup run once
 provisioning has caught up; a service's pipeline; for a removal, the retire run planned from the guest's last applied
@@ -148,7 +148,9 @@ A change request names the resource, the base commit, the kind, and each section
 
 A section left out stays as it is. A refusal is `{ changeId, reason, message, issues, fieldIssues }`, where `reason` is
 `disabled`, `observed-only`, `unavailable`, `stale`, `invalid`, `no-change`, `unsupported` or `push-failed`, and each field
-issue is a JSON pointer into `{ workflow, hardware, network, inputs }` with its message.
+issue is a JSON pointer into `{ workflow, hardware, network, inputs }` with its message. A change refused once its edit was
+made, such as a stale form or one that does not validate, is recorded as `refused` and has a `changeId`; one refused before,
+because committing is off or the resource cannot be changed, is not.
 
 ## Not yet
 

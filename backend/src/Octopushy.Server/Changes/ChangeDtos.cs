@@ -88,7 +88,7 @@ public sealed record ChangeDto(
 
 /// <summary>
 /// Why a change was refused (HTTP 409), with nothing committed: <c>Reason</c> is <c>disabled</c>, <c>observed-only</c>,
-/// <c>unavailable</c>, <c>stale</c>, <c>invalid</c>, <c>no-change</c>, <c>unsupported</c> or <c>push-failed</c>. A refusal of
-/// a known resource is recorded, as <c>ChangeId</c>.
+/// <c>unavailable</c>, <c>stale</c>, <c>invalid</c>, <c>no-change</c>, <c>unsupported</c> or <c>push-failed</c>. A refusal once
+/// the edit was made is recorded, as <c>ChangeId</c>; one refused before that, such as with committing off, is not.
 /// </summary>
 public sealed record ChangeRefusedDto(Guid? ChangeId, string Reason, string Message, IReadOnlyList<IssueDto> Issues, IReadOnlyList<FieldIssueDto> FieldIssues);
