@@ -183,6 +183,15 @@ public sealed class RepositorySync(
                 await transaction.CommitAsync(cancellationToken);
                 return true;
             }, cancellationToken);
+            // What deploys generated and nothing at this head uses any more: on every sync, so a removal that failed is retried.
+            if (GeneratedValues.ReferencedKeys(repository) is { } referenced)
+            {
+                await engine.ExecuteAsync(async (db, _) =>
+                {
+                    await GeneratedValues.CleanUpAsync(db, referenced, logger, clock.GetUtcNow());
+                    return 0;
+                }, cancellationToken);
+            }
             await PruneAsync(cancellationToken);
         }
         catch (GitException e)

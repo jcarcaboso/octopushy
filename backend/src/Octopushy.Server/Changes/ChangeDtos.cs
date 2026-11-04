@@ -105,7 +105,15 @@ public sealed record ChangeDto(
     int? Vmid = null,
     string? PreApproval = null,
     string? PreApprovalDetail = null,
-    IReadOnlyList<string>? GeneratedKeys = null);
+    IReadOnlyList<GeneratedValueStateDto>? Generated = null,
+    int CleanupPending = 0);
+
+/// <summary>
+/// A value a deploy generated and where it stands: <c>planned</c>, <c>created</c>, <c>removed</c> or <c>kept</c>.
+/// <c>CleanupPending</c> says its removal was due and has not finished yet; <c>Detail</c> says what cleanup did or why it waits.
+/// </summary>
+public sealed record GeneratedValueStateDto(string Secret, string Key, string Generator, string State, bool CleanupPending, string? Detail,
+    string? CleanupError);
 
 /// <summary>
 /// Why a change was refused (HTTP 409), with nothing committed: <c>Reason</c> is <c>disabled</c>, <c>observed-only</c>,

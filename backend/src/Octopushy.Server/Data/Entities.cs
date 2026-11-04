@@ -139,6 +139,9 @@ public static class ChangeStatuses
 
     public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
 
+    /// <summary>The statuses <see cref="IsFinal"/> holds for, for queries.</summary>
+    public static readonly string[] Final = [Applied, Failed, Refused, NoChange, Superseded, Dismissed];
+
     /// <summary>
     /// Definitely not committed: refused before any push was attempted. Nothing else proves it, a dismissal included. What a
     /// change prepared, such as generated values, can be cleaned up then and only then.
@@ -229,15 +232,67 @@ public sealed class ResourceChange
     /// <summary>The run whose plan the pre-approval was decided for. It is decided once, for that run only.</summary>
     public Guid? PreApprovalRunId { get; set; }
 
-    /// <summary>Store keys the deploy generated values for. Deleted again if nothing was committed.</summary>
-    public List<string> GeneratedKeys { get; set; } = [];
-
-    /// <summary>Enrollment tokens the deploy created. Revoked again if nothing was committed.</summary>
-    public List<Guid> GeneratedTokens { get; set; } = [];
-
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? SyncedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>Where a value a deploy generated stands. See <see cref="GeneratedValue"/>.</summary>
+public static class GeneratedValueStates
+{
+    /// <summary>Recorded before it is made: nothing exists yet.</summary>
+    public const string Planned = "planned";
+    /// <summary>Made, and owned by its change: the store version it wrote, the token it created.</summary>
+    public const string Created = "created";
+    /// <summary>Removed by cleanup: its store version deleted and its unused token revoked.</summary>
+    public const string Removed = "removed";
+    /// <summary>Left in place for good, because someone else wrote the key since, or it has execution history.</summary>
+    public const string Kept = "kept";
+}
+
+/// <summary>
+/// One value a deploy generated, and exactly what it owns: the store version it wrote, under a description that names its
+/// change, and the enrollment token it created. Each is recorded in the same save that makes it. Cleanup removes only that
+/// version, while it is still the one present, and only an unused token; nothing someone else wrote is ever touched.
+/// </summary>
+public sealed class GeneratedValue
+{
+    public Guid Id { get; set; }
+
+    public Guid ChangeId { get; set; }
+
+    /// <summary>The secret of the definition it fills.</summary>
+    public required string Secret { get; set; }
+
+    public required string Key { get; set; }
+
+    public required string Generator { get; set; }
+
+    /// <summary><see cref="GeneratedValueStates"/>.</summary>
+    public string State { get; set; } = GeneratedValueStates.Planned;
+
+    /// <summary>The store version it wrote; null until it is written.</summary>
+    public int? StoreVersion { get; set; }
+
+    /// <summary>The description it wrote the entry with, naming its change: the entry is this value's only while it holds it.</summary>
+    public required string StoreDescription { get; set; }
+
+    /// <summary>The enrollment token it created, for <c>agent-enrollment-token</c>.</summary>
+    public Guid? TokenId { get; set; }
+
+    /// <summary>Cleanup was due and did not finish; each sync tries again.</summary>
+    public bool CleanupPending { get; set; }
+
+    public string? CleanupError { get; set; }
+
+    public int CleanupAttempts { get; set; }
+
+    /// <summary>What cleanup did, or why it left the value.</summary>
+    public string? Detail { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
 }

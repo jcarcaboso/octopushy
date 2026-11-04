@@ -4448,14 +4448,19 @@
               "string"
             ]
           },
-          "generatedKeys": {
+          "generated": {
             "type": [
               "null",
               "array"
             ],
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/GeneratedValueStateDto"
             }
+          },
+          "cleanupPending": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0
           }
         }
       },
@@ -5709,6 +5714,47 @@
           },
           "detail": {
             "type": "string"
+          }
+        }
+      },
+      "GeneratedValueStateDto": {
+        "required": [
+          "secret",
+          "key",
+          "generator",
+          "state",
+          "cleanupPending",
+          "detail",
+          "cleanupError"
+        ],
+        "type": "object",
+        "properties": {
+          "secret": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "generator": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "cleanupPending": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "cleanupError": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

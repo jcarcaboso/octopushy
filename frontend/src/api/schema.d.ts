@@ -1057,7 +1057,12 @@ export interface components {
             vmid?: null | number;
             preApproval?: null | string;
             preApprovalDetail?: null | string;
-            generatedKeys?: null | string[];
+            generated?: null | components["schemas"]["GeneratedValueStateDto"][];
+            /**
+             * Format: int32
+             * @default 0
+             */
+            cleanupPending: number;
         };
         ChangeFormDto: {
             /** Format: uuid */
@@ -1321,6 +1326,15 @@ export interface components {
             key: string;
             generator: string;
             detail: string;
+        };
+        GeneratedValueStateDto: {
+            secret: string;
+            key: string;
+            generator: string;
+            state: string;
+            cleanupPending: boolean;
+            detail: null | string;
+            cleanupError: null | string;
         };
         GuestConfigurationDto: {
             workflow: string;

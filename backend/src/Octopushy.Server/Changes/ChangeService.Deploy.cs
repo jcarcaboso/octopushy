@@ -172,8 +172,8 @@ public sealed partial class ChangeService
     /// <summary>
     /// Commits a deploy as <paramref name="actor"/>: checks the VMID again, records the change as <c>committing</c> with the
     /// store keys it will fill, generates the values it asks for, pushes the new folder, and syncs at once. A deploy refused
-    /// here discards what it generated at once; one whose request ends without saying how the push went is settled by
-    /// <see cref="ChangeReconciler"/>, which discards them too if its commit never reaches the branch.
+    /// before its push removes what it generated at once; one whose push was attempted is settled by <see cref="ChangeReconciler"/>
+    /// or a person, and <see cref="GeneratedValues"/> removes what it generated once it is final and nothing at the head uses it.
     /// </summary>
     public async Task<(ChangeDto? Change, ChangeRefusedDto? Refused)> DeployAsync(DeployRequest request, string actor, CancellationToken ct)
     {
@@ -191,15 +191,21 @@ public sealed partial class ChangeService
                 CheckReviewed(request, deployed, composed);
                 if (deployed.ResourceKind == ResourceKinds.Guest)
                     await CheckVmidAsync(db, deployed, request.Vmid!.Value, deployed.Settings.HeadCommit ?? request.BaseCommit, null, ct);
-                // On record before anything is generated or pushed, with every key it may fill: whatever happens to this
+                // On record before anything is generated or pushed, with each value it will make: whatever happens to this
                 // request, the branch never moves, and no value is left in the store, without a change that says why.
                 change = RecordDeploy(id, deployed, composed, request, actor);
                 change.Status = ChangeStatuses.Committing;
                 change.Detail = "Pushing its commit.";
-                change.GeneratedKeys = generations.Select(g => g.Key).ToList();
                 db.Changes.Add(change);
+                var now = clock.GetUtcNow();
+                var values = generations.Select(g => new GeneratedValue
+                {
+                    Id = Guid.CreateVersion7(), ChangeId = id, Secret = g.Secret, Key = g.Key, Generator = g.Generator,
+                    StoreDescription = $"Generated at deploy for {deployed.Address} ({g.Generator}, change {id}).", CreatedAt = now, UpdatedAt = now,
+                }).ToList();
+                db.GeneratedValues.AddRange(values);
                 await db.SaveChangesAsync(ct);
-                await GenerateAsync(db, services, deployed, generations, change, ct);
+                await GenerateAsync(db, services, generations, values, ct);
                 var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
                 Func<PublishCandidate, Task>? check = deployed.ResourceKind != ResourceKinds.Guest ? null : async candidate =>
                 {
@@ -235,11 +241,13 @@ public sealed partial class ChangeService
                 {
                     change.PreApproval = null;
                     change.PreApprovalDetail = null;
-                    await GeneratedValues.DiscardAsync(db, change, logger, clock.GetUtcNow());
                 }
 
                 change.UpdatedAt = clock.GetUtcNow();
                 await db.SaveChangesAsync(CancellationToken.None);
+                // Refused for good: what it generated goes now, under the same guards as at every sync.
+                if (!attempted && await HeadReferencedKeysAsync(db, CancellationToken.None) is { } referenced)
+                    await GeneratedValues.CleanUpAsync(db, referenced, logger, clock.GetUtcNow(), id);
                 return ((ResourceChange?)null, (ChangeRefusedDto?)refusal.Dto(id, change.Status));
             }
         }, ct);
@@ -556,41 +564,53 @@ public sealed partial class ChangeService
     }
 
     /// <summary>
-    /// Generates each value into its store key, and the enrollment tokens they hold, each token recorded on
-    /// <paramref name="change"/> in the same save that creates it. Nothing here is logged or returned.
+    /// Makes each value and records what it owns in the same save that makes it: the enrollment token with its id, the store
+    /// entry with the version and description it wrote. A key that is in the store already is never written over: the deploy is
+    /// refused. Nothing here is logged or returned.
     /// </summary>
-    private async Task GenerateAsync(OctopushyDb db, IServiceProvider services, DeployTarget target, IReadOnlyList<Generation> generations,
-        ResourceChange change, CancellationToken ct)
+    private async Task GenerateAsync(OctopushyDb db, IServiceProvider services, IReadOnlyList<Generation> generations, IReadOnlyList<GeneratedValue> values,
+        CancellationToken ct)
     {
-        if (generations.Count == 0)
-            return;
         var store = services.GetRequiredService<VariableStore>();
-        try
+        foreach (var (generation, value) in generations.Zip(values))
         {
-            foreach (var generation in generations)
+            if (await db.StoreEntries.AnyAsync(e => e.Key == generation.Key, ct))
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Exists,
+                    $"The store already has {generation.Key}: a generated value never replaces one. Choose it as an existing key, or delete it under Variables first.",
+                    fieldIssues: [new FieldIssueDto($"/secrets/{generation.Secret}", $"{generation.Key} is already in the store.")]);
+            string secret;
+            if (generation.Generator == SecretGenerators.AgentEnrollmentToken)
             {
-                string value;
-                if (generation.Generator == SecretGenerators.AgentEnrollmentToken)
-                {
-                    var ca = services.GetRequiredService<AgentCertificateAuthority>();
-                    var (token, made) = EnrollmentTokens.Create(db, ca, generation.TokenName, generation.Labels, 2,
-                        options.Value.AgentChannel.GeneratedEnrollmentTokenMinutes, clock.GetUtcNow());
-                    change.GeneratedTokens = [.. change.GeneratedTokens, token.Id];
-                    await db.SaveChangesAsync(ct);
-                    value = made;
-                }
-                else
-                {
-                    value = Convert.ToBase64String(RandomNumberGenerator.GetBytes(generation.Length)).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..generation.Length];
-                }
-
-                await store.SetAsync(generation.Key, value, Visibilities.Secret,
-                    $"Generated at deploy for {target.Address} ({generation.Generator}, change {change.Id}).", ct);
+                var ca = services.GetRequiredService<AgentCertificateAuthority>();
+                var (token, made) = EnrollmentTokens.Create(db, ca, generation.TokenName, generation.Labels, 2,
+                    options.Value.AgentChannel.GeneratedEnrollmentTokenMinutes, clock.GetUtcNow());
+                value.TokenId = token.Id;
+                value.State = GeneratedValueStates.Created;
+                value.UpdatedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(ct);
+                secret = made;
             }
-        }
-        catch (StoreException e)
-        {
-            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"A generated value could not be stored: {e.Message}");
+            else
+            {
+                secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(generation.Length)).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..generation.Length];
+            }
+
+            // A new key's first version is 1, and the store saves it together with this record.
+            value.StoreVersion = 1;
+            value.State = GeneratedValueStates.Created;
+            value.UpdatedAt = clock.GetUtcNow();
+            try
+            {
+                await store.SetAsync(generation.Key, secret, Visibilities.Secret, value.StoreDescription, ct);
+            }
+            catch (StoreException e)
+            {
+                // Not written: the record says so before the refusal is recorded.
+                value.StoreVersion = null;
+                value.State = value.TokenId is null ? GeneratedValueStates.Planned : GeneratedValueStates.Created;
+                throw new ChangeRefusal(e is StoreConflictException ? ChangeRefusal.Reasons.Exists : ChangeRefusal.Reasons.Invalid,
+                    $"A generated value could not be stored: {e.Message}");
+            }
         }
     }
 
@@ -649,7 +669,8 @@ public sealed partial class ChangeService
         }
 
         var prefix = installation + "/";
-        var settled = new[] { ChangeStatuses.Applied, ChangeStatuses.Failed, ChangeStatuses.Refused, ChangeStatuses.NoChange, ChangeStatuses.Superseded };
+        // A final change holds nothing: one applied is held by its definition from then on, and any other never will be.
+        var settled = ChangeStatuses.Final;
         var deploys = await db.Changes.AsNoTracking()
             .Where(c => c.Kind == ChangeKinds.CreateGuest && c.Vmid != null && c.Address.StartsWith(prefix) && !settled.Contains(c.Status) && c.Id != except)
             .Select(c => new { c.Address, c.Vmid }).ToListAsync(ct);

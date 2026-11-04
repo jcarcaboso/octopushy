@@ -408,7 +408,7 @@ ui:
 
 | Hint | What the wizard does |
 |---|---|
-| `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not written in any `guest.yaml` under it at the head commit, valid or not, not bound to or reserved by a guest, and not held by a deploy that is not settled. The person can change it. |
+| `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not written in any `guest.yaml` under it at the head commit, valid or not, not bound to or reserved by a guest, and not held by a deploy that is not final yet. The person can change it. |
 | `template` | Starts the template choice there. |
 | `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot. |
 | `secrets.<name>.generate` | Offers to generate the secret instead of naming a store key: `agent-enrollment-token` or `random-password`. |
@@ -445,9 +445,10 @@ the VMID it holds is unknown. A guest that is YAML but fails validation still ho
 Each goes into the variable store as a secret, under `guests/<lab>/<installation>/<guest>/<name>`, or
 `services/<address>/<name>` for a service: the address keeps two guests of one name on two installations apart. The new
 definition references it, `{ store: … }`. The value is never shown, returned by the API, logged, or written to Git. A key that
-is already in the store refuses the deploy rather than replacing it. **If nothing is committed,** because the push or the
-validation refused it, or because the push never reached the branch, the stored values are deleted and the token is revoked
-([how a deploy is recorded](changes-from-the-ui.md#the-workflow-wizard)).
+is already in the store refuses the deploy rather than replacing it. Each value records what it wrote: the store version and
+its token. Once its change is final and nothing at the branch head references the key, cleanup removes exactly that version,
+while it is still the one present, and revokes the token unless it was used. A removal that fails is retried at every sync
+([how generated values are removed](changes-from-the-ui.md#the-workflow-wizard)).
 
 The server generates a value only where the workflow's `ui.secrets` asks for that generator for that secret; any other secret
 names an existing store key. The managed SSH key a guest's setup logs in with is not a generated value here: Octopushy makes

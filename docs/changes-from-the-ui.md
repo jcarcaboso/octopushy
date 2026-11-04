@@ -308,10 +308,30 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
   refuses it with *"The workflow release changed since the review … Review again."*;
 - when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
 
-A deploy is recorded `committing` before anything is generated or pushed, with the store keys it will fill, and each
-enrollment token it makes is recorded in the same save that creates it. A refused deploy discards them at once. One whose
-request ends without saying how the push went is settled by reconciliation: if its commit never reaches the branch, the
-change is `failed` and its generated values are discarded there too, never on the request that was cancelled.
+A deploy is recorded `committing` before anything is generated or pushed, with a record of each value it will make. Each
+part of a value is recorded in the same save that makes it: the enrollment token's id, and the store version it writes,
+under a description that names the change. A deploy's commit is found as every change's is: by the candidate commits it
+pushed. Its status follows the same model: `refused` when nothing was pushed, `uncertain` or `unknown` after a push attempt
+until reconciliation finds its commit or a person dismisses it.
+
+**Generated values are removed under one rule, whatever triggers it:** at every sync, right after a deploy is refused before
+its push, and when it is dismissed. A value goes only when all of these hold:
+
+- its change is final, so its status cannot change again;
+- no definition at the branch head references its key. Every `store:` written in any definition file counts, valid or not.
+  So a dismissed change whose commit turns up on the branch later keeps the secrets its definition uses, and so does an
+  applied guest;
+- no run that has not finished uses the key.
+
+What goes is only what the value owns: the store version it wrote, while that version is still the one present and the entry
+still has its description. A key someone wrote since, a person or a later deploy of the same name, is never touched. Its
+enrollment token is revoked unless it was used: a used token stays, and removing it would not affect the agent it enrolled. A
+key a run was given keeps its history; revoke it under **Variables**. Each removal is its own transaction, with a short lock
+timeout. One that fails stays pending with its error, each sync tries it again, and the change page says *"2 generated
+values still to remove"* until it is done.
+
+A final deploy, whatever its status (`applied`, `failed`, `no-change`, `superseded`, `refused` or `dismissed`), holds no
+VMID: one applied is held by its definition from then on.
 
 A new guest or service is a resource once the revision with its folder is loaded, so a deploy's change has no resource until
 it is synced.

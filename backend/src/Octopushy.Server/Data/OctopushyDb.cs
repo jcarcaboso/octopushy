@@ -12,6 +12,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ResourceChange> Changes => Set<ResourceChange>();
 
+    public DbSet<GeneratedValue> GeneratedValues => Set<GeneratedValue>();
+
     public DbSet<RevisionIssues> RevisionIssues => Set<RevisionIssues>();
 
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
@@ -65,6 +67,13 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.Property(x => x.Title).HasMaxLength(120);
             e.HasIndex(x => x.UpdatedAt);
+        });
+
+        model.Entity<GeneratedValue>(e =>
+        {
+            e.ToTable("generated_values");
+            e.HasIndex(x => x.ChangeId);
+            e.HasIndex(x => new { x.State, x.Key });
         });
 
         model.Entity<ResourceChange>(e =>

@@ -22,6 +22,13 @@ const kindLabels: Record<string, string> = {
   "create-service": "New service",
 };
 
+const generatedStates: Record<string, string> = {
+  planned: "to be made",
+  created: "in the store",
+  removed: "removed",
+  kept: "kept",
+};
+
 const preApprovalLabels: Record<string, string> = {
   requested: "Asked for: the first plan is approved at deploy if it only creates",
   approved: "Approved at deploy",
@@ -109,15 +116,20 @@ function Facts({ change }: { change: Change }) {
         ...(change.preApproval
           ? [{ term: "Approve at deploy", value: <span>{preApprovalLabels[change.preApproval] ?? change.preApproval}</span> }]
           : []),
-        ...(change.generatedKeys && change.generatedKeys.length > 0
+        ...(change.generated && change.generated.length > 0
           ? [
               {
                 term: "Generated",
                 value: (
                   <ul className="plain-list">
-                    {change.generatedKeys.map((k) => (
-                      <li key={k} className="mono small break">
-                        {k}
+                    {change.generated.map((g) => (
+                      <li key={g.key} className="small">
+                        <span className="mono break">{g.key}</span>{" "}
+                        <span className="muted">
+                          {generatedStates[g.state] ?? g.state}
+                          {g.cleanupPending ? ", removal pending" : ""}
+                        </span>
+                        {g.detail ? <div className="muted">{g.detail}</div> : null}
                       </li>
                     ))}
                   </ul>
@@ -274,6 +286,12 @@ export function ChangePage() {
         {change.status === "refused" ? (
           <Callout kind="danger" title="Refused: nothing was committed">
             {change.detail}
+          </Callout>
+        ) : null}
+        {change.cleanupPending > 0 ? (
+          <Callout kind="warning" title={`${change.cleanupPending} generated value${change.cleanupPending === 1 ? "" : "s"} still to remove`}>
+            Removing {change.cleanupPending === 1 ? "it" : "them"} did not finish; each sync tries again.{" "}
+            {change.generated?.find((g) => g.cleanupPending)?.cleanupError ?? ""}
           </Callout>
         ) : null}
         {change.preApproval === "declined" ? (

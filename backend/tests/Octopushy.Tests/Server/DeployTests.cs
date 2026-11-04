@@ -395,7 +395,8 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
         var recorded = await setup.Server.QueryAsync(db => db.Changes.SingleAsync(c => c.Id == refused.ChangeId));
         Assert.Equal(ChangeStatuses.Refused, recorded.Status);
-        Assert.Empty(recorded.GeneratedKeys);
+        Assert.All(await setup.Server.QueryAsync(db => db.GeneratedValues.AsNoTracking().Where(v => v.ChangeId == recorded.Id).ToListAsync()),
+            v => Assert.Equal(GeneratedValueStates.Removed, v.State));
     }
 
     [Fact]
@@ -418,7 +419,8 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
 
         var change = await DeployAsync(setup, request);
-        Assert.Equal([Key, "guests/home/korriban/new-01/admin_password"], change.GeneratedKeys);
+        Assert.Equal([Key, "guests/home/korriban/new-01/admin_password"], change.Generated!.Select(g => g.Key));
+        Assert.All(change.Generated!, g => Assert.Equal(GeneratedValueStates.Created, g.State));
         var file = setup.RemoteFile(NewFile);
         Assert.Contains("secrets:                          # values are in the variable store, never in Git\n"
             + $"  enroll_token: {{ store: {Key} }}  # generated at deploy: one-time enrollment token\n", file);
@@ -459,38 +461,215 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
     }
 
-    [Fact]
-    public async Task A_deploy_whose_request_ended_before_its_push_is_refused_by_reconciliation_and_its_generated_values_discarded()
+    /// <summary>
+    /// Records a deploy of <paramref name="address"/> in <paramref name="status"/> that generated <paramref name="key"/>, as the
+    /// wizard leaves it: the change, the value's record of what it owns, the store entry it wrote and, if asked, its token.
+    /// </summary>
+    private static async Task<(Guid Change, Guid? Token)> OwnedAsync(Setup setup, string status, string key, string address = "home/korriban/lost-01",
+        bool token = false, bool tokenUsed = false, int? vmid = null)
     {
-        await using var setup = await StartAsync();
-        // As a request cancelled before its push leaves it: recorded as committing, its token and value made, no candidate commit.
         var id = Guid.CreateVersion7();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
-        var token = Guid.Empty;
+        var marker = $"Generated at deploy for {address} (agent-enrollment-token, change {id}).";
+        Guid? tokenId = null;
         await setup.Server.WithDbAsync(async db =>
         {
-            var ca = setup.Server.Services.GetRequiredService<Octopushy.Server.Agents.AgentCertificateAuthority>();
-            var (made, _) = Octopushy.Server.Agents.EnrollmentTokens.Create(db, ca, "lost-01", ["home"], 2, 60, DateTimeOffset.UtcNow);
-            token = made.Id;
-            var then = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var now = DateTimeOffset.UtcNow.AddMinutes(-1);
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/lost-01", Author = "ops",
-                BaseCommit = setup.RemoteHead, Message = "lost-01: deploy", Status = ChangeStatuses.Committing, Vmid = 330,
-                GeneratedKeys = [Key], GeneratedTokens = [made.Id], CreatedAt = then, UpdatedAt = then,
+                Id = id, Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = address, Author = "ops",
+                BaseCommit = setup.RemoteHead, Message = "deploy", Status = status, Vmid = vmid, CreatedAt = now, UpdatedAt = now,
+                CandidateCommits = status == ChangeStatuses.Committing ? [] : [new string('c', 40)],
+            });
+            if (token)
+            {
+                var ca = setup.Server.Services.GetRequiredService<Octopushy.Server.Agents.AgentCertificateAuthority>();
+                var (made, _) = Octopushy.Server.Agents.EnrollmentTokens.Create(db, ca, address.Split('/')[^1], ["home"], 2, 60, now);
+                if (tokenUsed)
+                    made.UsedAt = now;
+                tokenId = made.Id;
+            }
+
+            db.GeneratedValues.Add(new GeneratedValue
+            {
+                Id = Guid.CreateVersion7(), ChangeId = id, Secret = "enroll_token", Key = key, Generator = SecretGenerators.AgentEnrollmentToken,
+                State = GeneratedValueStates.Created, StoreVersion = 1, StoreDescription = marker, TokenId = tokenId, CreatedAt = now, UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
-        await setup.Server.SetSecretAsync(Key, "a generated value");
+        await using var scope = setup.Server.Services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>().SetAsync(key, "a generated value", Visibilities.Secret, marker,
+            CancellationToken.None);
+        return (id, tokenId);
+    }
+
+    private static Task<GeneratedValue> ValueOfAsync(Setup setup, Guid change) =>
+        setup.Server.QueryAsync(db => db.GeneratedValues.AsNoTracking().SingleAsync(v => v.ChangeId == change));
+
+    private static Task<bool> StoredAsync(Setup setup, string key) => setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == key));
+
+    [Fact]
+    public async Task A_deploy_whose_request_ended_before_its_push_is_refused_by_reconciliation_and_its_generated_values_removed()
+    {
+        await using var setup = await StartAsync();
+        // As a request cancelled before its push leaves it: recorded as committing, its token and value made, no candidate commit.
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (id, token) = await OwnedAsync(setup, ChangeStatuses.Committing, Key, token: true, vmid: 330);
+        Assert.Equal(331, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from=330"))!.Vmid);
 
         await setup.Server.SyncAsync();
-        var change = await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == id));
-        Assert.Equal(ChangeStatuses.Refused, change.Status);
-        Assert.Empty(change.GeneratedKeys);
-        Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Key)));
+        Assert.Equal(ChangeStatuses.Refused, (await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == id))).Status);
+        var value = await ValueOfAsync(setup, id);
+        Assert.Equal(GeneratedValueStates.Removed, value.State);
+        Assert.Contains("version 1 deleted", value.Detail);
+        Assert.False(await StoredAsync(setup, Key));
         Assert.False(await setup.Server.QueryAsync(db => db.EnrollmentTokens.AnyAsync(t => t.Id == token)));
         // It no longer holds its VMID.
         Assert.Equal(330, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from=330"))!.Vmid);
+    }
+
+    [Fact]
+    public async Task Cleanup_of_an_abandoned_deploy_never_removes_what_a_later_deploy_or_a_person_wrote_under_its_key()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        // A was dismissed; its value went, and B, a later deploy of the same name still being pushed, wrote the same key.
+        var (a, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+        await setup.Server.WithDbAsync(async db =>
+        {
+            await db.StoreVersions.Where(v => v.Key == Key).ExecuteDeleteAsync();
+            await db.StoreEntries.Where(e => e.Key == Key).ExecuteDeleteAsync();
+        });
+        var (b, _) = await OwnedAsync(setup, ChangeStatuses.Committing, Key);
+        // B's request is still running: its change is not settled by this sync.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var record = await db.Changes.SingleAsync(c => c.Id == b);
+            record.CandidateCommits = [new string('d', 40)];
+            record.Status = ChangeStatuses.Uncertain;
+            await db.SaveChangesAsync();
+        });
+
+        await setup.Server.SyncAsync();
+        // A's record matches the key's version, not its writer: B's value stays, and so does B's record.
+        Assert.Equal(GeneratedValueStates.Kept, (await ValueOfAsync(setup, a)).State);
+        Assert.Contains("written again since", (await ValueOfAsync(setup, a)).Detail);
+        Assert.True(await StoredAsync(setup, Key));
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, b)).State);
+        var entry = await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Key));
+        Assert.Contains(b.ToString(), entry.Description);
+
+        // A person who sets a key a dismissed deploy generated, by hand, keeps it too.
+        const string Manual = "guests/home/korriban/manual-01/enroll_token";
+        var (c, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Manual, address: "home/korriban/manual-01");
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var written = await db.StoreEntries.SingleAsync(e => e.Key == Manual);
+            written.Description = "Set by hand";
+            await db.SaveChangesAsync();
+        });
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Kept, (await ValueOfAsync(setup, c)).State);
+        Assert.True(await StoredAsync(setup, Manual));
+    }
+
+    [Fact]
+    public async Task A_removal_that_fails_stays_pending_shows_on_the_change_and_is_retried_at_the_next_sync()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+
+        // Someone holds the entry's row: the removal waits for its lock, gives up, and is left for the next sync.
+        await using (var scope = setup.Server.Services.CreateAsyncScope())
+        {
+            var other = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+            await using var held = await other.Database.BeginTransactionAsync();
+            await other.Database.ExecuteSqlRawAsync("SELECT 1 FROM store_entries WHERE key = {0} FOR UPDATE", Key);
+            await setup.Server.SyncAsync();
+            await held.RollbackAsync();
+        }
+
+        var pending = await ValueOfAsync(setup, id);
+        Assert.True(pending.CleanupPending);
+        Assert.Equal(1, pending.CleanupAttempts);
+        Assert.Contains("lock", pending.CleanupError, StringComparison.OrdinalIgnoreCase);
+        Assert.True(await StoredAsync(setup, Key));
+        var change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+        Assert.Equal(1, change.CleanupPending);
+        Assert.True(change.Generated!.Single().CleanupPending);
+
+        await setup.Server.SyncAsync();
+        var removed = await ValueOfAsync(setup, id);
+        Assert.Equal(GeneratedValueStates.Removed, removed.State);
+        Assert.False(removed.CleanupPending);
+        Assert.False(await StoredAsync(setup, Key));
+        Assert.Equal(0, (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!.CleanupPending);
+    }
+
+    [Fact]
+    public async Task A_dismissed_deploy_whose_commit_turns_up_keeps_what_the_definition_uses()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/landed-01/enroll_token";
+        var (id, token) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key, address: "home/korriban/landed-01", token: true);
+        // Its commit was on the branch after all: the head defines the guest, and it uses the generated key.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/landed-01/guest.yaml",
+            $"schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 350\nworkflow: agent-vm@1\nhardware: {{ cores: 1, memory: 512 }}\n"
+            + $"network: {{ bridge: vmbr0, mode: dhcp }}\nsecrets:\n  enroll_token: {{ store: {Key} }}\n");
+        await setup.Server.SyncAsync();
+        await setup.Server.SyncAsync();
+        var value = await ValueOfAsync(setup, id);
+        Assert.Equal(GeneratedValueStates.Created, value.State);
+        Assert.False(value.CleanupPending);
+        Assert.True(await StoredAsync(setup, Key));
+        Assert.True(await setup.Server.QueryAsync(db => db.EnrollmentTokens.AnyAsync(t => t.Id == token)));
+
+        // A definition that does not even validate still counts as using it.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/landed-01/guest.yaml",
+            $"schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 350\ncolour: blue\nsecrets:\n  enroll_token: {{ store: {Key} }}\n");
+        await setup.Server.SyncAsync();
+        Assert.False((await setup.Server.ResourceAsync("home/korriban/landed-01")).Valid);
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+
+        // Once nothing references it, it goes; a token that was used stays, since removing it would not affect its agent.
+        setup.PushElsewhere("labs/home/proxmox/korriban/guests/landed-01/guest.yaml",
+            "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 350\nworkflow: test-vm@1\nhardware: { cores: 1, memory: 512 }\nnetwork: { bridge: vmbr0, mode: dhcp }\n");
+        await setup.Server.WithDbAsync(async db =>
+        {
+            (await db.EnrollmentTokens.SingleAsync(t => t.Id == token)).UsedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        });
+        await setup.Server.SyncAsync();
+        value = await ValueOfAsync(setup, id);
+        Assert.Equal(GeneratedValueStates.Removed, value.State);
+        Assert.Contains("was used, so it stays", value.Detail);
+        Assert.False(await StoredAsync(setup, Key));
+        Assert.True(await setup.Server.QueryAsync(db => db.EnrollmentTokens.AnyAsync(t => t.Id == token)));
+    }
+
+    [Theory]
+    [InlineData(ChangeStatuses.Superseded, false)]
+    [InlineData(ChangeStatuses.Dismissed, false)]
+    [InlineData(ChangeStatuses.Refused, false)]
+    [InlineData(ChangeStatuses.Failed, false)]
+    [InlineData(ChangeStatuses.Applied, false)]
+    [InlineData(ChangeStatuses.Unknown, true)]
+    [InlineData(ChangeStatuses.Planning, true)]
+    public async Task A_final_deploy_releases_its_vmid_hold(string status, bool held)
+    {
+        await using var setup = await StartAsync();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.Changes.Add(new ResourceChange
+            {
+                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/held-01",
+                Author = "ops", BaseCommit = setup.RemoteHead, Message = "deploy", Status = status, Vmid = 360, CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+        var next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from=360"))!.Vmid;
+        Assert.Equal(held ? 361 : 360, next);
     }
 
     [Fact]

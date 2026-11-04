@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261104113621_Deploys")]
+    [Migration("20261104114154_Deploys")]
     partial class Deploys
     {
         /// <inheritdoc />
@@ -412,6 +412,86 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_enrollment_tokens_token_hash");
 
                     b.ToTable("enrollment_tokens", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GeneratedValue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ChangeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("change_id");
+
+                    b.Property<int>("CleanupAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("cleanup_attempts");
+
+                    b.Property<string>("CleanupError")
+                        .HasColumnType("text")
+                        .HasColumnName("cleanup_error");
+
+                    b.Property<bool>("CleanupPending")
+                        .HasColumnType("boolean")
+                        .HasColumnName("cleanup_pending");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("Generator")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("generator");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Secret")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("secret");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StoreDescription")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("store_description");
+
+                    b.Property<int?>("StoreVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("store_version");
+
+                    b.Property<Guid?>("TokenId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("token_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_generated_values");
+
+                    b.HasIndex("ChangeId")
+                        .HasDatabaseName("ix_generated_values_change_id");
+
+                    b.HasIndex("State", "Key")
+                        .HasDatabaseName("ix_generated_values_state_key");
+
+                    b.ToTable("generated_values", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.GuestAccessKey", b =>
@@ -1046,16 +1126,6 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text[]")
                         .HasColumnName("files");
-
-                    b.PrimitiveCollection<List<string>>("GeneratedKeys")
-                        .IsRequired()
-                        .HasColumnType("text[]")
-                        .HasColumnName("generated_keys");
-
-                    b.PrimitiveCollection<List<Guid>>("GeneratedTokens")
-                        .IsRequired()
-                        .HasColumnType("uuid[]")
-                        .HasColumnName("generated_tokens");
 
                     b.Property<string>("Kind")
                         .IsRequired()

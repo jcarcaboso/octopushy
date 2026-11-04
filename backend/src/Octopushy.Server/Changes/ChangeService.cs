@@ -326,8 +326,27 @@ public sealed partial class ChangeService(
             change.Detail = $"Dismissed by {actor}: none of its commits is on {settings.Branch} now, so Octopushy stopped waiting for it. This is "
                 + "not proof that nothing was committed: each sync still looks for its commits, and one that arrives is followed.";
             await db.SaveChangesAsync(ct);
+            // What a deploy generated goes now, under the same guards as at every sync: nothing at the head may reference it.
+            if (await HeadReferencedKeysAsync(db, ct) is { } referenced)
+                await GeneratedValues.CleanUpAsync(db, referenced, logger, now, change.Id);
             return await DtoAsync(db, change, ct);
         }, ct);
+
+    /// <summary>Every store key a definition at the head revision may reference, or null when it cannot be read.</summary>
+    private async Task<IReadOnlySet<string>?> HeadReferencedKeysAsync(OctopushyDb db, CancellationToken ct)
+    {
+        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+        if (head is null)
+            return null;
+        try
+        {
+            return GeneratedValues.ReferencedKeys(await revisions.GetAsync(head, ct));
+        }
+        catch (GitException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Why the installation over <paramref name="address"/> is observed only, by the server's own record of it or by its
@@ -511,13 +530,15 @@ public sealed partial class ChangeService(
         var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
         var runs = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
             .Where(r => change.RunIds.Contains(r.Id)).OrderBy(r => r.CreatedAt).ToListAsync(ct);
+        var generated = await db.GeneratedValues.AsNoTracking().Where(v => v.ChangeId == change.Id).OrderBy(v => v.CreatedAt).ToListAsync(ct);
         return new ChangeDto(change.Id, change.Kind, change.ResourceKind, change.ResourceId, change.Address, change.Author, change.Message,
             change.BaseCommit, change.Commit, change.Commit is null ? null : CommitUrl(settings?.Url, change.Commit), change.RevisionId,
             change.Status, change.Detail, change.Files, runs.Select(r => Views.Summary(r, change.Address, change.ResourceKind)).ToList(),
             change.CreatedAt, change.SyncedAt, change.UpdatedAt, change.SupersededBy,
             change.SupersededBy is null ? null : CommitUrl(settings?.Url, change.SupersededBy), change.DismissedBy, change.DismissedAt,
             ChangeStatuses.IsFinal(change.Status), ChangeStatuses.IsNotCommitted(change), change.Vmid, change.PreApproval,
-            change.PreApprovalDetail, change.GeneratedKeys);
+            change.PreApprovalDetail, generated.Select(v => new GeneratedValueStateDto(v.Secret, v.Key, v.Generator, v.State, v.CleanupPending,
+                v.Detail, v.CleanupError)).ToList(), generated.Count(v => v.CleanupPending));
     }
 
     /// <summary>The commit's page when the repository is on GitHub, reached over HTTPS or SSH.</summary>
