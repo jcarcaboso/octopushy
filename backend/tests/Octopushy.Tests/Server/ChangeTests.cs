@@ -1057,6 +1057,36 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_applied_successor_that_replaces_the_work_is_followed_through_its_own_run_not_the_superseded_one()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(agent: holder);
+        var agent = holder.Agent!;
+        await ProvisionAsync(setup, agent);
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        var superseded = Assert.Single(change.Runs);
+        // The change's revision left unapplied; then a commit that keeps the edit and changes the address, which is new work.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            (await db.Revisions.SingleAsync(r => r.Id == change.RevisionId)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        setup.PushElsewhere(GuestFile, setup.RemoteFile(GuestFile).Replace("address: 10.1.0.31/24", "address: 10.1.0.32/24").TrimEnd('\n'));
+        await setup.Server.SyncAsync();
+        Assert.Equal(RunStatuses.Cancelled, (await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == superseded.Id))).Status);
+
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact("replacement"));
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        var replacement = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Succeeded, replacement.Status);
+
+        var after = await setup.GetAsync(change.Id);
+        Assert.Equal(ChangeStatuses.Applied, after.Status);
+        Assert.Equal([replacement.Id], after.Runs.Select(r => r.Id));
+    }
+
+    [Fact]
     public async Task A_later_revisions_error_is_not_the_earlier_changes_failure()
     {
         await using var setup = await StartAsync();

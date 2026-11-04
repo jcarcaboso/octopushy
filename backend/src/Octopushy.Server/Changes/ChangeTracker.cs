@@ -53,11 +53,19 @@ public static class ChangeTracker
                     return;
                 }
 
-                // The unapplied revision's own runs are the change's work, which the successor keeps: they stay followed.
-                var retained = await db.Runs.AsNoTracking().Where(r => r.ResourceId == change.ResourceId && r.RevisionId == revision.Id
-                    && r.CreatedAt >= change.CreatedAt).Select(r => r.Id).ToListAsync(ct);
+                // Of the runs it had, only those that still stand for the resource's current work stay followed: a run whose
+                // occurrence is the work the successor kept, without proposing it again. A run the successor superseded or
+                // replaced with new work is history; the successor's own runs are followed as for any revision.
+                var current = await db.Resources.AsNoTracking().Where(r => r.Id == change.ResourceId).Select(r => r.DesiredOccurrence)
+                    .FirstOrDefaultAsync(ct);
+                var predecessor = revision.Id;
+                var known = change.RunIds;
+                var retained = current is null ? [] : await db.Runs.AsNoTracking()
+                    .Where(r => r.ResourceId == change.ResourceId && r.Occurrence == current && r.CreatedAt >= change.CreatedAt
+                        && (r.RevisionId == predecessor || known.Contains(r.Id)))
+                    .Select(r => r.Id).ToListAsync(ct);
                 change.RevisionId = successor.Id;
-                change.RunIds = [.. change.RunIds.Union(retained)];
+                change.RunIds = retained;
                 revision = successor;
             }
 

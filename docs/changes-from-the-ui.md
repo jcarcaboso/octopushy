@@ -208,8 +208,9 @@ the definition itself is only ever in Git.
 there is not `no-change`: the change waits, `synced`, until the next sync applies the revision and proposes its runs. That only
 happens while it is the head. Once the head has moved on, the change moves to the first applied revision after it that contains
 its commit, held to what it wrote like any other (it is `superseded` if that revision has other values), and follows that
-revision's runs together with the unapplied revision's own, since the successor keeps that work rather than proposing it
-again. The unapplied revision is never applied or marked.
+revision's runs, together with those of the unapplied revision that still stand for the resource's current work (the same
+occurrence), which the successor keeps rather than proposing again. A run the successor superseded or replaced with new work
+is dropped, so it never fails the change. The unapplied revision is never applied or marked.
 
 **Which revision.** A change follows the first revision that contains its commit, looked up directly among the commits that
 lead from it to the branch head, however many revisions came in between. That revision is accepted only if the
