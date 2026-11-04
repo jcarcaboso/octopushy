@@ -432,7 +432,8 @@ Each goes into the variable store as a secret, under `guests/<lab>/<installation
 `services/<address>/<name>` for a service: the address keeps two guests of one name on two installations apart. The new
 definition references it, `{ store: … }`. The value is never shown, returned by the API, logged, or written to Git. A key that
 is already in the store refuses the deploy rather than replacing it. **If nothing is committed,** because the push or the
-validation refused it, the stored values are deleted and the token is revoked.
+validation refused it, or because the push never reached the branch, the stored values are deleted and the token is revoked
+([how a deploy is recorded](changes-from-the-ui.md#the-workflow-wizard)).
 
 The server generates a value only where the workflow's `ui.secrets` asks for that generator for that secret; any other secret
 names an existing store key. The managed SSH key a guest's setup logs in with is not a generated value here: Octopushy makes

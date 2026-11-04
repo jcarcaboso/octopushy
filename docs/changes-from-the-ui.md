@@ -219,7 +219,8 @@ lead from it to the branch head, however many revisions came in between. That re
 resource's definition there still carries the change, checked on the change's own commit too; when a later commit landed
 before the sync, it is a descendant, checked the same way: each
 section the change wrote (`workflow`, `hardware`, `network`, `inputs`) has the values it wrote, or for a removal the resource
-is still absent. Otherwise the change is `superseded` by that commit. The same holds when a change's run is cancelled because a
+is still absent, or for a deploy the new resource still exists with every value it wrote. Otherwise the change is
+`superseded` by that commit. The same holds when a change's run is cancelled because a
 later revision superseded it: the change moves on to that revision only if it still carries the change.
 
 The runs a change follows are those its revision proposed for its resource: a guest's provision run, then its setup run once
@@ -300,6 +301,11 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
 - when its VMID is taken (`vmid-taken`), checked at the review and again at the commit the push lands on, with the next free
   one offered: the number is never changed after the review;
 - when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
+
+A deploy is recorded `committing` before anything is generated or pushed, with the store keys it will fill, and each
+enrollment token it makes is recorded in the same save that creates it. A refused deploy discards them at once. One whose
+request ends without saying how the push went is settled by reconciliation: if its commit never reaches the branch, the
+change is `failed` and its generated values are discarded there too, never on the request that was cancelled.
 
 A new guest or service is a resource once the revision with its folder is loaded, so a deploy's change has no resource until
 it is synced.
