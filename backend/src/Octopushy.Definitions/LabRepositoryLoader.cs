@@ -20,6 +20,8 @@ public sealed class LabRepositoryLoader
 
     private readonly string _root;
     private readonly IWorkflowSource _workflows;
+    /// <summary>Whether workflows come from somewhere else than this repository's own folders.</summary>
+    private readonly bool _external;
     private readonly List<DefinitionIssue> _issues = [];
     private readonly List<StoreUse> _storeUses = [];
     private readonly HashSet<string> _invalidAddresses = new(StringComparer.Ordinal);
@@ -31,10 +33,16 @@ public sealed class LabRepositoryLoader
     private LabRepositoryLoader(string root, IWorkflowSource? workflows)
     {
         _root = Path.GetFullPath(root);
-        _workflows = workflows ?? new LocalWorkflowSource(_root);
+        _workflows = workflows ?? (WorkflowsSetting.Read(_root).Repository is { } repository
+            ? new UnresolvedWorkflowSource(repository)
+            : new LocalWorkflowSource(_root));
+        _external = _workflows is not LocalWorkflowSource local || local.Root != _root;
     }
 
-    /// <summary>Reads a repository whose workflows are its own, in <c>workflows/</c>.</summary>
+    /// <summary>
+    /// Reads a repository as its <c>octopushy.yaml</c> says: with its own <c>workflows/</c>, or, when it names a workflows
+    /// repository, with every reference unresolved, since resolving takes that repository's tags.
+    /// </summary>
     public static LabRepository Load(string root) => new LabRepositoryLoader(root, null).LoadAll();
 
     /// <summary>Reads a repository, resolving the workflows it names from <paramref name="workflows"/>.</summary>
@@ -44,8 +52,8 @@ public sealed class LabRepositoryLoader
     {
         var settings = LoadSettings();
         CheckEarlierFormat();
+        CheckWorkflowsElsewhere();
         var templates = LoadTemplates();
-        _issues.AddRange(_workflows.Issues);
 
         var labs = new List<LabDefinition>();
         var installations = new List<InstallationDefinition>();
@@ -88,6 +96,9 @@ public sealed class LabRepositoryLoader
                 CheckService(service, guest, installations);
         }
 
+        // After every reference is resolved: a source may read a workflow only when something names it.
+        _issues.AddRange(_workflows.Issues);
+
         // An installation Octopushy only observes holds nothing it would change: see docs/safety-boundary.md.
         foreach (var installation in installations.Where(i => !i.Managed))
         {
@@ -124,7 +135,11 @@ public sealed class LabRepositoryLoader
             validEntries,
             _issues.ToList(),
             _storeUses.ToList(),
-            _repositoryValid);
+            _repositoryValid)
+        {
+            WorkflowsRepository = _external ? _workflows.Name : null,
+            WorkflowResolutions = (_workflows as GitTagWorkflowSource)?.Resolutions ?? [],
+        };
     }
 
     private bool IsValid(ResourceEntry entry, List<GuestDefinition> guests, RepositoryDefinition? settings)
@@ -180,6 +195,15 @@ public sealed class LabRepositoryLoader
         }
 
         CollectStoreUses(json, "octopushy.yaml", file, document);
+        if (json["workflows"] is JsonObject workflows)
+        {
+            if (workflows.ContainsKey("source") && workflows.ContainsKey("repository"))
+                Error(file, document.LineOf("/workflows"), "workflows: name either source: local or a repository, not both.");
+            if (workflows["repository"]?.GetValue<string>() is { } repository && GitUrls.Scheme(repository.Trim()) is null)
+                Error(file, document.LineOf("/workflows/repository"),
+                    $"workflows.repository: '{repository}' is not a repository Octopushy can fetch: use https://, ssh://, user@host:path, file:// or an absolute path.");
+        }
+
         var defaults = json["defaults"] as JsonObject;
         return new RepositoryDefinition(
             file,
@@ -194,6 +218,20 @@ public sealed class LabRepositoryLoader
         if (Directory.Exists(Path.Combine(_root, "recipes")))
             Error("recipes", null,
                 $"recipes/ is the format before workflows, and nothing reads it: move each recipe into a workflow, workflows/<id>/workflow.yaml. See {FormatDocument}.");
+    }
+
+    /// <summary>
+    /// With a workflows repository, this repository holds data only: one place holds workflows and modules, so what a run
+    /// executes is never a mix of two repositories.
+    /// </summary>
+    private void CheckWorkflowsElsewhere()
+    {
+        if (!_external)
+            return;
+        foreach (var folder in new[] { "workflows", "modules" }.Where(f => Directory.Exists(Path.Combine(_root, f))))
+        {
+            Error(folder, null, $"Workflows come from {_workflows.Name}; remove workflows/ and modules/ here.");
+        }
     }
 
     private Dictionary<string, TemplateDefinition> LoadTemplates()

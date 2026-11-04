@@ -313,6 +313,11 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("repository_valid");
 
+                    b.Property<string>("Resolutions")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("resolutions");
+
                     b.Property<long>("Sequence")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
@@ -332,15 +337,24 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("warning_count");
 
+                    b.Property<string>("WorkflowsDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("workflows_digest");
+
+                    b.Property<string>("WorkflowsRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("workflows_repository");
+
                     b.HasKey("Id")
                         .HasName("pk_revisions");
-
-                    b.HasIndex("Commit")
-                        .HasDatabaseName("ix_revisions_commit");
 
                     b.HasIndex("Sequence")
                         .IsUnique()
                         .HasDatabaseName("ix_revisions_sequence");
+
+                    b.HasIndex("Commit", "WorkflowsDigest")
+                        .HasDatabaseName("ix_revisions_commit_workflows_digest");
 
                     b.ToTable("revisions", (string)null);
                 });
@@ -746,6 +760,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("head_commit");
 
+                    b.Property<Guid?>("HeadRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("head_revision_id");
+
                     b.Property<DateTimeOffset?>("LastFetchAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_fetch_at");
@@ -769,6 +787,18 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("Url")
                         .HasColumnType("text")
                         .HasColumnName("url");
+
+                    b.Property<DateTimeOffset?>("WorkflowsLastFetchAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("workflows_last_fetch_at");
+
+                    b.Property<string>("WorkflowsLastFetchError")
+                        .HasColumnType("text")
+                        .HasColumnName("workflows_last_fetch_error");
+
+                    b.Property<string>("WorkflowsRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("workflows_repository");
 
                     b.HasKey("Id")
                         .HasName("pk_repository_settings");
@@ -1410,6 +1440,55 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_users_username");
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.WorkflowReleaseRecord", b =>
+                {
+                    b.Property<string>("Repository")
+                        .HasColumnType("text")
+                        .HasColumnName("repository");
+
+                    b.Property<string>("WorkflowId")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_id");
+
+                    b.Property<int>("Major")
+                        .HasColumnType("integer")
+                        .HasColumnName("major");
+
+                    b.Property<int>("Minor")
+                        .HasColumnType("integer")
+                        .HasColumnName("minor");
+
+                    b.Property<string>("Commit")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("commit");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<DateTimeOffset>("FirstSeenAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_at");
+
+                    b.Property<DateTimeOffset?>("MovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("moved_at");
+
+                    b.Property<string>("MovedTo")
+                        .HasColumnType("text")
+                        .HasColumnName("moved_to");
+
+                    b.Property<string>("Problem")
+                        .HasColumnType("text")
+                        .HasColumnName("problem");
+
+                    b.HasKey("Repository", "WorkflowId", "Major", "Minor")
+                        .HasName("pk_workflow_releases");
+
+                    b.ToTable("workflow_releases", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Attempt", b =>

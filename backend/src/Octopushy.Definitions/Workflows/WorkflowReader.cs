@@ -56,6 +56,23 @@ public sealed class WorkflowReader
         return result;
     }
 
+    /// <summary>One workflow, <c>workflows/&lt;id&gt;/workflow.yaml</c>, or null when it does not exist or cannot be read.</summary>
+    public WorkflowDefinition? ReadOne(string id)
+    {
+        var address = $"workflows/{id}";
+        var file = $"{address}/workflow.yaml";
+        if (!DefinitionFiles.IsId(id) || !File.Exists(Path.Combine(_root, file)))
+        {
+            Unreadable.Add(id);
+            return null;
+        }
+
+        var workflow = Read(id, file, address);
+        if (workflow is null)
+            Unreadable.Add(id);
+        return workflow;
+    }
+
     private WorkflowDefinition? Read(string id, string file, string address)
     {
         var (json, _) = DefinitionFiles.Read(_root, file, DefinitionKind.Workflow, _documents, (f, line, message) => Error(f, line, message, address));

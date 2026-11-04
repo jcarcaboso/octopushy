@@ -34,6 +34,12 @@ public sealed class LabRepository(
     /// <summary>Every workflow the workflow source read, valid or not, whether anything names it or not.</summary>
     public IReadOnlyList<WorkflowDefinition> Workflows { get; } = workflows;
 
+    /// <summary>Where workflows came from when not from this repository's own folders, such as a workflows repository's URL.</summary>
+    public string? WorkflowsRepository { get; init; }
+
+    /// <summary>For workflows from a workflows repository, what each reference resolved to; empty otherwise.</summary>
+    public IReadOnlyList<ResolvedWorkflow> WorkflowResolutions { get; init; } = [];
+
     /// <summary>Every lab, installation, guest, and service found, including those whose definition is invalid.</summary>
     public IReadOnlyList<ResourceEntry> Resources { get; } = resources;
 

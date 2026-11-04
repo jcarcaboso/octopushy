@@ -72,4 +72,49 @@ describe("repository revisions", () => {
     await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
     expect(requests.filter((request) => request.method === "POST").map((request) => request.path)).toEqual(["/api/repository/sync"]);
   });
+
+  it("shows the workflows repository, its releases with their issues, and what each guest resolved to", async () => {
+    const tagged = "aaaaaaaaaa1111111111aaaaaaaaaa1111111111";
+    const moved = "bbbbbbbbbb2222222222bbbbbbbbbb2222222222";
+    const lab = "git@github.com:jcarcaboso/octopushy-lab.git";
+    const issue = `fedora-vm/v1.0 was moved from aaaaaaaaaa to bbbbbbbbbb; the original commit is used. Moved tags are not followed.`;
+    mockApi({
+      "GET /api/repository": () => ({
+        ...repository(revision({ workflowsRepository: lab, workflowsDigest: "d1g35t0000" })),
+        workflows: {
+          source: "repository",
+          repository: lab,
+          lastFetchAt: loadedAt,
+          lastFetchError: null,
+          issues: [issue],
+          workflows: [
+            {
+              id: "fedora-vm",
+              releases: [
+                { version: "1.1", commit: tagged, firstSeenAt: loadedAt, usable: true, tagDeleted: false, movedTo: null, issue: null },
+                { version: "1.0", commit: tagged, firstSeenAt: loadedAt, usable: true, tagDeleted: false, movedTo: moved, issue },
+              ],
+            },
+          ],
+          uses: [
+            { address: "home/korriban/app", kind: "guest", reference: "fedora-vm@1", version: "1.1", commit: tagged, problem: null, newerMajor: "2.0" },
+            { address: "home/korriban/db", kind: "guest", reference: "fedora-vm@1.0", version: "1.0", commit: tagged, problem: null, newerMajor: null },
+          ],
+        },
+      }),
+      "GET /api/repository/revisions": () => [revision({ workflowsRepository: lab, workflowsDigest: "d1g35t0000" })],
+      "GET /api/repository/revisions/revision-1": () => ({ revision: revision(), issues: [] }),
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+
+    const card = within(await screen.findByRole("region", { name: "Workflows" }));
+    expect(card.getAllByText(lab)[0]).toBeVisible();
+    expect(card.getAllByText(issue)[0]).toBeVisible();
+    expect(card.getByText("Tag moved")).toBeVisible();
+    const uses = within(card.getByRole("region", { name: "What each reference resolved to" }));
+    expect(uses.getByText("fedora-vm 2.0 available, breaking")).toBeVisible();
+    expect(uses.getByText("fedora-vm@1.1")).toBeVisible();
+    const history = within(await screen.findByRole("region", { name: "Revision history" }));
+    expect(history.getByText("d1g35t0")).toBeVisible();
+  });
 });

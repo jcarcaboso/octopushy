@@ -36,7 +36,7 @@ public static partial class Endpoints
     private static void MapOverview(RouteGroupBuilder api)
     {
         api.MapGet("/overview", async (Views views, OctopushyDb db, CancellationToken ct) =>
-            TypedResults.Ok(await views.OverviewAsync(await RepositoryAsync(db, views, ct), ct)))
+            TypedResults.Ok(await views.OverviewAsync(await RepositoryAsync(db, views, ct, workflows: false), ct)))
             .WithTags("Overview")
             .WithName("getOverview");
     }
@@ -75,8 +75,12 @@ public static partial class Endpoints
                 {
                     settings.SourceId = Guid.NewGuid();
                     settings.HeadCommit = null;
+                    settings.HeadRevisionId = null;
                     settings.LastFetchAt = null;
                     settings.LastFetchError = null;
+                    settings.WorkflowsRepository = null;
+                    settings.WorkflowsLastFetchAt = null;
+                    settings.WorkflowsLastFetchError = null;
                 }
 
                 settings.Url = url;
@@ -285,7 +289,8 @@ public static partial class Endpoints
                 context.AgentLabelsSetBy,
                 context.Policy is { } p ? new RunPolicyDto(p.Approval, p.ApprovalSetBy, p.Destructive, p.DestructiveSetBy) : null,
                 canCancel,
-                run.Status == RunStatuses.Uncertain));
+                run.Status == RunStatuses.Uncertain,
+                context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null));
         })
         .WithName("getRun");
 
@@ -636,7 +641,7 @@ public static partial class Endpoints
             var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
             if (revision is not null)
             {
-                var repository = await revisions.GetAsync(revision.Commit, ct);
+                var repository = await revisions.GetAsync(revision, ct);
                 foreach (var use in repository.StoreUses.Where(u => u.Key == key))
                 {
                     Add(use.Version ?? entry.CurrentVersion, $"definition {use.Consumer}");
@@ -672,7 +677,7 @@ public static partial class Endpoints
         var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
         if (revision is not null)
         {
-            var repository = await revisions.GetAsync(revision.Commit, ct);
+            var repository = await revisions.GetAsync(revision, ct);
             foreach (var use in repository.StoreUses)
             {
                 Add(use.Key, use.Consumer);
@@ -694,7 +699,7 @@ public static partial class Endpoints
         return result;
     }
 
-    private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct)
+    private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct, bool workflows = true)
     {
         var settings = await db.RepositorySettings.AsNoTracking().Where(r => r.Id == 1).FirstOrDefaultAsync(ct) ?? new RepositorySettings();
         var credentialSet = await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == RepositorySync.CredentialKey, ct);
@@ -708,7 +713,8 @@ public static partial class Endpoints
             settings.LastFetchAt,
             settings.LastFetchError,
             settings.HeadCommit,
-            await views.LatestRevisionAsync(ct));
+            await views.LatestRevisionAsync(ct),
+            workflows ? await views.WorkflowsAsync(settings, ct) : null);
     }
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]*$")]

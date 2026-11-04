@@ -521,6 +521,7 @@ public class ConfigureRunTests(PostgresFixture postgres)
             // The branch moves back before the mistake runs.
             var settings = await db.RepositorySettings.SingleAsync();
             settings.HeadCommit = first.Commit;
+            settings.HeadRevisionId = first.RevisionId;
             await db.SaveChangesAsync();
         });
         await ScheduleAsync(server);

@@ -77,6 +77,24 @@ function RunFacts({ detail }: { detail: RunDetail }) {
           ),
         },
         { term: "Commit", value: <Commit commit={run.commit} length={10} /> },
+        ...(detail.workflow
+          ? [
+              {
+                term: "Workflow",
+                value: (
+                  <span className="stack stack--small">
+                    <span title={`Named as ${detail.workflow.reference}`}>
+                      <span className="mono">
+                        {detail.workflow.id}@{detail.workflow.version}
+                      </span>{" "}
+                      at <Commit commit={detail.workflow.commit} length={10} />
+                    </span>
+                    <span className="muted small break">{detail.workflow.repository ?? "from this repository"}</span>
+                  </span>
+                ),
+              },
+            ]
+          : []),
         { term: "Created", value: <RelativeTime value={run.createdAt} /> },
         { term: "Started", value: <RelativeTime value={run.startedAt} empty="Not yet" /> },
         { term: "Finished", value: <RelativeTime value={run.finishedAt} empty="Not yet" /> },

@@ -141,7 +141,7 @@ public sealed partial class AssignmentBuilder
             Action = step.Name == StepNames.Preview ? "preview" : "run",
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             InputJson = input.ToJsonString(),
-            FilesTarGz = ByteString.CopyFrom(rotation is null ? await mirror.BundleAsync(run.Commit!, cancellationToken) : GuestAccessPlaybooks.Bundle()),
+            FilesTarGz = ByteString.CopyFrom(rotation is null ? await bundles.ForAsync(run, context, cancellationToken) : GuestAccessPlaybooks.Bundle()),
         };
         if (preview is not null)
             assignment.Artifacts.Add(preview);
@@ -162,6 +162,9 @@ public sealed partial class AssignmentBuilder
             ["commit"] = context.Commit,
             ["inputsHash"] = run.InputsHash,
             ["workflow"] = ansible.Workflow,
+            // Which files the label stands for: a release's commit in its repository, or the lab repository's own.
+            ["workflowCommit"] = context.Workflow?.Commit,
+            ["workflowsRepository"] = context.Workflow?.Repository,
             ["root"] = ansible.Root,
             ["image"] = ansible.Image,
             ["host"] = $"{ansible.User}@{ansible.Address}:{ansible.Port}",

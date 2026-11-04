@@ -69,6 +69,8 @@ public sealed record PipelineDocument(string Text, string Sha256, IReadOnlyList<
             ["schemaVersion"] = 1,
             ["address"] = context.Address,
             ["commit"] = context.Commit,
+            // The workflow at its version, and the commit its files come from.
+            ["workflow"] = context.Workflow?.Describe(),
             ["inputsHash"] = run.InputsHash,
             ["stages"] = stages,
         }.ToJsonString();

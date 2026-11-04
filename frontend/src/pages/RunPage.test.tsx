@@ -22,6 +22,22 @@ it("retries a failed stage of a pipeline and names its stage", async () => {
   expect(screen.getByText("deploy")).toBeInTheDocument();
 });
 
+it("names the workflow a run executed, its version and the commit its files came from", async () => {
+  const detail = runDetail({});
+  detail.workflow = {
+    id: "fedora-vm",
+    version: "2.3",
+    reference: "fedora-vm@2",
+    commit: "c0ffee1234c0ffee1234c0ffee1234c0ffee1234",
+    repository: "git@github.com:jcarcaboso/octopushy-lab.git",
+  };
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  expect(await screen.findByText("fedora-vm@2.3")).toBeInTheDocument();
+  expect(screen.getByText("c0ffee1234")).toBeInTheDocument();
+  expect(screen.getByText("git@github.com:jcarcaboso/octopushy-lab.git")).toBeInTheDocument();
+});
+
 it("offers no stage retry once a change may have been lost", async () => {
   const detail = runDetail({ operation: "pipeline", status: "failed", currentStep: null });
   const lost = { ...detail.steps[0].attempts[0], id: "attempt-lost", status: "uncertain", mutating: true };

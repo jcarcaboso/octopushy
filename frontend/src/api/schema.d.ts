@@ -1331,6 +1331,7 @@ export interface components {
             lastFetchError: null | string;
             headCommit: null | string;
             revision: null | components["schemas"]["RevisionDto"];
+            workflows?: null | components["schemas"]["WorkflowsSourceDto"];
         };
         RepositoryUpdate: {
             url: null | string;
@@ -1361,6 +1362,8 @@ export interface components {
             /** Format: int32 */
             warningCount: number;
             isCurrentSource: boolean;
+            workflowsRepository?: null | string;
+            workflowsDigest?: null | string;
         };
         RunDetailDto: {
             run: components["schemas"]["RunSummaryDto"];
@@ -1370,6 +1373,7 @@ export interface components {
             policy: null | components["schemas"]["RunPolicyDto"];
             canCancel: boolean;
             canClose: boolean;
+            workflow?: null | components["schemas"]["RunWorkflowDto"];
         };
         RunPolicyDto: {
             approval: string;
@@ -1400,6 +1404,13 @@ export interface components {
             currentStep: null | string;
             waiting: null | string;
             reasonDetail?: null | string;
+        };
+        RunWorkflowDto: {
+            id: string;
+            version: string;
+            reference: string;
+            commit: string;
+            repository: null | string;
         };
         ServiceDetailDto: {
             service: components["schemas"]["ServiceSummaryDto"];
@@ -1602,6 +1613,39 @@ export interface components {
         WorkflowDto: {
             reference: string;
             resolved: null | string;
+        };
+        WorkflowReleaseDto: {
+            version: string;
+            commit: string;
+            /** Format: date-time */
+            firstSeenAt: null | string;
+            usable: boolean;
+            tagDeleted: boolean;
+            movedTo: null | string;
+            issue: null | string;
+        };
+        WorkflowReleasesDto: {
+            id: string;
+            releases: components["schemas"]["WorkflowReleaseDto"][];
+        };
+        WorkflowUseDto: {
+            address: string;
+            kind: string;
+            reference: string;
+            version: null | string;
+            commit: null | string;
+            problem: null | string;
+            newerMajor: null | string;
+        };
+        WorkflowsSourceDto: {
+            source: string;
+            repository: null | string;
+            /** Format: date-time */
+            lastFetchAt: null | string;
+            lastFetchError: null | string;
+            workflows: components["schemas"]["WorkflowReleasesDto"][];
+            issues: string[];
+            uses: components["schemas"]["WorkflowUseDto"][];
         };
     };
     responses: never;

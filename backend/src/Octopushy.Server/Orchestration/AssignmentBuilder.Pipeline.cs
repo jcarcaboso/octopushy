@@ -41,7 +41,7 @@ public sealed partial class AssignmentBuilder
             Executor = "opentofu",
             Action = apply ? "apply" : "preview",
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
-            FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken)),
+            FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(run, stage, cancellationToken)),
             InputJson = new JsonObject
             {
                 ["stack"] = tofu.Stack,

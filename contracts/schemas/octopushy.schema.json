@@ -6,11 +6,21 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "workflows": {
-      "description": "Where guests and services find the workflows they name. local, the default, is this repository's workflows/ folder, where each workflow's version is the one its workflow.yaml declares. A separate workflows repository, resolved by tags, comes later.",
+      "description": "Where guests and services find the workflows they name. source: local, the default, is this repository's workflows/ folder, where each workflow's version is the one its workflow.yaml declares. repository names a separate workflows repository, whose versions are its release tags <id>/v<M>.<m>; this repository then holds no workflows/ or modules/.",
       "type": "object",
       "properties": {
-        "source": { "const": "local" }
+        "source": { "const": "local" },
+        "repository": {
+          "description": "The workflows repository: https://, ssh://, user@host:path, file:// or an absolute path.",
+          "type": "string",
+          "minLength": 1
+        },
+        "credential": {
+          "description": "The store key of the credential to fetch it with: an HTTPS token or an SSH private key, by the repository's scheme. Without it, the lab repository's credential is used when the schemes match.",
+          "$ref": "common.schema.json#/$defs/storeRef"
+        }
       },
+      "dependentRequired": { "credential": ["repository"] },
       "additionalProperties": false
     },
     "defaults": {

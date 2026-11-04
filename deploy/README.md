@@ -56,8 +56,9 @@ This release starts its database schema again from one migration. It cannot upgr
 database created by an earlier release: `migrate` and the backend find the older migration
 history, log that this release requires a fresh database, change nothing, and exit with a
 non-zero status. Nothing in the old database is carried over, so before you start, write
-down the store keys your lab repository references (the Proxmox tokens and any `shared/*`
-values) and retire the guests you want removed while the old release still runs.
+down the store keys your lab repository references (the Proxmox tokens, any `shared/*`
+values, and the workflows repository's credential when `octopushy.yaml` names one) and retire
+the guests you want removed while the old release still runs.
 
 Then, from `deploy/`:
 

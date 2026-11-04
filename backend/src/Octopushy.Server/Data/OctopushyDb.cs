@@ -12,6 +12,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<InstallationTrust> InstallationTrusts => Set<InstallationTrust>();
 
+    public DbSet<WorkflowReleaseRecord> WorkflowReleases => Set<WorkflowReleaseRecord>();
+
     public DbSet<Resource> Resources => Set<Resource>();
 
 
@@ -65,8 +67,17 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.Property(x => x.Sequence).UseIdentityAlwaysColumn();
             e.HasIndex(x => x.Sequence).IsUnique();
-            e.HasIndex(x => x.Commit);
+            e.HasIndex(x => new { x.Commit, x.WorkflowsDigest });
             e.Property(x => x.Issues).HasColumnType("jsonb");
+            e.Property(x => x.Resolutions).HasColumnType("jsonb");
+        });
+
+        model.Entity<WorkflowReleaseRecord>(e =>
+        {
+            e.ToTable("workflow_releases");
+            e.HasKey(x => new { x.Repository, x.WorkflowId, x.Major, x.Minor });
+            e.Ignore(x => x.Version);
+            e.Ignore(x => x.Tag);
         });
 
         model.Entity<InstallationTrust>(e =>

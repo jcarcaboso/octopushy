@@ -17,7 +17,11 @@ public sealed record RunContext
 
     public required string Address { get; init; }
 
+    /// <summary>The lab repository's commit the run was built from.</summary>
     public string? Commit { get; init; }
+
+    /// <summary>The workflow the run executes: which one, at which version, and the commit its files come from.</summary>
+    public WorkflowContext? Workflow { get; init; }
 
     public IReadOnlyList<string> AgentLabels { get; init; } = [];
 
@@ -113,6 +117,29 @@ public sealed record RunContext
 
     public static RunContext Parse(string json) =>
         JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
+}
+
+/// <summary>
+/// The workflow a run executes, as its reference resolved: <paramref name="Commit"/> is the commit of
+/// <paramref name="Repository"/> its files come from, the release's, or for a workflow kept in the lab repository
+/// (<paramref name="Repository"/> null) the lab repository's own commit. A run's bundle holds that commit's files.
+/// </summary>
+public sealed record WorkflowContext(string Id, string Version, string Reference, string Commit, string? Repository)
+{
+    public string Label => $"{Id}@{Version}";
+
+    public static WorkflowContext Of(Definitions.WorkflowDefinition workflow, Definitions.WorkflowReference reference, string configCommit) =>
+        new(workflow.Id, workflow.Version.ToString(), reference.ToString(), workflow.Commit ?? configCommit, workflow.Repository);
+
+    /// <summary>The workflow as an approval document names it.</summary>
+    public JsonObject Describe() => new()
+    {
+        ["id"] = Id,
+        ["version"] = Version,
+        ["reference"] = Reference,
+        ["commit"] = Commit,
+        ["repository"] = Repository,
+    };
 }
 
 /// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools. <c>Workflow</c> is the workflow at its version.</summary>

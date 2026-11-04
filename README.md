@@ -10,7 +10,9 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 Milestone 1 has shipped, up to release 0.4.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
-  or `@<major>.<minor>`, resolved from the repository's own `workflows/` for now.
+  or `@<major>.<minor>`, resolved from the release tags of a
+  [workflows repository](docs/workflows.md#workflows-from-their-own-repository), or from the lab repository's own
+  `workflows/`. A tag never moves, and a new minor release reaches every guest on its major under that guest's policy.
 - Proxmox VMs provisioned, verified and retired with OpenTofu, with state kept by Octopushy.
 - [Guest setup with Ansible](docs/guest-configuration.md) once a VM exists, and
   [services](docs/workflows.md#services-and-their-runs) of OpenTofu and Ansible stages.
@@ -22,9 +24,10 @@ Milestone 1 has shipped, up to release 0.4.0:
 
 ## Direction
 
-Octopushy is becoming an engine only. Workflows move to their own repository,
-`jcarcaboso/octopushy-lab`, where each whole workflow is versioned `M.m`; `homelab-config` holds only data; and every change made in the UI
-becomes a commit. The plan and its phases are in [workflows migration](docs/workflows-migration.md).
+Octopushy is becoming an engine only. Workflows live in their own repository,
+`jcarcaboso/octopushy-lab`, where each whole workflow is versioned `M.m` and released by tags; `homelab-config` holds only
+data, and names that repository in its `octopushy.yaml`; and every change made in the UI will become a commit. The plan
+and its phases are in [workflows migration](docs/workflows-migration.md).
 
 Service workflows, the NixOS modules and their tests live in `jcarcaboso/octopushy-lab`.
 
@@ -76,8 +79,10 @@ and `just e2e-pipelines` do the same for guest setup and service pipelines.
 `just demo` leaves that setup running at http://127.0.0.1:5174 (user `demo`, password
 `octopushy-demo`) with manual approval, to try the web interface without a Proxmox
 installation. `just openapi` regenerates the OpenAPI document and the frontend's client
-after an API change. `just validate <dir>` checks a lab repository offline, the way the server reads it, and
-fails on any error ([validating offline](docs/workflows.md#validating-offline)). `just proxmox-e2e` runs the [real Proxmox end-to-end test](tests/proxmox/README.md).
+after an API change. `just validate <dir>` checks a lab repository offline, the way the server reads it, with the
+workflows its `octopushy.yaml` names or `--workflows <git url|path>`, and fails on any error; `--workflows-only <dir>`
+checks a workflows repository alone. The same validator is published as the `validate-<version>` image, for the CI of
+both repositories ([validating offline](docs/workflows.md#validating-offline)). `just proxmox-e2e` runs the [real Proxmox end-to-end test](tests/proxmox/README.md).
 
 ### CI
 
@@ -94,7 +99,7 @@ harnesses.
 
 ## Deployment
 
-`just images <version>` builds the backend, frontend, and agent images by hand, and
+`just images <version>` builds the backend, frontend, agent and validator images by hand, and
 [`deploy/`](deploy/README.md) runs them with PostgreSQL on one host. GitHub Actions
 publishes them to Docker Hub for `main` and every `v<version>` tag;
 [`deploy/proxmox/`](deploy/proxmox/README.md) installs those in a Proxmox LXC container

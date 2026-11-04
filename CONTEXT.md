@@ -204,7 +204,10 @@ A configured maximum of simultaneous operations within a specified scope.
 _Avoid_: Failure isolation when referring only to limiting simultaneous work
 
 **Definition revision**:
-An immutable snapshot of the homelab's declared configuration at a Git revision.
+An immutable snapshot of the homelab's declared configuration: a commit of the lab
+repository together with what each of its workflow references resolved to. A new
+release that changes a resolution is a new revision of the same commit.
+_Avoid_: Commit alone, when workflows come from a workflows repository
 
 **Observed-only installation**:
 A Proxmox installation set to `manage: false`: Octopushy observes its hosts and VMs
@@ -304,6 +307,17 @@ Everything needed to manage one kind of thing from start to end, such as a Fedor
 or a web service, kept in `workflows/<id>/` with one version for all of it: what it
 manages, its inputs schema, its stages, actions and outcomes. Guests and services
 name a workflow; it holds no lab data.
+
+**Workflows repository**:
+The Git repository that holds `workflows/` and `modules/`, separate from the lab
+repository, which names it in `octopushy.yaml` and then holds neither. Its versions
+are release tags.
+
+**Release**:
+A tag `<id>/v<M>.<m>` of a workflows repository, at the commit the tag pointed to when
+Octopushy first saw it. That commit never changes: a moved tag is reported and not
+followed, and a deleted tag stays a release while its commit is in the mirror.
+_Avoid_: Tag, when meaning the recorded commit
 _Avoid_: Recipe, the earlier format of one stage; run, when referring to the reusable procedure
 
 **Workflow version**:
@@ -316,10 +330,12 @@ What a guest or service writes: `<id>@M` for the newest `M.x`, or `<id>@M.m` for
 that version. A reference without a version is invalid.
 
 **Resolution**:
-Finding the workflow version a reference names, from a workflow source: today the lab
-repository's own `workflows/`. What it resolved to is part of the loaded definition and
-of every inputs hash; a reference that resolves to none makes its guest or service
-invalid.
+Finding the workflow version a reference names, from a workflow source: the releases of
+a workflows repository, where `@M` takes the highest usable minor and `@M.m` exactly that
+release, or the lab repository's own `workflows/`. It gives the workflow, its version and
+the commit to read it from. What it resolved to is part of the loaded definition, of the
+revision's identity and of every inputs hash; a reference that resolves to none makes its
+guest or service invalid.
 
 **Run**:
 One requested execution of an operation or workflow against a fixed configuration

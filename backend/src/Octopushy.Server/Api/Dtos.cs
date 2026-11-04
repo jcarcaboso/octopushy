@@ -14,7 +14,9 @@ public sealed record RevisionDto(
     bool Valid,
     int ErrorCount,
     int WarningCount,
-    bool IsCurrentSource);
+    bool IsCurrentSource,
+    string? WorkflowsRepository = null,
+    string? WorkflowsDigest = null);
 
 public sealed record RevisionDetailDto(RevisionDto Revision, IReadOnlyList<IssueDto> Issues);
 
@@ -28,7 +30,50 @@ public sealed record RepositoryDto(
     DateTimeOffset? LastFetchAt,
     string? LastFetchError,
     string? HeadCommit,
-    RevisionDto? Revision);
+    RevisionDto? Revision,
+    WorkflowsSourceDto? Workflows = null);
+
+/// <summary>
+/// Where the head revision's workflows come from: <c>local</c>, the lab repository's own <c>workflows/</c>, or <c>repository</c>,
+/// a workflows repository with its releases. <see cref="Uses"/> is what each guest and service resolved to.
+/// </summary>
+public sealed record WorkflowsSourceDto(
+    string Source,
+    string? Repository,
+    DateTimeOffset? LastFetchAt,
+    string? LastFetchError,
+    IReadOnlyList<WorkflowReleasesDto> Workflows,
+    IReadOnlyList<string> Issues,
+    IReadOnlyList<WorkflowUseDto> Uses);
+
+/// <summary>The releases of one workflow, newest first.</summary>
+public sealed record WorkflowReleasesDto(string Id, IReadOnlyList<WorkflowReleaseDto> Releases);
+
+/// <summary>
+/// One release: the commit its tag pointed to when Octopushy first saw it. <see cref="Usable"/> is false for a release that is
+/// never resolved to, or whose commit is gone; <see cref="Issue"/> says why, or that its tag moved or was deleted.
+/// </summary>
+public sealed record WorkflowReleaseDto(
+    string Version,
+    string Commit,
+    DateTimeOffset? FirstSeenAt,
+    bool Usable,
+    bool TagDeleted,
+    string? MovedTo,
+    string? Issue);
+
+/// <summary>
+/// What a guest's or service's reference resolved to in the head revision, and the newest major after it, which is offered
+/// and never applied by itself.
+/// </summary>
+public sealed record WorkflowUseDto(
+    string Address,
+    string Kind,
+    string Reference,
+    string? Version,
+    string? Commit,
+    string? Problem,
+    string? NewerMajor);
 
 public sealed record RepositoryUpdate(
     string? Url,
@@ -139,7 +184,11 @@ public sealed record RunDetailDto(
     string AgentLabelsSetBy,
     RunPolicyDto? Policy,
     bool CanCancel,
-    bool CanClose);
+    bool CanClose,
+    RunWorkflowDto? Workflow = null);
+
+/// <summary>The workflow a run executed: which one, at which version, and the commit its files came from.</summary>
+public sealed record RunWorkflowDto(string Id, string Version, string Reference, string Commit, string? Repository);
 
 public sealed record DecisionRequest(string? PlanSha256, string? Note);
 

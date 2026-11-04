@@ -138,6 +138,10 @@ namespace Octopushy.Server.Data.Migrations
                     last_fetch_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     last_fetch_error = table.Column<string>(type: "text", nullable: true),
                     head_commit = table.Column<string>(type: "text", nullable: true),
+                    head_revision_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    workflows_repository = table.Column<string>(type: "text", nullable: true),
+                    workflows_last_fetch_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    workflows_last_fetch_error = table.Column<string>(type: "text", nullable: true),
                     updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
@@ -203,6 +207,9 @@ namespace Octopushy.Server.Data.Migrations
                     sequence = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityAlwaysColumn),
                     commit = table.Column<string>(type: "text", nullable: false),
+                    workflows_repository = table.Column<string>(type: "text", nullable: true),
+                    workflows_digest = table.Column<string>(type: "text", nullable: false),
+                    resolutions = table.Column<string>(type: "jsonb", nullable: false),
                     subject = table.Column<string>(type: "text", nullable: true),
                     author = table.Column<string>(type: "text", nullable: true),
                     committed_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
@@ -311,6 +318,26 @@ namespace Octopushy.Server.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("pk_users", x => x.id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "workflow_releases",
+                columns: table => new
+                {
+                    repository = table.Column<string>(type: "text", nullable: false),
+                    workflow_id = table.Column<string>(type: "text", nullable: false),
+                    major = table.Column<int>(type: "integer", nullable: false),
+                    minor = table.Column<int>(type: "integer", nullable: false),
+                    commit = table.Column<string>(type: "text", nullable: false),
+                    first_seen_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    problem = table.Column<string>(type: "text", nullable: true),
+                    moved_to = table.Column<string>(type: "text", nullable: true),
+                    moved_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    deleted_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_workflow_releases", x => new { x.repository, x.workflow_id, x.major, x.minor });
                 });
 
             migrationBuilder.CreateTable(
@@ -616,9 +643,9 @@ namespace Octopushy.Server.Data.Migrations
                 filter: "bound_vmid IS NOT NULL AND retired_at IS NULL");
 
             migrationBuilder.CreateIndex(
-                name: "ix_revisions_commit",
+                name: "ix_revisions_commit_workflows_digest",
                 table: "revisions",
-                column: "commit");
+                columns: new[] { "commit", "workflows_digest" });
 
             migrationBuilder.CreateIndex(
                 name: "ix_revisions_sequence",
@@ -719,6 +746,9 @@ namespace Octopushy.Server.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "tofu_state_versions");
+
+            migrationBuilder.DropTable(
+                name: "workflow_releases");
 
             migrationBuilder.DropTable(
                 name: "steps");

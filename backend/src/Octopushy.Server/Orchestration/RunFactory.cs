@@ -75,6 +75,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         {
             Address = guest.Address,
             Commit = revision.Commit,
+            Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
             HostKey = $"{inputs.Installation.Address}/{inputs.Host.Id}",
@@ -163,6 +164,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         {
             Address = guest.Address,
             Commit = revision.Commit,
+            Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy),
@@ -204,15 +206,23 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
 
     /// <summary>
     /// A rotation of a guest's own key. Its login is its own binding: each step takes the version
-    /// it needs, so no Proxmox credential and no setup secret is in it, only the pin.
+    /// it needs, so no Proxmox credential and no setup secret is in it, only the pin. It needs only how the guest is
+    /// reached, so it works for any guest Octopushy holds a key for, whatever Ansible work gave it one: its setup stage
+    /// or a service's stage alike.
     /// </summary>
     public Run RotateAccess(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, AccessRotationContext rotation)
     {
         Managed(repository, guest.InstallationAddress);
-        var inputs = ConfigureInputs.Build(repository, guest);
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = inputs.HostKey.Key };
+        var address = ConfigureInputs.AddressOf(guest)
+            ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
+        var user = guest.Json["access"]?["user"]?.GetValue<string>()
+            ?? throw new RunException("This guest names no access.user to log in as.");
+        var hostKey = ConfigureInputs.Reference(guest, "hostKey")
+            ?? throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
+        var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = hostKey.Key };
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (inputs.HostKey.Version is { } hostVersion)
+        if (hostKey.Version is { } hostVersion)
             requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
         var installation = repository.Installation(guest.InstallationAddress)!;
         var policy = PolicyResolver.For(repository, guest);
@@ -241,9 +251,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 options.Value.Tools.AnsibleImage,
                 guest.Id,
                 guest.Directory,
-                inputs.Address,
-                inputs.Port,
-                inputs.User,
+                address,
+                port,
+                user,
                 [],
                 [],
                 [],
@@ -252,7 +262,13 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         };
 
         var run = NewRun(resource, Operations.RotateAccess, revision, "manual", context);
-        run.InputsHash = inputs.Hash;
+        // What the rotation reaches the guest by; its playbooks are the server's own.
+        run.InputsHash = Canonical.Hash(new JsonObject
+        {
+            ["access"] = guest.Json["access"]?.DeepClone(),
+            ["address"] = address,
+            ["rotation"] = new JsonObject { ["current"] = rotation.Current, ["candidate"] = rotation.Candidate },
+        });
         AddSteps(run, [
             StepNames.Preview, StepNames.Approval, StepNames.VerifyCurrent, StepNames.AuthorizeKey, StepNames.VerifyKey,
             StepNames.PromoteKey, StepNames.ApproveRemoval, StepNames.RemoveKey, StepNames.VerifyRemoval, StepNames.ConfirmRefused]);

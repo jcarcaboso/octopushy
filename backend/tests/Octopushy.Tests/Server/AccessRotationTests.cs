@@ -78,6 +78,30 @@ public class AccessRotationTests(PostgresFixture postgres)
     private static JsonNode Input(Assignment assignment) => JsonNode.Parse(assignment.InputJson)!;
 
     [Fact]
+    public async Task A_guest_whose_only_ansible_work_is_a_service_rotates_its_key_as_any_other()
+    {
+        // Its workflow has no setup stage: its key came with its service's Ansible stage.
+        await using var server = await ServerHarness.StartAsync(postgres, Definitions.ServiceDefinitionTests.WithoutSetup());
+        await server.SetSecretAsync("web/password", "a-web-password");
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        var resource = await server.ResourceAsync(Guest);
+        var old = Assert.Single(await KeysAsync(server));
+
+        var id = await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource.Id, CancellationToken.None);
+        var run = await server.LatestRunAsync(Guest, Operations.RotateAccess);
+        Assert.Equal(id, run.Id);
+        Assert.Null(RunContext.Parse(run.Context).Workflow);
+        await server.TickAsync();
+        var preview = await ConfigureRunTests.PreviewAsync(agent);
+        Assert.Equal("ops", Input(preview)["host"]!["user"]!.GetValue<string>());
+        Assert.False(string.IsNullOrEmpty(Input(preview)["host"]!["address"]!.GetValue<string>()));
+        var verify = await agent.NextAsync("run");
+        Assert.Equal(GuestAccessPlaybooks.Verify, Input(verify)["playbook"]!.GetValue<string>());
+        Assert.Equal([old.Version, old.Version + 1], (await KeysAsync(server)).Select(k => k.Version));
+    }
+
+    [Fact]
     public async Task A_rotation_adds_verifies_promotes_and_then_removes_in_stages()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Managed());

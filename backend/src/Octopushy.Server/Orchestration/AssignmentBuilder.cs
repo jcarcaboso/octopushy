@@ -24,7 +24,7 @@ public sealed class ExecutionUntrustedException(string message) : Exception(mess
 public sealed partial class AssignmentBuilder(
     OctopushyDb db,
     VariableStore store,
-    RepositoryMirror mirror,
+    RunBundles bundles,
     ArtifactStore artifacts,
     TofuStateStore states,
     TimeProvider clock,
@@ -156,7 +156,7 @@ public sealed partial class AssignmentBuilder(
                 ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
-            assignment.FilesTarGz = ByteString.CopyFrom(await mirror.BundleAsync(run.Commit!, cancellationToken));
+            assignment.FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(run, context, cancellationToken));
             if (stepName == StepNames.Apply)
             {
                 assignment.Artifacts.Add(approvedPlan!);
