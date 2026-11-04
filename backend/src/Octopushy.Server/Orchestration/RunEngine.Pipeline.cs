@@ -66,7 +66,7 @@ public sealed partial class RunEngine
         }
 
         // A deploy that asked to approve its plan in the same click: only a first pipeline that does nothing but create.
-        var preApproval = await PreApproveAsync(db, run, step, context, PipelineMoreThanCreate(run, document), needed: true, cancellationToken);
+        var preApproval = await PreApproveAsync(db, run, step, context, PipelineMoreThanCreate(run, context), needed: true, cancellationToken);
         if (preApproval.Approved)
             return true;
 

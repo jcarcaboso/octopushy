@@ -138,15 +138,23 @@ public sealed partial class RunEngine
         return null;
     }
 
-    /// <summary>Why a pipeline does more than create: a stage plan that does, or a stage that is destructive.</summary>
-    private static string? PipelineMoreThanCreate(Run run, PipelineDocument document)
+    /// <summary>
+    /// Why a pipeline cannot be shown to only create, or null. Only a pipeline made entirely of OpenTofu stages, each plan
+    /// checked change by change, qualifies: an Ansible stage's preview says what a playbook might change, never that it only
+    /// creates, and the workflow's own <c>destructive</c> flag is not proof either. Decided by the owner.
+    /// </summary>
+    private static string? PipelineMoreThanCreate(Run run, RunContext context)
     {
-        if (document.Destructive.Count > 0)
-            return $"It is destructive: {string.Join("; ", document.Destructive)}.";
-        foreach (var plan in run.Steps.Where(s => s.Stage is not null && s.Name == StepNames.Plan))
+        var ansible = (context.Stages ?? []).Where(s => s.Ansible is not null).Select(s => s.Name).ToList();
+        if (ansible.Count > 0)
+            return $"Stage {string.Join(", ", ansible)} runs Ansible, whose preview cannot be shown to only create.";
+        foreach (var stage in context.Stages ?? [])
         {
+            var plan = run.Steps.SingleOrDefault(s => s.Stage == stage.Name && s.Name == StepNames.Plan);
+            if (plan is null)
+                return $"Stage {stage.Name} has no plan.";
             if (MoreThanCreate(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)) is { } why)
-                return $"Stage {plan.Stage}: {why}";
+                return $"Stage {stage.Name}: {why}";
         }
 
         return null;
