@@ -119,6 +119,29 @@ describe("ChangePage", () => {
     expect(screen.queryByRole("list", { name: "Progress" })).toBeNull();
   });
 
+  it("says a later commit superseded the change, and names it", async () => {
+    const later = "7777777777777777777777777777777777777777";
+    mockApi({
+      "GET /api/changes/change-1": () =>
+        change({ status: "superseded", detail: "Superseded by 7777777777: it sets hardware otherwise.", runs: [], revisionId: null,
+          supersededBy: later, supersededByUrl: `https://github.com/jcarcaboso/homelab-config/commit/${later}` }),
+    });
+    renderAt(<ChangePage />, route);
+    expect(await screen.findByText("Superseded: a later commit set this otherwise before it was applied")).toBeInTheDocument();
+    expect(screen.getAllByText("Superseded").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /on GitHub/ }).map((a) => a.getAttribute("href"))).toContain(
+      `https://github.com/jcarcaboso/homelab-config/commit/${later}`);
+    expect(screen.getByText("Applied", { selector: "li *" }).closest("li")).toHaveClass("change-progress__step--todo");
+    expect(screen.queryByText("Updating")).toBeNull();
+  });
+
+  it("shows a change being pushed", async () => {
+    mockApi({ "GET /api/changes/change-1": () => change({ status: "committing", detail: "Pushing its commit.", commit: null, commitUrl: null, revisionId: null, syncedAt: null, runs: [] }) });
+    renderAt(<ChangePage />, route);
+    expect(await screen.findByText("Being pushed")).toBeInTheDocument();
+    expect(screen.getByText("Committed", { selector: "li *" }).closest("li")).toHaveAttribute("aria-current", "step");
+  });
+
   it("says when the revision proposed no run", async () => {
     mockApi({ "GET /api/changes/change-1": () => change({ status: "no-change", detail: "abc proposes no run.", runs: [] }) });
     renderAt(<ChangePage />, route);

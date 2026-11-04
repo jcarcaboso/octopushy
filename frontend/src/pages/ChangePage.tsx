@@ -26,24 +26,30 @@ const stages = [
   { status: "applied", label: "Applied" },
 ] as const;
 
+/** How far a change got: the index of the last step it reached, and whether it stopped there. */
+function reached(change: Change): { index: number; stopped: "failed" | "done" | null } {
+  const at = stages.findIndex((s) => s.status === change.status);
+  if (at >= 0) return { index: at, stopped: change.status === "applied" ? "done" : null };
+  switch (change.status) {
+    case "committing":
+      return { index: 0, stopped: null };
+    case "no-change":
+    case "superseded":
+      return { index: change.syncedAt ? 1 : 0, stopped: "done" };
+    case "failed":
+      return { index: !change.commit ? 0 : change.runs.length > 0 ? 2 : 1, stopped: "failed" };
+    default:
+      return { index: 0, stopped: null };
+  }
+}
+
 function Progress({ change }: { change: Change }) {
   if (change.status === "refused") return null;
-  const current = stages.findIndex((s) => s.status === change.status);
-  // A finished change that did not apply stopped at the last step it reached.
-  const reached = current >= 0 ? current : change.status === "no-change" ? 1 : Math.max(1, change.runs.length > 0 ? 2 : 1);
+  const { index, stopped } = reached(change);
   return (
     <ol className="change-progress" aria-label="Progress">
       {stages.map((stage, i) => {
-        const state =
-          change.status === "applied" || i < reached
-            ? "done"
-            : i === reached
-              ? change.status === "failed"
-                ? "failed"
-                : isChangeFinished(change.status)
-                  ? "done"
-                  : "current"
-              : "todo";
+        const state = i < index ? "done" : i > index ? "todo" : stopped ?? "current";
         return (
           <li key={stage.status} className={`change-progress__step change-progress__step--${state}`} aria-current={state === "current" ? "step" : undefined}>
             <span className="change-progress__dot" aria-hidden="true" />
@@ -170,6 +176,25 @@ export function ChangePage() {
       />
       <div className="stack stack--large">
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
+        {change.status === "superseded" && change.supersededBy ? (
+          <Callout kind="info" title="Superseded: a later commit set this otherwise before it was applied">
+            <span className="inline-group">
+              {change.detail}
+              <Commit commit={change.supersededBy} length={10} />
+              {change.supersededByUrl ? (
+                <a href={change.supersededByUrl} target="_blank" rel="noreferrer" className="inline-group">
+                  on GitHub <ExternalLink size={13} aria-hidden="true" />
+                </a>
+              ) : null}
+            </span>
+          </Callout>
+        ) : null}
+        {change.status === "committing" ? (
+          <Callout kind="info" title="Being pushed">
+            The change is on record and its commit is being pushed. If this page was left mid-push, the next sync finds the
+            commit on the branch, or fails the change if it never arrived.
+          </Callout>
+        ) : null}
         {change.status === "refused" ? (
           <Callout kind="danger" title="Refused: nothing was committed">
             {change.detail}
@@ -185,7 +210,9 @@ export function ChangePage() {
                     ? "Waiting for the revision to be read."
                     : change.status === "no-change"
                       ? "The revision proposes no run: nothing a run is built from changed."
-                      : (change.detail ?? "No run yet.")}
+                      : change.status === "superseded"
+                        ? "None: the runs of the later commit are its own change's, not this one's."
+                        : (change.detail ?? "No run yet.")}
                 </p>
               </Card>
             ) : null}

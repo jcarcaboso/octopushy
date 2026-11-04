@@ -44,6 +44,7 @@ const statuses: Record<string, StatusStyle> = {
   cancelled: { label: "Cancelled", tone: "muted", icon: "minus" },
   skipped: { label: "Skipped", tone: "muted", icon: "minus" },
   // A change from the UI, from its commit to the end of its runs.
+  committing: { label: "Committing", tone: "info", icon: "spinner" },
   committed: { label: "Committed", tone: "info", icon: "clock" },
   synced: { label: "Synced", tone: "info", icon: "clock" },
   planning: { label: "Planning", tone: "info", icon: "spinner" },
@@ -52,6 +53,7 @@ const statuses: Record<string, StatusStyle> = {
   applied: { label: "Applied", tone: "success", icon: "check" },
   refused: { label: "Refused", tone: "danger", icon: "ban" },
   "no-change": { label: "No change", tone: "muted", icon: "minus" },
+  superseded: { label: "Superseded", tone: "muted", icon: "archive" },
 };
 
 export function statusStyle(status: string): StatusStyle {

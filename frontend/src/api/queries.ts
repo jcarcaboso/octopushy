@@ -561,7 +561,7 @@ export function useDiscardDraft() {
 
 // Changes from the UI: each is a commit to the lab repository, followed through its revision and runs.
 
-const finalChange = new Set(["applied", "failed", "refused", "no-change"]);
+const finalChange = new Set(["applied", "failed", "refused", "no-change", "superseded"]);
 
 export function isChangeFinished(status: string): boolean {
   return finalChange.has(status);
