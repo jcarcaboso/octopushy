@@ -31,6 +31,12 @@ function change(overrides: Partial<Change> = {}): Change {
     createdAt: at,
     syncedAt: at,
     updatedAt: at,
+    supersededBy: null,
+    supersededByUrl: null,
+    dismissedBy: null,
+    dismissedAt: null,
+    final: false,
+    notCommitted: false,
     ...overrides,
   };
 }
@@ -133,6 +139,24 @@ describe("ChangePage", () => {
       `https://github.com/jcarcaboso/homelab-config/commit/${later}`);
     expect(screen.getByText("Applied", { selector: "li *" }).closest("li")).toHaveClass("change-progress__step--todo");
     expect(screen.queryByText("Updating")).toBeNull();
+  });
+
+  it("lets a person dismiss a change whose commit is not on the branch", async () => {
+    vi.stubGlobal("confirm", () => true);
+    const unknown = change({ status: "unknown", detail: "Not on main (yet): none of the 1 commit(s) its push prepared is there.", commit: null,
+      commitUrl: null, revisionId: null, syncedAt: null, runs: [] });
+    let current = unknown;
+    const { requests } = mockApi({
+      "GET /api/changes/change-1": () => current,
+      "POST /api/changes/change-1/dismiss": () =>
+        (current = { ...unknown, status: "dismissed", dismissedBy: "ops", detail: "Settled as not committed.", final: true, notCommitted: true }),
+    });
+    renderAt(<ChangePage />, route);
+    expect(await screen.findByText("Its commit is not on the branch (yet)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByText("Dismissed by ops")).toBeInTheDocument();
+    expect(requests.some((r) => r.method === "POST" && r.path === "/api/changes/change-1/dismiss")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
   it("shows a change being pushed", async () => {

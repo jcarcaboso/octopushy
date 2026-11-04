@@ -561,7 +561,7 @@ export function useDiscardDraft() {
 
 // Changes from the UI: each is a commit to the lab repository, followed through its revision and runs.
 
-const finalChange = new Set(["applied", "failed", "refused", "no-change", "superseded"]);
+const finalChange = new Set(["applied", "failed", "refused", "no-change", "superseded", "dismissed"]);
 
 export function isChangeFinished(status: string): boolean {
   return finalChange.has(status);
@@ -595,6 +595,19 @@ export function useChanges(resourceId: string, limit = 5) {
     queryKey: keys.changes(resourceId),
     queryFn: () => unwrap(api.GET("/api/changes", { params: { query: { resourceId, limit } } })),
     refetchInterval: 15_000,
+  });
+}
+
+/** Settles a change whose push is unsettled as not committed; refused while its commit is on the branch. */
+export function useDismissChange() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (id: string) => unwrap(api.POST("/api/changes/{id}/dismiss", { params: { path: { id } } })),
+    onSuccess: (change) => {
+      client.setQueryData(keys.change(change.id), change);
+      void client.invalidateQueries({ queryKey: ["changes"] });
+    },
   });
 }
 

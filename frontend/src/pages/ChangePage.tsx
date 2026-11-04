@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { isNotFound } from "../api/client";
-import { isChangeFinished, useChange, useRun } from "../api/queries";
+import { isChangeFinished, useChange, useDismissChange, useRun } from "../api/queries";
 import type { Change, RunSummary } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
@@ -32,7 +32,11 @@ function reached(change: Change): { index: number; stopped: "failed" | "done" | 
   if (at >= 0) return { index: at, stopped: change.status === "applied" ? "done" : null };
   switch (change.status) {
     case "committing":
+    case "uncertain":
+    case "unknown":
       return { index: 0, stopped: null };
+    case "dismissed":
+      return { index: 0, stopped: "failed" };
     case "no-change":
     case "superseded":
       return { index: change.syncedAt ? 1 : 0, stopped: "done" };
@@ -145,6 +149,29 @@ function ChangeRun({ summary }: { summary: RunSummary }) {
 }
 
 /** A change made in a form, from its commit to the end of the runs it proposed. Polls until it is finished. */
+/** Settles a change whose push is unsettled, after asking: a person says it will not arrive. */
+function Unsettled({ change }: { change: Change }) {
+  const dismiss = useDismissChange();
+  return (
+    <Callout
+      kind="uncertain"
+      title={change.status === "uncertain" ? "Whether its push landed could not be checked" : "Its commit is not on the branch (yet)"}
+      actions={
+        <button type="button" className="button" disabled={dismiss.isPending}
+          onClick={() => {
+            if (window.confirm("Dismiss this change as not committed? If its commit reaches the branch later, it is not followed.")) dismiss.mutate(change.id);
+          }}>
+          {dismiss.isPending ? "Dismissing…" : "Dismiss"}
+        </button>
+      }
+    >
+      <p>{change.detail}</p>
+      <p>Each sync looks for the commits its push prepared on the branch. Dismiss it once you know it will not arrive: it is then settled as not committed.</p>
+      <ErrorMessage error={dismiss.error} />
+    </Callout>
+  );
+}
+
 export function ChangePage() {
   const { id = "" } = useParams();
   const { data: change, error, isPending } = useChange(id);
@@ -194,6 +221,10 @@ export function ChangePage() {
             The change is on record and its commit is being pushed. If this page was left mid-push, the next sync finds the
             commit on the branch, or fails the change if it never arrived.
           </Callout>
+        ) : null}
+        {change.status === "uncertain" || change.status === "unknown" ? <Unsettled change={change} /> : null}
+        {change.status === "dismissed" ? (
+          <Callout kind="info" title={`Dismissed by ${change.dismissedBy ?? "someone"}`}>{change.detail}</Callout>
         ) : null}
         {change.status === "refused" ? (
           <Callout kind="danger" title="Refused: nothing was committed">

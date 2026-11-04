@@ -144,6 +144,11 @@ function Editor({ form, mode, reload, reloading }: { form: ChangeForm; mode: Mod
       onSuccess: (change) => navigate(`/changes/${change.id}`),
       onError: (e) => {
         const refusal = changeRefusal(e);
+        // A push was attempted and is not settled: its change page follows it.
+        if (refusal?.changeId && (refusal.status === "uncertain" || refusal.status === "unknown")) {
+          navigate(`/changes/${refusal.changeId}`);
+          return;
+        }
         if (refusal?.reason === "invalid") {
           setIssues(refusal.fieldIssues);
           setReviewed(null);

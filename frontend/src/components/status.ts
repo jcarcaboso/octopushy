@@ -54,6 +54,8 @@ const statuses: Record<string, StatusStyle> = {
   refused: { label: "Refused", tone: "danger", icon: "ban" },
   "no-change": { label: "No change", tone: "muted", icon: "minus" },
   superseded: { label: "Superseded", tone: "muted", icon: "archive" },
+  unknown: { label: "Not on the branch", tone: "uncertain", icon: "question" },
+  dismissed: { label: "Dismissed", tone: "muted", icon: "minus" },
 };
 
 export function statusStyle(status: string): StatusStyle {
