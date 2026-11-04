@@ -301,7 +301,7 @@ public class DeployTests(PostgresFixture postgres)
                 Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow,
                 Data = new JsonObject
                 {
-                    ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban" }),
+                    ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(new JsonObject { ["vmid"] = 311, ["name"] = "homeassistant", ["host"] = "korriban" },
                         new JsonObject { ["vmid"] = 100, ["name"] = "template", ["host"] = "korriban", ["template"] = true }),
                 }.ToJsonString(),
@@ -325,6 +325,7 @@ public class DeployTests(PostgresFixture postgres)
 
         Assert.Equal(101, await NextAsync(100));
         Assert.Equal(313, await NextAsync(310));
+        Assert.Equal("online", (await setup.TargetsAsync()).Installations.Single(i => i.Address == Installation).Hosts.Single().Status);
         Assert.Equal(HttpStatusCode.NotFound, (await setup.Client.GetAsync("/api/deploy/vmid?installation=home/nowhere")).StatusCode);
 
         var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 311));

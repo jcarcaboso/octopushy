@@ -82,9 +82,9 @@ public sealed partial class ChangeService
             var observedHosts = (observation?.Data["hosts"] as JsonArray ?? []).OfType<JsonObject>().ToList();
             var hosts = installation.Hosts.Keys.Order(StringComparer.Ordinal)
                 .Select(h => new DeployHostDto(h, true, observedHosts.Any(o => o["name"]?.ToString() == h),
-                    observedHosts.FirstOrDefault(o => o["name"]?.ToString() == h)?["status"]?.ToString()))
+                    HostStatus(observedHosts.FirstOrDefault(o => o["name"]?.ToString() == h))))
                 .Concat(observedHosts.Select(o => o["name"]?.ToString()).OfType<string>().Where(h => !installation.Hosts.ContainsKey(h)).Distinct()
-                    .Select(h => new DeployHostDto(h, false, true, observedHosts.First(o => o["name"]?.ToString() == h)["status"]?.ToString())))
+                    .Select(h => new DeployHostDto(h, false, true, HostStatus(observedHosts.First(o => o["name"]?.ToString() == h)))))
                 .ToList();
             var guests = repository.Guests.Where(g => g.InstallationAddress == installation.Address).OrderBy(g => g.Id, StringComparer.Ordinal)
                 .Select(g => new DeployGuestDto(g.Address, g.Id, g.WorkflowReference.ToString(), repository.IsValid(g.Address))).ToList();
@@ -644,6 +644,12 @@ public sealed partial class ChangeService
     private static Task<bool> RecordedObservedOnlyAsync(OctopushyDb db, string installation, CancellationToken ct) =>
         db.Resources.AsNoTracking().AnyAsync(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null
             && r.ObservedOnly, ct);
+
+    /// <summary>What the latest observation says of a host: its status, or whether it was online.</summary>
+    private static string? HostStatus(JsonObject? host) =>
+        host?["status"]?.ToString() is { Length: > 0 } status ? status
+        : host?["online"] is JsonValue online && online.TryGetValue<bool>(out var up) ? up ? "online" : "offline"
+        : null;
 
     private static IReadOnlyList<string> LabLabels(LabRepository repository, string lab) =>
         repository.Lab(lab)?.AgentLabels ?? repository.Settings?.DefaultAgentLabels ?? [];
