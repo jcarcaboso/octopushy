@@ -144,16 +144,20 @@ it. A crash between those steps used to leave a head whose runs were never propo
 change could end `no-change` with zero runs. Now a crash leaves nothing, and the next sync, the first at startup included,
 applies the revision. A head revision without the marker is applied again.
 
-Applying it again proposes what has no run yet, and nothing twice. A resource's desired work counts as proposed only while a
-run exists for **this occurrence** of it, of any status, so work cancelled on purpose is not proposed again:
+Applying it again proposes what has no run yet, and nothing twice. Each new piece of desired work a resource records, a
+provisioning or a removal, gets its own **occurrence** id (`resources.desired_occurrence`), and the run proposed for it carries
+that id (`runs.occurrence`). The work counts as proposed only while a run with its occurrence exists, of any status, so work
+cancelled on purpose is not proposed again. So:
 
-- for provisioning, a run with those inputs for the revision that recorded them, which a later revision that changes nothing
-  for the resource keeps. Coming back to inputs that ran before, as from 2048 to 4096 and back, is new work, and an old run for
-  2048 does not stand in for it;
-- for a removal, a retire run with those inputs made since the guest's folder went missing this time. A folder deleted,
-  restored and deleted again is a second removal.
+- a later revision that changes nothing for the resource keeps the occurrence, and its run;
+- coming back to inputs that ran before, as from 2048 to 4096 and back, is new work, and so is rolling the branch back to a
+  commit whose revision is reused: an old run for those inputs does not stand in for it;
+- a folder deleted, restored and deleted again is a second removal, whatever the clock said in between;
+- work recorded without its run is proposed, keeping its occurrence, even by a later revision that changes nothing for it.
 
-So work recorded without its run is proposed, even when a later revision changes nothing for that resource. The migration that adds the marker sets it
+The migration that adds occurrences gives each resource's current work one, and stamps it on the run that stood for that work
+by the earlier rules: a retire run made since a deleted guest went missing, or a run with those inputs for the revision that
+recorded them. The migration that adds the marker sets it
 on every existing revision except the head, which the next sync, the first at startup included, applies again in this way.
 
 ## What it needs
@@ -197,7 +201,10 @@ the definition itself is only ever in Git.
 | `dismissed` | A person stopped waiting for an `uncertain` or `unknown` change; the change records who and when. Not final, and not proof: a commit of it that arrives later moves it on |
 
 **A revision not applied yet decides nothing.** While the revision a change follows has no inventory marker, an empty run list
-there is not `no-change`: the change waits, `synced`, until the next sync applies the revision and proposes its runs.
+there is not `no-change`: the change waits, `synced`, until the next sync applies the revision and proposes its runs. That only
+happens while it is the head. Once the head has moved on, the change moves to the first applied revision after it that contains
+its commit, held to what it wrote like any other (it is `superseded` if that revision has other values), and follows that
+revision's runs. The unapplied revision is never applied or marked.
 
 **Which revision.** A change follows the first revision that contains its commit, looked up directly among the commits that
 lead from it to the branch head, however many revisions came in between. That revision is accepted only if the
