@@ -411,6 +411,86 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("enrollment_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GeneratedValue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ChangeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("change_id");
+
+                    b.Property<int>("CleanupAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("cleanup_attempts");
+
+                    b.Property<string>("CleanupError")
+                        .HasColumnType("text")
+                        .HasColumnName("cleanup_error");
+
+                    b.Property<bool>("CleanupPending")
+                        .HasColumnType("boolean")
+                        .HasColumnName("cleanup_pending");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("Generator")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("generator");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Secret")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("secret");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StoreDescription")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("store_description");
+
+                    b.Property<int?>("StoreVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("store_version");
+
+                    b.Property<Guid?>("TokenId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("token_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_generated_values");
+
+                    b.HasIndex("ChangeId")
+                        .HasDatabaseName("ix_generated_values_change_id");
+
+                    b.HasIndex("State", "Key")
+                        .HasDatabaseName("ix_generated_values_state_key");
+
+                    b.ToTable("generated_values", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.GuestAccessKey", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -1063,7 +1143,19 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("message");
 
-                    b.Property<Guid>("ResourceId")
+                    b.Property<string>("PreApproval")
+                        .HasColumnType("text")
+                        .HasColumnName("pre_approval");
+
+                    b.Property<string>("PreApprovalDetail")
+                        .HasColumnType("text")
+                        .HasColumnName("pre_approval_detail");
+
+                    b.Property<Guid?>("PreApprovalRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pre_approval_run_id");
+
+                    b.Property<Guid?>("ResourceId")
                         .HasColumnType("uuid")
                         .HasColumnName("resource_id");
 
@@ -1086,6 +1178,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.PrimitiveCollection<List<string>>("StoreKeys")
+                        .HasColumnType("text[]")
+                        .HasColumnName("store_keys");
+
                     b.Property<string>("SupersededBy")
                         .HasColumnType("text")
                         .HasColumnName("superseded_by");
@@ -1097,6 +1193,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<int?>("Vmid")
+                        .HasColumnType("integer")
+                        .HasColumnName("vmid");
 
                     b.HasKey("Id")
                         .HasName("pk_changes");
@@ -1423,6 +1523,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<Guid?>("GenerationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generation_id");
 
                     b.Property<string>("RevocationNote")
                         .HasColumnType("text")

@@ -20,7 +20,7 @@ function form(overrides: Partial<ChangeForm> = {}): ChangeForm {
     text: "schemaVersion: 1\n",
     workflow: "octopushy-worker@1",
     resolved: { id: "octopushy-worker", version: "1.0", commit: base, usable: true, issue: null, manages: "vm", description: null,
-      inputs: worker, ui: null, secrets: ["worker_enrollment_token"] },
+      inputs: worker, ui: null, secrets: ["worker_enrollment_token"], setup: true },
     hardware: { cores: 2, memory: 4096, disks: [{ size: 32 }] },
     network: { bridge: "vmbr0", mode: "dhcp" },
     inputs: { worker_server_url: "https://octopushy.lan:8443", worker_agent_version: "0.5.0" },
@@ -139,7 +139,7 @@ describe("ChangeEditorPage", () => {
     inputs.required = ["worker_server_url", "worker_agent_version", "worker_pool"];
     const { requests } = mockApi({
       "GET /api/changes/form/guest-1": () =>
-        form({ upgrade: { id: "octopushy-worker", version: "2.0", commit: base, usable: true, issue: null, manages: "vm", description: null, inputs: next, ui: null, secrets: [] } }),
+        form({ upgrade: { id: "octopushy-worker", version: "2.0", commit: base, usable: true, issue: null, manages: "vm", description: null, inputs: next, ui: null, secrets: [], setup: false } }),
       "POST /api/changes/preview": (r) =>
         (r.body as { inputs: Record<string, unknown> }).inputs.worker_pool
           ? preview({ kind: "upgrade", subject: "pve01-worker: workflow octopushy-worker@1 → octopushy-worker@2, worker_pool set to gpu" })

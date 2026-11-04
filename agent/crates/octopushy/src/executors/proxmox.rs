@@ -135,19 +135,66 @@ async fn observe(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         })
         .collect();
     let guests: Vec<Value> = vms.iter().map(guest_json).collect();
-    ctx.log.agent(format!(
-        "{} hosts ({} online), {} guests",
-        hosts.len(),
-        nodes.iter().filter(|n| n.is_online()).count(),
-        guests.len()
-    ));
-
+    // `/cluster/resources` silently leaves out guests the token may not audit, so whether the list
+    // is every VM has to be proven: unproven counts as incomplete.
+    let visibility = vm_visibility(&c).await;
+    if let Err(reason) = &visibility {
+        ctx.log
+            .agent(format!("the guests listed may not be every VM: {reason}"));
+    }
     Ok(Success::outputs(json!({
         "version": version.version,
         "cluster": cluster.map(|c| json!({ "name": c.name, "quorate": c.quorate })),
         "hosts": hosts,
         "guests": guests,
+        "vmVisibility": match &visibility {
+            Ok(()) => json!({ "complete": true }),
+            Err(reason) => json!({ "complete": false, "reason": reason }),
+        },
     })))
+}
+
+/// Whether the token sees every VM: `VM.Audit` on `/vms` that propagates, and no ACL below
+/// `/vms` or on a pool that could narrow it. The ACL list is only complete with `Sys.Audit` on
+/// `/access`, since Proxmox leaves out entries a token may not audit. Anything not shown is a
+/// reason it is not proven.
+async fn vm_visibility(c: &octopushy_proxmox::Client) -> Result<(), String> {
+    let vms = c
+        .permissions(Some("/vms"))
+        .await
+        .map_err(|e| format!("the token's privileges on /vms could not be read: {e}"))?;
+    if !vms.has("/vms", "VM.Audit") {
+        return Err("the token lacks VM.Audit on /vms".into());
+    }
+    if !vms.propagates("/vms", "VM.Audit") {
+        return Err("the token's VM.Audit on /vms does not propagate to the VMs below it".into());
+    }
+    let access = c
+        .permissions(Some("/access"))
+        .await
+        .map_err(|e| format!("the token's privileges on /access could not be read: {e}"))?;
+    if !access.has("/access", "Sys.Audit") {
+        return Err(
+            "the token lacks Sys.Audit on /access, so the ACLs it can read may leave out one that narrows what it sees"
+                .into(),
+        );
+    }
+    let acl = c
+        .acl()
+        .await
+        .map_err(|e| format!("the ACLs could not be read: {e}"))?;
+    let narrowing: Vec<&str> = acl
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .filter(|path| path.starts_with("/vms/") || *path == "/pool" || path.starts_with("/pool/"))
+        .collect();
+    if !narrowing.is_empty() {
+        return Err(format!(
+            "ACLs on {} may narrow what the token sees below /vms",
+            narrowing.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 fn guest_json(vm: &VmResource) -> Value {

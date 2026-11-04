@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
+using Octopushy.Server.Git;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
@@ -92,6 +93,65 @@ public class PipelineRunTests(PostgresFixture postgres)
 
     private static async Task<Step> ApprovalOfAsync(ServerHarness server, string address = Service) =>
         (await server.LatestRunAsync(address, Operations.Pipeline)).Steps.Single(s => s.Name == StepNames.Approval);
+
+    /// <summary>Records the service as deployed from the wizard at the head, asking to approve its plan in the same click.</summary>
+    private static Task<Guid> DeployedAsync(ServerHarness server) =>
+        server.QueryAsync(async db =>
+        {
+            var head = await RepositoryTrust.HeadRevisions(db).OrderByDescending(r => r.Sequence).FirstAsync();
+            var resource = await db.Resources.FirstAsync(r => r.Address == Service);
+            var id = Guid.CreateVersion7();
+            var now = DateTimeOffset.UtcNow;
+            db.Changes.Add(new ResourceChange
+            {
+                Id = id, Kind = ChangeKinds.CreateService, ResourceKind = ResourceKinds.Service, ResourceId = resource.Id, Address = Service,
+                Author = "ops", BaseCommit = head.Commit, Message = "web: deploy", Commit = head.Commit, RevisionId = head.Id,
+                Status = ChangeStatuses.Synced, PreApproval = PreApprovals.Requested, CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+            return id;
+        });
+
+    [Fact]
+    public async Task A_deployed_pipeline_with_an_ansible_stage_is_never_approved_at_deploy()
+    {
+        var test = Repository.Repository();
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        var change = await DeployedAsync(server);
+        await ScheduleAsync(server);
+        // The OpenTofu stage only creates, and the workflow says the playbook is not destructive: neither is enough.
+        await PlanStagesAsync(agent, FakeAgent.Plan(create: 1));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Service, Operations.Pipeline);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Null(approval.Decision);
+        Assert.Contains("Not approved at deploy: Plan does more than create; approve it yourself. Stage deploy runs Ansible", approval.Detail);
+        var recorded = await server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == change));
+        Assert.Equal(PreApprovals.Declined, recorded.PreApproval);
+    }
+
+    [Fact]
+    public async Task A_deployed_pipeline_of_opentofu_stages_that_only_create_is_approved_at_deploy()
+    {
+        var test = Repository.Repository(Repository.TofuOnly.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await DeployedAsync(server);
+        await ScheduleAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await server.TickAsync();
+
+        var approval = await ApprovalOfAsync(server);
+        Assert.Equal("approved", approval.Decision);
+        Assert.Equal("ops", approval.DecidedBy);
+        Assert.StartsWith("Approved at deploy", approval.DecisionNote);
+    }
 
     [Fact]
     public async Task Every_stage_is_planned_approved_once_then_applied_in_order()

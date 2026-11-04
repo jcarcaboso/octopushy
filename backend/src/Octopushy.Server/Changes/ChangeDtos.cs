@@ -60,7 +60,11 @@ public sealed record ChangePreviewDto(
     bool Valid,
     IReadOnlyList<IssueDto> Issues,
     IReadOnlyList<FieldIssueDto> FieldIssues,
-    string? Refused);
+    string? Refused,
+    IReadOnlyList<GeneratedValueDto>? Generated = null,
+    int? NextVmid = null,
+    string? ReviewedRelease = null,
+    string? ReviewDigest = null);
 
 /// <summary>
 /// A change and where it stands: <c>committing</c> (recorded, being pushed), <c>uncertain</c> or <c>unknown</c> (a push was
@@ -69,12 +73,15 @@ public sealed record ChangePreviewDto(
 /// <c>SupersededBy</c> names it), <c>refused</c> (nothing was pushed) or <c>dismissed</c> (a person settled it as not committed).
 /// <c>Final</c> says the status will not change; <c>NotCommitted</c> says it is definitely not committed, which is
 /// <c>refused</c> or <c>dismissed</c> only.
+/// A create's <c>ResourceId</c> is null until the revision with its folder is loaded; <c>PreApproval</c> is where a deploy's
+/// approval in the same click stands (<c>requested</c>, <c>approved</c>, <c>declined</c> or <c>not-needed</c>), with
+/// <c>PreApprovalDetail</c> saying why.
 /// </summary>
 public sealed record ChangeDto(
     Guid Id,
     string Kind,
     string ResourceKind,
-    Guid ResourceId,
+    Guid? ResourceId,
     string Address,
     string Author,
     string Message,
@@ -94,14 +101,28 @@ public sealed record ChangeDto(
     string? DismissedBy = null,
     DateTimeOffset? DismissedAt = null,
     bool Final = false,
-    bool NotCommitted = false);
+    bool NotCommitted = false,
+    int? Vmid = null,
+    string? PreApproval = null,
+    string? PreApprovalDetail = null,
+    IReadOnlyList<GeneratedValueStateDto>? Generated = null,
+    int CleanupPending = 0);
+
+/// <summary>
+/// A value a deploy generated and where it stands: <c>planned</c>, <c>created</c>, <c>removed</c> or <c>kept</c>.
+/// <c>CleanupPending</c> says its removal was due and has not finished yet; <c>Detail</c> says what cleanup did or why it waits.
+/// </summary>
+public sealed record GeneratedValueStateDto(string Secret, string Key, string Generator, string State, bool CleanupPending, string? Detail,
+    string? CleanupError);
 
 /// <summary>
 /// Why a change was refused (HTTP 409), with nothing committed: <c>Reason</c> is <c>disabled</c>, <c>observed-only</c>,
-/// <c>unavailable</c>, <c>stale</c>, <c>invalid</c>, <c>no-change</c>, <c>unsupported</c> or <c>push-failed</c>. A refusal once
+/// <c>unavailable</c>, <c>stale</c>, <c>invalid</c>, <c>no-change</c>, <c>unsupported</c>, <c>push-failed</c>, or for a deploy
+/// <c>exists</c> or <c>vmid-taken</c>. A refusal once
 /// the edit was made is recorded, as <c>ChangeId</c>; one refused before that, such as with committing off, is not.
+/// A deploy refused because its VMID was taken meanwhile offers <c>NextVmid</c>, the next free one, to review again with.
 /// </summary>
 /// <param name="Status">The recorded change's status: <c>refused</c> when nothing was pushed, which is final; <c>uncertain</c> or
 /// <c>unknown</c> when a push was attempted, which reconciliation or a person settles.</param>
 public sealed record ChangeRefusedDto(Guid? ChangeId, string Reason, string Message, IReadOnlyList<IssueDto> Issues, IReadOnlyList<FieldIssueDto> FieldIssues,
-    string? Status = null);
+    string? Status = null, int? NextVmid = null);

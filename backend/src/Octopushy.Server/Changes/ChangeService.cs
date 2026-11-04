@@ -126,11 +126,12 @@ public sealed partial class ChangeService(
                 // On record before anything is pushed: whatever happens to this request after a push, the branch never moves
                 // without a change that says why, and the commit each attempt pushes is recorded before it is pushed.
                 change = Record(id, target, composed, request, actor);
+                change.StoreKeys = GeneratedValues.StoreKeysOf(composed);
                 change.Status = ChangeStatuses.Committing;
                 change.Detail = "Pushing its commit.";
                 db.Changes.Add(change);
                 await db.SaveChangesAsync(ct);
-                var commit = await PushAsync(db, services, target, composed, change, request.BaseCommit, actor, ct);
+                var commit = await PushAsync(db, services, target.Settings, target.Address, composed, change, request.BaseCommit, actor, null, ct);
                 // The push happened: what follows is recorded even if the request is gone by now.
                 change.Commit = commit;
                 change.Status = ChangeStatuses.Committed;
@@ -157,8 +158,7 @@ public sealed partial class ChangeService(
                     : $"{refusal.Message} A push was attempted: each sync looks for its commit on the branch, until it is found or the change is dismissed.";
                 change.UpdatedAt = clock.GetUtcNow();
                 await db.SaveChangesAsync(CancellationToken.None);
-                return ((ResourceChange?)null, (ChangeRefusedDto?)new ChangeRefusedDto(id, refusal.Reason, refusal.Message, refusal.Issues,
-                    refusal.FieldIssues, change.Status));
+                return ((ResourceChange?)null, (ChangeRefusedDto?)refusal.Dto(id, change.Status));
             }
         }, ct);
         if (committed is null)
@@ -211,8 +211,9 @@ public sealed partial class ChangeService(
     /// recorded on the change before it is pushed. A commit of an earlier attempt that the branch already reaches is success,
     /// checked before anything is retried or refused, so a push whose acknowledgement was lost is never taken for a stale form.
     /// </summary>
-    private async Task<string> PushAsync(OctopushyDb db, IServiceProvider services, Target target, ComposedChange composed, ResourceChange change,
-        string baseCommit, string actor, CancellationToken ct)
+    /// <param name="check">Asked of each candidate before it is validated, such as whether a new guest's VMID is still free.</param>
+    private async Task<string> PushAsync(OctopushyDb db, IServiceProvider services, RepositorySettings settings, string address, ComposedChange composed,
+        ResourceChange change, string baseCommit, string actor, Func<PublishCandidate, Task>? check, CancellationToken ct)
     {
         var id = change.Id;
         await mirror.CreateDraftAsync(id, baseCommit, ct);
@@ -222,8 +223,8 @@ public sealed partial class ChangeService(
             var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
             try
             {
-                var credential = await RepositoryEditor.CredentialAsync(services.GetRequiredService<VariableStore>(), target.Settings, ct);
-                var candidate = await RepositoryEditor.PushDraftAsync(mirror, target.Settings, credential, baseCommit, head, composed.Message,
+                var credential = await RepositoryEditor.CredentialAsync(services.GetRequiredService<VariableStore>(), settings, ct);
+                var candidate = await RepositoryEditor.PushDraftAsync(mirror, settings, credential, baseCommit, head, composed.Message,
                     RepositoryEditor.AuthorOf(actor), async candidate =>
                     {
                         // An earlier attempt landed, though its push reported failure: that is this change's commit.
@@ -236,8 +237,10 @@ public sealed partial class ChangeService(
                         if (candidate.Unchanged || candidate.Conflicts.Count > 0)
                             throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, $"{composed.Name} changed since the form was loaded; reload it.");
                         // The form's commit said managed; what is pushed is judged by what it would be merged into, and by the server's record.
-                        if (await ObservedOnlyAsync(db, target.Address, candidate.Commit!, releases, ct) is { } observed)
+                        if (await ObservedOnlyAsync(db, address, candidate.Commit!, releases, ct) is { } observed)
                             throw new ChangeRefusal(ChangeRefusal.Reasons.ObservedOnly, observed);
+                        if (check is not null)
+                            await check(candidate);
                         var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
                         if (!validation.Valid)
                         {
@@ -260,12 +263,12 @@ public sealed partial class ChangeService(
             }
             catch (GitException e)
             {
-                var message = $"Pushing to {target.Settings.Branch} failed: {e.Message} Octopushy needs a repository credential that can push, "
+                var message = $"Pushing to {settings.Branch} failed: {e.Message} Octopushy needs a repository credential that can push, "
                     + "such as a deploy key with write access.";
                 if (change.CandidateCommits.Count == 0)
                     throw new ChangeRefusal(ChangeRefusal.Reasons.PushFailed, message);
                 // A push reported as failed may still have landed: the branch says, if it can be read.
-                var (checkedBranch, landed) = await CheckBranchAsync(target.Settings, services, change);
+                var (checkedBranch, landed) = await CheckBranchAsync(settings, services, change);
                 if (landed is not null)
                     return landed;
                 throw new ChangeRefusal(ChangeRefusal.Reasons.PushFailed, message, unverified: !checkedBranch);
@@ -324,8 +327,30 @@ public sealed partial class ChangeService(
             change.Detail = $"Dismissed by {actor}: none of its commits is on {settings.Branch} now, so Octopushy stopped waiting for it. This is "
                 + "not proof that nothing was committed: each sync still looks for its commits, and one that arrives is followed.";
             await db.SaveChangesAsync(ct);
+            // A dismissal alone never removes what a deploy generated: one of its commits may still land. Each sync removes it
+            // under the usual guards, against the head it has just fetched.
             return await DtoAsync(db, change, ct);
         }, ct);
+
+    /// <summary>
+    /// Every store key a definition file at the branch as last fetched references, or null when it cannot be read. The mirror
+    /// fetches the branch before every push, so this is at least as new as that push saw.
+    /// </summary>
+    private async Task<IReadOnlySet<string>?> HeadReferencedKeysAsync(OctopushyDb db, CancellationToken ct)
+    {
+        var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
+        if (settings is null)
+            return null;
+        try
+        {
+            var head = await mirror.BranchHeadAsync(settings.Branch, ct) ?? settings.HeadCommit;
+            return head is null ? null : GeneratedValues.ReferencedKeys(await mirror.SnapshotAsync(head, ct));
+        }
+        catch (GitException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Why the installation over <paramref name="address"/> is observed only, by the server's own record of it or by its
@@ -345,8 +370,9 @@ public sealed partial class ChangeService(
     private static string ObservedOnlyMessage(string installation) =>
         $"{installation} is observed only (manage: false): Octopushy changes nothing there, so nothing under it can be changed here.";
 
-    private static string Stale(ComposedChange composed, string path, string remote) =>
-        $"{composed.Name} changed since the form was loaded: {path} is different at {remote[..Math.Min(10, remote.Length)]}. Reload it and make the change again.";
+    private static string Stale(ComposedChange composed, string path, string remote) => ChangeKinds.IsCreate(composed.Kind)
+        ? $"{composed.Folder} was created on the branch meanwhile: {path} is there at {remote[..Math.Min(10, remote.Length)]}. Choose another name."
+        : $"{composed.Name} changed since the form was loaded: {path} is different at {remote[..Math.Min(10, remote.Length)]}. Reload it and make the change again.";
 
     private ResourceChange Record(Guid id, Target target, ComposedChange? composed, ChangeRequest request, string actor)
     {
@@ -508,12 +534,15 @@ public sealed partial class ChangeService(
         var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
         var runs = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
             .Where(r => change.RunIds.Contains(r.Id)).OrderBy(r => r.CreatedAt).ToListAsync(ct);
+        var generated = await db.GeneratedValues.AsNoTracking().Where(v => v.ChangeId == change.Id).OrderBy(v => v.CreatedAt).ToListAsync(ct);
         return new ChangeDto(change.Id, change.Kind, change.ResourceKind, change.ResourceId, change.Address, change.Author, change.Message,
             change.BaseCommit, change.Commit, change.Commit is null ? null : CommitUrl(settings?.Url, change.Commit), change.RevisionId,
             change.Status, change.Detail, change.Files, runs.Select(r => Views.Summary(r, change.Address, change.ResourceKind)).ToList(),
             change.CreatedAt, change.SyncedAt, change.UpdatedAt, change.SupersededBy,
             change.SupersededBy is null ? null : CommitUrl(settings?.Url, change.SupersededBy), change.DismissedBy, change.DismissedAt,
-            ChangeStatuses.IsFinal(change.Status), ChangeStatuses.IsNotCommitted(change));
+            ChangeStatuses.IsFinal(change.Status), ChangeStatuses.IsNotCommitted(change), change.Vmid, change.PreApproval,
+            change.PreApprovalDetail, generated.Select(v => new GeneratedValueStateDto(v.Secret, v.Key, v.Generator, v.State, v.CleanupPending,
+                v.Detail, v.CleanupError)).ToList(), generated.Count(v => v.CleanupPending));
     }
 
     /// <summary>The commit's page when the repository is on GitHub, reached over HTTPS or SSH.</summary>

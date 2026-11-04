@@ -103,6 +103,58 @@ async fn observe_standalone_and_offline_hosts() {
     assert!(lines.iter().any(|l| l.contains("standalone host")));
 }
 
+async fn visibility(fixture: Fixture) -> (Value, Vec<String>) {
+    let m = mock(fixture).await;
+    let (r, lines) = exec(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+    )
+    .await;
+    (r.unwrap().outputs["vmVisibility"].clone(), lines)
+}
+
+#[tokio::test]
+async fn observe_proves_the_token_sees_every_vm_or_says_why_not() {
+    // A propagating VM.Audit on /vms, Sys.Audit on /access, and no ACL below /vms or on a pool.
+    let (seen, _) = visibility(Fixture::example()).await;
+    assert_eq!(seen, json!({ "complete": true }));
+
+    let incomplete = |fixture: fn(&mut Fixture), reason: &'static str| async move {
+        let mut f = Fixture::example();
+        fixture(&mut f);
+        let (seen, lines) = visibility(f).await;
+        assert_eq!(seen["complete"], false, "{reason}");
+        assert!(seen["reason"].as_str().unwrap().contains(reason), "{seen}");
+        assert!(lines.iter().any(|l| l.contains(reason)));
+    };
+    // Proxmox leaves out the guests a token may not audit.
+    incomplete(
+        |f| f.privileges = Some(vec!["Sys.Audit".into()]),
+        "lacks VM.Audit on /vms",
+    )
+    .await;
+    // Held on /vms itself only: it reaches no VM.
+    incomplete(|f| f.privileges_propagate = false, "does not propagate").await;
+    // A more specific ACL can take it away from a VM.
+    incomplete(
+        |f| f.acl = Some(vec![json!({ "path": "/vms/150", "ugid": "octopushy@pve!agent", "type": "token", "roleid": "NoAccess" })]),
+        "ACLs on /vms/150",
+    )
+    .await;
+    incomplete(
+        |f| f.acl = Some(vec![json!({ "path": "/pool/lab", "ugid": "ops", "type": "group", "roleid": "NoAccess" })]),
+        "ACLs on /pool/lab",
+    )
+    .await;
+    // Without Sys.Audit on /access, the ACLs it reads may leave one out.
+    incomplete(
+        |f| f.privileges = Some(vec!["VM.Audit".into()]),
+        "Sys.Audit on /access",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn wrong_token_and_unreachable_api_fail() {
     let m = mock(Fixture::example()).await;

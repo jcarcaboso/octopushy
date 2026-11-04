@@ -3326,6 +3326,247 @@
         }
       }
     },
+    "/api/deploy/targets": {
+      "get": {
+        "tags": [
+          "Deploy"
+        ],
+        "operationId": "getDeployTargets",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployTargetsDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deploy/vmid": {
+      "get": {
+        "tags": [
+          "Deploy"
+        ],
+        "operationId": "getNextVmid",
+        "parameters": [
+          {
+            "name": "installation",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NextVmidDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/deploy/preview": {
+      "post": {
+        "tags": [
+          "Deploy"
+        ],
+        "operationId": "previewDeploy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRefusedDto"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePreviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deploy": {
+      "post": {
+        "tags": [
+          "Deploy"
+        ],
+        "operationId": "deploy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRefusedDto"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variables": {
       "get": {
         "tags": [
@@ -4082,7 +4323,10 @@
             "type": "string"
           },
           "resourceId": {
-            "type": "string",
+            "type": [
+              "null",
+              "string"
+            ],
             "format": "uuid"
           },
           "address": {
@@ -4184,6 +4428,39 @@
           "notCommitted": {
             "type": "boolean",
             "default": false
+          },
+          "vmid": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "preApproval": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "preApprovalDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "generated": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GeneratedValueStateDto"
+            }
+          },
+          "cleanupPending": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0
           }
         }
       },
@@ -4372,6 +4649,34 @@
               "null",
               "string"
             ]
+          },
+          "generated": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GeneratedValueDto"
+            }
+          },
+          "nextVmid": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "reviewedRelease": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reviewDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4415,6 +4720,13 @@
               "null",
               "string"
             ]
+          },
+          "nextVmid": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -4730,6 +5042,283 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "DeployGuestDto": {
+        "required": [
+          "address",
+          "name",
+          "workflow",
+          "valid"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeployHostDto": {
+        "required": [
+          "name",
+          "declared",
+          "observed",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "declared": {
+            "type": "boolean"
+          },
+          "observed": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "DeployInstallationDto": {
+        "required": [
+          "address",
+          "lab",
+          "name",
+          "type",
+          "managed",
+          "reason",
+          "hosts",
+          "guests",
+          "agentLabels",
+          "observedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "lab": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "managed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployHostDto"
+            }
+          },
+          "guests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployGuestDto"
+            }
+          },
+          "agentLabels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "vmidProblem": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "DeployRequest": {
+        "required": [
+          "kind",
+          "baseCommit",
+          "parent",
+          "name",
+          "workflow"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "host": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "vmid": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "template": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hardware": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "network": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "inputs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "secrets": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SecretChoice"
+            }
+          },
+          "accessUser": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "approveAtDeploy": {
+            "type": "boolean",
+            "default": false
+          },
+          "reviewedRelease": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reviewDigest": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeployTargetsDto": {
+        "required": [
+          "baseCommit",
+          "blockedReason",
+          "installations",
+          "templates"
+        ],
+        "type": "object",
+        "properties": {
+          "baseCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "blockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployInstallationDto"
+            }
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -5102,6 +5691,70 @@
           },
           "pending": {
             "type": "boolean"
+          }
+        }
+      },
+      "GeneratedValueDto": {
+        "required": [
+          "secret",
+          "key",
+          "generator",
+          "detail"
+        ],
+        "type": "object",
+        "properties": {
+          "secret": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "generator": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "GeneratedValueStateDto": {
+        "required": [
+          "secret",
+          "key",
+          "generator",
+          "state",
+          "cleanupPending",
+          "detail",
+          "cleanupError"
+        ],
+        "type": "object",
+        "properties": {
+          "secret": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "generator": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "cleanupPending": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "cleanupError": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -6026,6 +6679,36 @@
           }
         }
       },
+      "NextVmidDto": {
+        "required": [
+          "installation",
+          "vmid",
+          "from"
+        ],
+        "type": "object",
+        "properties": {
+          "installation": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "from": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "problem": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "ObserveErrorDto": {
         "required": [
           "installationId",
@@ -6939,6 +7622,39 @@
             ]
           }
         }
+      },
+      "SecretChoice": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "generate": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "labels": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "ServiceDetailDto": {
         "required": [
@@ -8050,6 +8766,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "setup": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -8133,6 +8853,9 @@
     },
     {
       "name": "Changes"
+    },
+    {
+      "name": "Deploy"
     },
     {
       "name": "Variables"

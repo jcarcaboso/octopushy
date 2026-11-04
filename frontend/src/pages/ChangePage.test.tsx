@@ -38,6 +38,7 @@ function change(overrides: Partial<Change> = {}): Change {
     dismissedAt: null,
     final: false,
     notCommitted: false,
+    cleanupPending: 0,
     ...overrides,
   };
 }
@@ -182,5 +183,22 @@ describe("ChangePage", () => {
     mockApi({ "GET /api/changes/change-1": () => change({ status: "no-change", final: true, detail: "abc proposes no run.", runs: [] }) });
     renderAt(<ChangePage />, route);
     expect(await screen.findByText("The revision proposes no run: nothing a run is built from changed.")).toBeInTheDocument();
+  });
+
+  it("says how many generated values of a deploy are still to remove, and why", async () => {
+    mockApi({
+      "GET /api/changes/change-1": () =>
+        change({ kind: "create-guest", status: "dismissed", final: true, notCommitted: true, runs: [], resourceId: null, cleanupPending: 1,
+          generated: [
+            { secret: "worker_enrollment_token", key: "guests/home/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
+              state: "created", cleanupPending: true, detail: null, cleanupError: "canceling statement due to lock timeout" },
+            { secret: "admin_password", key: "guests/home/pve01/w2/admin_password", generator: "random-password", state: "removed",
+              cleanupPending: false, detail: "guests/home/pve01/w2/admin_password version 1 deleted.", cleanupError: null },
+          ] }),
+    });
+    renderAt(<ChangePage />, { path: "/changes/:id", route: "/changes/change-1" });
+    expect(await screen.findByText("1 generated value still to remove")).toBeInTheDocument();
+    expect(screen.getByText(/canceling statement due to lock timeout/)).toBeInTheDocument();
+    expect(screen.getByText("guests/home/pve01/w2/admin_password version 1 deleted.")).toBeInTheDocument();
   });
 });

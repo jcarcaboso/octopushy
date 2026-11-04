@@ -367,6 +367,12 @@ impl Client {
         }
     }
 
+    /// `GET /access/acl`: the ACL entries the token may read. Proxmox leaves out entries the
+    /// token may not audit, so the list is complete only with `Sys.Audit` on `/access`.
+    pub async fn acl(&self) -> Result<Vec<AclEntry>> {
+        self.get(&["access", "acl"], &[]).await
+    }
+
     /// `GET /access/permissions[?path=...]`: the token's privileges.
     pub async fn permissions(&self, path: Option<&str>) -> Result<Permissions> {
         match path {

@@ -107,7 +107,7 @@ PATH="$($S/stack.sh shim):$PATH" just demo
 
 It serves http://127.0.0.1:5174, user `demo`, password `octopushy-demo`, with logs in `.dev/demo`, and it can run alongside `stack.sh`. The first build compiles the Rust agent, which takes a few minutes. It also uses the long-lived `octopushy-dev-pg` container and volume, which stay after it stops. To plan, trust the Proxmox installation on its Inventory page first; the first plan then waits for approval.
 
-`drive.mjs` signs in to the light stack only, so for the demo set the URL and credentials in your own script.
+`drive.mjs` signs in to the light stack by default; for the demo pass them: `open({ base: "http://127.0.0.1:5174", user: "demo", password: "octopushy-demo" })`, and `shots` for where screenshots go.
 
 Ctrl-C stops everything, but a backgrounded demo has no terminal. Signal its whole process group, or Vite stays behind on port 5174 and the next demo cannot start:
 

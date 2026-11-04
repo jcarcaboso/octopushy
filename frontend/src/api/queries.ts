@@ -4,6 +4,7 @@ import type {
   AgentUpdate,
   Change,
   ChangeRequest,
+  DeployRequest,
   AuthState,
   DraftDetail,
   DraftFileChange,
@@ -39,6 +40,7 @@ export const keys = {
   change: (id: string) => ["changes", "one", id] as const,
   changes: (resourceId: string) => ["changes", "list", resourceId] as const,
   workflows: ["workflows"] as const,
+  deployTargets: ["deploy", "targets"] as const,
   draft: (id: string) => ["drafts", id] as const,
 };
 
@@ -645,6 +647,55 @@ export function useCommitChange() {
       void client.invalidateQueries({ queryKey: keys.revisions });
       void client.invalidateQueries({ queryKey: keys.inventory });
       void client.invalidateQueries({ queryKey: [change.resourceKind === "service" ? "service" : "guest", change.resourceId] });
+    },
+  });
+}
+
+// The workflow wizard: where a guest or service can be deployed, and the deploy itself, which is a change like any other.
+
+/** Where the wizard can deploy, read at the head commit it starts from. */
+export function useDeployTargets() {
+  return useQuery({
+    queryKey: keys.deployTargets,
+    queryFn: () => unwrap(api.GET("/api/deploy/targets")),
+    // The wizard keeps the commit it was loaded from; it is read again when it opens.
+    staleTime: Infinity,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** The next free VMID on an installation, asked for when one is chosen. */
+export function useNextVmid() {
+  return useMutation({
+    retry: false,
+    mutationFn: ({ installation, from }: { installation: string; from?: number | null }) =>
+      unwrap(api.GET("/api/deploy/vmid", { params: { query: { installation, from: from ?? undefined } } })),
+  });
+}
+
+type DeployBody = import("./schema").components["schemas"]["DeployRequest"];
+
+/** What deploying would commit: the exact file and diff, the generated values and the validation, with nothing committed. */
+export function usePreviewDeploy() {
+  return useMutation({
+    retry: false,
+    mutationFn: (request: DeployRequest) => unwrap(api.POST("/api/deploy/preview", { body: request as unknown as DeployBody })),
+  });
+}
+
+export function useDeploy() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (request: DeployRequest) => unwrap(api.POST("/api/deploy", { body: request as unknown as DeployBody })),
+    onSuccess: (change) => {
+      client.setQueryData(keys.change(change.id), change);
+      void client.invalidateQueries({ queryKey: ["changes"] });
+      void client.invalidateQueries({ queryKey: keys.repository });
+      void client.invalidateQueries({ queryKey: keys.revisions });
+      void client.invalidateQueries({ queryKey: keys.inventory });
+      void client.invalidateQueries({ queryKey: keys.deployTargets });
     },
   });
 }

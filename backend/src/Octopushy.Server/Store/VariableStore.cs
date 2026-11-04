@@ -22,17 +22,19 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         db.StoreEntries.AsNoTracking().OrderBy(e => e.Key).ToListAsync(cancellationToken);
 
     /// <summary>Sets a value from the API. Keys in the system scope are refused.</summary>
-    public Task SetAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken)
+    /// <param name="generation">For a value a deploy generates, the <see cref="GeneratedValue"/> the new version belongs to.</param>
+    public Task SetAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken, Guid? generation = null)
     {
         CheckUserKey(key);
-        return SetValueAsync(key, value, visibility, description, false, cancellationToken);
+        return SetValueAsync(key, value, visibility, description, false, cancellationToken, generation);
     }
 
     /// <summary>Sets a value in any scope, for the server's own credentials.</summary>
     public Task SetInternalAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken) =>
         SetValueAsync(key, value, visibility, description, true, cancellationToken);
 
-    private async Task SetValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken)
+    private async Task SetValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken,
+        Guid? generation = null)
     {
         if (!KeyPattern().IsMatch(key))
         {
@@ -76,6 +78,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             ActivatedAt = now,
             ActivatedBy = "initial-or-internal",
             ActivationNote = "Initial value or immediate plain/system value update; not an automated credential check.",
+            GenerationId = generation,
         });
         await SaveAsync(cancellationToken);
     }

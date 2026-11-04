@@ -300,8 +300,15 @@ is in the two other repositories: their CI, and converting the recipes into work
 
 **3A, changes from the UI, is built** ([changes-from-the-ui.md](changes-from-the-ui.md)): forms rendered from the inputs
 schema with `ui` hints, the compare-and-swap commit through the editor's publish path with immediate sync, upgrades to a newer
-major, removing a guest, and the change page. What is left of Phase 3 is the wizard with its generated values (3B), and the
-acceptance on real Proxmox.
+major, removing a guest, and the change page.
+
+**3B, the workflow wizard, is built** ([the workflow wizard](changes-from-the-ui.md#the-workflow-wizard)): **Deploy** picks a
+workflow, an installation and host, fills in the form and the secrets, reviews the exact file, and commits a new guest's or
+service's folder as a `create-guest` or `create-service` change. Generated values are generic and requested by the workflow's
+`ui` ([generated values](workflows.md#generated-values)): the next free VMID, a one-time agent enrollment token, and a random
+password; the managed SSH key stays the server's. A deploy can approve its first plan in the same click when that plan only
+creates. `octopushy-lab` gives its VM workflows these hints at 1.1. What is left of Phase 3 is the acceptance on real
+Proxmox.
 
 - **UI changes as commits.**
   - Form editing for guests and services, rendered from the workflow's `inputs` schema.

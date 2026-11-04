@@ -83,3 +83,38 @@ export interface ChangeRequest {
   network?: Record<string, unknown> | null;
   inputs?: Record<string, unknown> | null;
 }
+export type WorkflowSummary = Schemas["WorkflowSummaryDto"];
+export type DeployTargets = Schemas["DeployTargetsDto"];
+export type DeployInstallation = Schemas["DeployInstallationDto"];
+export type NextVmid = Schemas["NextVmidDto"];
+export type GeneratedValue = Schemas["GeneratedValueDto"];
+
+/** How a new guest's or service's secret is provided: an existing store key, or a value Octopushy generates. */
+export interface SecretChoice {
+  store?: string | null;
+  generate?: string | null;
+  labels?: string[] | null;
+  name?: string | null;
+}
+
+/** A deploy from the workflow wizard, as it sends it; the sections are plain JSON objects. */
+export interface DeployRequest {
+  kind: "create-guest" | "create-service";
+  baseCommit: string;
+  parent: string;
+  name: string;
+  workflow: string;
+  host?: string | null;
+  vmid?: number | null;
+  template?: string | null;
+  hardware?: Record<string, unknown> | null;
+  network?: Record<string, unknown> | null;
+  inputs?: Record<string, unknown> | null;
+  secrets?: Record<string, SecretChoice> | null;
+  accessUser?: string | null;
+  hostKey?: string | null;
+  approveAtDeploy?: boolean;
+  /** What the review returned: a deploy whose workflow release or files differ from it is refused. */
+  reviewedRelease?: string | null;
+  reviewDigest?: string | null;
+}

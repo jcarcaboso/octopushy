@@ -5,18 +5,20 @@ commit that Octopushy writes to the lab repository. It then syncs at once, and t
 approval as the policy says, apply, verify. Git stays the only source of truth. Nothing a form changes lives only in the
 database, so there is no drift to reconcile.
 
-This page is Phase 3A of the [workflows migration](workflows-migration.md#phase-3-change-from-the-ui-and-one-click-deployment).
-The workflow wizard and generated values are the next part.
+This page is Phase 3A and 3B of the [workflows migration](workflows-migration.md#phase-3-change-from-the-ui-and-one-click-deployment):
+changes to what exists, and [the workflow wizard](#the-workflow-wizard), which deploys something new.
 
 ## What a change is
 
-A **change** is a structured edit of one guest or service, made in a form and written as one commit. There are three kinds:
+A **change** is a structured edit of one guest or service, made in a form and written as one commit. There are five kinds:
 
 | Kind | What it writes |
 |---|---|
 | `edit` | A guest's `hardware`, `network`, `inputs` and `workflow`, or a service's `inputs` and `workflow` |
 | `upgrade` | An edit that moves `workflow:` to a newer major of the same workflow, such as `fedora-vm@1` to `fedora-vm@2`, with any inputs the new major needs |
 | `remove` | Deletes a guest's folder. Octopushy then proposes the guest's retire run, under its approval and destructive policy, as for a folder deleted in Git |
+| `create-guest` | A new guest's folder with its `guest.yaml`, from [the workflow wizard](#the-workflow-wizard) |
+| `create-service` | A new service's folder under a guest, with its `service.yaml`, from the wizard |
 
 A change touches only files inside its resource's own folder: `guest.yaml`, `service.yaml`, or for a removal everything under
 the guest's folder. It never touches `octopushy.yaml`, an installation, a lab, or another resource. Secrets, schedules,
@@ -217,7 +219,8 @@ lead from it to the branch head, however many revisions came in between. That re
 resource's definition there still carries the change, checked on the change's own commit too; when a later commit landed
 before the sync, it is a descendant, checked the same way: each
 section the change wrote (`workflow`, `hardware`, `network`, `inputs`) has the values it wrote, or for a removal the resource
-is still absent. Otherwise the change is `superseded` by that commit. The same holds when a change's run is cancelled because a
+is still absent, or for a deploy the new resource still exists with every value it wrote. Otherwise the change is
+`superseded` by that commit. The same holds when a change's run is cancelled because a
 later revision superseded it: the change moves on to that revision only if it still carries the change.
 
 The runs a change follows are those its revision proposed for its resource: a guest's provision run, then its setup run once
@@ -238,6 +241,10 @@ live updates come with Phase 4. Guest and service pages list their recent change
 | `POST /api/changes` | Commits the change and syncs; 409 with a reason when it is refused |
 | `GET /api/changes/{id}` | The change and its status, brought up to date from its revision and runs |
 | `GET /api/changes?resourceId=` | The newest changes of a resource |
+| `GET /api/deploy/targets` | Where the wizard can deploy, at the head commit: installations, managed or not and why, their hosts as declared and observed, their guests, their labs' agent labels, and the templates |
+| `GET /api/deploy/vmid?installation=&from=` | The next free VMID on an installation |
+| `POST /api/deploy/preview` | A deploy's file, diff, message, validation and the values it would generate, with nothing committed or generated |
+| `POST /api/deploy` | Generates the values, commits the deploy and syncs; 409 with a reason when it is refused |
 
 A change request names the resource, the base commit, the kind, and each section it replaces:
 
@@ -251,14 +258,132 @@ A change request names the resource, the base commit, the kind, and each section
 ```
 
 A section left out stays as it is. A refusal is `{ changeId, reason, message, issues, fieldIssues }`, where `reason` is
-`disabled`, `observed-only`, `unavailable`, `stale`, `invalid`, `no-change`, `unsupported` or `push-failed`, and each field
+`disabled`, `observed-only`, `unavailable`, `stale`, `invalid`, `no-change`, `unsupported`, `push-failed`, or for a deploy
+`exists` or `vmid-taken` (with `nextVmid`, the next free one), and each field
 issue is a JSON pointer into `{ workflow, hardware, network, inputs }` with its message. A change refused once its edit was
 made, such as a stale form or one that does not validate, is recorded as `refused` and has a `changeId`; one refused before,
 because committing is off or the resource cannot be changed, is not.
 
+## The workflow wizard
+
+**Deploy**, in the navigation, opens `/deploy`. It is generic: it knows workflows, not what they are for, so an Octopushy
+worker is the `octopushy-worker` workflow deployed like any other. Its steps:
+
+1. **Workflow.** A card for each workflow from `GET /api/workflows`: its description, what it manages, the newest release
+   of each major, and the major to use. A deploy writes `workflow: <id>@<M>`, the newest `M.x`; **Pin** writes `@M.m`.
+2. **Where.** For a VM: the installation, its host and the guest's name, the VMID and the template. Installations with
+   `manage: false` are listed, disabled, with the reason. Hosts are those `installation.yaml` declares, with what the latest
+   observation says of them; a host only observed is shown, disabled. For a service: the installation and the guest it runs on.
+3. **Form.** The workflow's inputs schema with its `ui` hints, as for an edit, prefilled with the schema's defaults and what
+   it requires.
+4. **Secrets.** For each secret the workflow declares, or describes in `ui.secrets`, an existing store key, or a value
+   generated when the workflow asks for one ([generated values](workflows.md#generated-values)). For a workflow with a setup
+   stage, its login and the store key of the guest's host key, which the person sets after the first boot.
+5. **Review.** The exact file and diff Git will record, the commit message, what will be generated and where it is stored,
+   and the validation. A VMID taken since the wizard opened is refused here, with the next free one offered.
+6. **Deploy,** with a box: **approve the plan in the same click**. Then the change page follows it, as for an edit.
+
+A deploy is a change like any other: the same commit path, compare-and-swap, validation, trailer, immediate sync and change
+page. Its commit adds only the new folder:
+
+```text
+labs/<lab>/proxmox/<installation>/guests/<name>/guest.yaml
+labs/<lab>/proxmox/<installation>/guests/<guest>/services/<name>/service.yaml
+```
+
+and its message names what it is: `w2: deploy octopushy-worker@1 on home/pve01, host pve01, VMID 311`. The file is written
+clean and commented: the header names the workflow, the VMID says it was free when deployed, the reference says how to pin
+it, and each generated secret says so. A deploy is refused, with nothing committed:
+
+- when the folder exists, at the commit the wizard was loaded from or on the branch when it is pushed (`exists`, `stale`);
+- when the name is not a resource id: lowercase letters, digits and hyphens (`invalid`);
+- on an installation with `manage: false`, saying so (`observed-only`), as every change there is;
+- when its VMID is taken (`vmid-taken`), checked at the review and again at the commit the push lands on, with the next free
+  one offered: the number is never changed after the review;
+- when which VMIDs are free cannot be known (`vmids-unknown`): the installation has no successful, complete and recent
+  observation, or a `guest.yaml` under it cannot be read ([generated values](workflows.md#generated-values)). The wizard says
+  why and offers **Observe now**. **Known limitation:** an installation with any ACL on a single VM (`/vms/<id>`) or on a
+  pool is always `vmids-unknown`, even for a full Administrator token, because such an ACL could hide VMs from the
+  observation. The reason names the ACL paths. Keep the ACLs you need, and deploy to that installation in Git until a
+  per-VMID availability check exists ([Not yet](#not-yet));
+- when what it would commit is not what was reviewed (`stale`): the review returns the workflow release it resolved to and a
+  digest of the files, and the deploy sends both back. A release is a tag's commit for a workflows repository, which pins
+  its modules too. For a workflow kept in the lab repository, it is what its runs take, by the same definition as their
+  hashes: its folder, and every file of every stage's root, such as a module under `modules/`. Before **every** push attempt, the commit it would land
+  is read again: what the new resource's reference resolves to there, and its file there, must be what was reviewed. A
+  workflow changed on the branch since the review, even without a sync and even at the same version, refuses it with *"The
+  workflow release changed since the review … Review again."*. The installation is read from that commit too, so a host
+  added since the review must be in the observation;
+- when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
+
+A deploy is recorded `committing` before anything is generated or pushed, with a record of each value it will make. Each
+part of a value is recorded in the same save that makes it: the enrollment token's id, and the store version it writes,
+tagged with the value's own id, which the version keeps and nothing can set afterwards. A deploy's commit is found as every
+change's is: by the candidate commits it
+pushed. Its status follows the same model: `refused` when nothing was pushed, `uncertain` or `unknown` after a push attempt
+until reconciliation finds its commit or a person dismisses it.
+
+**Generated values are removed under one rule, whatever triggers it:** at every sync, against the branch head that sync has
+just fetched, and right after a deploy is refused before any push. A value goes only when all of these hold:
+
+- its change is final, so its status cannot change again. `dismissed` is not final: a dismissal proves nothing, since a push
+  was attempted and one of its commits may still land. A dismissed deploy keeps its generated values, and its VMID, until
+  its commit turns up and it is followed again, or it ends in another final status;
+- no definition file at the branch head references its key: every `store` anywhere in `octopushy.yaml` and the YAML under
+  `labs/` and `templates/`, read as plain YAML, valid or not. If one of those files is not YAML at all, nothing is removed.
+  So a dismissed change whose commit turns up on the branch later keeps the secrets its definition uses, and so does an
+  applied guest;
+- no change that is not final references the key. That covers the keys its written files reference, recorded before its
+  first push, so an edit of other sections that keeps a `store:` reference still counts. It also covers its files at each
+  commit it recorded, pushed or about to be, as far as the mirror holds that commit. A change recorded before those keys
+  were kept, whose commit is not in the mirror, stops all removals until it settles;
+- no run that has not finished uses the key.
+
+**What is not looked at:** drafts of the [repository editor](repository-editor.md), and branches other than the one
+Octopushy reads. A generated key referenced only there can be removed; set it again under **Variables** before such a draft
+or branch is merged.
+
+What goes is only what the value owns: the store version it wrote, identified by the value's id that the version was created
+with, while that version is still the one present. A key someone wrote since, a person or a later deploy of the same name, is
+never touched, even at version 1 with the same description. Its
+enrollment token is revoked unless it was used: a used token stays, and removing it would not affect the agent it enrolled. A
+key a run was given keeps its history; revoke it under **Variables**. Each removal is its own transaction, with a short lock
+timeout. One that fails stays pending with its error, each sync tries it again, and the change page says *"2 generated
+values still to remove"* until it is done.
+
+A final deploy, whatever its status (`applied`, `failed`, `no-change`, `superseded` or `refused`), holds no VMID: one
+applied is held by its definition from then on. Every other deploy holds its VMID, a dismissed one included.
+
+A new guest or service is a resource once the revision with its folder is loaded, so a deploy's change has no resource until
+it is synced.
+
+### Approving in the same click
+
+**Decided by the owner:** a deploy can include the approval. It records the operator's intent on the change, and that intent
+is decided once, when the first plan of the deploy reaches its approval. It approves that plan, as the operator who deployed,
+noted *"Approved at deploy"*, only when all of these hold:
+
+- **The plan only creates.** Every change it lists is a create: no update, delete, replace or import, and at least one. For a
+  service, only a pipeline made entirely of OpenTofu stages qualifies, each plan checked change by change. **Decided by the
+  owner:** a pipeline with an Ansible stage is never approved at deploy. A playbook's preview says what it might change, never
+  that it only creates, and the workflow's own `destructive` flag is not proof. Such a pipeline waits for approval, and says
+  why: *"Stage deploy runs Ansible, whose preview cannot be shown to only create."*
+- **It is the deploy's own plan:** the provision run, or for a service the pipeline, that the change's revision proposed for
+  the new guest or service, and the first one.
+- **What an approval meets holds:** the run is of the current head revision, its installation is trusted and not observed
+  only, and the plan has the fingerprint an approval names.
+
+Otherwise the run waits for approval as usual, and its approval step and the change page say why: *"Plan does more than
+create; approve it yourself."* A plan the policy approves by itself needs nothing, and the change says so. The intent is
+spent on that one decision: it never covers a later plan, a setup run, a retire, a removal or anything destructive.
+
 ## Not yet
 
-- The workflow wizard and generated values, such as the next free VMID and an enrollment token (Phase 3, next).
 - Power, snapshots and actions as recorded runs, and live updates (Phase 4).
 - Editing secrets, schedules, access and policy from a form.
 - Removing a service: deleting a service's folder removes nothing yet ([services](workflows.md#removal)).
+- Approving a deploy's setup run in the same click: a guest's setup is a later run, so it waits for approval as the policy says.
+- Deploying several guests at once, such as a cluster.
+- An authoritative check that one VMID is free, independent of ACLs, such as Proxmox's `/cluster/nextid?vmid=<n>` asked by an
+  agent before the commit. It would let the wizard deploy to installations with ACLs on single VMs or pools, which the
+  observation-based check refuses today.

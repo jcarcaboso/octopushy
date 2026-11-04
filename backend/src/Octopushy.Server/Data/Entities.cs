@@ -83,6 +83,28 @@ public static class ChangeKinds
     public const string Upgrade = "upgrade";
     /// <summary>Deletes the guest's folder; its retire run follows under its policy.</summary>
     public const string Remove = "remove";
+    /// <summary>Writes a new guest's folder, from the workflow wizard.</summary>
+    public const string CreateGuest = "create-guest";
+    /// <summary>Writes a new service's folder under a guest, from the workflow wizard.</summary>
+    public const string CreateService = "create-service";
+
+    public static bool IsCreate(string kind) => kind is CreateGuest or CreateService;
+}
+
+/// <summary>
+/// Where a deploy's "approve the plan in the same click" stands. It covers the change's first plan only, and only when that
+/// plan does nothing but create. See docs/changes-from-the-ui.md.
+/// </summary>
+public static class PreApprovals
+{
+    /// <summary>Asked for at deploy; no plan has been decided yet.</summary>
+    public const string Requested = "requested";
+    /// <summary>The first plan was approved at deploy, as the operator who deployed.</summary>
+    public const string Approved = "approved";
+    /// <summary>The first plan did not qualify, so it waits for approval as usual; the detail says why.</summary>
+    public const string Declined = "declined";
+    /// <summary>The policy approved the first plan on its own, so nothing waited.</summary>
+    public const string NotNeeded = "not-needed";
 }
 
 public static class ChangeStatuses
@@ -117,6 +139,9 @@ public static class ChangeStatuses
 
     public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
 
+    /// <summary>The statuses <see cref="IsFinal"/> holds for, for queries.</summary>
+    public static readonly string[] Final = [Applied, Failed, Refused, NoChange, Superseded];
+
     /// <summary>
     /// Definitely not committed: refused before any push was attempted. Nothing else proves it, a dismissal included. What a
     /// change prepared, such as generated values, can be cleaned up then and only then.
@@ -142,7 +167,8 @@ public sealed class ResourceChange
     /// <summary><c>guest</c> or <c>service</c>.</summary>
     public required string ResourceKind { get; set; }
 
-    public Guid ResourceId { get; set; }
+    /// <summary>The guest or service; for a create, null until the revision that holds the new folder is loaded.</summary>
+    public Guid? ResourceId { get; set; }
 
     public required string Address { get; set; }
 
@@ -175,6 +201,13 @@ public sealed class ResourceChange
     /// </summary>
     public List<string> CandidateCommits { get; set; } = [];
 
+    /// <summary>
+    /// Every store key the files this change writes reference, recorded before its first push. Each attempt's candidate writes
+    /// exactly those files, so this is what any of its commits would bring to the branch; cleanup reads it when a candidate's
+    /// objects are not in the mirror. Null on a change recorded before it was kept, which cleanup treats as unknown.
+    /// </summary>
+    public List<string>? StoreKeys { get; set; }
+
     /// <summary>When reconciliation last checked the change against the branch; it checks the longest unchecked first.</summary>
     public DateTimeOffset? CheckedAt { get; set; }
 
@@ -194,9 +227,80 @@ public sealed class ResourceChange
     /// <summary>Why it was refused or failed, or what it waits for.</summary>
     public string? Detail { get; set; }
 
+    /// <summary>For a new guest, the VMID it declares: held against other deploys until the change is settled.</summary>
+    public int? Vmid { get; set; }
+
+    /// <summary><see cref="PreApprovals"/>, or null when the deploy did not ask to approve its plan in the same click.</summary>
+    public string? PreApproval { get; set; }
+
+    /// <summary>What happened to the pre-approval, such as why the plan did not qualify.</summary>
+    public string? PreApprovalDetail { get; set; }
+
+    /// <summary>The run whose plan the pre-approval was decided for. It is decided once, for that run only.</summary>
+    public Guid? PreApprovalRunId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? SyncedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>Where a value a deploy generated stands. See <see cref="GeneratedValue"/>.</summary>
+public static class GeneratedValueStates
+{
+    /// <summary>Recorded before it is made: nothing exists yet.</summary>
+    public const string Planned = "planned";
+    /// <summary>Made, and owned by its change: the store version it wrote, the token it created.</summary>
+    public const string Created = "created";
+    /// <summary>Removed by cleanup: its store version deleted and its unused token revoked.</summary>
+    public const string Removed = "removed";
+    /// <summary>Left in place for good, because someone else wrote the key since, or it has execution history.</summary>
+    public const string Kept = "kept";
+}
+
+/// <summary>
+/// One value a deploy generated, and exactly what it owns: the store version it wrote, which carries this value's id as its
+/// <see cref="StoreVersion.GenerationId"/>, and the enrollment token it created. Each is recorded in the same save that makes
+/// it. Cleanup removes only that version, while it is still the one present, and only an unused token; nothing someone else
+/// wrote is ever touched.
+/// </summary>
+public sealed class GeneratedValue
+{
+    public Guid Id { get; set; }
+
+    public Guid ChangeId { get; set; }
+
+    /// <summary>The secret of the definition it fills.</summary>
+    public required string Secret { get; set; }
+
+    public required string Key { get; set; }
+
+    public required string Generator { get; set; }
+
+    /// <summary><see cref="GeneratedValueStates"/>.</summary>
+    public string State { get; set; } = GeneratedValueStates.Planned;
+
+    /// <summary>The store version it wrote; null until it is written.</summary>
+    public int? StoreVersion { get; set; }
+
+    /// <summary>The description it wrote the entry with, naming its change, for people. Ownership is the version's generation id.</summary>
+    public required string StoreDescription { get; set; }
+
+    /// <summary>The enrollment token it created, for <c>agent-enrollment-token</c>.</summary>
+    public Guid? TokenId { get; set; }
+
+    /// <summary>Cleanup was due and did not finish; each sync tries again.</summary>
+    public bool CleanupPending { get; set; }
+
+    public string? CleanupError { get; set; }
+
+    public int CleanupAttempts { get; set; }
+
+    /// <summary>What cleanup did, or why it left the value.</summary>
+    public string? Detail { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
 }
@@ -981,6 +1085,12 @@ public sealed class StoreVersion
     public string? ActivationNote { get; set; }
 
     public DateTimeOffset? RevokedAt { get; set; }
+
+    /// <summary>
+    /// The <see cref="GeneratedValue"/> that wrote this version, for a value a deploy generated: what its cleanup owns. Set when
+    /// the version is created and never changed, so a key deleted and written again, whatever its description, is not its.
+    /// </summary>
+    public Guid? GenerationId { get; set; }
 
     public string? RevokedBy { get; set; }
 

@@ -34,13 +34,25 @@ public sealed class OctopushyOptions
     public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
 
     public ChangeOptions Changes { get; set; } = new();
+
+    public DeployOptions Deploy { get; set; } = new();
 }
 
-/// <summary>The integrated editor. Drafts always work; pushing them to the lab repository is opt-in.</summary>
+/// <summary>Changes made in the UI.</summary>
 public sealed class ChangeOptions
 {
     /// <summary>How many changes each sync checks against the branch, the longest unchecked first.</summary>
     public int ReconcileBatch { get; set; } = 100;
+}
+
+/// <summary>Deploys from the workflow wizard.</summary>
+public sealed class DeployOptions
+{
+    /// <summary>
+    /// How old, in minutes, an installation's last successful observation may be for a deploy to allocate or commit a VMID
+    /// there. By default three observation intervals (<see cref="SchedulingOptions.ObserveMinutes"/>), 15 minutes.
+    /// </summary>
+    public int? ObservationMaxAgeMinutes { get; set; }
 }
 
 public sealed class RepositoryEditorOptions
@@ -70,6 +82,12 @@ public sealed class AgentChannelOptions
     public int LeaseSeconds { get; set; } = 60;
 
     public int EnrollmentTokenMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// How long an enrollment token a deploy generates lives: long enough for the guest to be approved, provisioned and set
+    /// up, which can wait on a person. A week at most.
+    /// </summary>
+    public int GeneratedEnrollmentTokenMinutes { get; set; } = 3 * 24 * 60;
 
     public int CertificateDays { get; set; } = 30;
 }
