@@ -191,6 +191,36 @@ describe("SchemaForm", () => {
     expect(within(group(/^sites\[2\]/)).getByLabelText(/^settings/)).toHaveValue("port: 1\nmore: [");
   });
 
+  it("keeps an item's unsaved YAML when items are reordered and that item is also changed from outside", async () => {
+    const schema: Schema = {
+      type: "object",
+      properties: { inputs: { type: "object", properties: { sites: { type: "array",
+        items: { type: "object", properties: { name: { type: "string" }, settings: { type: "object" } } } } } } },
+    };
+    function Outside() {
+      const [value, setValue] = useState<JsonObject>({ inputs: { sites: [{ name: "A", settings: { port: 1 } }, { name: "B", settings: { port: 2 } }] } });
+      // [A, B] becomes [B', A]: B moves first, and only its name changes.
+      const change = () =>
+        setValue((v) => {
+          const [a, b] = (v.inputs as JsonObject).sites as JsonObject[];
+          return { inputs: { sites: [{ ...b, name: "B2" }, a] } };
+        });
+      return (
+        <>
+          <button type="button" onClick={change}>Change</button>
+          <SchemaForm schema={schema} value={value} onChange={setValue} />
+        </>
+      );
+    }
+    render(<Outside />);
+    await userEvent.type(within(group(/^sites\[2\]/)).getByLabelText(/^settings/), "{enter}more: [[");
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+
+    expect(within(group(/^sites\[1\]/)).getByLabelText(/^name/)).toHaveValue("B2");
+    expect(within(group(/^sites\[1\]/)).getByLabelText(/^settings/)).toHaveValue("port: 2\nmore: [");
+    expect(within(group(/^sites\[2\]/)).getByLabelText(/^settings/)).toHaveValue("port: 1");
+  });
+
   it("shows a YAML part's new value when it changes from outside", async () => {
     const schema: Schema = { type: "object", properties: { inputs: { type: "object", properties: { settings: { type: "object" } } } } };
     function Outside() {

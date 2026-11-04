@@ -418,9 +418,11 @@ interface Pair {
 }
 
 /**
- * The keys for `items`: each item keeps the key of an equal value it had before, the first unused one, so a reorder moves
- * keys with their items; an item whose value is new takes the key left at its place, else a new one. Returns `pairs` itself
- * when nothing changed.
+ * The keys for `items`. Keys live alongside the values in this component, so edits, additions and removals made here keep
+ * them exactly. A value set from outside carries no keys, so they are matched to it: an item equal to an earlier one takes
+ * that one's key, which keeps reorders; an item that also changed takes the key of the most alike earlier item still unused,
+ * by how many of its top-level fields are equal, then the first unused one; only items beyond those get new keys. Returns
+ * `pairs` itself when nothing changed.
  */
 function paired(pairs: Pair[], items: JsonValue[]): Pair[] {
   if (pairs.length === items.length && pairs.every((p, i) => sameJson(p.value, items[i]))) return pairs;
@@ -433,13 +435,25 @@ function paired(pairs: Pair[], items: JsonValue[]): Pair[] {
   });
   return result.map((pair, i) => {
     if (pair) return pair;
-    const atPlace = free[i] && !free[i].used ? free[i] : undefined;
-    if (atPlace) atPlace.used = true;
-    return { key: atPlace?.key ?? itemKey(), value: items[i] };
+    let best: (typeof free)[number] | undefined;
+    let bestScore = -1;
+    for (const candidate of free) {
+      if (candidate.used) continue;
+      const score = likeness(candidate.value, items[i]);
+      if (score > bestScore) [best, bestScore] = [candidate, score];
+    }
+    if (best) best.used = true;
+    return { key: best?.key ?? itemKey(), value: items[i] };
   });
 }
 
-/** A key for an array item that stays with it when items before it are removed. */
+/** How alike two values are: for objects, how many top-level fields are equal; otherwise none. */
+function likeness(a: JsonValue, b: JsonValue): number {
+  if (!isObject(a) || !isObject(b)) return 0;
+  return Object.keys(a).filter((k) => k in b && sameJson(a[k], b[k])).length;
+}
+
+/** A key for an array item that stays with it when items around it are removed or moved. */
 function itemKey(): string {
   itemCount += 1;
   return `item-${itemCount}`;
