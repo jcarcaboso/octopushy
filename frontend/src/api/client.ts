@@ -1,10 +1,12 @@
 import createClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./schema";
-import type { Problem } from "./types";
+import type { ChangeRefused, Problem } from "./types";
 
 /** The one line to show for a problem: the server puts its message in `title`. */
 export function problemMessage(problem: Problem | null): string | null {
-  return problem?.title?.trim() || problem?.detail?.trim() || null;
+  // A refused change carries its reason in `message`.
+  const message = (problem as { message?: unknown } | null)?.message;
+  return problem?.title?.trim() || problem?.detail?.trim() || (typeof message === "string" ? message.trim() : "") || null;
 }
 
 export class ApiError extends Error {
@@ -35,6 +37,13 @@ export function toApiError(response: Response, body: unknown): ApiError {
     statusText[response.status] ??
     (response.status >= 500 ? "The server had a problem. Try again." : `Request failed (${response.status}).`);
   return new ApiError(response.status, problem, fallback);
+}
+
+/** Why a change was refused, when the error is the server's refusal of one (409 with a reason). */
+export function changeRefusal(error: unknown): ChangeRefused | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const body = error.problem as unknown as Partial<ChangeRefused> | null;
+  return body && typeof body.reason === "string" ? (body as ChangeRefused) : null;
 }
 
 export function isNotFound(error: unknown): boolean {

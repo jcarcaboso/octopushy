@@ -2,6 +2,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { api, unwrap } from "./client";
 import type {
   AgentUpdate,
+  Change,
+  ChangeRequest,
   AuthState,
   DraftDetail,
   DraftFileChange,
@@ -33,6 +35,10 @@ export const keys = {
   revisions: ["revisions"] as const,
   revision: (id: string) => ["revision", id] as const,
   drafts: ["drafts"] as const,
+  changeForm: (resourceId: string) => ["changes", "form", resourceId] as const,
+  change: (id: string) => ["changes", "one", id] as const,
+  changes: (resourceId: string) => ["changes", "list", resourceId] as const,
+  workflows: ["workflows"] as const,
   draft: (id: string) => ["drafts", id] as const,
 };
 
@@ -549,6 +555,79 @@ export function useDiscardDraft() {
     onSuccess: (_result, id) => {
       client.removeQueries({ queryKey: keys.draft(id) });
       return client.invalidateQueries({ queryKey: keys.drafts, exact: true });
+    },
+  });
+}
+
+// Changes from the UI: each is a commit to the lab repository, followed through its revision and runs.
+
+const finalChange = new Set(["applied", "failed", "refused", "no-change"]);
+
+export function isChangeFinished(status: string): boolean {
+  return finalChange.has(status);
+}
+
+/** What the form for a guest or service starts from, read at the head commit. */
+export function useChangeForm(resourceId: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.changeForm(resourceId),
+    queryFn: () => unwrap(api.GET("/api/changes/form/{resourceId}", { params: { path: { resourceId } } })),
+    enabled: options.enabled ?? true,
+    // A form keeps the commit it was loaded from; it is read again only when asked.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useChange(id: string) {
+  return useQuery({
+    queryKey: keys.change(id),
+    queryFn: () => unwrap(api.GET("/api/changes/{id}", { params: { path: { id } } })),
+    refetchInterval: (query) => {
+      const data = query.state.data as Change | undefined;
+      return data && isChangeFinished(data.status) ? false : 2_500;
+    },
+  });
+}
+
+export function useChanges(resourceId: string, limit = 5) {
+  return useQuery({
+    queryKey: keys.changes(resourceId),
+    queryFn: () => unwrap(api.GET("/api/changes", { params: { query: { resourceId, limit } } })),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useWorkflows() {
+  return useQuery({
+    queryKey: keys.workflows,
+    queryFn: () => unwrap(api.GET("/api/workflows")),
+    staleTime: 60_000,
+  });
+}
+
+type Body = import("./schema").components["schemas"]["ChangeRequest"];
+
+/** What committing would do: the exact diff, the message and the validation, with nothing committed. */
+export function usePreviewChange() {
+  return useMutation({
+    retry: false,
+    mutationFn: (request: ChangeRequest) => unwrap(api.POST("/api/changes/preview", { body: request as unknown as Body })),
+  });
+}
+
+export function useCommitChange() {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (request: ChangeRequest) => unwrap(api.POST("/api/changes", { body: request as unknown as Body })),
+    onSuccess: (change) => {
+      client.setQueryData(keys.change(change.id), change);
+      void client.invalidateQueries({ queryKey: ["changes"] });
+      void client.invalidateQueries({ queryKey: keys.repository });
+      void client.invalidateQueries({ queryKey: keys.revisions });
+      void client.invalidateQueries({ queryKey: keys.inventory });
+      void client.invalidateQueries({ queryKey: [change.resourceKind === "service" ? "service" : "guest", change.resourceId] });
     },
   });
 }

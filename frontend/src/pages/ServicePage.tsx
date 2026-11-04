@@ -15,6 +15,7 @@ import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { WorkflowLabel } from "../components/WorkflowLabel";
+import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 
 /** One service: its status, what it waits for, its stages, and its history. Its definition is read from the repository. */
@@ -50,15 +51,18 @@ export function ServicePage() {
         }
         actions={
           missing || data.retiredAt ? undefined : (
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={() => deploy.mutate(undefined, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
-              disabled={deploy.isPending}
-            >
-              <Rocket size={15} aria-hidden="true" />
-              {deploy.isPending ? "Starting…" : "Deploy"}
-            </button>
+            <>
+              <ChangeActions resourceId={service.id} kind="service" />
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => deploy.mutate(undefined, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
+                disabled={deploy.isPending}
+              >
+                <Rocket size={15} aria-hidden="true" />
+                {deploy.isPending ? "Starting…" : "Deploy"}
+              </button>
+            </>
           )
         }
       />
@@ -79,6 +83,7 @@ export function ServicePage() {
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>
+            <RecentChanges resourceId={service.id} />
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${service.name}`} showAddress={false} />
             </Card>

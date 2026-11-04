@@ -65,3 +65,21 @@ export type DraftChange = Schemas["ChangedPath"];
 export type DraftFileChange = Schemas["DraftFileChange"];
 export type DraftValidation = Schemas["DraftValidationDto"];
 export type DraftPublishRequest = Schemas["DraftPublishRequest"];
+export type ChangeForm = Schemas["ChangeFormDto"];
+export type ChangePreview = Schemas["ChangePreviewDto"];
+export type ChangeRefused = Schemas["ChangeRefusedDto"];
+export type Change = Schemas["ChangeDto"];
+export type FieldIssue = Schemas["FieldIssueDto"];
+export type WorkflowVersion = Schemas["WorkflowVersionDto"];
+export type WorkflowCatalog = Schemas["WorkflowCatalogDto"];
+
+/** A change as a form sends it; the sections are plain JSON objects. */
+export interface ChangeRequest {
+  resourceId: string;
+  baseCommit: string;
+  kind: "edit" | "upgrade" | "remove";
+  workflow?: string | null;
+  hardware?: Record<string, unknown> | null;
+  network?: Record<string, unknown> | null;
+  inputs?: Record<string, unknown> | null;
+}

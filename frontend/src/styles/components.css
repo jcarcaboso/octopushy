@@ -1207,3 +1207,187 @@ a.badge:hover {
   background: var(--surface-2);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
+
+/* Schema form: a workflow's inputs schema rendered as fields. */
+.schema-form,
+.schema-form__fields,
+.schema-form__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.schema-form__object {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.schema-form__object .schema-form__object {
+  background: var(--surface);
+}
+
+.schema-form__legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0 var(--space-1);
+  font-weight: 650;
+  font-size: var(--text-md);
+}
+
+.schema-form__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.schema-form__label-row .field__label {
+  flex-wrap: wrap;
+}
+
+.schema-form__required {
+  color: var(--danger-fg);
+  margin-left: 1px;
+}
+
+.schema-form__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--border);
+}
+
+.schema-form__group-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.schema-form__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.schema-form__number {
+  max-width: 10rem;
+}
+
+.schema-form__yaml {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* A unified diff: the sign at the start of each line says what it is; color only supports it. */
+.diff__pre {
+  max-height: 36rem;
+  padding: var(--space-2) 0;
+}
+
+.diff__line {
+  display: block;
+  padding: 0 var(--space-3);
+  white-space: pre;
+}
+
+.diff__line--add {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}
+
+.diff__line--del {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.diff__line--hunk {
+  color: var(--info-fg);
+}
+
+.diff__line--meta {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* A change's way through the normal process. */
+.change-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.change-progress__step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-faint);
+}
+
+.change-progress__dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid currentcolor;
+}
+
+.change-progress__step--done {
+  color: var(--success-fg);
+}
+
+.change-progress__step--done .change-progress__dot {
+  background: currentcolor;
+}
+
+.change-progress__step--current {
+  color: var(--info-fg);
+  font-weight: 650;
+}
+
+.change-progress__step--failed {
+  color: var(--danger-fg);
+  font-weight: 650;
+}
+
+.change-progress__step--failed .change-progress__dot {
+  background: currentcolor;
+}
+
+.change-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.change-list__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
