@@ -540,8 +540,8 @@ public class DeployTests(PostgresFixture postgres)
     {
         await using var setup = await StartAsync();
         const string Key = "guests/home/korriban/lost-01/enroll_token";
-        // A was dismissed; its value went, and B, a later deploy of the same name still being pushed, wrote the same key.
-        var (a, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+        // A was superseded; its value went, and B, a later deploy of the same name still being pushed, wrote the same key.
+        var (a, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         await setup.Server.WithDbAsync(async db =>
         {
             await db.StoreVersions.Where(v => v.Key == Key).ExecuteDeleteAsync();
@@ -566,10 +566,10 @@ public class DeployTests(PostgresFixture postgres)
         var entry = await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Key));
         Assert.Contains(b.ToString(), entry.Description);
 
-        // A person who deletes a key a dismissed deploy generated and sets it again by hand keeps it too, even at version 1
+        // A person who deletes a key a finished deploy generated and sets it again by hand keeps it too, even at version 1
         // and with the very same description copied over: the version was not made by that deploy.
         const string Manual = "guests/home/korriban/manual-01/enroll_token";
-        var (c, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Manual, address: "home/korriban/manual-01");
+        var (c, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Manual, address: "home/korriban/manual-01");
         var copied = (await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Manual))).Description;
         await setup.Server.WithDbAsync(async db =>
         {
@@ -591,7 +591,7 @@ public class DeployTests(PostgresFixture postgres)
     {
         await using var setup = await StartAsync();
         const string Key = "guests/home/korriban/lost-01/enroll_token";
-        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
 
         // Someone holds the entry's row: the removal waits for its lock, gives up, and is left for the next sync.
         await using (var scope = setup.Server.Services.CreateAsyncScope())
@@ -645,12 +645,21 @@ public class DeployTests(PostgresFixture postgres)
         Assert.False((await setup.Server.ResourceAsync("home/korriban/landed-01")).Valid);
         Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
 
-        // Once nothing references it, it goes; a token that was used stays, since removing it would not affect its agent.
+        // Nothing references it any more, and it stays all the same: a dismissal proves nothing, so the change is not final and
+        // one of its commits may still arrive.
         setup.PushElsewhere("labs/home/proxmox/korriban/guests/landed-01/guest.yaml",
             "schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 350\nworkflow: test-vm@1\nhardware: { cores: 1, memory: 512 }\nnetwork: { bridge: vmbr0, mode: dhcp }\n");
+        await setup.Server.SyncAsync();
+        Assert.Equal(ChangeStatuses.Dismissed, (await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == id))).Status);
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+        Assert.True(await StoredAsync(setup, Key));
+
+        // Once the change is final and nothing references the key, it goes; a token that was used stays, since removing it
+        // would not affect its agent.
         await setup.Server.WithDbAsync(async db =>
         {
             (await db.EnrollmentTokens.SingleAsync(t => t.Id == token)).UsedAt = DateTimeOffset.UtcNow;
+            (await db.Changes.SingleAsync(c => c.Id == id)).Status = ChangeStatuses.Superseded;
             await db.SaveChangesAsync();
         });
         await setup.Server.SyncAsync();
@@ -703,7 +712,7 @@ public class DeployTests(PostgresFixture postgres)
         await using var setup = await StartAsync();
         const string Key = "guests/home/korriban/lost-01/enroll_token";
         const string File = "labs/home/proxmox/korriban/guests/other-01/guest.yaml";
-        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key);
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         // Another change, not settled, recorded a commit that references the key; the branch head does not.
         setup.PushElsewhere(File, $"schemaVersion: 1\ntype: vm\nhost: korriban\nvmid: 340\nsecrets: {{ x: {{ store: {Key} }} }}\n");
         await setup.Server.SyncAsync();
@@ -725,15 +734,38 @@ public class DeployTests(PostgresFixture postgres)
         Assert.True(await StoredAsync(setup, Key));
     }
 
+    [Fact]
+    public async Task A_key_an_open_change_recorded_writing_is_not_removed_even_when_its_commit_is_not_here()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
+        // Another deploy of the same guest, unknown, writes the key in what it recorded; its candidate is not in the mirror.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.Changes.Add(new ResourceChange
+            {
+                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/lost-01",
+                Author = "ops", BaseCommit = setup.RemoteHead, Message = "lost-01: deploy", Status = ChangeStatuses.Unknown, Files = [NewFile],
+                CandidateCommits = [new string('e', 40)], Edited = new JsonObject { ["secrets"] = new JsonObject { ["enroll_token"] = new JsonObject { ["store"] = Key } } }.ToJsonString(), CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, id)).State);
+        Assert.True(await StoredAsync(setup, Key));
+    }
+
     [Theory]
     [InlineData(ChangeStatuses.Superseded, false)]
-    [InlineData(ChangeStatuses.Dismissed, false)]
+    [InlineData(ChangeStatuses.Dismissed, true)]
     [InlineData(ChangeStatuses.Refused, false)]
     [InlineData(ChangeStatuses.Failed, false)]
     [InlineData(ChangeStatuses.Applied, false)]
     [InlineData(ChangeStatuses.Unknown, true)]
     [InlineData(ChangeStatuses.Planning, true)]
-    public async Task A_final_deploy_releases_its_vmid_hold(string status, bool held)
+    public async Task A_final_deploy_releases_its_vmid_hold_and_a_dismissed_one_keeps_it(string status, bool held)
     {
         await using var setup = await StartAsync();
         await setup.Server.WithDbAsync(async db =>

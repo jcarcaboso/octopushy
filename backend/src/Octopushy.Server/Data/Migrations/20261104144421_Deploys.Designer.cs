@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261104142624_Deploys")]
+    [Migration("20261104144421_Deploys")]
     partial class Deploys
     {
         /// <inheritdoc />
@@ -1098,6 +1098,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("candidate_commits");
 
+                    b.Property<DateTimeOffset?>("CheckedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("checked_at");
+
                     b.Property<string>("Commit")
                         .HasColumnType("text")
                         .HasColumnName("commit");
@@ -1191,6 +1195,9 @@ namespace Octopushy.Server.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_changes");
+
+                    b.HasIndex("CheckedAt")
+                        .HasDatabaseName("ix_changes_checked_at");
 
                     b.HasIndex("Commit")
                         .HasDatabaseName("ix_changes_commit");

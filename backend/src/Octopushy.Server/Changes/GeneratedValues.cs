@@ -234,31 +234,40 @@ public static class GeneratedValues
     }
 
     /// <summary>
-    /// Every store key referenced in the files of a change that is not final, at each commit it recorded: those it pushed or
-    /// was about to push, and the one that landed. Null when one of those cannot be read, so nothing is removed.
+    /// Every store key a change that is not final may still bring to the branch: in the values it recorded writing
+    /// (<see cref="ResourceChange.Edited"/>, a deploy's whole new definition included), and in its files at each commit it
+    /// recorded, pushed or about to be, and the one that landed. A dismissed change is among them: a dismissal proves nothing.
+    /// A commit the mirror does not hold is read from what the change recorded alone. Null when a file is not YAML, so nothing
+    /// is removed.
     /// </summary>
     private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror)
     {
         var finals = ChangeStatuses.Final;
         var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status))
-            .Select(c => new { c.Commit, c.CandidateCommits, c.Files }).ToListAsync(CancellationToken.None);
+            .Select(c => new { c.Commit, c.CandidateCommits, c.Files, c.Edited }).ToListAsync(CancellationToken.None);
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var change in open)
         {
+            if (change.Edited is { } edited && !Collect(edited, keys))
+                return null;
             foreach (var commit in change.CandidateCommits.Append(change.Commit).OfType<string>().Distinct())
             {
                 foreach (var file in change.Files.Where(f => f.EndsWith(".yaml", StringComparison.Ordinal) || f.EndsWith(".yml", StringComparison.Ordinal)))
                 {
+                    string? text;
                     try
                     {
                         // A file the commit deletes holds nothing.
-                        if ((await mirror.ReadFileAsync(commit, file, CancellationToken.None))?.Text is { } text && !Collect(text, keys))
-                            return null;
+                        text = (await mirror.ReadFileAsync(commit, file, CancellationToken.None))?.Text;
                     }
                     catch (GitException)
                     {
-                        return null;
+                        // Not in this mirror, so not on the branch it fetched: what the change recorded stands for it.
+                        continue;
                     }
+
+                    if (text is not null && !Collect(text, keys))
+                        return null;
                 }
             }
         }

@@ -140,7 +140,7 @@ public static class ChangeStatuses
     public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
 
     /// <summary>The statuses <see cref="IsFinal"/> holds for, for queries.</summary>
-    public static readonly string[] Final = [Applied, Failed, Refused, NoChange, Superseded, Dismissed];
+    public static readonly string[] Final = [Applied, Failed, Refused, NoChange, Superseded];
 
     /// <summary>
     /// Definitely not committed: refused before any push was attempted. Nothing else proves it, a dismissal included. What a

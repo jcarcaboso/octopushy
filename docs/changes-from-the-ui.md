@@ -320,16 +320,17 @@ pushed. Its status follows the same model: `refused` when nothing was pushed, `u
 until reconciliation finds its commit or a person dismisses it.
 
 **Generated values are removed under one rule, whatever triggers it:** at every sync, against the branch head that sync has
-just fetched, and right after a deploy is refused before any push. A dismissal removes nothing by itself: a push was
-attempted, so one of its commits may still land, and the next sync applies the rule. A value goes only when all of these
-hold:
+just fetched, and right after a deploy is refused before any push. A value goes only when all of these hold:
 
-- its change is final, so its status cannot change again;
+- its change is final, so its status cannot change again. `dismissed` is not final: a dismissal proves nothing, since a push
+  was attempted and one of its commits may still land. A dismissed deploy keeps its generated values, and its VMID, until
+  its commit turns up and it is followed again, or it ends in another final status;
 - no definition file at the branch head references its key: every `store` anywhere in `octopushy.yaml` and the YAML under
   `labs/` and `templates/`, read as plain YAML, valid or not. If one of those files is not YAML at all, nothing is removed.
   So a dismissed change whose commit turns up on the branch later keeps the secrets its definition uses, and so does an
   applied guest;
-- no change that is not final references the key in a commit it recorded, pushed or about to be;
+- no change that is not final references the key: in the values it recorded writing (a deploy's whole definition), or in
+  its files at a commit it recorded, pushed or about to be, as far as the mirror holds that commit;
 - no run that has not finished uses the key.
 
 **What is not looked at:** drafts of the [repository editor](repository-editor.md), and branches other than the one
@@ -344,8 +345,8 @@ key a run was given keeps its history; revoke it under **Variables**. Each remov
 timeout. One that fails stays pending with its error, each sync tries it again, and the change page says *"2 generated
 values still to remove"* until it is done.
 
-A final deploy, whatever its status (`applied`, `failed`, `no-change`, `superseded`, `refused` or `dismissed`), holds no
-VMID: one applied is held by its definition from then on.
+A final deploy, whatever its status (`applied`, `failed`, `no-change`, `superseded` or `refused`), holds no VMID: one
+applied is held by its definition from then on. Every other deploy holds its VMID, a dismissed one included.
 
 A new guest or service is a resource once the revision with its folder is loaded, so a deploy's change has no resource until
 it is synced.
