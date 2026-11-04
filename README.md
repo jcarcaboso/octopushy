@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.4.0:
+Milestone 1 has shipped, up to release 0.5.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a

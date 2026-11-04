@@ -41,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `0.4.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `0.5.0` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
@@ -174,8 +174,8 @@ three newest update snapshots (`--keep N`) and the five newest dumps.
 Wait for running provision runs to finish before you update; there is no automatic drain
 yet.
 
-**Updating from a release that predates the fresh start.** This release cannot use a
-database created by an earlier one: its `migrate` refuses it, logs that a fresh database is
+**Updating from a release before 0.5.0.** Release 0.5.0 and later cannot use a
+database created by an earlier release: its `migrate` refuses it, logs that a fresh database is
 required, and `octopushy-update` rolls the container back. Start again with an empty
 database instead ([what that means](../README.md#starting-again-with-a-fresh-database)):
 

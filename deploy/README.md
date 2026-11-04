@@ -52,7 +52,7 @@ podman compose up -d                      # or: docker compose up -d
 
 ## Starting again with a fresh database
 
-This release starts its database schema again from one migration. It cannot upgrade a
+Release 0.5.0 starts its database schema again from one migration. It cannot upgrade a
 database created by an earlier release: `migrate` and the backend find the older migration
 history, log that this release requires a fresh database, change nothing, and exit with a
 non-zero status. Nothing in the old database is carried over, so before you start, write
