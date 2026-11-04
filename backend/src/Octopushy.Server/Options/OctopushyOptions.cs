@@ -32,9 +32,17 @@ public sealed class OctopushyOptions
     public SchedulingOptions Scheduling { get; set; } = new();
 
     public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
+
+    public ChangeOptions Changes { get; set; } = new();
 }
 
 /// <summary>The integrated editor. Drafts always work; pushing them to the lab repository is opt-in.</summary>
+public sealed class ChangeOptions
+{
+    /// <summary>How many changes each sync checks against the branch, the longest unchecked first.</summary>
+    public int ReconcileBatch { get; set; } = 100;
+}
+
 public sealed class RepositoryEditorOptions
 {
     /// <summary>Explicitly allow publishing drafts as commits pushed with the configured repository credential.</summary>

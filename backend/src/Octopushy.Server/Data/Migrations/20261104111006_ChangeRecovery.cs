@@ -50,8 +50,14 @@ namespace Octopushy.Server.Data.Migrations
                     table.PrimaryKey("pk_revision_issues", x => new { x.resource_id, x.revision_id });
                 });
 
-            // Revisions loaded before the marker existed were applied when they were loaded.
-            migrationBuilder.Sql("UPDATE revisions SET inventory_applied_at = loaded_at WHERE inventory_applied_at IS NULL;");
+            // Revisions loaded before the marker existed are taken as applied, except the head: a 0.5.0 head may have been saved
+            // before its runs were proposed, so it stays unmarked and the next sync, the first at startup included, applies it
+            // again, which proposes only work that has no run.
+            migrationBuilder.Sql("""
+                UPDATE revisions SET inventory_applied_at = loaded_at
+                WHERE inventory_applied_at IS NULL
+                  AND id NOT IN (SELECT head_revision_id FROM repository_settings WHERE head_revision_id IS NOT NULL);
+                """);
         }
 
         /// <inheritdoc />

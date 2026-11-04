@@ -96,7 +96,10 @@ public static class ChangeStatuses
     /// late arrival through the normal checks; a person may dismiss it.
     /// </summary>
     public const string Unknown = "unknown";
-    /// <summary>A person settled an uncertain or unknown change as not committed, and is recorded with it.</summary>
+    /// <summary>
+    /// A person stopped waiting for an uncertain or unknown change, and is recorded with it. It proves nothing: a push was
+    /// attempted, so each sync still looks for its commits, and one that arrives moves it on.
+    /// </summary>
     public const string Dismissed = "dismissed";
     public const string Committed = "committed";
     public const string Synced = "synced";
@@ -112,13 +115,13 @@ public static class ChangeStatuses
     /// <summary>A later commit set the resource otherwise, or restored it, before this change was applied: it is never applied.</summary>
     public const string Superseded = "superseded";
 
-    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded or Dismissed;
+    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
 
     /// <summary>
-    /// Definitely not committed: refused before any push was attempted, or dismissed by a person. What a change prepared, such
-    /// as generated values, can be cleaned up then and only then.
+    /// Definitely not committed: refused before any push was attempted. Nothing else proves it, a dismissal included. What a
+    /// change prepared, such as generated values, can be cleaned up then and only then.
     /// </summary>
-    public static bool IsNotCommitted(string status) => status is Refused or Dismissed;
+    public static bool IsNotCommitted(ResourceChange change) => change.Status == Refused && change.CandidateCommits.Count == 0;
 
     /// <summary>A push was attempted and has not been settled yet.</summary>
     public static bool IsUnsettled(string status) => status is Committing or Uncertain or Unknown;
@@ -171,6 +174,9 @@ public sealed class ResourceChange
     /// these the branch reaches; a commit's message is never used to find it.
     /// </summary>
     public List<string> CandidateCommits { get; set; } = [];
+
+    /// <summary>When reconciliation last checked the change against the branch; it checks the longest unchecked first.</summary>
+    public DateTimeOffset? CheckedAt { get; set; }
 
     public string? DismissedBy { get; set; }
 

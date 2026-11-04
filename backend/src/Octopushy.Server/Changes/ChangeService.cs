@@ -300,8 +300,9 @@ public sealed partial class ChangeService(
     }
 
     /// <summary>
-    /// Dismisses a change whose push was attempted and is unsettled, as <paramref name="actor"/>: definitely not committed from
-    /// now on. Refused while one of its commits is on the branch.
+    /// Dismisses a change whose push was attempted and is unsettled, as <paramref name="actor"/>: Octopushy stops waiting for it,
+    /// and that is all. A push was attempted, so it is never "not committed" by this; one of its commits that arrives later still
+    /// moves it on. Refused while one of its commits is on the branch.
     /// </summary>
     public async Task<ChangeDto> DismissAsync(Guid id, string actor, CancellationToken ct) =>
         await engine.ExecuteAsync(async (db, services) =>
@@ -320,7 +321,8 @@ public sealed partial class ChangeService(
             change.DismissedBy = actor;
             change.DismissedAt = now;
             change.UpdatedAt = now;
-            change.Detail = $"Dismissed by {actor}: none of its commits is on {settings.Branch}, and it is settled as not committed.";
+            change.Detail = $"Dismissed by {actor}: none of its commits is on {settings.Branch} now, so Octopushy stopped waiting for it. This is "
+                + "not proof that nothing was committed: each sync still looks for its commits, and one that arrives is followed.";
             await db.SaveChangesAsync(ct);
             return await DtoAsync(db, change, ct);
         }, ct);
@@ -511,7 +513,7 @@ public sealed partial class ChangeService(
             change.Status, change.Detail, change.Files, runs.Select(r => Views.Summary(r, change.Address, change.ResourceKind)).ToList(),
             change.CreatedAt, change.SyncedAt, change.UpdatedAt, change.SupersededBy,
             change.SupersededBy is null ? null : CommitUrl(settings?.Url, change.SupersededBy), change.DismissedBy, change.DismissedAt,
-            ChangeStatuses.IsFinal(change.Status), ChangeStatuses.IsNotCommitted(change.Status));
+            ChangeStatuses.IsFinal(change.Status), ChangeStatuses.IsNotCommitted(change));
     }
 
     /// <summary>The commit's page when the repository is on GitHub, reached over HTTPS or SSH.</summary>

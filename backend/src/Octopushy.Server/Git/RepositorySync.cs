@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
 using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
+using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
 
@@ -20,6 +22,7 @@ public sealed class RepositorySync(
     WorkflowsMirrors workflowMirrors,
     RevisionCache revisions,
     RunEngine engine,
+    IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RepositorySync> logger) : BackgroundService
 {
@@ -118,12 +121,8 @@ public sealed class RepositorySync(
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
             var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
-            // Changes recorded before a push whose request ended without saying how it went: the branch now says.
-            await engine.ExecuteAsync(async (db, _) =>
-            {
-                await ChangeReconciler.ReconcileAsync(db, mirror, settings.Branch, head, clock.GetUtcNow(), cancellationToken);
-                return 0;
-            }, cancellationToken);
+            // Changes whose push is not confirmed, or whose commit is being followed: the branch now says where they are.
+            await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, head, options.Value.Changes.ReconcileBatch, clock, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
             // The workflows repository is the one this commit names, fetched on the same poll as the branch.
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));

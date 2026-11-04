@@ -72,6 +72,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.ToTable("changes");
             e.Property(x => x.Message).HasMaxLength(500);
             e.Property(x => x.Edited).HasColumnType("jsonb");
+            e.HasIndex(x => x.CheckedAt);
             e.HasIndex(x => new { x.ResourceId, x.CreatedAt });
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.Commit);

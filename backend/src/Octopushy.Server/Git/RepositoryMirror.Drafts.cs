@@ -339,6 +339,18 @@ public sealed partial class RepositoryMirror
             fromCommit, toCommit, "--"], cancellationToken: ct);
     }
 
+    /// <summary>
+    /// The commits that contain <paramref name="commit"/> on the way to <paramref name="head"/>, <paramref name="head"/> included;
+    /// none when <paramref name="head"/> does not contain it.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> DescendantsAsync(string commit, string head, CancellationToken ct)
+    {
+        CheckCommit(commit);
+        CheckCommit(head);
+        var output = await _git.RunAsync(["-C", _mirror, "rev-list", "--ancestry-path", $"{commit}..{head}", "--"], cancellationToken: ct);
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
     /// <summary>Whether <paramref name="ancestor"/> is <paramref name="commit"/> or one of its ancestors.</summary>
     public async Task<bool> IsAncestorAsync(string ancestor, string commit, CancellationToken ct)
     {

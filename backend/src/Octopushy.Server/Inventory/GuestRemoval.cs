@@ -17,6 +17,14 @@ public static class GuestRemoval
     /// A retire run for <paramref name="resource"/>, deleted in <paramref name="removal"/>, or null when
     /// one is already under way, or, unless <paramref name="force"/>, was already proposed for it.
     /// </summary>
+    /// <summary>
+    /// Whether a run for exactly this desired work of the resource exists, of any status: work that was proposed and then
+    /// ran, failed or was cancelled is not proposed again by itself, but work recorded without a run is.
+    /// </summary>
+    public static Task<bool> ProposedAsync(OctopushyDb db, Guid resourceId, string inputsHash, CancellationToken ct) =>
+        db.Runs.AnyAsync(r => r.ResourceId == resourceId && r.InputsHash == inputsHash
+            && (r.Operation == Operations.Provision || r.Operation == Operations.Retire), ct);
+
     public static async Task<Run?> ProposeAsync(OctopushyDb db, RevisionCache revisions, RunFactory factory, Resource resource,
         DefinitionRevision removal, bool force, CancellationToken ct)
     {
@@ -37,7 +45,8 @@ public static class GuestRemoval
 
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
             $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
-        if (!force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id)
+        if (!force && resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id
+            && await ProposedAsync(db, resource.Id, run.InputsHash!, ct))
             return null;
         resource.DesiredInputsHash = run.InputsHash;
         resource.DesiredRevisionId = lastDefined.Id;

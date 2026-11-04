@@ -65,31 +65,29 @@ public static class ChangeTracker
     }
 
     /// <summary>
-    /// The first revision of the current source, loaded since the change, whose commit is the change's or comes after it: a
-    /// commit pushed right after this one may be what the sync read.
+    /// The first revision of the current source whose commit is the change's or contains it on the way to the branch head: a
+    /// commit pushed right after this one may be what the sync read. Looked up directly, however many revisions came between.
     /// </summary>
     private static async Task<DefinitionRevision?> RevisionOfAsync(OctopushyDb db, RepositoryMirror mirror, ResourceChange change, string commit,
         CancellationToken ct)
     {
-        var candidates = await RepositoryTrust.CurrentRevisions(db).AsNoTracking()
-            .Where(r => r.Commit == commit || r.LoadedAt >= change.CreatedAt)
-            .OrderBy(r => r.Sequence).Take(20).ToListAsync(ct);
-        foreach (var revision in candidates)
+        var containing = new List<string> { commit };
+        var head = await db.RepositorySettings.AsNoTracking().Where(s => s.Id == 1).Select(s => s.HeadCommit).FirstOrDefaultAsync(ct);
+        if (head is not null && head != commit)
         {
-            if (revision.Commit == commit)
-                return revision;
             try
             {
-                if (await mirror.IsAncestorAsync(commit, revision.Commit, ct))
-                    return revision;
+                containing.AddRange(await mirror.DescendantsAsync(commit, head, ct));
             }
             catch (GitException)
             {
-                // A commit no longer in the mirror is not this one's descendant as far as anything here can tell.
+                // A commit no longer in the mirror has no descendants here.
             }
         }
 
-        return null;
+        return await RepositoryTrust.CurrentRevisions(db).AsNoTracking()
+            .Where(r => containing.Contains(r.Commit))
+            .OrderBy(r => r.Sequence).FirstOrDefaultAsync(ct);
     }
 
     /// <summary>

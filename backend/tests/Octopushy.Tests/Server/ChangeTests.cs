@@ -126,6 +126,38 @@ public class ChangeTests(PostgresFixture postgres)
             rm -f "$GIT_INDEX_FILE"
             """;
 
+        /// <summary>
+        /// A commit a push attempt would have prepared, on <paramref name="start"/> (main by default), with the guest's memory set and
+        /// a note added; it is kept on a side branch of the remote, so main does not have it until a test moves main there.
+        /// </summary>
+        public string Prepare(string memory, string? start = null, string note = "")
+        {
+            using var work = new TestRepository();
+            TestWorkflows.Run(work.Root, "clone", "--quiet", Remote.Root, ".");
+            if (start is not null)
+                TestWorkflows.Run(work.Root, "checkout", "--quiet", start);
+            var text = File.ReadAllText(Path.Combine(work.Root, GuestFile));
+            work.Write(GuestFile, System.Text.RegularExpressions.Regex.Replace(text, "memory: [0-9]+ ", $"memory: {memory} ").TrimEnd('\n') + note);
+            TestWorkflows.Run(work.Root, "-c", "user.name=Ops", "-c", "user.email=ops@octopushy.invalid", "commit", "--quiet", "-am", "Prepared");
+            var commit = TestWorkflows.Run(work.Root, "rev-parse", "HEAD").Trim();
+            TestWorkflows.Run(work.Root, "push", "--quiet", "origin", $"{commit}:refs/heads/prepared-{commit[..12]}");
+            return commit;
+        }
+
+        /// <summary>Moves main, as a push or a force-push would.</summary>
+        public void MoveMain(string commit) => TestWorkflows.Run(Remote.Root, "update-ref", "refs/heads/main", commit);
+
+        public void DeleteElsewhere(string path, string message)
+        {
+            using var work = new TestRepository();
+            TestWorkflows.Run(work.Root, "clone", "--quiet", Remote.Root, ".");
+            TestWorkflows.Run(work.Root, "rm", "-r", "--quiet", path);
+            TestWorkflows.Run(work.Root, "-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "--quiet", "-m", message);
+            TestWorkflows.Run(work.Root, "push", "--quiet", "origin", "HEAD:main");
+        }
+
+        public async Task<ChangeDto> GetAsync(Guid id) => (await Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+
         public async Task<ChangeFormDto> FormAsync(string address = Guest)
         {
             var resource = await Server.ResourceAsync(address);
@@ -140,10 +172,13 @@ public class ChangeTests(PostgresFixture postgres)
         }
     }
 
-    private async Task<Setup> StartAsync(TestRepository? lab = null, bool publish = true, FakeAgentHolder? agent = null)
+    private async Task<Setup> StartAsync(TestRepository? lab = null, bool publish = true, FakeAgentHolder? agent = null,
+        Dictionary<string, string>? settings = null)
     {
-        var server = await ServerHarness.StartAsync(postgres, lab ?? Lab(),
-            settings: publish ? new() { ["Octopushy:RepositoryEditor:PublishEnabled"] = "true" } : null);
+        var all = new Dictionary<string, string>(settings ?? []);
+        if (publish)
+            all["Octopushy:RepositoryEditor:PublishEnabled"] = "true";
+        var server = await ServerHarness.StartAsync(postgres, lab ?? Lab(), settings: all);
         var remote = new TestRepository();
         await server.Services.GetRequiredService<GitCli>().RunAsync(["clone", "--bare", "--quiet", server.Repository.Root, remote.Root]);
         await server.WithDbAsync(async db =>
@@ -421,20 +456,9 @@ public class ChangeTests(PostgresFixture postgres)
     {
         await using var setup = await StartAsync();
         var form = await setup.FormAsync();
-        // Commits an attempt prepared, the way a push makes them, not on the branch yet.
-        string Prepared(string memory)
-        {
-            using var work = new TestRepository();
-            TestWorkflows.Run(work.Root, "clone", "--quiet", setup.Remote.Root, ".");
-            work.Write(GuestFile, Commented.Replace("memory: 2048 ", $"memory: {memory} "));
-            TestWorkflows.Run(work.Root, "-c", "user.name=Ops", "-c", "user.email=ops@octopushy.invalid", "commit", "--quiet", "-am", "Prepared");
-            var commit = TestWorkflows.Run(work.Root, "rev-parse", "HEAD").Trim();
-            TestWorkflows.Run(work.Root, "push", "--quiet", "origin", $"{commit}:refs/heads/prepared-{memory}");
-            return commit;
-        }
-
-        var late = Prepared("4096");
-        var other = Prepared("8192");
+        var late = setup.Prepare("4096");
+        // On top of the first, so moving main to it keeps both on the branch.
+        var other = setup.Prepare("8192", late);
         var arriving = await PendingAsync(setup, form, candidates: [late]);
         var wrong = await PendingAsync(setup, form, candidates: [other]);
         var never = await PendingAsync(setup, form, candidates: [new string('e', 40)]);
@@ -470,7 +494,8 @@ public class ChangeTests(PostgresFixture postgres)
         var dismissed = await (await setup.Client.PostAsync($"/api/changes/{never}/dismiss", null)).Content.ReadFromJsonAsync<ChangeDto>();
         Assert.Equal(ChangeStatuses.Dismissed, dismissed!.Status);
         Assert.Equal("ops", dismissed.DismissedBy);
-        Assert.True(dismissed.Final && dismissed.NotCommitted);
+        // A push was attempted: dismissing stops the waiting, and is neither final nor proof.
+        Assert.False(dismissed.Final || dismissed.NotCommitted);
         Assert.Equal(HttpStatusCode.Conflict, (await setup.Client.PostAsync($"/api/changes/{arriving}/dismiss", null)).StatusCode);
     }
 
@@ -571,6 +596,132 @@ public class ChangeTests(PostgresFixture postgres)
         });
         await setup.Server.SyncAsync();
         Assert.Equal(1, await setup.Server.QueryAsync(db => db.Runs.CountAsync()));
+    }
+
+    [Fact]
+    public async Task A_dismissed_change_is_not_proof_it_was_not_committed_and_a_late_arrival_moves_it_on()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        var late = setup.Prepare("4096");
+        var id = await PendingAsync(setup, form, candidates: [late]);
+        await setup.Server.SyncAsync();
+        Assert.Equal(ChangeStatuses.Unknown, (await setup.GetAsync(id)).Status);
+
+        var dismissed = (await (await setup.Client.PostAsync($"/api/changes/{id}/dismiss", null)).Content.ReadFromJsonAsync<ChangeDto>())!;
+        Assert.Equal(ChangeStatuses.Dismissed, dismissed.Status);
+        Assert.Equal("ops", dismissed.DismissedBy);
+        // A push was attempted: dismissing stops the waiting, and proves nothing.
+        Assert.False(dismissed.NotCommitted);
+
+        // The push that was still under way lands after all.
+        setup.MoveMain(late);
+        await setup.Server.SyncAsync();
+        var landed = await setup.GetAsync(id);
+        Assert.Equal(late, landed.Commit);
+        Assert.Equal(ChangeStatuses.Planning, landed.Status);
+        Assert.False(landed.NotCommitted);
+        Assert.Single(landed.Runs);
+    }
+
+    [Fact]
+    public async Task Work_recorded_without_its_run_is_proposed_even_when_a_later_revision_changes_nothing_for_it()
+    {
+        await using var setup = await StartAsync();
+        var first = await setup.Server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).AsNoTracking().SingleAsync());
+        // What a crash left: the guest's desired inputs recorded for the first revision, its run never proposed.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == first.Id)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+        // A commit that changes nothing a run is built from arrives before anything recovers.
+        setup.PushElsewhere(GuestFile, Commented.TrimEnd('\n') + "\ndescription: The application VM.");
+        await setup.Server.SyncAsync();
+
+        var run = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(setup.RemoteHead, run.Commit);
+    }
+
+    [Fact]
+    public async Task A_removal_recorded_without_its_retire_run_is_proposed_when_the_revision_is_applied_again()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(agent: holder);
+        await ProvisionAsync(setup, holder.Agent!);
+        setup.DeleteElsewhere(Folder, "Remove the guest");
+        await setup.Server.SyncAsync();
+        var head = await setup.Server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).AsNoTracking().SingleAsync());
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Runs.RemoveRange(await db.Runs.Where(r => r.Operation == Operations.Retire).ToListAsync());
+            (await db.Revisions.SingleAsync(r => r.Id == head.Id)).InventoryAppliedAt = null;
+            await db.SaveChangesAsync();
+        });
+
+        await setup.Server.SyncAsync();
+        var retire = await setup.Server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(head.Commit, RunContext.Parse(retire.Context).DefinitionRemovedIn);
+    }
+
+    [Fact]
+    public async Task A_late_arrival_is_followed_however_many_revisions_came_before_it()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        var late = setup.Prepare("4096");
+        var id = await PendingAsync(setup, form, candidates: [late]);
+        for (var i = 0; i < 21; i++)
+        {
+            setup.PushElsewhere("labs/home/lab.yaml", $"schemaVersion: 1\nname: Home {i}\nexecution:\n  agentLabels: [home]");
+            await setup.Server.SyncAsync();
+        }
+
+        setup.MoveMain(late);
+        await setup.Server.SyncAsync();
+        var change = await setup.GetAsync(id);
+        Assert.Equal(late, change.Commit);
+        Assert.NotNull(change.RevisionId);
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+        Assert.Single(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_commit_a_force_push_removes_before_it_is_followed_is_unknown_again()
+    {
+        await using var setup = await StartAsync();
+        var faults = setup.Server.Services.GetRequiredService<InventoryFaults>();
+        faults.BeforeRuns = () => throw new IOException("The server stopped here.");
+        var form = await setup.FormAsync();
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(ChangeStatuses.Committed, change.Status);
+
+        faults.BeforeRuns = null;
+        setup.MoveMain(form.BaseCommit!);
+        await setup.Server.SyncAsync();
+        change = await setup.GetAsync(change.Id);
+        Assert.Equal(ChangeStatuses.Unknown, change.Status);
+        Assert.Null(change.Commit);
+        Assert.Empty(change.Runs);
+    }
+
+    [Fact]
+    public async Task Reconciliation_checks_a_bounded_batch_each_sync_and_reaches_every_change_in_turn()
+    {
+        await using var setup = await StartAsync(settings: new() { ["Octopushy:Changes:ReconcileBatch"] = "2" });
+        var form = await setup.FormAsync();
+        var one = setup.Prepare("4096");
+        var two = setup.Prepare("4096", one, "\n# two");
+        var three = setup.Prepare("4096", two, "\n# three");
+        foreach (var candidate in new[] { one, two, three })
+            await PendingAsync(setup, form, candidates: [candidate]);
+        setup.MoveMain(three);
+
+        await setup.Server.SyncAsync();
+        Assert.Equal(2, await setup.Server.QueryAsync(db => db.Changes.CountAsync(c => c.Commit != null)));
+        await setup.Server.SyncAsync();
+        Assert.Equal(3, await setup.Server.QueryAsync(db => db.Changes.CountAsync(c => c.Commit != null)));
     }
 
     [Fact]

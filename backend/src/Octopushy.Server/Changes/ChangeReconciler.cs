@@ -1,69 +1,146 @@
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Changes;
 
 /// <summary>
-/// Settles changes whose push was attempted but not confirmed: <c>committing</c> ones whose request ended mid-push, and
-/// <c>uncertain</c> and <c>unknown</c> ones. Each sync does this right after fetching the branch, the first sync at startup
-/// included. A change is found only by its own candidate commits, recorded before each push attempt: one of them reachable
-/// from the branch head makes it <c>committed</c> with that commit, and the tracker then compares its values with what the
-/// branch holds, as for any change. A commit's message is never used to find a change. One not found is <c>unknown</c>,
-/// looked for again at every sync, until it is found or a person dismisses it. A <c>committing</c> change with no candidate
-/// never reached a push, so it is refused: nothing was committed.
+/// Checks changes against the branch after each fetch, the first sync at startup included. It watches two kinds:
+/// <list type="bullet">
+/// <item>Changes whose push was attempted and not confirmed: <c>committing</c> ones whose request ended mid-push, <c>uncertain</c>
+/// and <c>unknown</c> ones, and <c>dismissed</c> ones, since a dismissal proves nothing. A change is found only by its own
+/// candidate commits, recorded before each push attempt, never by a commit's message: one of them reachable from the branch head
+/// makes it <c>committed</c> with that commit, and the tracker then compares its values with the branch's, as for any change.
+/// One not found is <c>unknown</c>, looked for again later; a <c>committing</c> change with no candidate never reached a push,
+/// so it is <c>refused</c>.</item>
+/// <item>Changes committed and still being followed: one whose commit the branch no longer reaches, as after a force-push, is
+/// <c>unknown</c> again, so it is not followed through a commit that is gone.</item>
+/// </list>
+/// Each sync checks a bounded batch, the longest unchecked first, so every change is reached in turn. The Git ancestry checks run
+/// outside the engine's gate: the changes are picked under it, and the results applied under it, unless a change moved meanwhile.
 /// </summary>
 public static class ChangeReconciler
 {
-    /// <summary>Runs inside the engine's gate, after <paramref name="branch"/> was fetched to <paramref name="head"/>.</summary>
-    public static async Task ReconcileAsync(OctopushyDb db, RepositoryMirror mirror, string branch, string head, DateTimeOffset now, CancellationToken ct)
-    {
-        var pending = await db.Changes
-            .Where(c => c.Status == ChangeStatuses.Committing || c.Status == ChangeStatuses.Uncertain || c.Status == ChangeStatuses.Unknown)
-            .ToListAsync(ct);
-        foreach (var change in pending)
-        {
-            if (change.CandidateCommits.Count == 0)
-            {
-                if (change.Status == ChangeStatuses.Committing)
-                    Settle(change, ChangeStatuses.Refused, "The request ended before anything was pushed: nothing was committed.", now);
-                continue;
-            }
+    private static readonly string[] Unsettled =
+        [ChangeStatuses.Committing, ChangeStatuses.Uncertain, ChangeStatuses.Unknown, ChangeStatuses.Dismissed];
 
-            if (await LandedAsync(mirror, change, head, ct) is { } landed)
-            {
-                change.Commit = landed;
-                Settle(change, ChangeStatuses.Committed, $"Found on {branch}; waiting for the sync.", now);
-            }
-            else if (change.Status != ChangeStatuses.Unknown)
-            {
-                Settle(change, ChangeStatuses.Unknown,
-                    $"Not on {branch} (yet): none of the {change.CandidateCommits.Count} commit(s) its push prepared is there. Each sync "
-                    + "looks again; dismiss it once you know it will not arrive.", now);
-            }
+    private static readonly string[] Following =
+        [ChangeStatuses.Committed, ChangeStatuses.Synced, ChangeStatuses.Planning, ChangeStatuses.WaitingForApproval, ChangeStatuses.Applying];
+
+    private sealed record Picked(Guid Id, string Status, string? Commit, List<string> Candidates);
+
+    private sealed record Checked(Picked Change, bool OnBranch, string? Landed);
+
+    public static async Task ReconcileAsync(RunEngine engine, RepositoryMirror mirror, string branch, string head, int batch, TimeProvider clock,
+        CancellationToken ct)
+    {
+        var picked = await engine.ExecuteAsync(async (db, _) => await db.Changes.AsNoTracking()
+            .Where(c => Unsettled.Contains(c.Status) && (c.Status != ChangeStatuses.Dismissed || c.CandidateCommits.Count > 0)
+                || Following.Contains(c.Status) && c.Commit != null)
+            .OrderBy(c => c.CheckedAt != null).ThenBy(c => c.CheckedAt).ThenBy(c => c.CreatedAt)
+            .Take(Math.Max(1, batch))
+            .Select(c => new Picked(c.Id, c.Status, c.Commit, c.CandidateCommits))
+            .ToListAsync(ct), ct);
+        if (picked.Count == 0)
+            return;
+
+        var results = new List<Checked>();
+        foreach (var change in picked)
+        {
+            if (change.Commit is { } commit && Following.Contains(change.Status))
+                results.Add(new Checked(change, await ReachesAsync(mirror, commit, head, ct), null));
+            else
+                results.Add(new Checked(change, false, await LandedAsync(mirror, change.Candidates, head, ct)));
         }
 
-        if (pending.Count > 0)
+        await engine.ExecuteAsync(async (db, _) =>
+        {
+            var now = clock.GetUtcNow();
+            var ids = results.Select(r => r.Change.Id).ToList();
+            var changes = await db.Changes.Where(c => ids.Contains(c.Id)).ToDictionaryAsync(c => c.Id, ct);
+            foreach (var result in results)
+            {
+                if (!changes.TryGetValue(result.Change.Id, out var change))
+                    continue;
+                change.CheckedAt = now;
+                // It moved since it was picked, such as by a request or the tracker: what was checked is not about it any more.
+                if (change.Status != result.Change.Status || change.Commit != result.Change.Commit
+                    || change.CandidateCommits.Count != result.Change.Candidates.Count)
+                    continue;
+                Apply(change, result, branch, now);
+            }
+
             await db.SaveChangesAsync(ct);
+            return 0;
+        }, ct);
     }
 
-    /// <summary>The first of the change's candidate commits that <paramref name="head"/> reaches, or null.</summary>
-    public static async Task<string?> LandedAsync(RepositoryMirror mirror, ResourceChange change, string head, CancellationToken ct)
+    private static void Apply(ResourceChange change, Checked result, string branch, DateTimeOffset now)
     {
-        foreach (var candidate in change.CandidateCommits)
+        if (Following.Contains(change.Status))
         {
-            try
-            {
-                if (await mirror.IsAncestorAsync(candidate, head, ct))
-                    return candidate;
-            }
-            catch (GitException)
-            {
-                // A candidate this mirror does not have cannot be on the branch it fetched.
-            }
+            if (result.OnBranch)
+                return;
+            var gone = change.Commit!;
+            change.Commit = null;
+            change.RevisionId = null;
+            change.RunIds = [];
+            change.SyncedAt = null;
+            Settle(change, ChangeStatuses.Unknown,
+                $"Its commit {gone[..Math.Min(10, gone.Length)]} is no longer on {branch}, as after a force-push. Each sync looks for its commits again.",
+                now);
+            return;
+        }
+
+        if (change.CandidateCommits.Count == 0)
+        {
+            if (change.Status == ChangeStatuses.Committing)
+                Settle(change, ChangeStatuses.Refused, "The request ended before anything was pushed: nothing was committed.", now);
+            return;
+        }
+
+        if (result.Landed is { } landed)
+        {
+            change.Commit = landed;
+            Settle(change, ChangeStatuses.Committed, change.Status == ChangeStatuses.Dismissed
+                ? $"Found on {branch} after {change.DismissedBy} dismissed it: it was committed, and is followed again."
+                : $"Found on {branch}; waiting for the sync.", now);
+        }
+        else if (change.Status is ChangeStatuses.Committing or ChangeStatuses.Uncertain)
+        {
+            Settle(change, ChangeStatuses.Unknown,
+                $"Not on {branch} (yet): none of the {change.CandidateCommits.Count} commit(s) its push prepared is there. Each sync "
+                + "looks again; dismiss it to stop waiting.", now);
+        }
+    }
+
+    /// <summary>The first of <paramref name="candidates"/> that <paramref name="head"/> reaches, or null.</summary>
+    public static async Task<string?> LandedAsync(RepositoryMirror mirror, IEnumerable<string> candidates, string head, CancellationToken ct)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (await ReachesAsync(mirror, candidate, head, ct))
+                return candidate;
         }
 
         return null;
+    }
+
+    public static Task<string?> LandedAsync(RepositoryMirror mirror, ResourceChange change, string head, CancellationToken ct) =>
+        LandedAsync(mirror, change.CandidateCommits, head, ct);
+
+    private static async Task<bool> ReachesAsync(RepositoryMirror mirror, string commit, string head, CancellationToken ct)
+    {
+        try
+        {
+            return await mirror.IsAncestorAsync(commit, head, ct);
+        }
+        catch (GitException)
+        {
+            // A commit this mirror does not have cannot be on the branch it fetched.
+            return false;
+        }
     }
 
     private static void Settle(ResourceChange change, string status, string detail, DateTimeOffset now)
