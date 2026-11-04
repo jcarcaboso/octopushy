@@ -284,10 +284,15 @@ pub fn ipv4_addresses(interfaces: &[GuestInterface]) -> Vec<Ipv4Addr> {
 /// `GET /access/permissions`: the privileges the token holds, by ACL path.
 ///
 /// Proxmox lists each granted privilege with its propagate flag (`0`/`1`), so a
-/// privilege counts as held whenever it is listed.
+/// privilege counts as held on the path itself whenever it is listed
+/// ([`Permissions::has`]); it reaches the paths below only when it propagates
+/// ([`Permissions::propagates`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Permissions {
     pub paths: BTreeMap<String, BTreeSet<String>>,
+    /// The privileges of each path whose propagate flag is set.
+    #[serde(skip)]
+    pub propagating: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Permissions {
@@ -297,16 +302,64 @@ impl Permissions {
             .get(path)
             .is_some_and(|privs| privs.contains(privilege))
     }
+
+    /// Whether `privilege` is held on `path` and propagates to the paths below it.
+    pub fn propagates(&self, path: &str, privilege: &str) -> bool {
+        self.propagating
+            .get(path)
+            .is_some_and(|privs| privs.contains(privilege))
+    }
 }
 
 impl<'de> Deserialize<'de> for Permissions {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = BTreeMap::<String, BTreeMap<String, serde_json::Value>>::deserialize(d)?;
+        let set = |v: &serde_json::Value| {
+            v.as_u64() == Some(1) || v.as_bool() == Some(true) || v.as_str() == Some("1")
+        };
         Ok(Permissions {
+            propagating: raw
+                .iter()
+                .map(|(path, privs)| {
+                    let held = privs
+                        .iter()
+                        .filter(|(_, flag)| set(flag))
+                        .map(|(p, _)| p.clone());
+                    (path.clone(), held.collect())
+                })
+                .collect(),
             paths: raw
                 .into_iter()
                 .map(|(path, privs)| (path, privs.into_keys().collect()))
                 .collect(),
         })
+    }
+}
+
+/// One entry of `GET /access/acl`: a role given to a user, group or token on a path.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AclEntry {
+    pub path: String,
+    #[serde(default)]
+    pub ugid: String,
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub roleid: String,
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::Permissions;
+
+    #[test]
+    fn a_privilege_is_held_where_listed_and_reaches_below_only_when_it_propagates() {
+        let p: Permissions =
+            serde_json::from_str(r#"{"/vms":{"VM.Audit":0,"VM.Monitor":1}}"#).unwrap();
+        assert!(p.has("/vms", "VM.Audit"));
+        assert!(!p.propagates("/vms", "VM.Audit"));
+        assert!(p.has("/vms", "VM.Monitor"));
+        assert!(p.propagates("/vms", "VM.Monitor"));
+        assert!(!p.has("/vms", "Sys.Audit"));
     }
 }

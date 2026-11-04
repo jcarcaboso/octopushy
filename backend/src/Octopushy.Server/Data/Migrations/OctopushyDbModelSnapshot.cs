@@ -1178,6 +1178,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.PrimitiveCollection<List<string>>("StoreKeys")
+                        .HasColumnType("text[]")
+                        .HasColumnName("store_keys");
+
                     b.Property<string>("SupersededBy")
                         .HasColumnType("text")
                         .HasColumnName("superseded_by");

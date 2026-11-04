@@ -201,6 +201,13 @@ public sealed class ResourceChange
     /// </summary>
     public List<string> CandidateCommits { get; set; } = [];
 
+    /// <summary>
+    /// Every store key the files this change writes reference, recorded before its first push. Each attempt's candidate writes
+    /// exactly those files, so this is what any of its commits would bring to the branch; cleanup reads it when a candidate's
+    /// objects are not in the mirror. Null on a change recorded before it was kept, which cleanup treats as unknown.
+    /// </summary>
+    public List<string>? StoreKeys { get; set; }
+
     /// <summary>When reconciliation last checked the change against the branch; it checks the longest unchecked first.</summary>
     public DateTimeOffset? CheckedAt { get; set; }
 

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -41,6 +42,12 @@ namespace Octopushy.Server.Data.Migrations
                 name: "pre_approval_run_id",
                 table: "changes",
                 type: "uuid",
+                nullable: true);
+
+            migrationBuilder.AddColumn<List<string>>(
+                name: "store_keys",
+                table: "changes",
+                type: "text[]",
                 nullable: true);
 
             migrationBuilder.AddColumn<int>(
@@ -105,6 +112,10 @@ namespace Octopushy.Server.Data.Migrations
 
             migrationBuilder.DropColumn(
                 name: "pre_approval_run_id",
+                table: "changes");
+
+            migrationBuilder.DropColumn(
+                name: "store_keys",
                 table: "changes");
 
             migrationBuilder.DropColumn(

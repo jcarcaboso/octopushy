@@ -427,9 +427,16 @@ installation's latest successful observation to be:
 - **recent:** no older than `Octopushy__Deploy__ObservationMaxAgeMinutes`, by default three observation intervals
   (`Octopushy__Scheduling__ObserveMinutes`, 5), so 15 minutes;
 - **newer than any failed observation, and not dated ahead of the server's clock** by more than two minutes;
-- **able to see every VM:** Proxmox lists only the guests a token may audit, so the observation records whether its token
-  holds `VM.Audit` on `/vms`, read from `/access/permissions`. Without it, or if that was not read, the observation could be
-  missing VMs: give the observing token `VM.Audit` on `/vms`;
+- **through the connection the installation has:** each observation records the endpoint, TLS verification and CA it went
+  through. One taken through another endpoint than the installation declares at the commit being checked is no evidence;
+- **able to see every VM:** Proxmox lists only the guests a token may audit, so the agent proves the list is complete, or
+  says why not. It needs all of these:
+  - `VM.Audit` on `/vms` that propagates to the VMs below. A grant on `/vms` alone reaches none of them;
+  - `Sys.Audit` on `/access`, so the ACL list it reads leaves nothing out;
+  - no ACL below `/vms`, or on a pool, which could narrow what the token sees.
+
+  A token with full privileges and no ACL on single VMs or pools qualifies. One that does not is never trusted for free
+  VMIDs: give the observing token those privileges, or remove the narrower ACLs;
 - **complete:** it lists hosts, each with an explicit online state and online; every host `installation.yaml` declares at the
   commit being checked is listed; and it says whether it is a cluster, and a cluster says it is quorate.
 

@@ -304,8 +304,9 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
   observation, or a `guest.yaml` under it cannot be read ([generated values](workflows.md#generated-values)). The wizard says
   why and offers **Observe now**;
 - when what it would commit is not what was reviewed (`stale`): the review returns the workflow release it resolved to and a
-  digest of the files, and the deploy sends both back. A release is a tag's commit for a workflows repository, and the
-  workflow folder's files for a workflow kept in the lab repository. Before **every** push attempt, the commit it would land
+  digest of the files, and the deploy sends both back. A release is a tag's commit for a workflows repository, which pins
+  its modules too. For a workflow kept in the lab repository, it is what its runs take, by the same definition as their
+  hashes: its folder, and every file of every stage's root, such as a module under `modules/`. Before **every** push attempt, the commit it would land
   is read again: what the new resource's reference resolves to there, and its file there, must be what was reviewed. A
   workflow changed on the branch since the review, even without a sync and even at the same version, refuses it with *"The
   workflow release changed since the review … Review again."*. The installation is read from that commit too, so a host
@@ -329,8 +330,10 @@ just fetched, and right after a deploy is refused before any push. A value goes 
   `labs/` and `templates/`, read as plain YAML, valid or not. If one of those files is not YAML at all, nothing is removed.
   So a dismissed change whose commit turns up on the branch later keeps the secrets its definition uses, and so does an
   applied guest;
-- no change that is not final references the key: in the values it recorded writing (a deploy's whole definition), or in
-  its files at a commit it recorded, pushed or about to be, as far as the mirror holds that commit;
+- no change that is not final references the key. That covers the keys its written files reference, recorded before its
+  first push, so an edit of other sections that keeps a `store:` reference still counts. It also covers its files at each
+  commit it recorded, pushed or about to be, as far as the mirror holds that commit. A change recorded before those keys
+  were kept, whose commit is not in the mirror, stops all removals until it settles;
 - no run that has not finished uses the key.
 
 **What is not looked at:** drafts of the [repository editor](repository-editor.md), and branches other than the one

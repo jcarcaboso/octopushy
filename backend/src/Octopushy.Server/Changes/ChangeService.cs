@@ -126,6 +126,7 @@ public sealed partial class ChangeService(
                 // On record before anything is pushed: whatever happens to this request after a push, the branch never moves
                 // without a change that says why, and the commit each attempt pushes is recorded before it is pushed.
                 change = Record(id, target, composed, request, actor);
+                change.StoreKeys = GeneratedValues.StoreKeysOf(composed);
                 change.Status = ChangeStatuses.Committing;
                 change.Detail = "Pushing its commit.";
                 db.Changes.Add(change);

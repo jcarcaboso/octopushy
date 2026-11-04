@@ -57,6 +57,15 @@ public static class GeneratedValues
         return keys;
     }
 
+    /// <summary>Every store key the files a change writes reference: what any of its candidate commits would bring to the branch.</summary>
+    public static List<string> StoreKeysOf(ComposedChange composed)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in composed.Changes.Where(c => c.Content is not null))
+            Collect(file.Content!, keys);
+        return keys.Order(StringComparer.Ordinal).ToList();
+    }
+
     /// <summary>Adds every <c>store</c> string in a YAML text to <paramref name="keys"/>; false when the text is not YAML.</summary>
     public static bool Collect(string text, ISet<string> keys)
     {
@@ -234,20 +243,22 @@ public static class GeneratedValues
     }
 
     /// <summary>
-    /// Every store key a change that is not final may still bring to the branch: in the values it recorded writing
-    /// (<see cref="ResourceChange.Edited"/>, a deploy's whole new definition included), and in its files at each commit it
-    /// recorded, pushed or about to be, and the one that landed. A dismissed change is among them: a dismissal proves nothing.
-    /// A commit the mirror does not hold is read from what the change recorded alone. Null when a file is not YAML, so nothing
-    /// is removed.
+    /// Every store key a change that is not final may still bring to the branch: the keys its written files reference, recorded
+    /// before its first push (<see cref="ResourceChange.StoreKeys"/>), what it recorded writing
+    /// (<see cref="ResourceChange.Edited"/>), and its files at each commit it recorded, pushed or about to be, and the one that
+    /// landed, as far as the mirror holds them. A dismissed change is among them: a dismissal proves nothing. Null, so nothing is
+    /// removed, when a file is not YAML, or a commit is not in the mirror and the change predates its recorded keys.
     /// </summary>
     private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror)
     {
         var finals = ChangeStatuses.Final;
         var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status))
-            .Select(c => new { c.Commit, c.CandidateCommits, c.Files, c.Edited }).ToListAsync(CancellationToken.None);
+            .Select(c => new { c.Commit, c.CandidateCommits, c.Files, c.Edited, c.StoreKeys }).ToListAsync(CancellationToken.None);
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var change in open)
         {
+            if (change.StoreKeys is { } recorded)
+                keys.UnionWith(recorded);
             if (change.Edited is { } edited && !Collect(edited, keys))
                 return null;
             foreach (var commit in change.CandidateCommits.Append(change.Commit).OfType<string>().Distinct())
@@ -262,7 +273,9 @@ public static class GeneratedValues
                     }
                     catch (GitException)
                     {
-                        // Not in this mirror, so not on the branch it fetched: what the change recorded stands for it.
+                        // Not in this mirror. The keys it recorded before its push stand for it; without them, nothing is known.
+                        if (change.StoreKeys is null)
+                            return null;
                         continue;
                     }
 

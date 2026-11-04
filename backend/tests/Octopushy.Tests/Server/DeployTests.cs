@@ -143,13 +143,18 @@ public class DeployTests(PostgresFixture postgres)
                 ["cluster"] = null,
                 ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = online }),
                 ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject { ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = "korriban" }).ToArray()),
-                ["vmAudit"] = true,
+                ["vmVisibility"] = new JsonObject { ["complete"] = true },
             }, at);
 
-        /// <summary>Records an observation of korriban with exactly <paramref name="data"/>.</summary>
+        /// <summary>
+        /// Records an observation of korriban with <paramref name="data"/>, through korriban's connection unless the data names
+        /// one, as the server records it.
+        /// </summary>
         public Task ObserveRawAsync(JsonObject data, DateTimeOffset? at = null) =>
             Server.WithDbAsync(async db =>
             {
+                if (!data.ContainsKey("connection"))
+                    data["connection"] = ObservedConnection.Of("https://10.1.0.10:8006/", false, null);
                 var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
                 db.Observations.Add(new Observation
                 {
@@ -341,7 +346,8 @@ public class DeployTests(PostgresFixture postgres)
                 Data = new JsonObject
                 {
                     ["cluster"] = null,
-                    ["vmAudit"] = true,
+                    ["vmVisibility"] = new JsonObject { ["complete"] = true },
+                    ["connection"] = ObservedConnection.Of("https://10.1.0.10:8006/", false, null),
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(new JsonObject { ["vmid"] = 311, ["name"] = "homeassistant", ["host"] = "korriban" },
                         new JsonObject { ["vmid"] = 100, ["name"] = "template", ["host"] = "korriban", ["template"] = true }),
@@ -427,6 +433,10 @@ public class DeployTests(PostgresFixture postgres)
 
         var change = await DeployAsync(setup, request);
         Assert.Equal([Key, "guests/home/korriban/new-01/admin_password"], change.Generated!.Select(g => g.Key));
+        // What its file references is recorded before the push, for cleanup when a candidate is not in the mirror.
+        var recordedKeys = (await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == change.Id))).StoreKeys!;
+        Assert.Contains(Key, recordedKeys);
+        Assert.Contains("guests/home/korriban/new-01/host-key", recordedKeys);
         Assert.All(change.Generated!, g => Assert.Equal(GeneratedValueStates.Created, g.State));
         var file = setup.RemoteFile(NewFile);
         Assert.Contains("secrets:                          # values are in the variable store, never in Git\n"
@@ -757,6 +767,51 @@ public class DeployTests(PostgresFixture postgres)
         Assert.True(await StoredAsync(setup, Key));
     }
 
+    [Fact]
+    public async Task An_open_edit_whose_candidate_is_not_here_keeps_every_key_its_written_file_references()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (owned, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
+        // An ordinary edit of another guest: it changes only hardware, and the file it writes keeps a reference to the key in a
+        // section it does not change. Its candidate commit is not in the mirror.
+        const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var text = setup.RemoteFile(GuestFile) + $"secrets: {{ enroll_token: {{ store: {Key} }} }}\n";
+        var composed = ChangeComposer.Compose(new ChangeRequest(Guid.NewGuid(), setup.RemoteHead, Hardware: new JsonObject { ["cores"] = 4, ["memory"] = 2048 }),
+            Guid.NewGuid(), ResourceKinds.Guest, Existing, GuestFile, "labs/home/proxmox/korriban/guests/krb-app-01", text, []);
+        Assert.DoesNotContain(Key, composed.Edited!.ToJsonString());
+        Assert.Contains(Key, GeneratedValues.StoreKeysOf(composed));
+        async Task OpenEditAsync(List<string>? storeKeys) => await setup.Server.WithDbAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.Changes.Add(new ResourceChange
+            {
+                Id = Guid.CreateVersion7(), Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, Address = Existing, Author = "ops",
+                BaseCommit = setup.RemoteHead, Message = "krb-app-01: cores 2 → 4", Status = ChangeStatuses.Unknown, Files = [GuestFile],
+                CandidateCommits = [new string('e', 40)], Edited = composed.Edited!.ToJsonString(), StoreKeys = storeKeys, CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        // Recorded before its push, the keys its file references stand for the commit that is not here.
+        await OpenEditAsync(GeneratedValues.StoreKeysOf(composed));
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, owned)).State);
+        Assert.True(await StoredAsync(setup, Key));
+
+        // A change recorded before the keys were kept tells nothing about a missing commit: nothing is removed.
+        await setup.Server.WithDbAsync(async db => await db.Changes.Where(c => c.Kind == ChangeKinds.Edit).ExecuteDeleteAsync());
+        await OpenEditAsync(null);
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Created, (await ValueOfAsync(setup, owned)).State);
+
+        // Settled, the key goes.
+        await setup.Server.WithDbAsync(async db => await db.Changes.Where(c => c.Kind == ChangeKinds.Edit)
+            .ExecuteUpdateAsync(u => u.SetProperty(c => c.Status, ChangeStatuses.Superseded)));
+        await setup.Server.SyncAsync();
+        Assert.Equal(GeneratedValueStates.Removed, (await ValueOfAsync(setup, owned)).State);
+    }
+
     [Theory]
     [InlineData(ChangeStatuses.Superseded, false)]
     [InlineData(ChangeStatuses.Dismissed, true)]
@@ -861,14 +916,19 @@ public class DeployTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [] }""", "did not say whether it holds VM.Audit on /vms")]
-    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": false }""", "lacks VM.Audit on /vms")]
-    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban" }], "guests": [], "vmAudit": true }""", "korriban without an online state")]
-    [InlineData("""{ "cluster": null, "hosts": [], "guests": [], "vmAudit": true }""", "lists no host")]
-    [InlineData("""{ "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""", "does not say whether it is a cluster")]
-    [InlineData("""{ "cluster": { "name": "c" }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""",
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [] }""", "it does not say whether its token sees every VM")]
+    // What an agent before this release reported: VM.Audit listed on /vms, which proves nothing about the VMs below it.
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""", "it does not say whether its token sees every VM")]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmVisibility": { "complete": false, "reason": "the token's VM.Audit on /vms does not propagate to the VMs below it" } }""",
+        "does not propagate to the VMs below it")]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmVisibility": { "complete": false, "reason": "ACLs on /vms/150 may narrow what the token sees below /vms" } }""",
+        "ACLs on /vms/150 may narrow")]
+    [InlineData("""{ "cluster": null, "hosts": [{ "name": "korriban" }], "guests": [], "vmVisibility": { "complete": true } }""", "korriban without an online state")]
+    [InlineData("""{ "cluster": null, "hosts": [], "guests": [], "vmVisibility": { "complete": true } }""", "lists no host")]
+    [InlineData("""{ "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmVisibility": { "complete": true } }""", "does not say whether it is a cluster")]
+    [InlineData("""{ "cluster": { "name": "c" }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmVisibility": { "complete": true } }""",
         "does not say whether its cluster is quorate")]
-    [InlineData("""{ "cluster": { "name": "c", "quorate": false }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmAudit": true }""",
+    [InlineData("""{ "cluster": { "name": "c", "quorate": false }, "hosts": [{ "name": "korriban", "online": true }], "guests": [], "vmVisibility": { "complete": true } }""",
         "cluster was not quorate")]
     public async Task An_observation_that_cannot_show_it_saw_every_vm_offers_no_vmid(string data, string problem)
     {
@@ -881,6 +941,62 @@ public class DeployTests(PostgresFixture postgres)
         var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 100));
         Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
         Assert.Contains(problem, refused.Message);
+    }
+
+    [Fact]
+    public async Task An_observation_through_another_endpoint_than_the_installation_has_at_landing_is_no_evidence()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        Assert.Null(preview.Refused);
+        // The installation moves to another endpoint with the same host names, after the review and before any sync.
+        const string Path = "labs/home/proxmox/korriban/installation.yaml";
+        setup.PushElsewhere(Path, setup.RemoteFile(Path).Replace("10.1.0.10", "10.99.0.10"));
+        var refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.VmidsUnknown, refused.Reason);
+        Assert.Contains("went through https://10.1.0.10:8006, and home/korriban now connects to https://10.99.0.10:8006/", refused.Message);
+        Assert.DoesNotContain(NewFile, TestWorkflows.Run(setup.Remote.Root, "ls-tree", "-r", "--name-only", "main"));
+
+        // One that does not record its connection, as before this release, is no evidence either.
+        await setup.ObserveRawAsync(new JsonObject
+        {
+            ["connection"] = null, ["cluster"] = null, ["vmVisibility"] = new JsonObject { ["complete"] = true },
+            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }), ["guests"] = new JsonArray(),
+        });
+        Assert.Contains("does not record the connection it went through",
+            (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!.Problem);
+    }
+
+    [Fact]
+    public async Task An_agents_observation_is_recorded_with_the_connection_it_went_through()
+    {
+        await using var setup = await StartAsync(agent: true, observe: false);
+        var observe = await setup.Agent!.NextAsync("observe");
+        await setup.Agent.ReportAsync(observe, Outcome.Succeeded, new JsonObject
+        {
+            ["cluster"] = null, ["vmVisibility"] = new JsonObject { ["complete"] = true },
+            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }), ["guests"] = new JsonArray(),
+        });
+        var data = await setup.Server.QueryAsync(async db => JsonNode.Parse((await db.Observations.AsNoTracking().SingleAsync()).Data)!);
+        Assert.Equal("https://10.1.0.10:8006", data["connection"]!["endpoint"]!.GetValue<string>());
+        Assert.False(data["connection"]!["verifyTls"]!.GetValue<bool>());
+        Assert.Equal(100, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!.Vmid);
+    }
+
+    [Fact]
+    public async Task A_module_a_workflow_stage_runs_changed_after_the_review_is_another_release()
+    {
+        await using var setup = await StartAsync();
+        var request = Guest(setup.RemoteHead, 311);
+        var preview = await PreviewAsync(setup, request);
+        // The workflow's folder is untouched; the OpenTofu root its machine stage runs, under modules/, is not.
+        setup.PushElsewhere("modules/opentofu/test-vm/main.tf",
+            "variable \"guest\" { type = any }\nresource \"terraform_data\" \"different\" { input = \"changed-after-review\" }\n");
+        var refused = await RefusedAsync(setup, request with { ReviewedRelease = preview.ReviewedRelease, ReviewDigest = preview.ReviewDigest });
+        Assert.Equal(ChangeRefusal.Reasons.Stale, refused.Reason);
+        Assert.Contains("The workflow release changed since the review", refused.Message);
+        Assert.DoesNotContain(NewFile, TestWorkflows.Run(setup.Remote.Root, "ls-tree", "-r", "--name-only", "main"));
     }
 
     [Fact]

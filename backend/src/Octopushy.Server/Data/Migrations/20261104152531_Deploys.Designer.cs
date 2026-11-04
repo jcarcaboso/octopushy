@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261104144421_Deploys")]
+    [Migration("20261104152531_Deploys")]
     partial class Deploys
     {
         /// <inheritdoc />
@@ -1176,6 +1176,10 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("status");
+
+                    b.PrimitiveCollection<List<string>>("StoreKeys")
+                        .HasColumnType("text[]")
+                        .HasColumnName("store_keys");
 
                     b.Property<string>("SupersededBy")
                         .HasColumnType("text")

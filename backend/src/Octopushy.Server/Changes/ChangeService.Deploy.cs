@@ -10,6 +10,7 @@ using Octopushy.Server.Agents;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Changes;
@@ -55,10 +56,10 @@ public sealed partial class ChangeService
         IReadOnlyList<string> AgentLabels);
 
     /// <summary>An installation as one commit defines it: what its VMIDs are checked against at that commit.</summary>
-    private sealed record InstallationAt(string Address, string Folder, IReadOnlyCollection<string> Hosts, string Type)
+    private sealed record InstallationAt(string Address, string Folder, IReadOnlyCollection<string> Hosts, string Type, ConnectionDefinition Connection)
     {
         public static InstallationAt Of(InstallationDefinition installation) =>
-            new(installation.Address, FolderOf(installation), installation.Hosts.Keys.ToList(), installation.Type);
+            new(installation.Address, FolderOf(installation), installation.Hosts.Keys.ToList(), installation.Type, installation.Connection);
     }
 
     /// <summary>A value to generate at commit, into <paramref name="Key"/>.</summary>
@@ -199,6 +200,7 @@ public sealed partial class ChangeService
                 // On record before anything is generated or pushed, with each value it will make: whatever happens to this
                 // request, the branch never moves, and no value is left in the store, without a change that says why.
                 change = RecordDeploy(id, deployed, composed, request, actor);
+                change.StoreKeys = GeneratedValues.StoreKeysOf(composed);
                 change.Status = ChangeStatuses.Committing;
                 change.Detail = "Pushing its commit.";
                 db.Changes.Add(change);
@@ -404,11 +406,11 @@ public sealed partial class ChangeService
         if (version.Manages != manages)
             throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"{reference} manages {version.Manages ?? "nothing"}, not a {manages}.",
                 fieldIssues: [new FieldIssueDto("/workflow", $"It manages {version.Manages}, not a {manages}.")]);
-        // From a workflows repository a release is its tag's commit, which never moves; a workflow kept in the lab repository is
-        // its files at the head commit the catalog read.
+        // From a workflows repository a release is its tag's commit, which never moves, modules included; a workflow kept in the lab
+        // repository is what its runs take at the head revision the catalog read: its folder and every stage's root.
         var release = listed.Source == "repository"
             ? ReleaseIdentity(version.Id, version.Version, version.Commit, null)
-            : ReleaseIdentity(version.Id, version.Version, null, await LocalWorkflowDigestAsync(version.Id, version.Commit!, ct));
+            : LocalRelease(await LocalWorkflowAsync(db, version, ct));
         return (reference, version, release);
     }
 
@@ -768,11 +770,22 @@ public sealed partial class ChangeService
             return $"{installation}'s last observation is dated {Time(latest.ObservedAt)}, after the server's time now, {Time(clock.GetUtcNow())}. "
                    + "Check the server's clock, then observe it again.";
 
-        // Proxmox lists only the guests the observing token may audit: the list is every VM only with VM.Audit on /vms.
-        if (latest.Data["vmAudit"] is not JsonValue audit || !audit.TryGetValue<bool>(out var audits) || !audits)
-            return $"{installation}'s last observation cannot show it saw every VM: its token "
-                   + (latest.Data["vmAudit"] is JsonValue ? "lacks VM.Audit on /vms" : "did not say whether it holds VM.Audit on /vms")
-                   + ", and Proxmox leaves out the VMs a token may not audit. Give the observing token VM.Audit on /vms, then observe it again.";
+        // Evidence about this installation only if it went through the connection the installation has now.
+        if (!ObservedConnection.Matches(latest.Data["connection"], at.Connection))
+            return latest.Data["connection"] is null
+                ? $"{installation}'s last observation does not record the connection it went through. Observe it again."
+                : $"{installation}'s last observation went through {ObservedConnection.Describe(latest.Data["connection"])}, and {installation} now "
+                  + $"connects to {at.Connection.Endpoint}: it says nothing about the machines there. Observe it again.";
+
+        // Proxmox lists only the guests the observing token may audit: the agent proves the list is every VM, or says why not.
+        if (latest.Data["vmVisibility"] is not JsonObject visibility || visibility["complete"] is not JsonValue complete
+            || !complete.TryGetValue<bool>(out var sees) || !sees)
+            return $"{installation}'s last observation cannot show it saw every VM: "
+                   + (latest.Data["vmVisibility"] is JsonObject seen && seen["reason"]?.ToString() is { Length: > 0 } reason
+                       ? reason
+                       : "it does not say whether its token sees every VM")
+                   + ". Proxmox leaves out the VMs a token may not audit. Give the observing token VM.Audit on /vms, propagated and not "
+                   + "narrowed below, and Sys.Audit on /access, then observe it again.";
         if (latest.Data["hosts"] is not JsonArray { Count: > 0 } listed)
             return $"{installation}'s last observation lists no host, so the VMIDs it shows may be incomplete. Observe it again.";
         var hosts = listed.OfType<JsonObject>().ToList();
@@ -819,14 +832,21 @@ public sealed partial class ChangeService
     private static string ReleaseIdentity(string id, string version, string? tagCommit, string? localDigest) =>
         tagCommit is not null ? $"{id}@{version} at {tagCommit}" : $"{id}@{version} from the lab repository, files {localDigest}";
 
-    /// <summary>The content of <c>workflows/&lt;id&gt;/</c> at a commit: every path and blob in it.</summary>
-    private async Task<string> LocalWorkflowDigestAsync(string id, string commit, CancellationToken ct)
+    /// <summary>
+    /// A workflow kept in the lab repository as a release: what every run of it takes, by the same definition the runs' own
+    /// hashes use (<see cref="ProvisionInputs.WorkflowHash"/>): its folder and every file of every stage's root, such as a module
+    /// under <c>modules/</c>. A change to any of them is another release.
+    /// </summary>
+    private static string LocalRelease(WorkflowDefinition workflow) =>
+        ReleaseIdentity(workflow.Id, workflow.Version.ToString(), null, Canonical.Hash(ProvisionInputs.WorkflowHash(workflow, workflow.Roots))[..16]);
+
+    /// <summary>The lab repository's own workflow the catalog offered, as the head revision it read it from defines it.</summary>
+    private async Task<WorkflowDefinition> LocalWorkflowAsync(OctopushyDb db, WorkflowVersionDto version, CancellationToken ct)
     {
-        var folder = $"workflows/{id}/";
-        var text = new System.Text.StringBuilder();
-        foreach (var file in (await mirror.TreeAsync(commit, ct)).Where(f => f.Path.StartsWith(folder, StringComparison.Ordinal)).OrderBy(f => f.Path, StringComparer.Ordinal))
-            text.Append(file.Path).Append('\0').Append(file.Object).Append('\n');
-        return Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text.ToString())))[..16];
+        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+        var workflow = head is null ? null
+            : (await revisions.GetAsync(head, ct)).Workflows.FirstOrDefault(w => w.Id == version.Id && w.Version.ToString() == version.Version);
+        return workflow ?? throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, $"{version.Id}@{version.Version} is not in the head revision any more; reload the wizard.");
     }
 
     /// <summary>
@@ -857,7 +877,7 @@ public sealed partial class ChangeService
         var workflow = target.ResourceKind == ResourceKinds.Guest ? landing.Guest(target.Address)?.Workflow : landing.Service(target.Address)?.Workflow;
         var release = workflow is null ? null
             : workflow.Repository is not null ? ReleaseIdentity(workflow.Id, workflow.Version.ToString(), workflow.Commit, null)
-            : ReleaseIdentity(workflow.Id, workflow.Version.ToString(), null, await LocalWorkflowDigestAsync(workflow.Id, commit, ct));
+            : LocalRelease(workflow);
         if (release != request.ReviewedRelease)
             throw new ChangeRefusal(ChangeRefusal.Reasons.Stale,
                 $"The workflow release changed since the review: it was {request.ReviewedRelease}, and at the commit this deploy would land it is "

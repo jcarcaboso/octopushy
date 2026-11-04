@@ -33,6 +33,12 @@ pub struct Fixture {
     /// [`DEFAULT_PRIVILEGES`].
     #[serde(default)]
     pub privileges: Option<Vec<String>>,
+    /// Whether those privileges propagate to the paths below; true by default.
+    #[serde(default = "yes")]
+    pub privileges_propagate: bool,
+    /// What `GET /access/acl` lists; by default one propagating grant on `/`.
+    #[serde(default)]
+    pub acl: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

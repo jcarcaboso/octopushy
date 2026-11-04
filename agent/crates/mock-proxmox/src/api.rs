@@ -38,6 +38,7 @@ pub fn router(state: SharedFixture) -> Router {
             get(network_interfaces),
         )
         .route("/access/permissions", get(permissions))
+        .route("/access/acl", get(acl))
         .fallback(|| async { pve_error(StatusCode::NOT_IMPLEMENTED, "Method not implemented") })
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
 
@@ -349,8 +350,12 @@ async fn permissions(
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let f = state.lock().unwrap();
-    let privs: serde_json::Map<String, Value> =
-        f.privileges().into_iter().map(|p| (p, json!(1))).collect();
+    let flag = if f.privileges_propagate { 1 } else { 0 };
+    let privs: serde_json::Map<String, Value> = f
+        .privileges()
+        .into_iter()
+        .map(|p| (p, json!(flag)))
+        .collect();
     let mut out = serde_json::Map::new();
     match query.get("path") {
         Some(path) => {
@@ -362,6 +367,14 @@ async fn permissions(
         }
     }
     data(Value::Object(out))
+}
+
+async fn acl(State(state): State<SharedFixture>) -> Response {
+    let f = state.lock().unwrap();
+    let entries = f.acl.clone().unwrap_or_else(|| {
+        vec![json!({ "path": "/", "ugid": "octopushy@pve!agent", "type": "token", "roleid": "PVEAuditor", "propagate": 1 })]
+    });
+    data(Value::Array(entries))
 }
 
 async fn list_vms(State(state): State<SharedFixture>) -> Response {
