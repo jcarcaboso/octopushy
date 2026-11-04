@@ -38,15 +38,22 @@ if not, the form opens with the new major's schema and its issues, so the inputs
 
 A change goes through the editor's publish path, the only way Octopushy writes to Git:
 
-1. A private draft ref, `refs/octopushy/drafts/<change id>`, is made at the base commit, and the edit is written there.
-2. The branch is fetched, and the draft is merged onto it if it moved since the base (`git merge-tree`).
-3. **Compare-and-swap.** If any file the change touches differs between the base and the branch now, the change is refused
+1. **The change is recorded first**, as `committing`, under the id its commit's trailer will carry. Whatever happens to the
+   request after that, the branch never moves without a change on record that says why: see
+   [reconciliation](#when-a-request-ends-mid-push).
+2. A private draft ref, `refs/octopushy/drafts/<change id>`, is made at the base commit, and the edit is written there.
+3. The branch is fetched, and the draft is merged onto it if it moved since the base (`git merge-tree`).
+4. **Compare-and-swap.** If any file the change touches differs between the base and the branch now, the change is refused
    with *"pve01-ai changed since the form was loaded: …/guest.yaml is different at 1a2b3c4d5e. Reload it and make the change
    again."* Commits that touch other files do not refuse it: they are merged.
-4. **Validation.** The result is compared with the branch as it is: only *new* errors refuse it, as in the editor, so a
+5. **Observed only.** If the server's record of the installation says it is observed only, or its definition in the
+   commit about to be pushed says `manage: false`, the change is refused. This is checked on every attempt, against what the
+   change would be merged into, not against the commit the form was loaded from.
+6. **Validation.** The result is compared with the branch as it is: only *new* errors refuse it, as in the editor, so a
    problem elsewhere never blocks an unrelated change. The refusal lists the issues and places them on fields.
-5. **Push** with `--force-with-lease`. If the branch moves during the push, steps 2 to 5 are tried again, up to three times.
-   It never force-pushes.
+7. **Push** with `--force-with-lease`. If the branch moves during the push, steps 3 to 7 are tried again, up to three times.
+   It never force-pushes. A push that reports failure is checked against the branch: if the commit landed after all, the change
+   is `committed`. The draft ref is removed whatever happens, never on the request's cancellation.
 
 The commit is **authored** by the signed-in operator (`<name>@octopushy.invalid`) and committed by "Octopushy editor". Its
 **message** says what changed, leaf by leaf, with a trailer naming the change:
@@ -58,6 +65,16 @@ Octopushy-Change: 019a4f1e-6b3c-7d2e-9f10-2a3b4c5d6e7f
 ```
 
 With more than one difference, the subject names the first three and the body lists them all.
+
+### When a request ends mid-push
+
+A change left `committing`, because its request was cancelled during the push or the server stopped, is settled by
+**reconciliation**. Every sync does it right after fetching the branch, and so does the first sync at startup:
+
+- a change whose trailer, `Octopushy-Change: <id>`, is on the branch becomes `committed` with that commit, and is followed
+  from there like any other;
+- one whose commit is still absent 15 minutes after it was recorded never reached the branch, and becomes `failed`: *"Its
+  commit never reached main: the push did not finish, and nothing was committed."*
 
 Right after the push, Octopushy **syncs the repository at once**, as **Repository → Sync now** does, without waiting for the
 poll interval. A failed sync leaves the change committed; the next poll picks it up.
@@ -71,6 +88,7 @@ poll interval. A failed sync leaves the change committed; the next poll picks it
   indentation, in block style.
 - A block sequence keeps the items it still has, drops the ones at its end, and gains new ones after its last.
 - Comments, blank lines, key order and everything the form does not change stay exactly as they were written.
+- An explicit `null` stays `null`. Only a key the form leaves out is removed.
 
 Two constructs are written again rather than edited in place, and the review shows exactly what that does:
 
@@ -106,15 +124,23 @@ the definition itself is only ever in Git.
 
 | Status | Means |
 |---|---|
+| `committing` | Recorded, and its commit being pushed; reconciliation settles it if the request ends first |
 | `committed` | Pushed; no revision holds it yet |
 | `synced` | The first revision that contains the commit is loaded |
 | `planning` | A run it proposed is planning or previewing, or is due and waits for its turn, such as a setup that waits for provisioning |
 | `waiting-for-approval` | A run waits for an approval |
 | `applying` | A run is approved and applying, or one succeeded and a setup it implies is still due |
 | `applied` | Every run it proposed succeeded |
-| `failed` | A run failed or was cancelled, for example superseded by a later change |
-| `no-change` | The revision proposed no run for the resource: nothing a run is built from changed |
+| `failed` | A run failed or was cancelled; the revision could not plan its run, such as a removal whose last definition is invalid, with the server's reason; or its commit never reached the branch |
+| `no-change` | The revision proposed no run for the resource, and the server recorded no problem with it: nothing a run is built from changed |
+| `superseded` | A later commit set the resource otherwise before this change was applied, or for a removal defined it again. The change page names that commit. A superseded change is never shown applied by the later commit's runs |
 | `refused` | Nothing was committed: the form was stale, the change did not validate or changed nothing, or the push failed |
+
+**Which revision.** A change follows the first revision that contains its commit. When a later commit landed before the sync,
+that revision is a descendant, and it is accepted only if the resource's definition there still carries the change: each
+section the change wrote (`workflow`, `hardware`, `network`, `inputs`) has the values it wrote, or for a removal the resource
+is still absent. Otherwise the change is `superseded` by that commit. The same holds when a change's run is cancelled because a
+later revision superseded it: the change moves on to that revision only if it still carries the change.
 
 The runs a change follows are those its revision proposed for its resource: a guest's provision run, then its setup run once
 provisioning has caught up; a service's pipeline; for a removal, the retire run planned from the guest's last applied
