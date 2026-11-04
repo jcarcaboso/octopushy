@@ -410,9 +410,23 @@ function ExtraKeys({ pointer, value, allowed, onChange }: { pointer: string; val
   );
 }
 
+let itemCount = 0;
+
+/** A key for an array item that stays with it when items before it are removed. */
+function itemKey(): string {
+  itemCount += 1;
+  return `item-${itemCount}`;
+}
+
 function ArrayField(props: ResolvedProps) {
   const { root, disabled } = useForm();
   const items = Array.isArray(props.value) ? props.value : [];
+  // One key per item, kept alongside the array: removing an item takes its key, so the fields of the items after it,
+  // and what they hold, such as YAML being typed, stay with their own items.
+  const [keys, setKeys] = useState<string[]>(() => items.map(() => itemKey()));
+  if (keys.length !== items.length) {
+    setKeys(keys.length > items.length ? keys.slice(0, items.length) : [...keys, ...items.slice(keys.length).map(() => itemKey())]);
+  }
   const itemSchema = resolve(props.schema.items, root);
   const itemKind = kindOf(itemSchema).kind;
   const id = useId();
@@ -440,9 +454,13 @@ function ArrayField(props: ResolvedProps) {
   const set = (index: number, next: JsonValue | undefined) => props.onChange(items.map((v, i) => (i === index ? (next ?? null) : v)));
   const remove = (index: number) => {
     const next = items.filter((_, i) => i !== index);
+    setKeys(keys.filter((_, i) => i !== index));
     props.onChange(next.length === 0 && props.value === undefined ? undefined : next);
   };
-  const add = () => props.onChange([...items, initialValue(itemSchema, root) ?? null]);
+  const add = () => {
+    setKeys([...keys, itemKey()]);
+    props.onChange([...items, initialValue(itemSchema, root) ?? null]);
+  };
   const help = helpOf(props.schema, props.hints);
   const title = labelOf(props.schema, props.hints, props.name);
   return (
@@ -460,7 +478,7 @@ function ArrayField(props: ResolvedProps) {
       <div className="schema-form__items">
         {items.length === 0 ? <p className="muted small">None.</p> : null}
         {items.map((item, index) => (
-          <Field key={index} schema={props.schema.items} pointer={child(props.pointer, index)} name={`${props.name}[${index + 1}]`}
+          <Field key={keys[index] ?? `new-${index}`} schema={props.schema.items} pointer={child(props.pointer, index)} name={`${props.name}[${index + 1}]`}
             value={item} item onChange={(next) => set(index, next)} onRemove={() => remove(index)} />
         ))}
       </div>
@@ -482,6 +500,22 @@ function YamlField(props: ResolvedProps & { reason?: string }) {
   );
 }
 
+type Parsed = { ok: true; value: JsonValue | undefined } | { ok: false; error: string };
+
+/** YAML text as a value: empty text is no value. */
+function parseYaml(text: string): Parsed {
+  if (text.trim() === "") return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: yaml.load(text, { schema: yaml.CORE_SCHEMA }) as JsonValue };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message.split("\n")[0] : "Not valid YAML." };
+  }
+}
+
+function sameJson(a: JsonValue | undefined, b: JsonValue | undefined): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function dump(value: JsonValue | undefined): string {
   return value === undefined ? "" : yaml.dump(value, { lineWidth: -1, noRefs: true }).replace(/\n$/, "");
 }
@@ -494,7 +528,16 @@ function YamlEditor({ pointer, label, name, value, reason, help, issues, require
   const { disabled, reportYaml } = useForm();
   const id = useId();
   const [text, setText] = useState(() => dump(value));
-  const [error, setError] = useState<string | null>(null);
+  // A value changed from outside, such as a reset, replaces the text; text that means the same value stays as typed.
+  const [seen, setSeen] = useState(value);
+  if (!sameJson(seen, value)) {
+    setSeen(value);
+    const current = parseYaml(text);
+    if (!current.ok || !sameJson(current.value, value)) setText(dump(value));
+  }
+  const parsed = parseYaml(text);
+  const error = parsed.ok ? null : parsed.error;
+  useEffect(() => reportYaml(pointer, error), [pointer, error, reportYaml]);
   useEffect(() => () => reportYaml(pointer, null), [pointer, reportYaml]);
   return (
     <div className="field schema-form__field" data-pointer={pointer}>
@@ -506,15 +549,10 @@ function YamlEditor({ pointer, label, name, value, reason, help, issues, require
         disabled={disabled} spellCheck={false} aria-invalid={Boolean(error) || issues.length > 0}
         onChange={(e) => {
           setText(e.target.value);
-          try {
-            const parsed = e.target.value.trim() === "" ? undefined : (yaml.load(e.target.value, { schema: yaml.CORE_SCHEMA }) as JsonValue);
-            setError(null);
-            reportYaml(pointer, null);
-            onChange(parsed === null && e.target.value.trim() === "" ? undefined : parsed);
-          } catch (e2) {
-            const message = e2 instanceof Error ? e2.message.split("\n")[0] : "Not valid YAML.";
-            setError(message);
-            reportYaml(pointer, message);
+          const next = parseYaml(e.target.value);
+          if (next.ok) {
+            setSeen(next.value);
+            onChange(next.value);
           }
         }} />
       <span className="field__hint">YAML{reason ? `: ${reason}` : ""}</span>

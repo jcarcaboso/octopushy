@@ -135,6 +135,55 @@ describe("SchemaForm", () => {
     expect((seen.value!.inputs as JsonObject).legacy).toBe("kept");
   });
 
+  it("keeps each array item's own values, YAML parts included, when an item before it is removed", async () => {
+    const schema: Schema = {
+      type: "object",
+      properties: {
+        inputs: {
+          type: "object",
+          properties: {
+            sites: {
+              type: "array",
+              items: { type: "object", properties: { name: { type: "string" }, settings: { type: "object" } } },
+            },
+          },
+        },
+      },
+    };
+    const seen = { value: null as JsonObject | null };
+    const initial: JsonObject = { inputs: { sites: [{ name: "A", settings: { port: 1 } }, { name: "B", settings: { port: 2 } }] } };
+    render(<Harness schema={schema} initial={initial} seen={seen} />);
+    await userEvent.click(screen.getByRole("button", { name: "Remove sites[1]" }));
+
+    const remaining = group(/^sites\[1\]/);
+    expect(within(remaining).getByLabelText(/^name/)).toHaveValue("B");
+    const settings = within(remaining).getByLabelText(/^settings/);
+    expect(settings).toHaveValue("port: 2");
+    await userEvent.clear(settings);
+    await userEvent.type(settings, "port: 3");
+    expect(seen.value).toEqual({ inputs: { sites: [{ name: "B", settings: { port: 3 } }] } });
+  });
+
+  it("shows a YAML part's new value when it changes from outside", async () => {
+    const schema: Schema = { type: "object", properties: { inputs: { type: "object", properties: { settings: { type: "object" } } } } };
+    function Outside() {
+      const [value, setValue] = useState<JsonObject>({ inputs: { settings: { port: 1 } } });
+      return (
+        <>
+          <button type="button" onClick={() => setValue({ inputs: { settings: { port: 9 } } })}>Reset</button>
+          <SchemaForm schema={schema} value={value} onChange={setValue} />
+        </>
+      );
+    }
+    render(<Outside />);
+    const settings = screen.getByLabelText(/^settings/);
+    // Text that means the same as the value stays as it is typed.
+    await userEvent.type(settings, "{enter}# note");
+    expect(settings).toHaveValue("port: 1\n# note");
+    await userEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(settings).toHaveValue("port: 9");
+  });
+
   it("follows the workflow's ui hints: labels, help, order, groups and hidden fields", () => {
     const ui: UiHints = {
       order: ["inputs", "hardware"],
