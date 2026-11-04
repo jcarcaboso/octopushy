@@ -98,6 +98,9 @@ public sealed record WorkflowDefinition(
     /// <summary>The inputs schema, built; null when it has none or it is not a valid schema.</summary>
     public JsonSchema? Schema { get; init; }
 
+    /// <summary>The inputs schema as written, served to forms; null when it has none or it is not a valid schema.</summary>
+    public JsonObject? SchemaJson { get; init; }
+
     /// <summary>For a workflow from a workflows repository, the repository it was released from; null for one kept in the lab repository.</summary>
     public string? Repository { get; init; }
 
