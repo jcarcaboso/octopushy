@@ -59,7 +59,7 @@ public sealed partial class ChangeService(
         }
 
         var (file, json, reference, workflow) = Definition(repository, resource);
-        var blocked = BlockedReason(resource, repository, file is not null);
+        var blocked = BlockedReason(resource, repository, file is not null, await RecordedObservedOnlyAsync(db, resource, ct));
         if (file is null || json is null)
             return Empty(resource, name, blocked ?? "The definition is not in the head revision.");
         var text = (await mirror.ReadFileAsync(head.Commit, file, ct))?.Text;
@@ -103,7 +103,7 @@ public sealed partial class ChangeService(
         }
         finally
         {
-            await mirror.DeleteDraftAsync(id, ct);
+            await mirror.DeleteDraftAsync(id, CancellationToken.None);
         }
     }
 
@@ -118,16 +118,25 @@ public sealed partial class ChangeService(
         {
             Target? target = null;
             ComposedChange? composed = null;
+            ResourceChange? change = null;
             try
             {
                 target = await TargetAsync(db, request, ct);
                 composed = Compose(request, id, target, await mirror.TreeAsync(request.BaseCommit, ct));
-                var commit = await PushAsync(db, services, target, composed, request.BaseCommit, actor, id, ct);
-                var change = Record(id, target, composed, request, actor);
-                change.Commit = commit;
-                change.Detail = "Waiting for the sync.";
+                // On record before anything is pushed, under the id its commit's trailer carries: whatever happens to this
+                // request after the push, the branch never moves without a change that says why.
+                change = Record(id, target, composed, request, actor);
+                change.Status = ChangeStatuses.Committing;
+                change.Detail = "Pushing its commit.";
                 db.Changes.Add(change);
                 await db.SaveChangesAsync(ct);
+                var commit = await PushAsync(db, services, target, composed, request.BaseCommit, actor, id, ct);
+                // The push happened: what follows is recorded even if the request is gone by now.
+                change.Commit = commit;
+                change.Status = ChangeStatuses.Committed;
+                change.Detail = "Waiting for the sync.";
+                change.UpdatedAt = clock.GetUtcNow();
+                await db.SaveChangesAsync(CancellationToken.None);
                 return ((ResourceChange?)change, (ChangeRefusedDto?)null);
             }
             catch (ChangeRefusal refusal)
@@ -135,15 +144,20 @@ public sealed partial class ChangeService(
                 Guid? recorded = null;
                 if (target is not null)
                 {
-                    var change = Record(id, target, composed, request, actor);
+                    if (change is null)
+                    {
+                        change = Record(id, target, composed, request, actor);
+                        db.Changes.Add(change);
+                    }
+
                     change.Status = ChangeStatuses.Refused;
                     change.Detail = refusal.Message;
-                    db.Changes.Add(change);
-                    await db.SaveChangesAsync(ct);
+                    change.UpdatedAt = clock.GetUtcNow();
+                    await db.SaveChangesAsync(CancellationToken.None);
                     recorded = id;
                 }
 
-                return (null, new ChangeRefusedDto(recorded, refusal.Reason, refusal.Message, refusal.Issues, refusal.FieldIssues));
+                return ((ResourceChange?)null, (ChangeRefusedDto?)new ChangeRefusedDto(recorded, refusal.Reason, refusal.Message, refusal.Issues, refusal.FieldIssues));
             }
         }, ct);
         if (committed is null)
@@ -169,7 +183,7 @@ public sealed partial class ChangeService(
             var change = await db.Changes.FirstOrDefaultAsync(c => c.Id == id, ct);
             if (change is null)
                 return null;
-            await ChangeTracker.RefreshAsync(db, mirror, change, clock.GetUtcNow(), ct);
+            await ChangeTracker.RefreshAsync(db, mirror, revisions, change, clock.GetUtcNow(), ct);
             await db.SaveChangesAsync(ct);
             return await DtoAsync(db, change, ct);
         }, ct);
@@ -183,7 +197,7 @@ public sealed partial class ChangeService(
             var result = new List<ChangeDto>();
             foreach (var change in changes)
             {
-                await ChangeTracker.RefreshAsync(db, mirror, change, clock.GetUtcNow(), ct);
+                await ChangeTracker.RefreshAsync(db, mirror, revisions, change, clock.GetUtcNow(), ct);
                 result.Add(await DtoAsync(db, change, ct));
             }
 
@@ -212,6 +226,9 @@ public sealed partial class ChangeService(
                             throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, Stale(composed, moved.Path, candidate.Remote));
                         if (candidate.Unchanged || candidate.Conflicts.Count > 0)
                             throw new ChangeRefusal(ChangeRefusal.Reasons.Stale, $"{composed.Name} changed since the form was loaded; reload it.");
+                        // The form's commit said managed; what is pushed is judged by what it would be merged into, and by the server's record.
+                        if (await ObservedOnlyAsync(db, target.Address, candidate.Commit!, releases, ct) is { } observed)
+                            throw new ChangeRefusal(ChangeRefusal.Reasons.ObservedOnly, observed);
                         var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
                         if (!validation.Valid)
                         {
@@ -225,15 +242,52 @@ public sealed partial class ChangeService(
             }
             catch (GitException e)
             {
+                // A push reported as failed may still have landed: the branch says.
+                if (await LandedAsync(target.Settings, services, id) is { } landed)
+                    return landed;
                 throw new ChangeRefusal(ChangeRefusal.Reasons.PushFailed,
                     $"Pushing to {target.Settings.Branch} failed: {e.Message} Octopushy needs a repository credential that can push, such as a deploy key with write access.");
             }
         }
         finally
         {
-            await mirror.DeleteDraftAsync(id, ct);
+            // Never on the request's token: a cancelled request must not leave its draft ref behind.
+            await mirror.DeleteDraftAsync(id, CancellationToken.None);
         }
     }
+
+    /// <summary>The commit carrying this change's trailer on the branch as it is now, or null; checked after a push that reported failure.</summary>
+    private async Task<string?> LandedAsync(RepositorySettings settings, IServiceProvider services, Guid id)
+    {
+        try
+        {
+            var credential = await RepositoryEditor.CredentialAsync(services.GetRequiredService<VariableStore>(), settings, CancellationToken.None);
+            await mirror.FetchAsync(settings.Url!, settings.Branch, credential, CancellationToken.None);
+            return await mirror.FindCommitWithAsync(settings.Branch, ChangeReconciler.Trailer(id), CancellationToken.None);
+        }
+        catch (GitException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Why the installation over <paramref name="address"/> is observed only, by the server's own record of it or by its
+    /// definition in <paramref name="candidate"/>, the commit that would be pushed; null when neither says so.
+    /// </summary>
+    private async Task<string?> ObservedOnlyAsync(OctopushyDb db, string address, string candidate,
+        Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, CancellationToken ct)
+    {
+        var installation = RepositoryTrust.InstallationAddress(address);
+        var recorded = await db.Resources.AsNoTracking().AnyAsync(r => r.Kind == ResourceKinds.Installation && r.Address == installation
+            && r.RetiredAt == null && r.ObservedOnly, ct);
+        var repository = (await revisions.ResolveAsync(candidate, releases, ct)).Repository;
+        var declared = SafetyBoundary.ObservedOnly(repository.Resource(installation)?.Json) || repository.Installation(installation) is { Managed: false };
+        return recorded || declared ? ObservedOnlyMessage(installation) : null;
+    }
+
+    private static string ObservedOnlyMessage(string installation) =>
+        $"{installation} is observed only (manage: false): Octopushy changes nothing there, so nothing under it can be changed here.";
 
     private static string Stale(ComposedChange composed, string path, string remote) =>
         $"{composed.Name} changed since the form was loaded: {path} is different at {remote[..Math.Min(10, remote.Length)]}. Reload it and make the change again.";
@@ -252,6 +306,7 @@ public sealed partial class ChangeService(
             BaseCommit = request.BaseCommit,
             Message = composed?.Subject ?? $"{target.Address.Split('/')[^1]}: {request.Kind}",
             Files = composed?.Files.ToList() ?? [target.File],
+            Edited = composed?.Edited?.ToJsonString(),
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -282,8 +337,10 @@ public sealed partial class ChangeService(
         }
 
         var (file, _, _, _) = Definition(repository, resource);
-        if (BlockedReason(resource, repository, file is not null) is { } blocked)
-            throw new ChangeRefusal(options.Value.RepositoryEditor.PublishEnabled ? Reason(resource, repository) : ChangeRefusal.Reasons.Disabled, blocked);
+        var recorded = await RecordedObservedOnlyAsync(db, resource, ct);
+        if (BlockedReason(resource, repository, file is not null, recorded) is { } blocked)
+            throw new ChangeRefusal(!options.Value.RepositoryEditor.PublishEnabled ? ChangeRefusal.Reasons.Disabled
+                : recorded ? ChangeRefusal.Reasons.ObservedOnly : Reason(resource, repository), blocked);
         var text = (await mirror.ReadFileAsync(request.BaseCommit, file!, ct))?.Text
             ?? throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, $"{file} is not a text file Octopushy can edit.");
         var folder = resource.Kind == ResourceKinds.Guest ? repository.Guest(resource.Address)!.Directory : repository.Service(resource.Address)!.Directory;
@@ -291,14 +348,21 @@ public sealed partial class ChangeService(
     }
 
     /// <summary>Why the resource cannot be changed from a form now, or null.</summary>
-    private string? BlockedReason(Resource resource, LabRepository repository, bool defined)
+    private static Task<bool> RecordedObservedOnlyAsync(OctopushyDb db, Resource resource, CancellationToken ct)
+    {
+        var installation = RepositoryTrust.InstallationAddress(resource.Address);
+        return db.Resources.AsNoTracking().AnyAsync(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null
+            && r.ObservedOnly, ct);
+    }
+
+    private string? BlockedReason(Resource resource, LabRepository repository, bool defined, bool recordedObservedOnly)
     {
         if (!options.Value.RepositoryEditor.PublishEnabled)
             return "Changes from the UI are commits to the lab repository, and committing is off. Set Octopushy__RepositoryEditor__PublishEnabled=true, "
                 + "with a repository credential that can push, such as a deploy key with write access.";
         var installation = RepositoryTrust.InstallationAddress(resource.Address);
-        if (repository.Installation(installation) is { Managed: false })
-            return $"{installation} is observed only (manage: false): Octopushy changes nothing there, so nothing under it can be changed here.";
+        if (recordedObservedOnly || repository.Installation(installation) is { Managed: false })
+            return ObservedOnlyMessage(installation);
         if (resource.RetiredAt is not null)
             return "This guest is retired.";
         if (resource.MissingSince is not null || !defined)
@@ -391,7 +455,8 @@ public sealed partial class ChangeService(
         return new ChangeDto(change.Id, change.Kind, change.ResourceKind, change.ResourceId, change.Address, change.Author, change.Message,
             change.BaseCommit, change.Commit, change.Commit is null ? null : CommitUrl(settings?.Url, change.Commit), change.RevisionId,
             change.Status, change.Detail, change.Files, runs.Select(r => Views.Summary(r, change.Address, change.ResourceKind)).ToList(),
-            change.CreatedAt, change.SyncedAt, change.UpdatedAt);
+            change.CreatedAt, change.SyncedAt, change.UpdatedAt, change.SupersededBy,
+            change.SupersededBy is null ? null : CommitUrl(settings?.Url, change.SupersededBy));
     }
 
     /// <summary>The commit's page when the repository is on GitHub, reached over HTTPS or SSH.</summary>

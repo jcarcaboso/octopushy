@@ -1,31 +1,51 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
+using Octopushy.Definitions.Yaml;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Changes;
 
 /// <summary>
-/// Follows a committed change: to the first revision that contains its commit, then through the runs that revision proposed
-/// for its resource, until they are applied or fail. Nothing here starts work; it only reads where the normal process got to.
+/// Follows a committed change: to the first revision that contains its commit and still carries its edit, then through the
+/// runs that revision proposed for its resource, until they are applied or fail. A revision whose resource no longer has the
+/// values the change wrote, or for a removal has the resource back, supersedes the change: its runs are another change's,
+/// and the change is never shown applied by them. Nothing here starts work; it only reads where the normal process got to.
 /// </summary>
 public static class ChangeTracker
 {
-    public static async Task RefreshAsync(OctopushyDb db, RepositoryMirror mirror, ResourceChange change, DateTimeOffset now, CancellationToken ct)
+    public static async Task RefreshAsync(OctopushyDb db, RepositoryMirror mirror, RevisionCache revisions, ResourceChange change, DateTimeOffset now,
+        CancellationToken ct)
     {
+        // A change being pushed has no commit yet: reconciliation gives it one, or fails it.
         if (ChangeStatuses.IsFinal(change.Status) || change.Commit is not { } commit)
             return;
         var (status, detail) = (change.Status, change.Detail);
         if (change.RevisionId is null && await RevisionOfAsync(db, mirror, change, commit, ct) is { } found)
         {
+            change.SyncedAt ??= now;
+            if (found.Commit != commit && await LostAsync(revisions, change, found, ct) is { } lost)
+            {
+                Supersede(change, found.Commit, lost, now);
+                return;
+            }
+
             change.RevisionId = found.Id;
-            change.SyncedAt = now;
             (status, detail) = (ChangeStatuses.Synced, null);
         }
 
         if (change.RevisionId is { } revisionId && await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == revisionId, ct) is { } revision)
-            (status, detail) = await FollowAsync(db, change, revision, ct);
+        {
+            var followed = await FollowAsync(db, mirror, revisions, change, revision, now, ct);
+            if (followed is null)
+                return;
+            (status, detail) = followed.Value;
+        }
 
         if (status != change.Status || detail != change.Detail)
         {
@@ -33,6 +53,14 @@ public static class ChangeTracker
             change.Detail = detail;
             change.UpdatedAt = now;
         }
+    }
+
+    private static void Supersede(ResourceChange change, string commit, string why, DateTimeOffset now)
+    {
+        change.SupersededBy = commit;
+        change.Status = ChangeStatuses.Superseded;
+        change.Detail = $"Superseded by {Short(commit)}: {why}";
+        change.UpdatedAt = now;
     }
 
     /// <summary>
@@ -63,7 +91,40 @@ public static class ChangeTracker
         return null;
     }
 
-    private static async Task<(string Status, string? Detail)> FollowAsync(OctopushyDb db, ResourceChange change, DefinitionRevision revision, CancellationToken ct)
+    /// <summary>
+    /// Why <paramref name="revision"/> no longer carries the change: its resource has other values in a section the change
+    /// wrote, is gone, or, for a removal, is back. Null when the change is still there.
+    /// </summary>
+    private static async Task<string?> LostAsync(RevisionCache revisions, ResourceChange change, DefinitionRevision revision, CancellationToken ct)
+    {
+        LabRepository repository;
+        try
+        {
+            repository = await revisions.GetAsync(revision, ct);
+        }
+        catch (GitException e)
+        {
+            return $"its definitions cannot be read ({e.Message}).";
+        }
+
+        var entry = repository.Resource(change.Address);
+        if (change.Kind == ChangeKinds.Remove)
+            return entry is null ? null : $"it defines {change.Address} again.";
+        if (entry?.Json is not { } json)
+            return entry is null ? $"it no longer defines {change.Address}." : $"its definition of {change.Address} cannot be read.";
+        var edited = change.Edited is null ? null : JsonNode.Parse(change.Edited) as JsonObject;
+        foreach (var (section, value) in edited ?? [])
+        {
+            if (!YamlEditor.Same(json[section], value))
+                return $"it sets {section} otherwise.";
+        }
+
+        return null;
+    }
+
+    /// <summary>Where the change's runs are, or null when the change was superseded on the way.</summary>
+    private static async Task<(string Status, string? Detail)?> FollowAsync(OctopushyDb db, RepositoryMirror mirror, RevisionCache revisions,
+        ResourceChange change, DefinitionRevision revision, DateTimeOffset now, CancellationToken ct)
     {
         var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == change.ResourceId, ct);
         var candidates = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
@@ -73,16 +134,47 @@ public static class ChangeTracker
         // was last applied from. A run someone starts by hand at the same revision is theirs, not the change's.
         var runs = candidates.Where(r => r.Reason == "revision" && r.RevisionId == revision.Id
             || r.Operation == Operations.Retire && RunContext.Parse(r.Context).DefinitionRemovedIn == revision.Commit).ToList();
+        if (runs.Count == 0 && change.Kind == ChangeKinds.Remove)
+        {
+            // A removal already under way when the folder was deleted is the one the change waits for.
+            var retire = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
+                .Where(r => r.ResourceId == change.ResourceId && r.Operation == Operations.Retire)
+                .OrderByDescending(r => r.CreatedAt).FirstOrDefaultAsync(ct);
+            if (retire is not null && (!RunStatuses.IsTerminal(retire.Status) || retire.Status == RunStatuses.Succeeded))
+                runs.Add(retire);
+        }
+
         if (runs.Any(r => !change.RunIds.Contains(r.Id)))
             change.RunIds = [.. change.RunIds, .. runs.Select(r => r.Id).Where(id => !change.RunIds.Contains(id))];
+
+        // A run given up for a later revision: the change moves on with it while that revision still carries it.
+        if (runs.Count > 0 && runs.All(r => RunStatuses.IsTerminal(r.Status))
+            && runs.FirstOrDefault(r => r.Status == RunStatuses.Cancelled && r.Detail?.StartsWith("Superseded by ", StringComparison.Ordinal) == true) is not null
+            && await NewerHeadAsync(db, mirror, change, revision, ct) is { } newer)
+        {
+            if (await LostAsync(revisions, change, newer, ct) is { } lost)
+            {
+                Supersede(change, newer.Commit, lost, now);
+                return null;
+            }
+
+            change.RevisionId = newer.Id;
+            change.RunIds = [];
+            return await FollowAsync(db, mirror, revisions, change, newer, now, ct);
+        }
 
         var owed = await OwedAsync(db, change, revision, ct);
         if (runs.Count == 0)
         {
+            // An empty list is not "nothing to do" by itself: what the server recorded for the resource says why there is none.
+            if (Problem(resource) is { } problem)
+                return (ChangeStatuses.Failed, change.Kind == ChangeKinds.Remove ? problem : $"{problem} ({change.ResourceKind} at {Short(revision.Commit)})");
             if (owed is not null)
                 return (ChangeStatuses.Planning, owed);
-            if (resource is { Valid: false } && change.Kind != ChangeKinds.Remove)
-                return (ChangeStatuses.Failed, $"The definition is invalid in {Short(revision.Commit)}; see the {change.ResourceKind}'s issues.");
+            if (change.Kind == ChangeKinds.Remove)
+                return resource?.RetiredAt is not null
+                    ? (ChangeStatuses.Applied, $"{change.Address} is retired.")
+                    : (ChangeStatuses.Failed, $"{Short(revision.Commit)} proposed no removal of {change.Address}; use Plan removal on its page.");
             return (ChangeStatuses.NoChange, $"{Short(revision.Commit)} proposes no run for {change.Address}: nothing a run is built from changed.");
         }
 
@@ -106,6 +198,33 @@ public static class ChangeTracker
         if (owed is not null)
             return (ChangeStatuses.Applying, owed);
         return (ChangeStatuses.Applied, runs.Count == 1 ? $"Run #{runs[0].Number} succeeded." : $"Runs {string.Join(", ", runs.Select(r => $"#{r.Number}"))} succeeded.");
+    }
+
+    /// <summary>The head revision, when it is newer than <paramref name="revision"/> and comes after the change's commit.</summary>
+    private static async Task<DefinitionRevision?> NewerHeadAsync(OctopushyDb db, RepositoryMirror mirror, ResourceChange change, DefinitionRevision revision,
+        CancellationToken ct)
+    {
+        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+        if (head is null || head.Id == revision.Id || head.Sequence < revision.Sequence)
+            return null;
+        try
+        {
+            return await mirror.IsAncestorAsync(change.Commit!, head.Commit, ct) ? head : null;
+        }
+        catch (GitException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The first error the server recorded on the resource, such as a removal that cannot be planned.</summary>
+    private static string? Problem(Resource? resource)
+    {
+        if (resource is null)
+            return null;
+        var issues = JsonSerializer.Deserialize<List<DefinitionIssue>>(resource.Issues, InventoryUpdater.IssueJson) ?? [];
+        return issues.FirstOrDefault(i => i.Severity == IssueSeverity.Error)?.Message
+            ?? (resource.Valid || resource.MissingSince is not null ? null : "The definition is invalid; see its issues.");
     }
 
     /// <summary>

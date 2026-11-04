@@ -53,7 +53,8 @@ public sealed record ComposedChange(
     string Subject,
     string Message,
     string? NewText,
-    JsonObject? Desired)
+    JsonObject? Desired,
+    JsonObject? Edited = null)
 {
     /// <summary>Whether a path that moved on the branch is one this change touches.</summary>
     public bool Touches(string path) =>
@@ -149,8 +150,12 @@ public static class ChangeComposer
         var summary = differences.Count == 0 ? "edit its definition"
             : string.Join(", ", differences.Take(SubjectChanges)) + (differences.Count > SubjectChanges ? $" and {differences.Count - SubjectChanges} more" : "");
         var line = Truncate($"{name}: {summary}", 200);
+        // What a later revision has to keep for this change to be the one applied: each section it wrote, a null for one removed.
+        var written = new JsonObject();
+        foreach (var key in GuestSections.Prepend("workflow").Where(k => !YamlEditor.Same(original[k], desired[k])))
+            written[key] = desired[key]?.DeepClone();
         return new ComposedChange(kind, resourceKind, address, name, file, [new DraftFileChange(file, edited)], [file], null, line,
-            Message(line, differences.Count > 1 ? differences : [], id), edited, desired);
+            Message(line, differences.Count > 1 ? differences : [], id), edited, desired, written);
     }
 
     /// <summary>The commit message: the subject, every difference when there are several, and the trailer that names the change.</summary>

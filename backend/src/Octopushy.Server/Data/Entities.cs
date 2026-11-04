@@ -87,6 +87,8 @@ public static class ChangeKinds
 
 public static class ChangeStatuses
 {
+    /// <summary>Recorded, and being pushed: the push may or may not have reached the branch. Reconciliation settles it.</summary>
+    public const string Committing = "committing";
     public const string Committed = "committed";
     public const string Synced = "synced";
     public const string Planning = "planning";
@@ -98,8 +100,10 @@ public static class ChangeStatuses
     public const string Refused = "refused";
     /// <summary>Committed and synced, and the revision proposes no run for the resource: nothing it is built from changed.</summary>
     public const string NoChange = "no-change";
+    /// <summary>A later commit set the resource otherwise, or restored it, before this change was applied: it is never applied.</summary>
+    public const string Superseded = "superseded";
 
-    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange;
+    public static bool IsFinal(string status) => status is Applied or Failed or Refused or NoChange or Superseded;
 }
 
 /// <summary>
@@ -132,8 +136,17 @@ public sealed class ResourceChange
     /// <summary>The files the change writes or deletes, all inside the resource's own folder.</summary>
     public List<string> Files { get; set; } = [];
 
-    /// <summary>The commit pushed; null when the change was refused.</summary>
+    /// <summary>
+    /// What the change wrote, by section (<c>workflow</c>, <c>hardware</c>, <c>network</c>, <c>inputs</c>), as JSON: a later
+    /// revision carries the change only while the resource still has these values. Null for a removal.
+    /// </summary>
+    public string? Edited { get; set; }
+
+    /// <summary>The commit pushed; null when the change was refused, or while it is being pushed.</summary>
     public string? Commit { get; set; }
+
+    /// <summary>The commit that set the resource otherwise before this change was applied.</summary>
+    public string? SupersededBy { get; set; }
 
     /// <summary>The first revision loaded that contains the commit.</summary>
     public Guid? RevisionId { get; set; }

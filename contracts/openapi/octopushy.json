@@ -4090,6 +4090,18 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "supersededBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "supersededByUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

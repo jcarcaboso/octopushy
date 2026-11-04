@@ -102,6 +102,29 @@ public class ChangeTests(PostgresFixture postgres)
             TestWorkflows.Run(work.Root, "push", "--quiet", "origin", "HEAD:main");
         }
 
+        /// <summary>
+        /// Makes the remote run <paramref name="script"/> once, right after the next push it accepts: as another commit landing
+        /// before Octopushy's own sync, or a push that is slow to finish.
+        /// </summary>
+        public void AfterNextPush(string script)
+        {
+            var path = Path.Combine(Remote.Root, "hooks", "post-receive");
+            File.WriteAllText(path, "#!/bin/sh\nset -e\n[ -e hook-ran ] && exit 0\ntouch hook-ran\n" + script + "\n");
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        /// <summary>A script for <see cref="AfterNextPush"/> that commits <paramref name="sed"/> applied to <paramref name="file"/> on main.</summary>
+        public static string CommitEdit(string file, string sed) => $"""
+            export GIT_INDEX_FILE="$PWD/hook-index" GIT_AUTHOR_NAME=Other GIT_AUTHOR_EMAIL=other@example.invalid
+            export GIT_COMMITTER_NAME=Other GIT_COMMITTER_EMAIL=other@example.invalid
+            git read-tree main
+            blob=$(git show main:{file} | sed '{sed}' | git hash-object -w --stdin)
+            git update-index --cacheinfo 100644,$blob,{file}
+            commit=$(git commit-tree $(git write-tree) -p main -m 'Edit {file} elsewhere')
+            git update-ref refs/heads/main $commit
+            rm -f "$GIT_INDEX_FILE"
+            """;
+
         public async Task<ChangeFormDto> FormAsync(string address = Guest)
         {
             var resource = await Server.ResourceAsync(address);
@@ -305,6 +328,158 @@ public class ChangeTests(PostgresFixture postgres)
         Assert.Equal([retire.Id], change.Runs.Select(r => r.Id));
         Assert.Equal(ChangeStatuses.Planning, change.Status);
         Assert.Equal([$"{Folder}/guest.yaml", $"{Folder}/motd"], change.Files);
+    }
+
+    private static async Task ProvisionAsync(Setup setup, FakeAgent agent)
+    {
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        Assert.Equal(SafetyBoundaryFixtures.Vmid, (await setup.Server.ResourceAsync(Guest)).BoundVmid);
+    }
+
+    [Fact]
+    public async Task A_commit_that_moves_the_value_on_before_the_sync_supersedes_the_change_and_it_is_never_applied()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(agent: holder);
+        var agent = holder.Agent!;
+        await ProvisionAsync(setup, agent);
+        setup.AfterNextPush(Setup.CommitEdit(GuestFile, "s/memory: 4096 /memory: 8192 /"));
+        var form = await setup.FormAsync();
+
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        var later = setup.RemoteHead;
+        Assert.NotEqual(change.Commit, later);
+        Assert.Contains("memory: 8192 ", setup.RemoteFile(GuestFile));
+        Assert.Equal("superseded", change.Status);
+        Assert.Equal(later, change.SupersededBy);
+        Assert.Contains(later[..10], change.Detail);
+        Assert.Empty(change.Runs);
+
+        // The later commit's own run goes through; the change it superseded is never applied by it.
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact("later"));
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        Assert.Equal(RunStatuses.Succeeded, (await setup.Server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{change.Id}"))!;
+        Assert.Equal("superseded", change.Status);
+        Assert.Empty(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_later_commit_that_keeps_the_change_is_followed_in_its_place()
+    {
+        await using var setup = await StartAsync();
+        setup.AfterNextPush(Setup.CommitEdit("labs/home/lab.yaml", "s/name: Home/name: Home lab/"));
+        var form = await setup.FormAsync();
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.NotEqual(change.Commit, setup.RemoteHead);
+        var revision = await setup.Server.QueryAsync(db => db.Revisions.AsNoTracking().SingleAsync(r => r.Id == change.RevisionId));
+        Assert.Equal(setup.RemoteHead, revision.Commit);
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+        Assert.Single(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_change_is_recorded_before_its_push_so_a_request_that_dies_after_it_still_ends_in_its_commit()
+    {
+        await using var setup = await StartAsync();
+        var started = Path.Combine(setup.Remote.Root, "push-received");
+        setup.AfterNextPush($"touch '{started}'\nsleep 20");
+        var form = await setup.FormAsync();
+        using var abort = new CancellationTokenSource();
+        var request = setup.Client.PostAsJsonAsync("/api/changes", new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)), abort.Token);
+        for (var i = 0; i < 300 && !File.Exists(started); i++)
+            await Task.Delay(100);
+        Assert.True(File.Exists(started), "The push never reached the remote.");
+        abort.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+
+        // The branch moved, and the change that moved it is on record, whatever happened to the request.
+        var pushed = setup.RemoteHead;
+        Assert.NotEqual(form.BaseCommit, pushed);
+        var id = Guid.Parse(TestWorkflows.Run(setup.Remote.Root, "log", "-1", "--format=%(trailers:key=Octopushy-Change,valueonly)", "main").Trim());
+        ResourceChange? row = null;
+        for (var i = 0; i < 100 && row is null; i++)
+        {
+            row = await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id));
+            if (row is null) await Task.Delay(100);
+        }
+
+        Assert.NotNull(row);
+        await setup.Server.SyncAsync();
+        var change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{id}"))!;
+        Assert.Equal(pushed, change.Commit);
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+        Assert.Single(change.Runs);
+    }
+
+    [Fact]
+    public async Task A_change_whose_commit_never_reached_the_branch_fails_once_its_push_cannot_still_land()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        var recent = Guid.CreateVersion7();
+        var old = Guid.CreateVersion7();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            foreach (var (id, age) in new[] { (recent, TimeSpan.FromMinutes(1)), (old, ChangeReconciler.Timeout + TimeSpan.FromMinutes(1)) })
+                db.Changes.Add(new ResourceChange
+                {
+                    Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
+                    BaseCommit = form.BaseCommit!, Message = "krb-app-01: memory 2048 → 4096", Status = ChangeStatuses.Committing,
+                    CreatedAt = DateTimeOffset.UtcNow - age, UpdatedAt = DateTimeOffset.UtcNow - age,
+                });
+            await db.SaveChangesAsync();
+        });
+
+        await setup.Server.SyncAsync();
+        var settled = await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().ToDictionaryAsync(c => c.Id));
+        Assert.Equal(ChangeStatuses.Committing, settled[recent].Status);
+        Assert.Equal(ChangeStatuses.Failed, settled[old].Status);
+        Assert.Equal("Its commit never reached main: the push did not finish, and nothing was committed.", settled[old].Detail);
+        Assert.Null(settled[old].Commit);
+    }
+
+    [Fact]
+    public async Task A_stale_form_cannot_write_under_an_installation_that_became_observed_only()
+    {
+        await using var setup = await StartAsync();
+        var form = await setup.FormAsync();
+        const string installation = "labs/home/proxmox/korriban/installation.yaml";
+        var managed = setup.RemoteFile(installation);
+        setup.PushElsewhere(installation, managed.Replace("type: standalone", "manage: false\ntype: standalone").TrimEnd('\n'));
+        var head = setup.RemoteHead;
+
+        // The definition it would be merged with says observed only, though the form's commit does not.
+        var refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(ChangeRefusal.Reasons.ObservedOnly, refused.Reason);
+        Assert.Equal(head, setup.RemoteHead);
+
+        // Octopushy's own record says observed only, though the definition it would be merged with cannot be read.
+        await setup.Server.SyncAsync();
+        Assert.True((await setup.Server.ResourceAsync("home/korriban")).ObservedOnly);
+        setup.PushElsewhere(installation, "schemaVersion: 1\ntype: standalone");
+        head = setup.RemoteHead;
+        refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Equal(ChangeRefusal.Reasons.ObservedOnly, refused.Reason);
+        Assert.Equal(head, setup.RemoteHead);
+    }
+
+    [Fact]
+    public async Task A_removal_whose_retire_run_cannot_be_planned_fails_with_why()
+    {
+        await using var setup = await StartAsync();
+        setup.PushElsewhere(GuestFile, Commented.Replace("cores: 2", "cores: 0"));
+        await setup.Server.SyncAsync();
+        Assert.False((await setup.Server.ResourceAsync(Guest)).Valid);
+        var form = await setup.FormAsync();
+
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Kind: ChangeKinds.Remove));
+        Assert.Equal(ChangeStatuses.Failed, change.Status);
+        Assert.Contains("its removal cannot be planned", change.Detail);
+        Assert.Empty(change.Runs);
     }
 
     [Fact]

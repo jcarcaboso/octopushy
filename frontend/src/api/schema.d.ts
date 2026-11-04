@@ -964,6 +964,8 @@ export interface components {
             syncedAt: null | string;
             /** Format: date-time */
             updatedAt: string;
+            supersededBy?: null | string;
+            supersededByUrl?: null | string;
         };
         ChangeFormDto: {
             /** Format: uuid */

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
+using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
@@ -117,6 +118,12 @@ public sealed class RepositorySync(
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
             var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
+            // Changes recorded before a push whose request ended without saying how it went: the branch now says.
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                await ChangeReconciler.ReconcileAsync(db, mirror, settings.Branch, clock.GetUtcNow(), cancellationToken);
+                return 0;
+            }, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
             // The workflows repository is the one this commit names, fetched on the same poll as the branch.
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));

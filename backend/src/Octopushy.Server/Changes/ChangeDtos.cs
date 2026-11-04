@@ -63,8 +63,9 @@ public sealed record ChangePreviewDto(
     string? Refused);
 
 /// <summary>
-/// A change and where it stands: <c>committed</c>, <c>synced</c>, <c>planning</c>, <c>waiting-for-approval</c>,
-/// <c>applying</c>, then <c>applied</c>, <c>failed</c>, <c>no-change</c>, or <c>refused</c> before anything was committed.
+/// A change and where it stands: <c>committing</c> (recorded, being pushed), <c>committed</c>, <c>synced</c>, <c>planning</c>,
+/// <c>waiting-for-approval</c>, <c>applying</c>, then <c>applied</c>, <c>failed</c>, <c>no-change</c>, <c>superseded</c> (a
+/// later commit set the resource otherwise first; <c>SupersededBy</c> names it), or <c>refused</c> before anything was committed.
 /// </summary>
 public sealed record ChangeDto(
     Guid Id,
@@ -84,7 +85,9 @@ public sealed record ChangeDto(
     IReadOnlyList<RunSummaryDto> Runs,
     DateTimeOffset CreatedAt,
     DateTimeOffset? SyncedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? SupersededBy = null,
+    string? SupersededByUrl = null);
 
 /// <summary>
 /// Why a change was refused (HTTP 409), with nothing committed: <c>Reason</c> is <c>disabled</c>, <c>observed-only</c>,

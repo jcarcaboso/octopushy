@@ -339,6 +339,20 @@ public sealed partial class RepositoryMirror
             fromCommit, toCommit, "--"], cancellationToken: ct);
     }
 
+    /// <summary>
+    /// The commit on the fetched <paramref name="branch"/> whose message carries <paramref name="trailer"/>, such as
+    /// <c>Octopushy-Change: &lt;id&gt;</c>, or null when there is none.
+    /// </summary>
+    public async Task<string?> FindCommitWithAsync(string branch, string trailer, CancellationToken ct)
+    {
+        if (!BranchPattern().IsMatch(branch))
+            throw new GitException($"'{branch}' is not a valid branch name.");
+        var (exitCode, output) = await _git.RunAcceptingAsync(["-C", _mirror, "log", "-n", "1", "--format=%H", "--fixed-strings",
+            $"--grep={trailer}", $"refs/remotes/origin/{branch}", "--"], new HashSet<int> { 128 }, cancellationToken: ct);
+        var commit = output.Trim();
+        return exitCode == 0 && commit.Length > 0 ? commit : null;
+    }
+
     /// <summary>Whether <paramref name="ancestor"/> is <paramref name="commit"/> or one of its ancestors.</summary>
     public async Task<bool> IsAncestorAsync(string ancestor, string commit, CancellationToken ct)
     {

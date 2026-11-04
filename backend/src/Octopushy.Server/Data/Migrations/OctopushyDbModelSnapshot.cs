@@ -1018,6 +1018,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("detail");
 
+                    b.Property<string>("Edited")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("edited");
+
                     b.PrimitiveCollection<List<string>>("Files")
                         .IsRequired()
                         .HasColumnType("text[]")
@@ -1057,6 +1061,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.Property<string>("SupersededBy")
+                        .HasColumnType("text")
+                        .HasColumnName("superseded_by");
+
                     b.Property<DateTimeOffset?>("SyncedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("synced_at");
@@ -1070,6 +1078,9 @@ namespace Octopushy.Server.Data.Migrations
 
                     b.HasIndex("Commit")
                         .HasDatabaseName("ix_changes_commit");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_changes_status");
 
                     b.HasIndex("ResourceId", "CreatedAt")
                         .HasDatabaseName("ix_changes_resource_id_created_at");
