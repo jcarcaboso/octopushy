@@ -253,8 +253,9 @@ public class VariableDeletionTests(PostgresFixture postgres)
         var unknown = Guid.CreateVersion7();
         await logs.AppendAsync(unknown, 0, [(0, "stderr", $"line {Secret}")], CancellationToken.None);
         Assert.Equal(AttemptLogStore.Withheld, (await logs.ReadAsync(unknown, -1, 10, CancellationToken.None)).Single().Text);
-        Assert.False(logs.TryMaskOutputs(unknown, $"{{\"v\":\"{Secret}\"}}", out var none));
+        Assert.False(logs.TryMaskOutputs(unknown, $"{{\"v\":\"{Secret}\"}}", out var none, out var why));
         Assert.Null(none);
+        Assert.Equal(AttemptLogStore.Withheld, why);
         Assert.Equal(AttemptLogStore.Withheld, logs.MaskDiagnostic(unknown, $"error {Secret}"));
 
         // Registered with no secrets: its lines are kept as they are.

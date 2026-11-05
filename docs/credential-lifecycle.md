@@ -127,9 +127,20 @@ controller reads them back from the store, and if one of them was deleted, the
 attempt's log lines, error and outputs are withheld rather than kept unmasked.
 Masking never passes text through for an attempt whose values it does not hold:
 an attempt with no secrets is registered with none, and one closed or unknown has
-what it reports withheld. Outputs are parsed before they are masked, so a secret
-is found as it reads once decoded, in every string, property name and value,
-whatever JSON escaped in it.
+what it reports withheld.
+
+Outputs are parsed before they are masked. Strings are masked as they read once
+decoded, whatever JSON escaped in them, and stay strings. Nothing else is
+rewritten: if a secret is in a property name, is the text of a number, `true`,
+`false` or `null`, is a whole JSON object or array in the output, or runs across
+tokens in the text the output is kept or shown as, compact or as PostgreSQL's
+jsonb prints it, the whole output is withheld. Outputs that are not JSON are
+withheld too. An attempt whose outputs are withheld is settled without them:
+failed, or uncertain if its work may have changed something, with the reason as
+its error. What reads outputs treats them as unknown, never as empty: a withheld
+observation leaves the installation's previous observation as the evidence the
+VMID collision check uses, and a VMID an observation shows but that cannot be
+read counts as possibly colliding.
 
 A key that was ever released to Proxmox or OpenTofu work stays refused to
 playbooks, set again or not. The key's last version number is kept, in

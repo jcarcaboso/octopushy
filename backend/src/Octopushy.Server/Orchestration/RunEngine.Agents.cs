@@ -338,26 +338,20 @@ public sealed partial class RunEngine
                 return true;
             }
 
-            // What the attempt reports is masked with what it was sent, read back if this process does not know it.
-            await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
+            // What the attempt reports is masked with what it was sent, read back if this process does not know it, and held
+            // until this result is handled.
+            using var masks = await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
             JsonNode? outputs = null;
-            var outputsWithheld = false;
+            string? outputsWithheld = null;
             if (!string.IsNullOrWhiteSpace(result.OutputsJson))
             {
-                try
+                if (logs.TryMaskOutputs(attempt.Id, result.OutputsJson, out var masked, out var withheld))
+                    outputs = masked;
+                else
                 {
-                    if (logs.TryMaskOutputs(attempt.Id, result.OutputsJson, out var masked))
-                        outputs = masked;
-                    else
-                    {
-                        // Fails closed: no outputs are kept, so a step that needs them, such as a plan's approval, refuses.
-                        outputsWithheld = true;
-                        logger.LogWarning("Attempt {Attempt} returned outputs that cannot be fully masked; they are not kept.", attemptId);
-                    }
-                }
-                catch (JsonException)
-                {
-                    logger.LogWarning("Attempt {Attempt} returned outputs that are not JSON.", attemptId);
+                    // Fails closed: no outputs are kept, and what they would have said is unknown, not absent.
+                    outputsWithheld = withheld;
+                    logger.LogWarning("Attempt {Attempt} returned outputs that are not kept: {Reason}", attemptId, withheld);
                 }
             }
 
@@ -392,8 +386,14 @@ public sealed partial class RunEngine
                 Outcome.Uncertain => AttemptStatuses.Uncertain,
                 _ => AttemptStatuses.Failed,
             };
+            // Withheld outputs settle the attempt without them: what reads its outputs, such as a plan's approval, the
+            // inventory or the VMID collision check, never takes their absence for evidence. Work that may have changed
+            // something is uncertain; anything else failed.
+            if (outputsWithheld is not null && attempt.Status == AttemptStatuses.Succeeded)
+                attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
             attempt.LateResult = late;
-            attempt.Error = string.IsNullOrEmpty(result.Error) ? (outputsWithheld ? AttemptLogStore.Withheld : null) : logs.MaskDiagnostic(attempt.Id, result.Error);
+            var error = string.IsNullOrEmpty(result.Error) ? null : logs.MaskDiagnostic(attempt.Id, result.Error);
+            attempt.Error = outputsWithheld is null ? error : error is null || error == outputsWithheld ? outputsWithheld : $"{outputsWithheld} {error}";
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;

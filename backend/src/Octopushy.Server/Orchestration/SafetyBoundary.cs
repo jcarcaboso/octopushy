@@ -200,10 +200,16 @@ public static class SafetyBoundary
             + "Octopushy plans nothing against a machine it did not create.";
     }
 
-    /// <summary>The VM an observation shows at this VMID, or null.</summary>
-    private static JsonObject? Observed(string data, int vmid) =>
-        (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>()
-            .FirstOrDefault(g => g["vmid"] is JsonValue id && id.TryGetValue<int>(out var observedVmid) && observedVmid == vmid);
+    /// <summary>
+    /// The VM an observation shows at this VMID, or null. A VM whose VMID cannot be read as a number could be at this one:
+    /// what cannot be read is unknown, not absent, so it is returned as a VM at this VMID with nothing else known of it.
+    /// </summary>
+    private static JsonObject? Observed(string data, int vmid)
+    {
+        var guests = (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>().ToList();
+        return guests.FirstOrDefault(g => g["vmid"] is JsonValue id && id.TryGetValue<int>(out var observedVmid) && observedVmid == vmid)
+            ?? (guests.Any(g => g["vmid"] is { } id && !(id is JsonValue value && value.TryGetValue<int>(out _))) ? new JsonObject() : null);
+    }
 
     private static string NormalEndpoint(string endpoint) => endpoint.Trim().TrimEnd('/');
 }
