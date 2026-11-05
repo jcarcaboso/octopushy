@@ -27,9 +27,15 @@ RUN apt-get update \
  && install -d -o octopushy-agent -g octopushy-agent -m 0700 /var/lib/octopushy-agent
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 COPY --from=ansible /opt/octopushy/ansible /opt/octopushy/ansible
-COPY --from=ansible /usr/local/bin/octopushy-ansible /usr/local/bin/octopushy-ansible
+# A link, as install.sh makes it, not a copy: octopushy-ansible finds its recap callback next to
+# the file the link names. A copy here loads no callback, and every run ends uncertain.
+RUN ln -s /opt/octopushy/ansible/lib/octopushy/octopushy-ansible /usr/local/bin/octopushy-ansible
 COPY --from=build /src/agent/target/release/octopushy /usr/local/bin/octopushy
 COPY --chmod=0755 agent/packaging/container-entrypoint.sh /usr/local/bin/octopushy-agent-entrypoint
+# The build fails unless a playbook run through octopushy-ansible ends with a recap.
+RUN printf -- '- hosts: localhost\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug: { msg: ok }\n' >/tmp/recap.yml \
+ && OCTOPUSHY_RECAP=1 octopushy-ansible -i localhost, -c local /tmp/recap.yml 2>&1 >/dev/null | grep '^octopushy-recap: ' \
+ && rm /tmp/recap.yml
 USER octopushy-agent
 ENV STATE_DIRECTORY=/var/lib/octopushy-agent \
     HOME=/var/lib/octopushy-agent \
