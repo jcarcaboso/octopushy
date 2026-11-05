@@ -86,17 +86,20 @@ public static class VariableUses
 
             foreach (var commit in commits)
             {
+                var at = $"commit {commit[..Math.Min(12, commit.Length)]} of the branch";
                 List<string>? files;
+                string? unreadable = null;
                 try
                 {
-                    files = GeneratedValues.FilesReferencing(await mirror.SnapshotAsync(commit, ct), key);
+                    files = GeneratedValues.FilesReferencing(await mirror.SnapshotAsync(commit, ct), key, out unreadable);
                 }
                 catch (GitException)
                 {
                     files = null;
                 }
 
-                foreach (var file in files ?? throw Unreadable($"commit {commit[..Math.Min(12, commit.Length)]} of the branch"))
+                foreach (var file in files ?? throw (unreadable is null ? Unreadable(at)
+                    : new StoreException($"{unreadable} at {at} is not YAML that can be read, so whether it uses this key is not known. Nothing was deleted; fix that file, then try again.")))
                 {
                     holders.Add($"{file} at the branch head");
                 }

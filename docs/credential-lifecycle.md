@@ -127,7 +127,9 @@ controller reads them back from the store, and if one of them was deleted, the
 attempt's log lines, error and outputs are withheld rather than kept unmasked.
 Masking never passes text through for an attempt whose values it does not hold:
 an attempt with no secrets is registered with none, and one closed or unknown has
-what it reports withheld.
+what it reports withheld. Outputs are parsed before they are masked, so a secret
+is found as it reads once decoded, in every string, property name and value,
+whatever JSON escaped in it.
 
 A key that was ever released to Proxmox or OpenTofu work stays refused to
 playbooks, set again or not. The key's last version number is kept, in

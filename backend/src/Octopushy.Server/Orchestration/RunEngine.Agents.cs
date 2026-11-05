@@ -346,8 +346,8 @@ public sealed partial class RunEngine
             {
                 try
                 {
-                    if (logs.MaskOutputs(attempt.Id, result.OutputsJson) is { } masked)
-                        outputs = JsonNode.Parse(masked);
+                    if (logs.TryMaskOutputs(attempt.Id, result.OutputsJson, out var masked))
+                        outputs = masked;
                     else
                     {
                         // Fails closed: no outputs are kept, so a step that needs them, such as a plan's approval, refuses.

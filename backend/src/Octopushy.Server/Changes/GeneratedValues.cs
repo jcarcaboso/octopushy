@@ -34,20 +34,26 @@ public static class GeneratedValues
     /// or not. Null, so that nothing is removed, when the snapshot or any of those files cannot be read.
     /// </summary>
     public static IReadOnlySet<string>? ReferencedKeys(string root) =>
-        KeysByFile(root) is { } files ? files.Values.SelectMany(k => k).ToHashSet(StringComparer.Ordinal) : null;
+        KeysByFile(root).Files is { } files ? files.Values.SelectMany(k => k).ToHashSet(StringComparer.Ordinal) : null;
 
     /// <summary>
     /// The definition files in the snapshot at <paramref name="root"/> that reference <paramref name="key"/>, by path from the
-    /// root, read as <see cref="ReferencedKeys"/> reads them. Null when the snapshot or any of those files cannot be read.
+    /// root, read as <see cref="ReferencedKeys"/> reads them. Null when the snapshot or one of those files cannot be read, with
+    /// <paramref name="unreadable"/> naming that file, or the snapshot itself when it is the snapshot.
     /// </summary>
-    public static List<string>? FilesReferencing(string root, string key) =>
-        KeysByFile(root)?.Where(f => f.Value.Contains(key)).Select(f => f.Key).Order(StringComparer.Ordinal).ToList();
+    public static List<string>? FilesReferencing(string root, string key, out string? unreadable)
+    {
+        var (files, failed) = KeysByFile(root);
+        unreadable = failed;
+        return files?.Where(f => f.Value.Contains(key)).Select(f => f.Key).Order(StringComparer.Ordinal).ToList();
+    }
 
-    private static Dictionary<string, HashSet<string>>? KeysByFile(string root)
+    private static (Dictionary<string, HashSet<string>>? Files, string? Unreadable) KeysByFile(string root)
     {
         if (!Directory.Exists(root))
-            return null;
+            return (null, null);
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        string? current = null;
         try
         {
             var files = DefinitionFolders.Select(f => Path.Combine(root, f)).Where(Directory.Exists)
@@ -56,18 +62,19 @@ public static class GeneratedValues
                 .Append(Path.Combine(root, "octopushy.yaml")).Where(File.Exists);
             foreach (var file in files)
             {
+                current = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
                 var keys = new HashSet<string>(StringComparer.Ordinal);
                 if (!Collect(File.ReadAllText(file), keys))
-                    return null;
-                result[Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/')] = keys;
+                    return (null, current);
+                result[current] = keys;
             }
         }
         catch (IOException)
         {
-            return null;
+            return (null, current);
         }
 
-        return result;
+        return (result, null);
     }
 
     /// <summary>Every store key the files a change writes reference: what any of its candidate commits would bring to the branch.</summary>
