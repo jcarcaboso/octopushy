@@ -512,8 +512,9 @@ Each goes into the variable store as a secret, under `proxmox/<installation>/<gu
 keys](#store-keys)). The new definition references it, `{ store: … }`. The value is never shown, returned by the API,
 logged, or written to Git. A key that is already in the store refuses the deploy rather than replacing it. The key
 leaves the lab out, so a guest in another lab with the same installation and guest names would get the same key: its
-deploy is refused, and the first guest's value is untouched. Give the second guest's secret a key of its own, or choose
-the existing key if the two should share it. Earlier versions generated keys under `guests/<lab>/…` and
+deploy is refused, and the first guest's value is untouched. Give the second guest's secret a key of its own. Choose the existing
+key only for a value both may reuse, such as a password: an agent enrollment token enrolls one agent, so the second guest
+needs a new token from **Agents**, stored at a key of its own. Earlier versions generated keys under `guests/<lab>/…` and
 `services/<lab>/…`; definitions name those keys explicitly, so they keep working, and cleanup goes by the key each value
 recorded. Each value records what it wrote: the store version, tagged
 with the value's id, and its token. Once its change is final, and nothing at the branch head, no open change and no unfinished
@@ -603,7 +604,7 @@ A key is any name, but keys are easier to follow under **Variables** when they f
 | `proxmox/<installation>/<guest>/<secret>` | A guest's secrets | `proxmox/pve01/bb/machine_tailscale_auth_key` |
 | `proxmox/<installation>/<guest>/<service>/<secret>` | A service's secrets | `proxmox/korriban/krb-app-01/web/web_password` |
 | `shared/<name>` | A value several guests reuse ([shared store values](guest-configuration.md#shared-store-values)) | `shared/git-ssh-key` |
-| `system/…` | Octopushy's own keys, which definitions cannot reference | `system/installation-snippets/pve01` |
+| `system/…` | Octopushy's own keys, which definitions cannot reference. They keep their own layout, lab included | `system/installation-snippets/home/pve01` |
 
 The last segment of a secret's key is its name in the definition's `secrets:` or `secretFiles:` map, verbatim, underscores
 included. The deploy wizard generates values at these keys ([generated values](#generated-values)), and suggests
