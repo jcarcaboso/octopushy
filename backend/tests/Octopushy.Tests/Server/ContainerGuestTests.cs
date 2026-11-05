@@ -418,4 +418,151 @@ public class ContainerGuestTests(PostgresFixture postgres)
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Retire)).Status);
         Assert.False(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == ContainerHostKeys.Key(resourceId))));
     }
+
+    [Fact]
+    public async Task Review_rejected_replacement_keeps_the_old_pin()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["delete", "create"], "replace_because_cannot_update"), artifacts: FakeAgent.PlanArtifact("replace"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        await server.Engine.RejectAsync(run.Id, run.Steps.Single(s => s.Name == StepNames.Approval).Id, "ops", null, CancellationToken.None);
+        await server.TickAsync();
+        Assert.Equal([(1, false)], await PinVersionsAsync(server));
+        Assert.NotNull(await PinAsync(server));
+    }
+
+    [Fact]
+    public async Task Review_revoked_pin_stays_unusable_after_restart()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+        await ReplaceAsync(server, agent);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "temporary API error");
+        await server.TickAsync();
+        await server.RestartFixtureAsync();
+        agent = await server.ConnectAgentAsync("home");
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await server.TickAsync();
+        Assert.Equal([(1, true)], await PinVersionsAsync(server));
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
+        Assert.Contains("revoked: the container may have been replaced", Why(await server.LatestRunAsync(Guest, Operations.RotateAccess)));
+    }
+
+    /// <summary>Replaces the container, whose verify then fails as for an API error, and plans the guest again: no changes.</summary>
+    private static async Task<Assignment> ReplanAfterAFailedVerifyAsync(ServerHarness server, FakeAgent agent)
+    {
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+        await ReplaceAsync(server, agent);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "temporary API error");
+        await server.TickAsync();
+        var replaced = await server.LatestRunAsync(Guest, Operations.Provision);
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(), artifacts: FakeAgent.PlanArtifact("no changes"));
+        var verify = await agent.NextAsync("verify-guest");
+        var request = Input(verify)["hostKeys"]!.AsObject();
+        // It asks about the replacement's creation, by the token that applied it, and does not fail for it: nothing is created now.
+        Assert.Equal(("octopushy@pve!writer", true), (request["createdBy"]!.GetValue<string>(), request["optional"]!.GetValue<bool>()));
+        Assert.Equal(replaced.Id, RunContext.Parse((await server.LatestRunAsync(Guest, Operations.Provision)).Context).HostKeysRequest!.CreatedBy);
+        return verify;
+    }
+
+    [Fact]
+    public async Task Review_no_op_replan_recovers_a_pin_after_transient_verify_failure()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        var verify = await ReplanAfterAFailedVerifyAsync(server, agent);
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Rsa));
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        // A new version, from the replacement's creation; the old one is never revived.
+        Assert.Equal(($"{Rsa}\n", 2), (await PinAsync(server))!.Value);
+        Assert.Equal([(1, true), (2, false)], await PinVersionsAsync(server));
+    }
+
+    [Fact]
+    public async Task A_replan_that_cannot_vouch_again_says_planning_will_not_fix_it()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        var verify = await ReplanAfterAFailedVerifyAsync(server, agent);
+        var outputs = Verified();
+        outputs.Remove("hostKeys");
+        outputs["hostKeysError"] = "after the create task …, Proxmox lists vzrestore … for VMID 310";
+        await agent.ReportAsync(verify, Outcome.Succeeded, outputs);
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        Assert.Contains("could not be read again", run.Steps.Single(s => s.Name == StepNames.Verify).Detail);
+        Assert.Equal([(1, true)], await PinVersionsAsync(server));
+
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await server.TickAsync();
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
+        var why = Why(await server.LatestRunAsync(Guest, Operations.RotateAccess));
+        Assert.Contains("planning again will not fix it: set access.hostKey, or rebuild the container", why);
+    }
+
+    [Fact]
+    public async Task Review_unrequested_keys_after_a_create_pin_nothing_when_the_apply_token_was_revoked()
+    {
+        var (server, agent) = await StartAsync(Container());
+        await using var _ = server;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["create"]), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var context = RunContext.Parse(run.Context);
+        var key = context.Secrets[SecretNames.ProxmoxPrivilegedToken];
+        var version = context.SecretVersions[SecretNames.ProxmoxPrivilegedToken];
+        await using (var scope = server.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<VariableStore>().RevokeAsync(key, version, "retired after apply", "ops", CancellationToken.None);
+        await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+
+        // What the apply was sent with was kept when it was sent, so the creation can still be asked about.
+        var verify = await agent.NextAsync("verify-guest");
+        Assert.Equal("octopushy@pve!writer", Input(verify)["hostKeys"]!["createdBy"]!.GetValue<string>());
+
+        // Only the attempt that was asked is heard: here the request names another attempt, so the keys pin nothing.
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var asked = RunContext.Parse(run.Context);
+        Assert.Equal(Guid.Parse(verify.AttemptId), asked.HostKeysRequest!.AttemptId);
+        await server.WithDbAsync(async db =>
+        {
+            var stored = await db.Runs.SingleAsync(r => r.Id == run.Id);
+            stored.Context = (asked with { HostKeysRequest = asked.HostKeysRequest with { AttemptId = Guid.NewGuid() } }).Serialize();
+            await db.SaveChangesAsync();
+        });
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Ed25519));
+        await server.TickAsync();
+        Assert.Null(await PinAsync(server));
+    }
+
+    [Fact]
+    public async Task The_creating_verify_pins_even_after_the_apply_token_is_revoked()
+    {
+        var (server, agent) = await StartAsync(Container());
+        await using var _ = server;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["create"]), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        var context = RunContext.Parse((await server.LatestRunAsync(Guest, Operations.Provision)).Context);
+        await using (var scope = server.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<VariableStore>().RevokeAsync(context.Secrets[SecretNames.ProxmoxPrivilegedToken],
+                context.SecretVersions[SecretNames.ProxmoxPrivilegedToken], "retired after apply", "ops", CancellationToken.None);
+        await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        var verify = await agent.NextAsync("verify-guest");
+        Assert.False(Input(verify)["hostKeys"]!["optional"]!.GetValue<bool>());
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Ed25519));
+        await server.TickAsync();
+        Assert.Equal(($"{Ed25519}\n", 1), (await PinAsync(server))!.Value);
+    }
 }

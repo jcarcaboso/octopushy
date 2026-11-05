@@ -142,7 +142,7 @@ internal static class CredentialBindings
             if (!entries.TryGetValue(key, out var entry))
             {
                 problems.Add(key.StartsWith(ContainerHostKeys.Prefix, StringComparison.Ordinal)
-                    ? $"{key}: missing: the container's host keys have not been read from its create task. Octopushy reads them only when its own provision run creates the container; set access.hostKey, or rebuild the container"
+                    ? $"{key}: missing: the container's host keys have not been read from its create task. {ContainerHostKeys.Recovery}"
                     : $"{key}: missing");
                 continue;
             }
@@ -178,7 +178,7 @@ internal static class CredentialBindings
             if (value is null || value.RevokedAt is not null || value.ActivatedAt is null)
             {
                 problems.Add(value?.RevokedAt is not null && key.StartsWith(ContainerHostKeys.Prefix, StringComparison.Ordinal)
-                    ? $"{key} v{version}: revoked: the container may have been replaced since its host keys were read. Its new keys are pinned when a provision run verifies it"
+                    ? $"{key} v{version}: revoked: the container may have been replaced since its host keys were read. {ContainerHostKeys.Recovery}"
                     : $"{key} v{version}: {(value is null ? "missing" : value.RevokedAt is not null ? "revoked" : "candidate not promoted")}");
                 continue;
             }

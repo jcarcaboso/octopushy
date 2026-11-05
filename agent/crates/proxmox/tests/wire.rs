@@ -415,3 +415,74 @@ async fn reads_a_nodes_clock() {
         1_800_000_000
     );
 }
+
+#[tokio::test]
+async fn review_guest_task_history_is_not_silently_limited_to_one_page() {
+    let server = MockServer::start().await;
+    let page: Vec<_> = (0..1000)
+        .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!(page)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "1000"))
+        .respond_with(data(
+            json!([{"upid":"older-create", "type":"vzcreate", "id":"320"}]),
+        ))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    assert_eq!(tasks.len(), 1001, "the history endpoint has another page");
+}
+
+#[tokio::test]
+async fn a_server_that_ignores_start_is_not_taken_for_a_whole_history() {
+    let server = MockServer::start().await;
+    let page: Vec<_> = (0..500)
+        .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!(page)))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("repeated a page"), "{error}");
+}
+
+#[tokio::test]
+async fn an_archived_token_task_is_its_whole_principal() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!([
+            // Archived: pve-manager splits a token's owner (PVE/API2/Tasks.pm, convert_token_task).
+            { "upid": "UPID:korriban:1:2:3:vzcreate:320:octopushy@pve!writer:", "type": "vzcreate", "id": "320",
+              "user": "octopushy@pve", "tokenid": "writer", "status": "OK", "starttime": 3 },
+            // Active: the whole principal in user.
+            { "upid": "UPID:korriban:1:2:4:vzstart:320:octopushy@pve!writer:", "type": "vzstart", "id": "320",
+              "user": "octopushy@pve!writer", "starttime": 4 },
+            { "upid": "UPID:korriban:1:2:5:vzstart:320:octopushy@pve:", "type": "vzstart", "id": "320",
+              "user": "octopushy@pve", "starttime": 5 }
+        ])))
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    let principals: Vec<_> = tasks.iter().map(|t| t.principal()).collect();
+    assert_eq!(
+        principals,
+        [
+            Some("octopushy@pve!writer".to_owned()),
+            Some("octopushy@pve!writer".to_owned()),
+            Some("octopushy@pve".to_owned())
+        ]
+    );
+}

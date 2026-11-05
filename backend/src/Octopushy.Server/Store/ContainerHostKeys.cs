@@ -15,12 +15,28 @@ public static class ContainerHostKeys
 
     public static string Key(Guid resourceId) => $"{Prefix}{resourceId}";
 
+    /// <summary>What a person can do about a container with no pin in use, as the runs waiting for one say it.</summary>
+    public const string Recovery = "Octopushy reads them only from the create task of the provision run that made this container. "
+        + "Plan the guest: its verify reads them again from that creation, if nothing has changed the VMID since. "
+        + "If that verify says they could not be read, or no run of Octopushy's made this container, planning again will not fix it: "
+        + "set access.hostKey, or rebuild the container.";
+
     /// <summary>The fingerprints a verify step read, or null when it read none.</summary>
     public static string? Read(System.Text.Json.Nodes.JsonNode? verified)
     {
         var lines = (verified?["hostKeys"] as System.Text.Json.Nodes.JsonArray ?? [])
             .Select(k => k?.ToString().Trim()).Where(k => !string.IsNullOrEmpty(k)).Order(StringComparer.Ordinal).ToList();
         return lines.Count == 0 ? null : string.Join('\n', lines) + "\n";
+    }
+
+    /// <summary>Whether the guest has a pin a run can use now: its current version is active and not revoked.</summary>
+    public static async Task<bool> InUseAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
+    {
+        var key = Key(resourceId);
+        return await (from entry in db.StoreEntries.AsNoTracking()
+                      join version in db.StoreVersions.AsNoTracking() on new { entry.Key, Version = entry.CurrentVersion } equals new { version.Key, version.Version }
+                      where entry.Key == key && version.RevokedAt == null && version.ActivatedAt != null
+                      select version).AnyAsync(cancellationToken);
     }
 
     /// <summary>Records the fingerprints as the pin in use: a new version when they changed, as for a replaced container.</summary>

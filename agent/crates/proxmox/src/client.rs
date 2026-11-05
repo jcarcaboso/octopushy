@@ -94,6 +94,11 @@ impl fmt::Debug for Client {
     }
 }
 
+/// How many tasks one request of [`Client::guest_tasks`] asks for.
+const TASK_PAGE: usize = 500;
+/// How many pages [`Client::guest_tasks`] reads before it gives up on a whole history.
+const MAX_TASK_PAGES: usize = 200;
+
 /// Status-line phrases Proxmox uses when the guest agent cannot answer.
 const GUEST_AGENT_UNAVAILABLE: &[&str] = &[
     "guest agent is not running",
@@ -324,16 +329,51 @@ impl Client {
         }
     }
 
-    /// `GET /nodes/{node}/tasks`: the finished and running tasks of one VMID, of every type.
-    /// Proxmox lists the tasks of another user or token only to a token with `Sys.Audit` on
-    /// `/nodes/{node}`.
+    /// `GET /nodes/{node}/tasks`: every finished and running task of one VMID, of every type,
+    /// page by page until a page comes back short. Proxmox lists the tasks of another user or token
+    /// only to a token with `Sys.Audit` on `/nodes/{node}`.
+    ///
+    /// Fails rather than return part of it: past [`MAX_TASK_PAGES`] pages, or when a page repeats
+    /// the one before, the history cannot be shown to be whole.
     pub async fn guest_tasks(&self, node: &str, vmid: u32) -> Result<Vec<Task>> {
         let id = vmid.to_string();
-        self.get(
-            &["nodes", node, "tasks"],
-            &[("vmid", &id), ("source", "all"), ("limit", "1000")],
-        )
-        .await
+        let limit = TASK_PAGE.to_string();
+        let mut all: Vec<Task> = Vec::new();
+        let mut first_of_previous: Option<String> = None;
+        for _ in 0..MAX_TASK_PAGES {
+            let start = all.len().to_string();
+            let page: Vec<Task> = self
+                .get(
+                    &["nodes", node, "tasks"],
+                    &[
+                        ("vmid", &id),
+                        ("source", "all"),
+                        ("start", &start),
+                        ("limit", &limit),
+                    ],
+                )
+                .await?;
+            let last = page.len() < TASK_PAGE;
+            let first = page.first().map(|t| t.upid.clone());
+            if first.is_some() && first == first_of_previous {
+                return Err(Error::Decode {
+                    path: format!("/nodes/{node}/tasks"),
+                    message: "the server ignored start and repeated a page of the history".into(),
+                });
+            }
+            first_of_previous = first;
+            all.extend(page);
+            if last {
+                return Ok(all);
+            }
+        }
+        Err(Error::Decode {
+            path: format!("/nodes/{node}/tasks"),
+            message: format!(
+                "the task history of VMID {vmid} is longer than {} entries, so it cannot be read whole",
+                MAX_TASK_PAGES * TASK_PAGE
+            ),
+        })
     }
 
     /// `GET /nodes/{node}/time`: the node's clock, in Unix seconds, which its tasks' times are in.

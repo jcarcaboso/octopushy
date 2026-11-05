@@ -299,8 +299,13 @@ pub struct Task {
     /// The guest's VMID, as a string.
     #[serde(default, deserialize_with = "de::opt_string")]
     pub id: Option<String>,
+    /// Who started it. For an API token, an archived task gives the user here and the token's
+    /// name in `tokenid` (pve-manager `PVE/API2/Tasks.pm`, `convert_token_task`), and a running
+    /// one gives the whole `user@realm!token`: see [`Task::principal`].
     #[serde(default, deserialize_with = "de::opt_string")]
     pub user: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub tokenid: Option<String>,
     #[serde(default, deserialize_with = "de::opt_u64")]
     pub starttime: Option<u64>,
     #[serde(default, deserialize_with = "de::opt_u64")]
@@ -308,6 +313,20 @@ pub struct Task {
     /// `OK` for a task that succeeded, an error otherwise; absent while it runs.
     #[serde(default, deserialize_with = "de::opt_string")]
     pub status: Option<String>,
+}
+
+impl Task {
+    /// Who started the task, as one principal: `user@realm`, or `user@realm!token` for an API
+    /// token, whichever of the two forms Proxmox listed it in. A user and each of its tokens are
+    /// different principals, so a token task is never just its user.
+    pub fn principal(&self) -> Option<String> {
+        let user = self.user.as_deref()?;
+        match self.tokenid.as_deref().filter(|t| !t.is_empty()) {
+            Some(_) if user.contains('!') => None,
+            Some(token) => Some(format!("{user}!{token}")),
+            None => Some(user.to_owned()),
+        }
+    }
 }
 
 /// One line of `GET /nodes/{node}/tasks/{upid}/log`.

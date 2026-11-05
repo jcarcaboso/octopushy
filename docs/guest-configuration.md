@@ -489,15 +489,25 @@ own apply performed:
    exactly one task: a successful `vzcreate` started by that token, inside that window. No task that changes
    which machine the VMID is may come after it: a destroy, restore, migration or another create, finished or
    still running. It then reports each key's type and fingerprint. There is no fallback to an older create.
+   The token is named as Proxmox names a task's owner, `user@realm!token`, whether the task is listed whole or,
+   once archived, as its user and `tokenid`; the whole history is read, page by page. The principal is recorded
+   when the apply is sent, so revoking that token later changes nothing here.
 2. **Octopushy records them as the container's pin** when the guest owns the container (see
    [ownership](safety-boundary.md#ownership-reservation-and-confirmed-creation)) and that run's plan created
    it: a plain entry at `system/container-host-key/<guest id>`, one `type SHA256:…` per line, which no
-   definition can name. Keys a verify reports without being asked pin nothing. Retiring the guest removes it.
+   definition can name. Only the answer of the verify attempt that was asked is heard: keys an attempt reports
+   without being asked pin nothing. Retiring the guest removes it.
 3. **A replacement withdraws the pin first.** When the apply of a plan that creates, replaces or deletes the
    guest's container is sent, every version of its pin is revoked, and kept for the record of what was
    released. From then on the machine at the VMID may be another, whatever the apply reports, so no setup,
    service or rotation connects, including a run that bound an older version, until a verify of the new
    container records its keys as a new version.
+4. **A verify that failed can be retried by planning again.** A run that creates nothing, as a plan with no
+   changes, asks for the keys while the guest has no pin in use, about the last run that created its container,
+   and the agent checks the history again from that create on. What it reads is a new version; a withdrawn one
+   is never revived. Since nothing was created then, a read that cannot vouch passes the verify and says why on
+   the step, and the runs waiting for a pin say plainly what is left: when it could not be read again, or no run
+   of Octopushy's made the container, planning again will not fix it; set `access.hostKey`, or rebuild it.
 3. **The setup stage, a service's Ansible stage and a key rotation are pinned to it.** Proxmox gives
    fingerprints, not the public keys, and `known_hosts` needs a key. So the agent leaves `known_hosts`
    empty and gives ssh a `KnownHostsCommand`: once the container has presented its host key, ssh asks the

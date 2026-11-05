@@ -512,6 +512,7 @@ fn task(
         endtime: Some(starttime + 12),
         status: Some("OK".into()),
         log,
+        active: false,
     }
 }
 
@@ -863,4 +864,138 @@ async fn verify_absent_counts_containers_in_the_one_vmid_namespace() {
     )
     .await;
     assert_eq!(r.unwrap().outputs, json!({ "present": false }));
+}
+
+#[tokio::test]
+async fn a_tokens_task_matches_in_either_form_proxmox_lists_it_and_no_other_principal_does() {
+    // Archived, as the fixture's tasks are listed: user and tokenid apart.
+    assert!(host_keys_after(|_| {}).await.is_ok());
+    // Still on the active list, finished: the whole principal in user.
+    assert!(
+        host_keys_after(|f| f.tasks.iter_mut().for_each(|t| t.active = true))
+            .await
+            .is_ok()
+    );
+    // Another token of the same user, and the user itself, are other principals.
+    for other in ["octopushy@pve!other", "octopushy@pve"] {
+        let (message, _) = failed(
+            host_keys_after(|f| {
+                f.tasks
+                    .iter_mut()
+                    .filter(|t| t.id == "320")
+                    .for_each(|t| t.user = other.into());
+            })
+            .await,
+        );
+        assert!(
+            message.contains("no successful create task"),
+            "{other}: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn host_keys_read_the_whole_history_past_its_first_page() {
+    // Later tasks that change nothing push the create far down the newest-first history.
+    let r = host_keys_after(|f| {
+        for i in 0..1_200 {
+            f.tasks
+                .push(task("vzstart", 320, WRITER, NOW - 150 + i % 100, vec![]));
+        }
+    })
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    // And a destroy among them is seen, wherever it falls.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            for i in 0..1_200 {
+                f.tasks
+                    .push(task("vzstart", 320, WRITER, NOW - 150 + i % 100, vec![]));
+            }
+            f.tasks
+                .push(task("vzdestroy", 320, "root@pam", NOW - 190, vec![]));
+        })
+        .await,
+    );
+    assert!(message.contains("Proxmox lists vzdestroy"), "{message}");
+}
+
+#[tokio::test]
+async fn review_clock_skew_over_120_seconds_uses_node_relative_time() {
+    let r = host_keys_after(|f| {
+        f.time = Some(NOW + 86_400);
+        for t in &mut f.tasks {
+            t.starttime += 86_400;
+            t.endtime = t.endtime.map(|s| s + 86_400);
+        }
+    })
+    .await;
+    assert!(
+        r.is_ok(),
+        "fixed one-day skew must not reject this creation: {r:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_a_running_create_cannot_vouch_for_keys() {
+    let r = host_keys_after(|f| {
+        for t in f
+            .tasks
+            .iter_mut()
+            .filter(|t| t.id == "320" && t.kind == "vzcreate")
+        {
+            t.status = None;
+            t.endtime = None;
+        }
+    })
+    .await;
+    let (message, _) = failed(r);
+    assert!(message.contains("no successful create task"), "{message}");
+}
+
+#[tokio::test]
+async fn review_another_guest_at_the_vmid_fails_the_expected_name_check() {
+    let mut f = with_containers();
+    f.vms.iter_mut().find(|v| v.vmid == 320).unwrap().name = "other-guest".into();
+    let m = mock(f).await;
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "name": "krb-ct-01", "waitSeconds": 0, "hostKeys": host_keys_request()
+        }),
+        &m.token(),
+    )
+    .await;
+    let (message, outputs) = failed(r);
+    assert!(message.contains("other-guest"), "{message}");
+    assert!(outputs.unwrap().get("hostKeys").is_none());
+}
+
+#[tokio::test]
+async fn a_retried_read_that_cannot_vouch_reports_why_and_passes() {
+    let mut fixture = with_containers();
+    fixture
+        .tasks
+        .push(task("vzrestore", 320, "root@pam", NOW - 100, vec![]));
+    let m = mock(fixture).await;
+    let mut request = host_keys_request();
+    request["optional"] = json!(true);
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "waitSeconds": 0, "hostKeys": request
+        }),
+        &m.token(),
+    )
+    .await;
+    let outputs = r.unwrap().outputs;
+    assert!(outputs.get("hostKeys").is_none());
+    let error = outputs["hostKeysError"].as_str().unwrap();
+    assert!(error.contains("Proxmox lists vzrestore"), "{error}");
+    assert!(
+        error.contains("Planning again will not change that"),
+        "{error}"
+    );
 }

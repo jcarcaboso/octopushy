@@ -612,15 +612,18 @@ public sealed partial class RunEngine(
                     }
                 }
 
-                // A container's host keys, as the create task of this run's apply logged them, are the pin of its Ansible
-                // work. Only for a container this guest owns and this run's plan created: what an agent reports otherwise
-                // pins nothing, since nothing asked it which creation to read.
-                if (RunContext.Parse(run.Context) is { ContainerHostKey: true } pinning
-                    && resource.BoundVmid == pinning.Proxmox.Vmid && resource.BoundInstallation == resource.ParentAddress
-                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Plan)?.Outputs is { } madeBy
-                    && GuestVmPlan.MakesGuestMachine(JsonNode.Parse(madeBy), pinning)
-                    && ContainerHostKeys.Read(outputs) is { } fingerprints)
-                    await ContainerHostKeys.RecordAsync(store, resource.Id, fingerprints, cancellationToken);
+                // A container's host keys, as the create task of the apply that made it logged them, are the pin of its
+                // Ansible work. Only the answer of the attempt that was asked, about a container this guest owns: keys an
+                // attempt reports without being asked, as after the token that applied was revoked, pin nothing.
+                if (RunContext.Parse(run.Context) is { ContainerHostKey: true, HostKeysRequest: { } asked } pinning
+                    && step.Attempts.OrderByDescending(a => a.Number).FirstOrDefault()?.Id == asked.AttemptId
+                    && resource.BoundVmid == pinning.Proxmox.Vmid && resource.BoundInstallation == resource.ParentAddress)
+                {
+                    if (ContainerHostKeys.Read(outputs) is { } fingerprints)
+                        await ContainerHostKeys.RecordAsync(store, resource.Id, fingerprints, cancellationToken);
+                    else if (outputs?["hostKeysError"]?.ToString() is { Length: > 0 } unread)
+                        step.Detail = $"The container's host keys could not be read again from the run that created it: {unread}";
+                }
 
                 resource.VerifiedAt = now;
                 break;

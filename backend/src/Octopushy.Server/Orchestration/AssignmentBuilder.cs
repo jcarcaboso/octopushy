@@ -185,14 +185,24 @@ public sealed partial class AssignmentBuilder(
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = stepName == StepNames.Reprotect,
             };
-            // A container's host keys, from the create task of the apply this run made, for its Ansible work to be pinned to.
+            // A container's host keys, from the create task of the apply that made it, for its Ansible work to be pinned to.
+            // The request is kept with the attempt it was made for: only that attempt's answer is ever pinned.
             if (stepName == StepNames.Verify && context.ContainerHostKey && run is not null
                 && await CreationAsync(run, context, cancellationToken) is { } creation)
-                input["hostKeys"] = creation;
+            {
+                input["hostKeys"] = creation.Request;
+                run.Context = (RunContext.Parse(run.Context) with
+                {
+                    HostKeysRequest = new HostKeysRequestContext(attempt.Id, creation.CreatedBy, creation.Request["optional"]!.GetValue<bool>()),
+                }).Serialize();
+            }
         }
 
         if (stepName == StepNames.Apply && run!.Operation == Operations.Provision)
+        {
             await ReserveAsync(run, cancellationToken);
+            RecordApplyPrincipal(run, context, values);
+        }
         if (stepName == StepNames.Apply && run!.Operation is Operations.Provision or Operations.Retire)
             await WithdrawContainerPinAsync(run, context, cancellationToken);
         assignment.InputJson = input.ToJsonString();
@@ -228,15 +238,62 @@ public sealed partial class AssignmentBuilder(
     }
 
     /// <summary>
-    /// Which creation a container's host keys may come from: this run's apply, when its approved plan created the guest's
-    /// machine, as the window it ran in, counted back from now, and the token it ran with. Proxmox logs the create task's
-    /// user as that token's id, and the agent finds the task in the node's own clock, so no clock but the server's is
-    /// compared with anything. Null when the run made no machine, or what it ran with cannot be told: then nothing is
-    /// pinned, and a container that has no pin needs access.hostKey. See docs/guest-configuration.md.
+    /// Which creation a container's host keys may come from, as the agent's <c>hostKeys</c> request: the provision run
+    /// whose apply created the guest's container, by the token principal recorded when that apply was sent, and the window
+    /// it ran in, counted back from now. Proxmox logs the create task's owner as that principal, and the agent finds the
+    /// task in the node's own clock, so no clock but the server's is compared with anything.
+    /// <list type="bullet">
+    /// <item>A run whose plan created the container asks about its own apply, and must get the keys.</item>
+    /// <item>Any other run asks only while the guest has no pin in use, as after a verify that failed, and about the last
+    /// run that created this container. The agent checks again that nothing changed the VMID since, and a failure to vouch
+    /// is reported, not fatal: nothing was created now. A pin is never revived; the keys read become a new version.</item>
+    /// </list>
+    /// Null when there is no such creation on record: then nothing is pinned. See docs/guest-configuration.md.
     /// </summary>
-    private async Task<JsonObject?> CreationAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    private async Task<(JsonObject Request, Guid CreatedBy)?> CreationAsync(Run run, RunContext context, CancellationToken cancellationToken)
     {
-        var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && (s.Name == StepNames.Plan || s.Name == StepNames.Apply))
+        // What the apply was sent with is in the run's context as stored, which may be newer than the view this step was built from.
+        var own = await CreatedAsync(run.Id, RunContext.Parse(run.Context), cancellationToken);
+        if (own is not null)
+            return (Request(own.Value, required: true), run.Id);
+        if (await ContainerHostKeys.InUseAsync(db, run.ResourceId, cancellationToken))
+            return null;
+        var earlier = await db.Runs.AsNoTracking()
+            .Where(r => r.ResourceId == run.ResourceId && r.Id != run.Id && r.Operation == Operations.Provision && r.CreatedAt <= run.CreatedAt)
+            .OrderByDescending(r => r.CreatedAt).Select(r => new { r.Id, r.Context }).ToListAsync(cancellationToken);
+        foreach (var candidate in earlier)
+        {
+            if (await CreatedAsync(candidate.Id, RunContext.Parse(candidate.Context), cancellationToken) is { } creation)
+                return creation.Context.Proxmox.Vmid == context.Proxmox.Vmid && creation.Context.Proxmox.Node == context.Proxmox.Node
+                    ? (Request(creation, required: false), candidate.Id)
+                    : null;
+        }
+
+        return null;
+
+        JsonObject Request((RunContext Context, DateTimeOffset Started, DateTimeOffset Finished) creation, bool required)
+        {
+            var now = clock.GetUtcNow();
+            return new JsonObject
+            {
+                ["createdBy"] = creation.Context.ApplyPrincipal,
+                ["applyStartedSecondsAgo"] = (long)Math.Ceiling(Math.Max(0, (now - creation.Started).TotalSeconds)),
+                ["applyFinishedSecondsAgo"] = (long)Math.Floor(Math.Max(0, (now - creation.Finished).TotalSeconds)),
+                ["optional"] = !required,
+            };
+        }
+    }
+
+    /// <summary>
+    /// The run's creation of its guest's container, if it made one: its approved plan created the guest's machine, its apply
+    /// succeeded, and the principal it was sent with is on record. Its context and the window its apply ran in.
+    /// </summary>
+    private async Task<(RunContext Context, DateTimeOffset Started, DateTimeOffset Finished)?> CreatedAsync(Guid runId, RunContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.ApplyPrincipal is null)
+            return null;
+        var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == runId && (s.Name == StepNames.Plan || s.Name == StepNames.Apply))
             .ToListAsync(cancellationToken);
         var plan = steps.SingleOrDefault(s => s.Name == StepNames.Plan);
         var apply = steps.SingleOrDefault(s => s.Name == StepNames.Apply);
@@ -246,19 +303,21 @@ public sealed partial class AssignmentBuilder(
         var attempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == apply.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number).FirstOrDefaultAsync(cancellationToken);
-        if (attempt?.FinishedAt is not { } finished || (attempt.AssignedAt ?? attempt.StartedAt) is not { } started)
-            return null;
-        var role = TokenFor(StepNames.Apply, context);
-        if (!context.Secrets.TryGetValue(role, out var key) || !context.SecretVersions.TryGetValue(role, out var version)
-            || await store.GetVersionInternalAsync(key, version, cancellationToken) is not { } token || token.IndexOf('=') is not (> 0 and var equals))
-            return null;
-        var now = clock.GetUtcNow();
-        return new JsonObject
-        {
-            ["createdBy"] = token[..equals],
-            ["applyStartedSecondsAgo"] = (long)Math.Ceiling(Math.Max(0, (now - started).TotalSeconds)),
-            ["applyFinishedSecondsAgo"] = (long)Math.Floor(Math.Max(0, (now - finished).TotalSeconds)),
-        };
+        return attempt?.FinishedAt is { } finished && (attempt.AssignedAt ?? attempt.StartedAt) is { } started
+            ? (context, started, finished)
+            : null;
+    }
+
+    /// <summary>
+    /// The principal a container's provision apply is sent with, kept in the run's context: Proxmox records it as the owner of
+    /// the create task, and only the token's id goes there, never its secret. Kept so the creation can be told later, even
+    /// once that token version is revoked.
+    /// </summary>
+    private static void RecordApplyPrincipal(Run run, RunContext context, Dictionary<string, string> values)
+    {
+        if (context.Proxmox.MachineKind != "lxc" || !values.TryGetValue(SecretNames.ProxmoxToken, out var token) || token.IndexOf('=') is not (> 0 and var equals))
+            return;
+        run.Context = (RunContext.Parse(run.Context) with { ApplyPrincipal = token[..equals] }).Serialize();
     }
 
     /// <summary>

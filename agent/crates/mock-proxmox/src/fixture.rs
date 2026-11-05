@@ -69,6 +69,10 @@ pub struct FixtureTask {
     pub status: Option<String>,
     #[serde(default)]
     pub log: Vec<String>,
+    /// Listed from the node's active list rather than its archive: Proxmox then gives a token's
+    /// owner whole in `user`, as for a running task, even once it has finished.
+    #[serde(default)]
+    pub active: bool,
 }
 
 impl FixtureTask {

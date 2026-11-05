@@ -272,6 +272,10 @@ struct HostKeysRequest {
     created_by: String,
     apply_started_seconds_ago: u64,
     apply_finished_seconds_ago: u64,
+    /// The controller retries the read of an earlier creation: when it cannot vouch for the keys,
+    /// the verification still passes, and `hostKeysError` says why.
+    #[serde(default)]
+    optional: bool,
 }
 
 /// How far the window of an apply may be off: the time between the controller making the
@@ -571,7 +575,7 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                 }
                 let mut outputs = report.to_json();
                 if let Some(request) = &input.host_keys {
-                    let keys = created_host_keys(
+                    match created_host_keys(
                         &c,
                         &kind,
                         &input.node,
@@ -580,20 +584,29 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                         started.elapsed().as_secs(),
                     )
                     .await
-                    .map_err(|e| Failure::with_outputs(e, report.to_json()))?;
-                    for key in &keys.keys {
-                        ctx.log.agent(format!(
-                            "host key: {} {} (from {})",
-                            key.kind, key.fingerprint, keys.task
-                        ));
+                    {
+                        Ok(keys) => {
+                            for key in &keys.keys {
+                                ctx.log.agent(format!(
+                                    "host key: {} {} (from {})",
+                                    key.kind, key.fingerprint, keys.task
+                                ));
+                            }
+                            outputs["hostKeys"] = json!(
+                                keys.keys
+                                    .iter()
+                                    .map(|k| format!("{} {}", k.kind, k.fingerprint))
+                                    .collect::<Vec<_>>()
+                            );
+                            outputs["hostKeysTask"] = json!(keys.task);
+                        }
+                        Err(e) if request.optional => {
+                            ctx.log
+                                .agent(format!("the host keys could not be read again: {e}"));
+                            outputs["hostKeysError"] = json!(e);
+                        }
+                        Err(e) => return Err(Failure::with_outputs(e, report.to_json())),
                     }
-                    outputs["hostKeys"] = json!(
-                        keys.keys
-                            .iter()
-                            .map(|k| format!("{} {}", k.kind, k.fingerprint))
-                            .collect::<Vec<_>>()
-                    );
-                    outputs["hostKeysTask"] = json!(keys.task);
                 }
                 return Ok(Success::outputs(outputs));
             }
@@ -692,7 +705,7 @@ async fn created_host_keys(
     let created: Vec<_> = of_vmid
         .iter()
         .filter(|t| t.kind == "vzcreate" && t.status.as_deref() == Some("OK"))
-        .filter(|t| t.user.as_deref() == Some(request.created_by.as_str()))
+        .filter(|t| t.principal().as_deref() == Some(request.created_by.as_str()))
         .filter(|t| t.starttime.is_some_and(|s| (from..=to).contains(&s)))
         .collect();
     let task = match created.as_slice() {
@@ -701,7 +714,7 @@ async fn created_host_keys(
             return Err(format!(
                 "Proxmox lists no successful create task (vzcreate) of container {vmid} on {node} by {} during this apply, \
                  so the container's host keys have no provenance: it may have been restored or cloned, or made by someone else. \
-                 Set access.hostKey, or rebuild it with Octopushy. {audit}",
+                 Planning again will not change that: set access.hostKey, or rebuild it with Octopushy. {audit}",
                 request.created_by
             ));
         }
@@ -719,7 +732,8 @@ async fn created_host_keys(
             && t.starttime.is_none_or(|s| s >= made_at)
     }) {
         return Err(format!(
-            "after the create task {}, Proxmox lists {} ({}) for VMID {vmid}: the machine there may not be the one it made",
+            "after the create task {}, Proxmox lists {} ({}) for VMID {vmid}: the machine there may not be the one it made. \
+             Planning again will not change that: set access.hostKey, or rebuild the container with Octopushy",
             task.upid, later.kind, later.upid
         ));
     }

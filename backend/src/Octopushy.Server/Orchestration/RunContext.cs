@@ -71,6 +71,15 @@ public sealed record RunContext
     public bool ContainerHostKey { get; init; }
 
     /// <summary>
+    /// The principal a container's provision apply was sent with, <c>user@realm!token</c>, recorded as it is sent: who
+    /// Proxmox names as the owner of the create task. Not secret.
+    /// </summary>
+    public string? ApplyPrincipal { get; init; }
+
+    /// <summary>The verify attempt that was asked for a container's host keys, and which creation it was asked about.</summary>
+    public HostKeysRequestContext? HostKeysRequest { get; init; }
+
+    /// <summary>
     /// A pipeline run's stages, in order. Each names one <see cref="OpenTofu"/> or <see cref="Ansible"/>,
     /// and a step of the stage sees the context <see cref="ForStage"/> makes. In <see cref="Secrets"/> and
     /// its version maps, the roles of a stage are written <c>stage/role</c>, so two stages can bind the
@@ -192,6 +201,12 @@ public sealed record AnsibleContext(
     Dictionary<string, AnsibleOutcome> Outcomes,
     /// <summary>What changed under the workflow and its project since the guest's last successful run; null when it has none.</summary>
     IReadOnlyList<string>? ChangedFiles);
+
+/// <summary>
+/// A verify attempt that was asked to read a container's host keys from the creation by run <paramref name="CreatedBy"/>.
+/// <paramref name="Optional"/> when this run created nothing and retries an earlier creation's read.
+/// </summary>
+public sealed record HostKeysRequestContext(Guid AttemptId, Guid CreatedBy, bool Optional);
 
 /// <summary>A declared outcome, as the run was built with it.</summary>
 public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);

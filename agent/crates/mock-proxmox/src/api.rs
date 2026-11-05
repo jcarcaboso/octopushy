@@ -493,15 +493,35 @@ async fn tasks(
         .filter(|t| query.get("typefilter").is_none_or(|k| *k == t.kind))
         .collect();
     listed.sort_by_key(|t| std::cmp::Reverse(t.starttime));
+    // As pve-manager pages it: `start` entries skipped, then at most `limit` (50 by default).
+    let number = |name: &str, default: usize| {
+        query
+            .get(name)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(default)
+    };
+    let (start, limit) = (number("start", 0), number("limit", 50));
     data(Value::Array(
         listed
             .iter()
+            .skip(start)
+            .take(limit)
             .map(|t| {
-                json!({
+                let mut v = json!({
                     "upid": t.upid(), "node": t.node, "pid": 41137, "pstart": 1230804,
                     "starttime": t.starttime, "endtime": t.endtime, "type": t.kind,
                     "id": t.id, "user": t.user, "status": t.status,
-                })
+                });
+                // A finished task comes from the archive, where Proxmox splits a token's owner into its
+                // user and `tokenid` (PVE/API2/Tasks.pm, convert_token_task); a running one keeps both in `user`.
+                if t.status.is_some()
+                    && !t.active
+                    && let Some((user, token)) = t.user.split_once('!')
+                {
+                    v["user"] = json!(user);
+                    v["tokenid"] = json!(token);
+                }
+                v
             })
             .collect(),
     ))
