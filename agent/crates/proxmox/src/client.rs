@@ -98,6 +98,16 @@ impl fmt::Debug for Client {
 const TASK_PAGE: usize = 500;
 /// How many pages [`Client::guest_tasks`] reads before it gives up on a whole history.
 const MAX_TASK_PAGES: usize = 200;
+/// How many times [`Client::guest_tasks`] reads a history that changed while it was read.
+const TASK_SCANS: usize = 3;
+
+/// A response: `data`, and `total`, which Proxmox gives beside a paged list.
+#[derive(serde::Deserialize)]
+struct Envelope<T> {
+    data: T,
+    #[serde(default, deserialize_with = "crate::de::opt_u64")]
+    total: Option<u64>,
+}
 
 /// Status-line phrases Proxmox uses when the guest agent cannot answer.
 const GUEST_AGENT_UNAVAILABLE: &[&str] = &[
@@ -158,6 +168,20 @@ impl Client {
         form: Option<&[(&str, &str)]>,
         json: Option<&serde_json::Value>,
     ) -> Result<T> {
+        self.request_envelope::<T>(method, segments, query, form, json)
+            .await
+            .map(|e| e.data)
+    }
+
+    /// The whole `{"data": …}` envelope, with the attributes Proxmox puts beside `data`.
+    async fn request_envelope<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        form: Option<&[(&str, &str)]>,
+        json: Option<&serde_json::Value>,
+    ) -> Result<Envelope<T>> {
         let url = self.url(segments);
         let path = format!("/{}", segments.join("/"));
         tracing::debug!(%method, %path, "proxmox request");
@@ -186,16 +210,10 @@ impl Client {
             return Err(status_error(status, reason.as_deref(), &body));
         }
 
-        #[derive(serde::Deserialize)]
-        struct Envelope<T> {
-            data: T,
-        }
-        serde_json::from_slice::<Envelope<T>>(&body)
-            .map(|e| e.data)
-            .map_err(|e| Error::Decode {
-                path,
-                message: e.to_string(),
-            })
+        serde_json::from_slice::<Envelope<T>>(&body).map_err(|e| Error::Decode {
+            path,
+            message: e.to_string(),
+        })
     }
 
     async fn get<T: DeserializeOwned>(
@@ -330,41 +348,69 @@ impl Client {
     }
 
     /// `GET /nodes/{node}/tasks`: every finished and running task of one VMID, of every type,
-    /// page by page until a page comes back short. Proxmox lists the tasks of another user or token
-    /// only to a token with `Sys.Audit` on `/nodes/{node}`.
+    /// newest first. Proxmox lists the tasks of another user or token only to a token with
+    /// `Sys.Audit` on `/nodes/{node}`.
     ///
-    /// Fails rather than return part of it: past [`MAX_TASK_PAGES`] pages, or when a page repeats
-    /// the one before, the history cannot be shown to be whole.
+    /// The history is paged by offset, and it changes while it is read: a new task goes in at
+    /// offset 0 and moves every other one down, so a page can repeat what the one before held and
+    /// leave a task out. So a read counts only when it shows the history held still: every page
+    /// gives the same `total`, which the tasks read add up to, no task is listed twice, and the
+    /// first page reads the same again at the end. Otherwise the whole history is read again, up
+    /// to [`TASK_SCANS`] times, and then this fails rather than return part of it. A history
+    /// longer than [`MAX_TASK_PAGES`] pages fails too.
     pub async fn guest_tasks(&self, node: &str, vmid: u32) -> Result<Vec<Task>> {
-        let id = vmid.to_string();
-        let limit = TASK_PAGE.to_string();
-        let mut all: Vec<Task> = Vec::new();
-        let mut first_of_previous: Option<String> = None;
-        for _ in 0..MAX_TASK_PAGES {
-            let start = all.len().to_string();
-            let page: Vec<Task> = self
-                .get(
-                    &["nodes", node, "tasks"],
-                    &[
-                        ("vmid", &id),
-                        ("source", "all"),
-                        ("start", &start),
-                        ("limit", &limit),
-                    ],
-                )
-                .await?;
-            let last = page.len() < TASK_PAGE;
-            let first = page.first().map(|t| t.upid.clone());
-            if first.is_some() && first == first_of_previous {
-                return Err(Error::Decode {
-                    path: format!("/nodes/{node}/tasks"),
-                    message: "the server ignored start and repeated a page of the history".into(),
-                });
+        let mut why = String::new();
+        for _ in 0..TASK_SCANS {
+            match self.scan_tasks(node, vmid).await? {
+                Ok(tasks) => return Ok(tasks),
+                Err(unstable) => why = unstable,
             }
-            first_of_previous = first;
-            all.extend(page);
-            if last {
-                return Ok(all);
+        }
+        Err(Error::Decode {
+            path: format!("/nodes/{node}/tasks"),
+            message: format!(
+                "the task history of VMID {vmid} changed while it was read, {TASK_SCANS} times ({why}), so it cannot be read whole"
+            ),
+        })
+    }
+
+    /// One read of the whole history: the tasks, or why the history did not hold still.
+    async fn scan_tasks(
+        &self,
+        node: &str,
+        vmid: u32,
+    ) -> Result<std::result::Result<Vec<Task>, String>> {
+        let mut all: Vec<Task> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut total: Option<u64> = None;
+        let mut first_page: Vec<String> = Vec::new();
+        for page_number in 0..MAX_TASK_PAGES {
+            let (page, listed) = self.task_page(node, vmid, all.len()).await?;
+            if page_number == 0 {
+                total = listed;
+                first_page = page.iter().map(|t| t.upid.clone()).collect();
+                if total.is_some_and(|n| n > (MAX_TASK_PAGES * TASK_PAGE) as u64) {
+                    break;
+                }
+            } else if listed != total {
+                return Ok(Err(format!("its total went from {total:?} to {listed:?}")));
+            }
+            let last = page.len() < TASK_PAGE;
+            for task in page {
+                if !seen.insert(task.upid.clone()) {
+                    return Ok(Err(format!("{} was listed twice", task.upid)));
+                }
+                all.push(task);
+            }
+            if last || total.is_some_and(|n| all.len() as u64 >= n) {
+                if total.is_some_and(|n| all.len() as u64 != n) {
+                    return Ok(Err(format!("{} tasks were read of {total:?}", all.len())));
+                }
+                let (again, _) = self.task_page(node, vmid, 0).await?;
+                if again.iter().map(|t| &t.upid).ne(first_page.iter()) {
+                    return Ok(Err("its newest tasks changed".into()));
+                }
+                return Ok(Ok(all));
             }
         }
         Err(Error::Decode {
@@ -374,6 +420,32 @@ impl Client {
                 MAX_TASK_PAGES * TASK_PAGE
             ),
         })
+    }
+
+    /// One page of a VMID's task history from `start`, and the `total` Proxmox gives beside it.
+    async fn task_page(
+        &self,
+        node: &str,
+        vmid: u32,
+        start: usize,
+    ) -> Result<(Vec<Task>, Option<u64>)> {
+        let id = vmid.to_string();
+        let (start, limit) = (start.to_string(), TASK_PAGE.to_string());
+        let page: Envelope<Vec<Task>> = self
+            .request_envelope(
+                Method::GET,
+                &["nodes", node, "tasks"],
+                &[
+                    ("vmid", &id),
+                    ("source", "all"),
+                    ("start", &start),
+                    ("limit", &limit),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        Ok((page.data, page.total))
     }
 
     /// `GET /nodes/{node}/time`: the node's clock, in Unix seconds, which its tasks' times are in.

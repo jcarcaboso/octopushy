@@ -513,8 +513,12 @@ fn task(
         status: Some("OK".into()),
         log,
         active: false,
+        // Unique, as a real node's are.
+        pid: NEXT_PID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     }
 }
+
+static NEXT_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x1000);
 
 /// The example installation with two containers on korriban, each made by the writer 200 seconds
 /// ago: 320 from a template that generated host keys, 321 from one without `/etc/ssh`.
@@ -997,5 +1001,161 @@ async fn a_retried_read_that_cannot_vouch_reports_why_and_passes() {
     assert!(
         error.contains("Planning again will not change that"),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn probe_restore_between_pages_must_prevent_pinning() {
+    use wiremock::matchers::query_param;
+    let server = MockServer::start().await;
+    let data = |v: Value| ResponseTemplate::new(200).set_body_json(json!({"data":v}));
+    for (url, value) in [
+        (
+            "/api2/json/access/permissions",
+            json!({"/vms/320":{"VM.Audit":1}}),
+        ),
+        (
+            "/api2/json/cluster/resources",
+            json!([{"vmid":320,"name":"krb-ct-01","node":"korriban","type":"lxc","status":"running"}]),
+        ),
+        (
+            "/api2/json/nodes/korriban/lxc/320/status/current",
+            json!({"status":"running"}),
+        ),
+        (
+            "/api2/json/nodes/korriban/lxc/320/interfaces",
+            json!([{"name":"eth0","inet":"10.1.0.40/24"}]),
+        ),
+        ("/api2/json/nodes/korriban/time", json!({"time":NOW})),
+    ] {
+        Mock::given(path(url))
+            .respond_with(data(value))
+            .mount(&server)
+            .await;
+    }
+    let mut tasks:Vec<_>=(0..501).map(|i|json!({"upid":format!("start-{i}"),"type":"vzstart","id":"320","starttime":NOW-100,"status":"OK"})).collect();
+    tasks[500] = json!({"upid":"owned-create","type":"vzcreate","id":"320","user":"octopushy@pve","tokenid":"writer","starttime":NOW-200,"status":"OK"});
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "0"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"data":tasks[..500],"total":501})),
+        )
+        .mount(&server)
+        .await;
+    let mut changed = vec![
+        json!({"upid":"later-restore","type":"vzrestore","id":"320","starttime":NOW,"status":"RUNNING"}),
+    ];
+    changed.extend(tasks);
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "500"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"data":changed[500..],"total":502})),
+        )
+        .mount(&server)
+        .await;
+    let log: Vec<_> = create_log("krb-ct-01", &[("ed25519", ED25519)])
+        .into_iter()
+        .enumerate()
+        .map(|(n, t)| json!({"n":n+1,"t":t}))
+        .collect();
+    Mock::given(path("/api2/json/nodes/korriban/tasks/owned-create/log"))
+        .respond_with(data(json!(log)))
+        .mount(&server)
+        .await;
+    let (result,_) = exec("verify-guest",json!({"connection":{"endpoint":server.uri(),"verifyTls":false},"kind":"lxc","node":"korriban","vmid":320,"name":"krb-ct-01","waitSeconds":0,"hostKeys":host_keys_request()}),"octopushy@pve!reader=test").await;
+    eprintln!("verify result: {result:?}");
+    assert!(
+        result.is_err(),
+        "a restore appeared during the scan, so the previous creation must not vouch for this VMID"
+    );
+}
+
+#[tokio::test]
+async fn probe_retry_never_switches_to_later_creation_by_same_token() {
+    for later in [
+        "vzcreate",
+        "vzrestore",
+        "vzdestroy",
+        "vzmigrate",
+        "qmcreate",
+        "qmrestore",
+        "qmdestroy",
+        "qmigrate",
+    ] {
+        let mut f = with_containers();
+        f.tasks.retain(|t| t.id != "320");
+        f.tasks.push(task(
+            "vzcreate",
+            320,
+            WRITER,
+            NOW - 10000,
+            create_log("krb-ct-01", &[("ed25519", ED25519)]),
+        ));
+        f.tasks.push(task(
+            later,
+            320,
+            WRITER,
+            NOW - 1000,
+            create_log("krb-ct-01", &[("rsa", RSA)]),
+        ));
+        let m = mock(f).await;
+        let (result,_)=exec("verify-guest",json!({"connection":connection(&m),"node":"korriban","vmid":320,"kind":"lxc","waitSeconds":0,"hostKeys":{"createdBy":WRITER,"applyStartedSecondsAgo":10100,"applyFinishedSecondsAgo":9900,"optional":true}}),&m.token()).await;
+        let outputs = result.unwrap().outputs;
+        assert!(outputs.get("hostKeys").is_none(), "{later}: {outputs}");
+        assert!(
+            outputs["hostKeysError"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Proxmox lists {later}")),
+            "{outputs}"
+        );
+    }
+}
+
+/// The fixture's history padded past one page with tasks that change nothing, and one more task that
+/// starts once the history has been read once: in the middle of the first read.
+fn moving_history(later: &str) -> Fixture {
+    let mut f = with_containers();
+    for i in 0..600 {
+        f.tasks
+            .push(task("vzstart", 320, WRITER, NOW - 150 + i % 100, vec![]));
+    }
+    f.tasks_later
+        .push((1, task(later, 320, "root@pam", NOW - 5, vec![])));
+    f
+}
+
+#[tokio::test]
+async fn a_restore_that_starts_while_the_history_is_read_is_seen() {
+    let m = mock(moving_history("vzrestore")).await;
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "waitSeconds": 0, "hostKeys": host_keys_request()
+        }),
+        &m.token(),
+    )
+    .await;
+    let (message, outputs) = failed(r);
+    assert!(message.contains("Proxmox lists vzrestore"), "{message}");
+    assert!(outputs.unwrap().get("hostKeys").is_none());
+}
+
+#[tokio::test]
+async fn a_task_that_changes_nothing_starting_mid_read_only_means_reading_again() {
+    let m = mock(moving_history("vzstart")).await;
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "waitSeconds": 0, "hostKeys": host_keys_request()
+        }),
+        &m.token(),
+    )
+    .await;
+    assert_eq!(
+        r.unwrap().outputs["hostKeys"],
+        json!([format!("rsa {RSA}"), format!("ed25519 {ED25519}")])
     );
 }

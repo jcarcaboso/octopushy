@@ -484,7 +484,15 @@ async fn tasks(
     Path(node): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    let f = state.lock().unwrap();
+    let mut f = state.lock().unwrap();
+    // Tasks started since the last read join the history, newest first, as on a node in use.
+    let reads = f.task_reads;
+    let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut f.tasks_later)
+        .into_iter()
+        .partition(|(after, _)| *after <= reads);
+    f.tasks_later = later;
+    f.tasks.extend(due.into_iter().map(|(_, task)| task));
+    f.task_reads += 1;
     let mut listed: Vec<&crate::fixture::FixtureTask> = f
         .tasks
         .iter()
@@ -501,30 +509,31 @@ async fn tasks(
             .unwrap_or(default)
     };
     let (start, limit) = (number("start", 0), number("limit", 50));
-    data(Value::Array(
-        listed
-            .iter()
-            .skip(start)
-            .take(limit)
-            .map(|t| {
-                let mut v = json!({
-                    "upid": t.upid(), "node": t.node, "pid": 41137, "pstart": 1230804,
-                    "starttime": t.starttime, "endtime": t.endtime, "type": t.kind,
-                    "id": t.id, "user": t.user, "status": t.status,
-                });
-                // A finished task comes from the archive, where Proxmox splits a token's owner into its
-                // user and `tokenid` (PVE/API2/Tasks.pm, convert_token_task); a running one keeps both in `user`.
-                if t.status.is_some()
-                    && !t.active
-                    && let Some((user, token)) = t.user.split_once('!')
-                {
-                    v["user"] = json!(user);
-                    v["tokenid"] = json!(token);
-                }
-                v
-            })
-            .collect(),
-    ))
+    // Proxmox gives the number of matching tasks beside the page.
+    let total = listed.len();
+    let page: Vec<Value> = listed
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|t| {
+            let mut v = json!({
+                "upid": t.upid(), "node": t.node, "pid": 41137, "pstart": 1230804,
+                "starttime": t.starttime, "endtime": t.endtime, "type": t.kind,
+                "id": t.id, "user": t.user, "status": t.status,
+            });
+            // A finished task comes from the archive, where Proxmox splits a token's owner into its
+            // user and `tokenid` (PVE/API2/Tasks.pm, convert_token_task); a running one keeps both in `user`.
+            if t.status.is_some()
+                && !t.active
+                && let Some((user, token)) = t.user.split_once('!')
+            {
+                v["user"] = json!(user);
+                v["tokenid"] = json!(token);
+            }
+            v
+        })
+        .collect();
+    Json(json!({ "data": page, "total": total })).into_response()
 }
 
 async fn task_log(

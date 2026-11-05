@@ -455,7 +455,7 @@ async fn a_server_that_ignores_start_is_not_taken_for_a_whole_history() {
         .guest_tasks("korriban", 320)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("repeated a page"), "{error}");
+    assert!(error.to_string().contains("listed twice"), "{error}");
 }
 
 #[tokio::test]
@@ -485,4 +485,123 @@ async fn an_archived_token_task_is_its_whole_principal() {
             Some("octopushy@pve".to_owned())
         ]
     );
+}
+
+#[tokio::test]
+async fn probe_changing_total_must_not_return_incomplete_history() {
+    let server = MockServer::start().await;
+    let tasks: Vec<_> = (0..501)
+        .map(|i| json!({"upid":format!("task-{i}"),"type":"vzstart","id":"320"}))
+        .collect();
+    // First snapshot has 501 tasks. Between reads a restore appears at offset 0.
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "0"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"total":501,"data":tasks[..500]})),
+        )
+        .mount(&server)
+        .await;
+    let mut later = vec![json!({"upid":"new-restore","type":"vzrestore","id":"320"})];
+    later.extend(tasks);
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "500"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"total":502,"data":later[500..]})),
+        )
+        .mount(&server)
+        .await;
+    let result = client(&server).guest_tasks("korriban", 320).await;
+    if let Ok(tasks) = &result {
+        eprintln!(
+            "Returned {} tasks, {} distinct, restore visible: {}",
+            tasks.len(),
+            tasks
+                .iter()
+                .map(|t| &t.upid)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            tasks.iter().any(|t| t.kind == "vzrestore")
+        );
+    }
+    assert!(
+        result.is_err(),
+        "changing total and duplicate UPIDs must fail closed instead of omitting the restore"
+    );
+}
+
+/// A history of `total` tasks `task-0`…, newest first, paged by `start`, whose first page reads
+/// another newest task the first `moved` times it is asked for, or every other time for `usize::MAX`.
+fn paged(total: usize, moved: usize) -> impl Fn(&wiremock::Request) -> ResponseTemplate {
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    move |req: &wiremock::Request| {
+        let start: usize = req
+            .url
+            .query_pairs()
+            .find(|(k, _)| k == "start")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
+        let mut page: Vec<_> = (start..(start + 500).min(total))
+            .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+            .collect();
+        // `usize::MAX`: it moves between every two reads, so no scan sees the same first page twice.
+        let read = if start == 0 {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        } else {
+            usize::MAX
+        };
+        if read != usize::MAX
+            && (read < moved && moved != usize::MAX || moved == usize::MAX && read % 2 == 0)
+        {
+            page[0] = json!({"upid": "head", "type": "vzstart", "id": "320"});
+        }
+        ResponseTemplate::new(200).set_body_json(json!({"data": page, "total": total}))
+    }
+}
+
+#[tokio::test]
+async fn a_history_whose_newest_tasks_moved_is_read_again_and_then_refused() {
+    // The first page reads otherwise at the end of the first scan only: the second scan holds still.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(700, 1))
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    assert_eq!((tasks.len(), tasks[0].upid.as_str()), (700, "task-0"));
+
+    // It keeps moving: every scan fails its check, and the read fails rather than return a part of it.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(700, usize::MAX))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("changed while it was read, 3 times"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_history_longer_than_the_cap_is_refused_from_its_total() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(100_001, 0))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("100000"), "{error}");
 }

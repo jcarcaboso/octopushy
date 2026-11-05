@@ -44,6 +44,13 @@ pub struct Fixture {
     /// guest is destroyed, and a VMID that is used again has the tasks of each guest it had.
     #[serde(default)]
     pub tasks: Vec<FixtureTask>,
+    /// Tasks that start while the history is being read: each joins `tasks` once
+    /// `GET /nodes/{node}/tasks` has been answered that many times.
+    #[serde(default)]
+    pub tasks_later: Vec<(usize, FixtureTask)>,
+    /// How many times `GET /nodes/{node}/tasks` has been answered.
+    #[serde(skip)]
+    pub task_reads: usize,
     /// What `GET /nodes/{node}/time` says it is, in Unix seconds; the mock's clock by default.
     #[serde(default)]
     pub time: Option<u64>,
@@ -73,14 +80,21 @@ pub struct FixtureTask {
     /// owner whole in `user`, as for a running task, even once it has finished.
     #[serde(default)]
     pub active: bool,
+    /// The worker's process id, which makes the UPID unique as on a real node.
+    #[serde(default = "default_pid")]
+    pub pid: u32,
+}
+
+fn default_pid() -> u32 {
+    0xA0B1
 }
 
 impl FixtureTask {
     /// The task's UPID, made from what it is, as Proxmox's are.
     pub fn upid(&self) -> String {
         format!(
-            "UPID:{}:0000A0B1:0012C3D4:{:08X}:{}:{}:{}:",
-            self.node, self.starttime, self.kind, self.id, self.user
+            "UPID:{}:{:08X}:0012C3D4:{:08X}:{}:{}:{}:",
+            self.node, self.pid, self.starttime, self.kind, self.id, self.user
         )
     }
 }
