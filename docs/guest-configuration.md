@@ -7,7 +7,7 @@ what a run does, and what it trusts. It carries no knowledge of any one applicat
 
 A guest's setup is the Ansible stage of its [workflow](workflows.md), after the stage that makes the
 machine. It is not VM-specific: a run reaches a guest over SSH and never talks to Proxmox, so a
-container guest with `sshd` uses the same definitions once `type: container` lands. *Until November 3,
+container guest with `sshd` uses the same definitions, with `type: container`. *Until November 3,
 2026 this was a recipe with `operation: configure`, named by `setup.recipe`.*
 
 ## Definitions
@@ -348,8 +348,15 @@ shows `delete, create`, naming `keys` as a reason. That is
 why the version OpenTofu carries, marked `Bootstrap`, stays fixed while the machine exists. A
 later change of key goes through the machine's own configuration instead, which is how
 [rotation](#rotating-the-key) is built, and that is also why the provisioning hash holds
-no key. PR 21's containers take keys through the same `sshAuthorizedKeys` variable, so they need
-nothing further.
+no key. Containers take keys through the same `sshAuthorizedKeys` variable. Because every field of
+`user_account` forces a replacement, `octopushy-lab`'s `proxmox-lxc` module also has OpenTofu ignore later
+changes to it (`lifecycle.ignore_changes`). So nothing about keys ever replaces a container: Octopushy's own
+key stays the version it was created with, as for a VM, and a key a person adds to `access.sshAuthorizedKeys`
+reaches a container made after the change, not one that exists. Checked with bpg/proxmox 0.117.0: a plan
+of a changed key without `ignore_changes` replaces the container (`keys = [ # forces replacement`), and with it
+replaces nothing. Should a module without it plan a replacement anyway, the plan is a replacement of the guest's
+own machine: it waits for a person under the [rules for a VM](workflows.md#rules), and is never applied by
+policy alone unless `destructive: automatic` is written down.
 
 **Adding a valid service with an Ansible stage to an existing guest delivers the key the same way.** A
 guest that had no Ansible work had no managed key, so the service changes its provisioning hash: the guest is
@@ -454,6 +461,47 @@ host-key checking exists for. Copying the key from a laptop's `known_hosts`, or 
 `ssh-keyscan`, is possible and Octopushy cannot tell the difference, but that is
 trust-on-first-use: the first key seen is not authenticated. If you do that on an isolated
 VLAN, it is your decision, and you should know that it is one.
+
+### The host key of a container
+
+**A container Octopushy creates needs no person to pin its host key.** Proxmox makes a container's SSH host
+keys itself: when it creates the container from a template that has `/etc/ssh`, it generates an RSA, an
+ECDSA and an Ed25519 key on the host and writes them into the container's root file system, before the
+container first starts (`PVE::LXC::Setup`, `rewrite_ssh_host_keys`, from `post_create_hook`; checked in
+pve-container's source). It logs each in the create task as
+`Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...` followed by
+`done: SHA256:… root@<hostname>`. That log is read through the API the installation is
+[trusted](installation-trust.md) for, so it is a source Proxmox authenticates, like the console of route 1,
+and nothing in the container has run when the keys are made.
+
+1. **The verify step of a provision run reads them,** for a container that names no `access.hostKey` and
+   has Ansible work: a setup stage, or a service with an Ansible stage. The agent takes the newest successful
+   task of type `vzcreate` of the VMID on the guest's node, and reports each key's type and fingerprint.
+2. **Octopushy records them as the container's pin** when the guest owns the container (see
+   [ownership](safety-boundary.md#ownership-reservation-and-confirmed-creation)): a plain entry at
+   `system/container-host-key/<guest id>`, one `type SHA256:…` per line, which no definition can name. A
+   replaced container's new keys are a new version; retiring the guest removes it.
+3. **The setup stage, a service's Ansible stage and a key rotation are pinned to it.** Proxmox gives
+   fingerprints, not the public keys, and `known_hosts` needs a key. So the agent leaves `known_hosts`
+   empty and gives ssh a `KnownHostsCommand`: once the container has presented its host key, ssh asks the
+   command for keys, and the command prints that key only if its SHA-256 fingerprint is pinned. With
+   `StrictHostKeyChecking=yes`, ssh then accepts exactly that key and refuses any other, as it would with
+   the key in the file. A fingerprint names exactly one key, so whoever sends the key, it is the one
+   Proxmox made. `HostKeyAlgorithms` is limited to the pinned types. Checked with OpenSSH 10.2 and
+   ansible-core 2.21.5 against a throwaway sshd: the pinned key logs in, and a wrong fingerprint or a key of
+   a type not pinned is refused with *Host key verification failed*. It needs OpenSSH 8.5 or later on the
+   agent, which the Ansible image has.
+
+**It fails closed.** A token that cannot list or read the create task, a create task that logged no key
+(a template without `/etc/ssh`), or none at all, fails the verify step with the reason, and nothing is
+pinned. Without a pin, the setup waits with *the container's host keys have not been read from its create
+task yet*. A key the container presents that is not one Proxmox made, as after someone replaced its keys by
+hand, is refused. Proxmox lists a task another user or token started only to a token with `Sys.Audit` on
+`/nodes/<node>`: the verify step uses the read-only (or shared) token, and in split mode the create task was
+started by the privileged one, so give the read-only token `Sys.Audit` on `/nodes`.
+
+`access.hostKey` stays the override. A container that names it is pinned to it, and its create task is not
+read.
 
 ## Secrets
 
@@ -588,9 +636,8 @@ the approval flow. What it needs from that branch is `type: container` and a roo
 the container, and neither depends on the install module. The services layer being built on
 this executor settles that question in the same direction.
 
-- **Host keys on a container.** Proxmox generates them when it creates the container, and
-  the create task's log shows the fingerprint, which is a Proxmox-authenticated source
-  with no console step. Check this before relying on it.
+- **Host keys on a container.** Built: Proxmox generates them when it creates the container, and
+  the create task's log shows their fingerprints. See [the host key of a container](#the-host-key-of-a-container).
 - **Protected secrets.** That work binds a grant to a digest of the code a secret may run
   with. `ConfigureInputs` produces such a digest, and a grant could bind to it. Its
   `ReviewedPaths` would need the project root, or the run receives no playbooks.
@@ -610,7 +657,6 @@ never lifts protection, so none of that logic applies to it.
 ## What this does not do
 
 - No host key read by the agent. Route 2 above is by hand.
-- No container guests until `type: container` lands.
 - No drift detection. A run shows what happened when it ran, not what is true now.
 - A deferred run waiting for approval holds the guest until someone decides. There is no
   timeout, because a run that is holding a real outcome should not disappear by itself. A

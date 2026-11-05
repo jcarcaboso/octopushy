@@ -113,6 +113,23 @@ pub enum GuestKind {
 }
 
 impl GuestKind {
+    /// `qemu` or `lxc`, as Proxmox names them; anything else as given.
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "qemu" => GuestKind::Qemu,
+            "lxc" => GuestKind::Lxc,
+            other => GuestKind::Other(other.to_owned()),
+        }
+    }
+
+    /// The guest as messages name it: `VM` for QEMU, `container` for LXC.
+    pub fn noun(&self) -> &'static str {
+        match self {
+            GuestKind::Lxc => "container",
+            _ => "VM",
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             GuestKind::Qemu => "qemu",
@@ -124,12 +141,7 @@ impl GuestKind {
 
 impl<'de> Deserialize<'de> for GuestKind {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = de::string_or_empty(d)?;
-        Ok(match s.as_str() {
-            "qemu" => GuestKind::Qemu,
-            "lxc" => GuestKind::Lxc,
-            _ => GuestKind::Other(s),
-        })
+        Ok(GuestKind::parse(&de::string_or_empty(d)?))
     }
 }
 
@@ -160,7 +172,7 @@ pub struct VmResource {
     pub kind: GuestKind,
 }
 
-/// `GET /nodes/{node}/qemu/{vmid}/status/current`.
+/// `GET /nodes/{node}/qemu/{vmid}/status/current`. A container's is [`CtStatus`].
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VmStatus {
     #[serde(default, deserialize_with = "de::string_or_empty")]
@@ -181,7 +193,7 @@ pub struct VmStatus {
 }
 
 /// `GET /nodes/{node}/qemu/{vmid}/config`. Only a few keys are typed; the rest
-/// stay available in `other`.
+/// stay available in `other`. A container's is [`CtConfig`].
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VmConfig {
     #[serde(default, deserialize_with = "de::opt_string")]
@@ -196,6 +208,168 @@ pub struct VmConfig {
     pub digest: Option<String>,
     #[serde(flatten)]
     pub other: BTreeMap<String, serde_json::Value>,
+}
+
+/// `GET /nodes/{node}/lxc/{vmid}/status/current`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CtStatus {
+    #[serde(default, deserialize_with = "de::string_or_empty")]
+    pub status: String,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_u64")]
+    pub uptime: Option<u64>,
+    #[serde(default, deserialize_with = "de::bool_or_false")]
+    pub template: bool,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub lock: Option<String>,
+}
+
+/// `GET /nodes/{node}/lxc/{vmid}/config`. A container's name is its `hostname`. Only a few
+/// keys are typed; the rest stay available in `other`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CtConfig {
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub hostname: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub description: Option<String>,
+    #[serde(default, deserialize_with = "de::bool_or_false")]
+    pub protection: bool,
+    #[serde(default, deserialize_with = "de::bool_or_false")]
+    pub template: bool,
+    #[serde(default, deserialize_with = "de::bool_or_false")]
+    pub unprivileged: bool,
+    #[serde(default, deserialize_with = "de::tags")]
+    pub tags: Vec<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub digest: Option<String>,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, serde_json::Value>,
+}
+
+/// One interface of `GET /nodes/{node}/lxc/{vmid}/interfaces`, which Proxmox reads with
+/// `ip --json a` in the container's network namespace (`PVE::LXC::get_interfaces`). `inet` and
+/// `inet6` hold one address each, with its prefix, and are deprecated; since pve-container 5.2.6,
+/// `ip-addresses` lists every address, its type being `ip`'s family, `inet` or `inet6`. Both are read.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CtInterface {
+    #[serde(default, deserialize_with = "de::string_or_empty")]
+    pub name: String,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub hwaddr: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub inet: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub inet6: Option<String>,
+    #[serde(rename = "ip-addresses", default)]
+    pub ip_addresses: Vec<GuestIpAddress>,
+}
+
+/// The non-loopback IPv4 addresses of a container's `interfaces`, in order, without duplicates.
+pub fn ct_ipv4_addresses(interfaces: &[CtInterface]) -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for iface in interfaces {
+        let listed = iface
+            .ip_addresses
+            .iter()
+            .filter(|a| a.kind.eq_ignore_ascii_case("inet") || a.kind.eq_ignore_ascii_case("ipv4"))
+            .map(|a| a.address.as_str());
+        for text in iface.inet.as_deref().into_iter().chain(listed) {
+            let text = text.split('/').next().unwrap_or(text).trim();
+            if let Ok(ip) = text.parse::<Ipv4Addr>()
+                && !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !out.contains(&ip)
+            {
+                out.push(ip);
+            }
+        }
+    }
+    out
+}
+
+/// One entry of `GET /nodes/{node}/tasks`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct Task {
+    #[serde(deserialize_with = "de::string_or_empty")]
+    pub upid: String,
+    /// `vzcreate`, `qmcreate`, `vzstart`, …
+    #[serde(rename = "type", default, deserialize_with = "de::string_or_empty")]
+    pub kind: String,
+    /// The guest's VMID, as a string.
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub id: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub user: Option<String>,
+    #[serde(default, deserialize_with = "de::opt_u64")]
+    pub starttime: Option<u64>,
+    #[serde(default, deserialize_with = "de::opt_u64")]
+    pub endtime: Option<u64>,
+    /// `OK` for a task that succeeded, an error otherwise; absent while it runs.
+    #[serde(default, deserialize_with = "de::opt_string")]
+    pub status: Option<String>,
+}
+
+/// One line of `GET /nodes/{node}/tasks/{upid}/log`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct TaskLogLine {
+    #[serde(default, deserialize_with = "de::opt_u64")]
+    pub n: Option<u64>,
+    #[serde(default, deserialize_with = "de::string_or_empty")]
+    pub t: String,
+}
+
+/// One SSH host key Proxmox generated for a container when it created it, as the create task
+/// logged it: the key's type (`rsa`, `ecdsa`, `ed25519`) and its SHA-256 fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreatedHostKey {
+    pub kind: String,
+    pub fingerprint: String,
+}
+
+/// The SSH host keys a container's create task logged. Proxmox (`PVE::LXC::Setup`,
+/// `rewrite_ssh_host_keys`) generates them on the host and writes them into the container's
+/// root file system before it first starts, whenever the template has `/etc/ssh`, and logs each
+/// as `Creating SSH host key 'ssh_host_<type>_key' - …` followed by `done: SHA256:<43> <comment>`.
+/// A key whose `done:` line has no fingerprint is left out.
+pub fn created_host_keys(log: &[TaskLogLine]) -> Vec<CreatedHostKey> {
+    let mut out = Vec::new();
+    let mut pending: Option<String> = None;
+    for line in log.iter().map(|l| l.t.trim()) {
+        if let Some(rest) = line.strip_prefix("Creating SSH host key 'ssh_host_") {
+            pending = rest
+                .split_once("_key'")
+                .map(|(kind, _)| kind.to_owned())
+                .filter(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric()));
+            continue;
+        }
+        let Some(done) = line.strip_prefix("done: ") else {
+            continue;
+        };
+        let Some(kind) = pending.take() else {
+            continue;
+        };
+        let fingerprint = done.split_whitespace().next().unwrap_or("");
+        if is_sha256_fingerprint(fingerprint)
+            && !out.iter().any(|k: &CreatedHostKey| k.kind == kind)
+        {
+            out.push(CreatedHostKey {
+                kind,
+                fingerprint: fingerprint.to_owned(),
+            });
+        }
+    }
+    out
+}
+
+/// `SHA256:` and 43 characters of unpadded base64: an OpenSSH SHA-256 fingerprint.
+pub fn is_sha256_fingerprint(text: &str) -> bool {
+    text.strip_prefix("SHA256:").is_some_and(|b64| {
+        b64.len() == 43
+            && b64
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+    })
 }
 
 /// A polled QEMU guest execution result. No output is assumed until `exited`.
@@ -346,6 +520,65 @@ pub struct AclEntry {
     pub kind: String,
     #[serde(default)]
     pub roleid: String,
+}
+
+#[cfg(test)]
+mod host_key_tests {
+    use super::{TaskLogLine, created_host_keys, is_sha256_fingerprint};
+
+    fn log(lines: &[&str]) -> Vec<TaskLogLine> {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(i, t)| TaskLogLine {
+                n: Some(i as u64 + 1),
+                t: (*t).to_owned(),
+            })
+            .collect()
+    }
+
+    const ED: &str = "SHA256:Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycA0";
+    const RSA: &str = "SHA256:cnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnM";
+
+    #[test]
+    fn reads_the_fingerprints_a_create_task_logged() {
+        let keys = created_host_keys(&log(&[
+            "extracting archive '/var/lib/vz/template/cache/debian-13-standard_13.6-1_amd64.tar.zst'",
+            "Total bytes read: 524288000 (500MiB, 120MiB/s)",
+            "Detected container architecture: amd64",
+            "Creating SSH host key 'ssh_host_rsa_key' - this may take some time ...",
+            &format!("done: {RSA} root@ct-01"),
+            "Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...",
+            &format!("done: {ED} root@ct-01"),
+            "TASK OK",
+        ]));
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            (keys[0].kind.as_str(), keys[0].fingerprint.as_str()),
+            ("rsa", RSA)
+        );
+        assert_eq!(
+            (keys[1].kind.as_str(), keys[1].fingerprint.as_str()),
+            ("ed25519", ED)
+        );
+    }
+
+    #[test]
+    fn a_line_out_of_place_or_without_a_fingerprint_counts_for_nothing() {
+        let keys = created_host_keys(&log(&[
+            &format!("done: {ED} root@ct-01"),
+            "Creating SSH host key 'ssh_host_ecdsa_key' - this may take some time ...",
+            "done: ",
+            "Creating SSH host key 'ssh_host_../x_key' - this may take some time ...",
+            &format!("done: {ED} root@ct-01"),
+            "Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...",
+            "done: aa:bb:cc root@ct-01",
+        ]));
+        assert!(keys.is_empty(), "{keys:?}");
+        assert!(is_sha256_fingerprint(ED));
+        assert!(!is_sha256_fingerprint("SHA256:short"));
+        assert!(!is_sha256_fingerprint(&format!("{ED}'")));
+    }
 }
 
 #[cfg(test)]

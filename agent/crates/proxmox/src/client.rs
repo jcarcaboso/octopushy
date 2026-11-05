@@ -271,6 +271,88 @@ impl Client {
         Ok(())
     }
 
+    /// `GET /nodes/{node}/lxc/{vmid}/status/current`.
+    pub async fn ct_status(&self, node: &str, vmid: u32) -> Result<CtStatus> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "status", "current"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// `GET /nodes/{node}/lxc/{vmid}/config`.
+    pub async fn ct_config(&self, node: &str, vmid: u32) -> Result<CtConfig> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "config"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// Sets the container's `protection` option (`PUT /nodes/{node}/lxc/{vmid}/config`).
+    pub async fn set_ct_protection(&self, node: &str, vmid: u32, protection: bool) -> Result<()> {
+        let id = vmid.to_string();
+        let value = if protection { "1" } else { "0" };
+        let _: serde_json::Value = self
+            .request(
+                Method::PUT,
+                &["nodes", node, "lxc", &id, "config"],
+                &[],
+                Some(&[("protection", value)]),
+                None,
+            )
+            .await
+            .map_err(missing_vm)?;
+        Ok(())
+    }
+
+    /// The container's network interfaces, read by Proxmox from its network namespace
+    /// (`GET /nodes/{node}/lxc/{vmid}/interfaces`). A container has no guest agent and needs none.
+    ///
+    /// Returns `None` when the container is not running: Proxmox then has no namespace to read.
+    pub async fn ct_interfaces(&self, node: &str, vmid: u32) -> Result<Option<Vec<CtInterface>>> {
+        let id = vmid.to_string();
+        let result: Result<Option<Vec<CtInterface>>> = self
+            .get(&["nodes", node, "lxc", &id, "interfaces"], &[])
+            .await;
+        match result.map_err(missing_vm) {
+            Ok(interfaces) => Ok(interfaces),
+            Err(Error::Status { status, message })
+                if status >= 500 && message.to_ascii_lowercase().contains("not running") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `GET /nodes/{node}/tasks`: the finished and running tasks of one guest, of one type
+    /// (`vzcreate` for a container's creation). Proxmox lists the tasks of another user or token
+    /// only to a token with `Sys.Audit` on `/nodes/{node}`.
+    pub async fn guest_tasks(&self, node: &str, vmid: u32, kind: &str) -> Result<Vec<Task>> {
+        let id = vmid.to_string();
+        self.get(
+            &["nodes", node, "tasks"],
+            &[
+                ("vmid", &id),
+                ("typefilter", kind),
+                ("source", "all"),
+                ("limit", "500"),
+            ],
+        )
+        .await
+    }
+
+    /// `GET /nodes/{node}/tasks/{upid}/log`: every line of a task's log, in order.
+    pub async fn task_log(&self, node: &str, upid: &str) -> Result<Vec<TaskLogLine>> {
+        let mut lines: Vec<TaskLogLine> = self
+            .get(
+                &["nodes", node, "tasks", upid, "log"],
+                &[("start", "0"), ("limit", "100000")],
+            )
+            .await?;
+        lines.sort_by_key(|l| l.n);
+        Ok(lines)
+    }
+
     /// Executes an argument array through QEMU's guest agent; never retries a POST.
     /// Input is plain stdin: Proxmox handles base64 encoding for QGA. Never log it.
     pub async fn guest_exec(
@@ -453,7 +535,8 @@ fn status_error(status: StatusCode, reason: Option<&str>, body: &[u8]) -> Error 
 }
 
 /// Proxmox answers requests for a missing VM with HTTP 500 "Configuration file
-/// 'nodes/x/qemu-server/210.conf' does not exist"; report that as not found.
+/// 'nodes/x/qemu-server/210.conf' does not exist", and for a missing container with the same
+/// message naming `lxc/210.conf`; report that as not found.
 fn missing_vm(err: Error) -> Error {
     match err {
         Error::Status {

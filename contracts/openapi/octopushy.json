@@ -6093,7 +6093,8 @@
           "observed",
           "activeRun",
           "lastRun",
-          "workflow"
+          "workflow",
+          "type"
         ],
         "type": "object",
         "properties": {
@@ -6173,6 +6174,12 @@
               {
                 "$ref": "#/components/schemas/WorkflowDto"
               }
+            ]
+          },
+          "type": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }
@@ -6753,7 +6760,8 @@
           "maxMemoryBytes",
           "uptimeSeconds",
           "managedBy",
-          "managedById"
+          "managedById",
+          "kind"
         ],
         "type": "object",
         "properties": {
@@ -6821,6 +6829,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

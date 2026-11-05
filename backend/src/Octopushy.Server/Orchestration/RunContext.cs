@@ -65,6 +65,12 @@ public sealed record RunContext
     public bool ManagedAccess { get; init; }
 
     /// <summary>
+    /// Whether the verify step reads the SSH host keys Proxmox logged when it created this container, to pin its Ansible
+    /// work to them. See <see cref="Definitions.ContainerHostKey"/>.
+    /// </summary>
+    public bool ContainerHostKey { get; init; }
+
+    /// <summary>
     /// A pipeline run's stages, in order. Each names one <see cref="OpenTofu"/> or <see cref="Ansible"/>,
     /// and a step of the stage sees the context <see cref="ForStage"/> makes. In <see cref="Secrets"/> and
     /// its version maps, the roles of a stage are written <c>stage/role</c>, so two stages can bind the
@@ -190,6 +196,10 @@ public sealed record AnsibleContext(
 /// <summary>A declared outcome, as the run was built with it.</summary>
 public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
 
+/// <param name="Kind">
+/// How Proxmox lists the guest's machine, <c>qemu</c> or <c>lxc</c>, for the steps that check it or change its protection
+/// through the API. Null in a run made before containers, which was a VM's.
+/// </param>
 public sealed record ProxmoxContext(
     string Endpoint,
     bool VerifyTls,
@@ -197,7 +207,15 @@ public sealed record ProxmoxContext(
     string? Node,
     int? Vmid,
     string? Name,
-    string? ExpectIpv4);
+    string? ExpectIpv4,
+    string? Kind = null)
+{
+    /// <summary>The machine's kind as the agent is told it: a run made before containers was a VM's.</summary>
+    public string MachineKind => Kind ?? "qemu";
+
+    /// <summary>The machine as messages name it: <c>VM</c> or <c>container</c>.</summary>
+    public string Machine => MachineKind == "lxc" ? "container" : "VM";
+}
 
 /// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames

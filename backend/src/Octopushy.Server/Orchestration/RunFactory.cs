@@ -83,6 +83,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
+            ContainerHostKey = !retire && ContainerHostKey.Wanted(repository, guest),
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Stage.Root,
@@ -90,7 +91,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 inputs.Variables,
                 env,
                 secretEnv),
-            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest)),
+            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest),
+                guest.ProxmoxKind),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Stage.Verify,
@@ -107,7 +109,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             foreach (var step in run.Steps.Where(s => s.Name is StepNames.Verify or StepNames.VerifyAbsent))
             {
                 step.Status = StepStatuses.Skipped;
-                step.Detail = "The workflow does not verify this VM through Proxmox.";
+                step.Detail = $"The workflow does not verify this {(guest.Type == GuestTypes.Container ? "container" : "VM")} through Proxmox.";
             }
         }
 
@@ -146,7 +148,12 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        Bind(SecretNames.AnsibleHostKey, inputs.HostKey);
+        if (inputs.HostKey is { } pin)
+            Bind(SecretNames.AnsibleHostKey, pin);
+        else if (ContainerHostKey.Pinned(guest))
+            secrets[SecretNames.AnsibleHostKey] = ContainerHostKeys.Key(resource.Id);
+        else
+            throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -217,7 +224,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
         var user = guest.Json["access"]?["user"]?.GetValue<string>()
             ?? throw new RunException("This guest names no access.user to log in as.");
+        // A container's own pin is what its create task logged, when it names none.
         var hostKey = ConfigureInputs.Reference(guest, "hostKey")
+            ?? (ContainerHostKey.Pinned(guest) ? new StoreReference(ContainerHostKeys.Key(resource.Id), null) : null)
             ?? throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
         var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = hostKey.Key };

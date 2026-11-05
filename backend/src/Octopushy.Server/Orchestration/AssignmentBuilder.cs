@@ -177,12 +177,17 @@ public sealed partial class AssignmentBuilder(
                 },
                 ["node"] = proxmox.Node,
                 ["vmid"] = proxmox.Vmid,
+                // qemu or lxc: verify and protection go to that endpoint, and a machine of the other kind fails them.
+                ["kind"] = proxmox.MachineKind,
                 ["name"] = proxmox.Name,
                 ["expectRunning"] = true,
                 ["expectIpv4"] = proxmox.ExpectIpv4,
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = stepName == StepNames.Reprotect,
             };
+            // A container's host keys, from its create task, for its Ansible work to be pinned to.
+            if (stepName == StepNames.Verify && context.ContainerHostKey)
+                input["hostKeys"] = true;
         }
 
         if (stepName == StepNames.Apply && run!.Operation == Operations.Provision)
@@ -234,12 +239,12 @@ public sealed partial class AssignmentBuilder(
             throw new AssignmentException(foreign);
         if (stepName == StepNames.Unprotect && run.Operation is Operations.Provision or Operations.Retire
             && !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
-            throw new AssignmentException("Protection is lifted only for an approved plan that replaces or deletes this guest's VM.");
+            throw new AssignmentException($"Protection is lifted only for an approved plan that replaces or deletes this guest's {runContext.Proxmox.Machine}.");
         if (stepName == StepNames.Unprotect
             && (await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is not { ParentAddress: { } installation } guest
                 || runContext.Proxmox.Vmid is not { } vmid
                 || !await SafetyBoundary.OwnsAsync(db, guest, installation, runContext.Proxmox.Node, vmid, cancellationToken)))
-            throw new AssignmentException($"Protection is lifted only from a VM this guest owns, and VM {runContext.Proxmox.Vmid} on {runContext.Proxmox.Node} is not shown to be its own.");
+            throw new AssignmentException($"Protection is lifted only from a machine this guest owns, and {runContext.Proxmox.Machine} {runContext.Proxmox.Vmid} on {runContext.Proxmox.Node} is not shown to be its own.");
         var planAttempt = await db.Attempts.AsNoTracking()
             .Where(a => a.StepId == plan.Id && a.Status == AttemptStatuses.Succeeded)
             .OrderByDescending(a => a.Number)

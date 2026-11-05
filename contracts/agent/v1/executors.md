@@ -47,9 +47,10 @@ See [credential roles and rollout limits](../../../docs/proxmox-credentials.md).
 ```
 
 `caCertificatePem`, when set, is the only trust root for that connection, and it is
-verified even if `verifyTls` is false; a missing `verifyTls` means true. VMs are
-located through `GET /api2/json/cluster/resources?type=vm`, which works for
-standalone hosts and clusters alike. Proxmox hides VMs a token cannot audit, so before
+verified even if `verifyTls` is false; a missing `verifyTls` means true. VMs and
+containers are located through `GET /api2/json/cluster/resources?type=vm`, which lists
+both and works for standalone hosts and clusters alike. A VMID is one namespace across
+the two. Proxmox hides VMs a token cannot audit, so before
 concluding that a VM is absent the executor checks that the token has `VM.Audit` on
 `/vms/<vmid>`, and fails if it does not.
 
@@ -89,21 +90,29 @@ Input:
 
 ```json
 {
-  "connection": { … }, "node": "korriban", "vmid": 210, "name": "krb-crt-01",
-  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180
+  "connection": { … }, "node": "korriban", "vmid": 210, "kind": "qemu", "name": "krb-crt-01",
+  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180, "hostKeys": false
 }
 ```
 
+`kind` is the machine the controller expects at the VMID: `qemu` for a VM, `lxc` for a
+container. A missing `kind` means `qemu`, which is what a controller before containers
+meant. The status, configuration and addresses are read from that kind's endpoints:
+`/nodes/{node}/qemu/{vmid}/…` and the QEMU guest agent for a VM,
+`/nodes/{node}/lxc/{vmid}/status/current`, `/config` and `/interfaces` for a container,
+whose addresses Proxmox reads from its network namespace, with no agent inside.
+
 `expectIpv4` is null for plain DHCP without a declared reservation; then any non-loopback IPv4 address
-reported by the QEMU guest agent satisfies the address check. The executor polls
+reported by the QEMU guest agent, or for a container by Proxmox, satisfies the address check. The executor polls
 every 5 seconds until every check passes or `waitSeconds` runs out.
 For DHCP with a declared `network.reservedAddress`, that address is required,
 just as the address without its prefix is required for static configuration.
 The reservation itself remains externally managed.
 
-Checks, in order: `present` (the VMID exists), `placement` (it is on `node`),
-`name`, `running` (when `expectRunning`), and `address` (the guest agent reports
-an IPv4 address, and `expectIpv4` is among them when set).
+Checks, in order: `present` (the VMID exists), `kind` (it is a guest of `kind`, reported
+only when it is not, and nothing else is checked then: a machine of the other kind is
+not this one), `placement` (it is on `node`), `name`, `running` (when `expectRunning`),
+and `address` (an IPv4 address is reported, and `expectIpv4` is among them when set).
 
 Output:
 
@@ -119,14 +128,32 @@ Output:
 }
 ```
 
-`tags` and `description` are the VM's own (`description` from its QEMU config; absent for a
-container). They are reported, not checked: the controller records a guest as owning its VM only
+`tags` and `description` are the machine's own (`description` from its QEMU or LXC
+config). They are reported, not checked: the controller records a guest as owning its VM only
 when a verified VM its approved plan created carries the tag `octopushy` and a description naming
 the guest's address; see [the safety boundary](../../../docs/safety-boundary.md).
 
 Succeeds when every check passes, fails otherwise (with the outputs still set). With
 `expectRunning: false` and the VM stopped, the address check is reported as passed
 with "not checked".
+
+`hostKeys: true`, for a container only, also reads the SSH host keys Proxmox generated
+when it created it, once every check has passed. Proxmox (`PVE::LXC::Setup`,
+`rewrite_ssh_host_keys`, run by `post_create_hook`) generates them on the host and writes
+them into the container's root file system before it first starts, whenever the template
+has `/etc/ssh`, and logs each one in the create task as
+`Creating SSH host key 'ssh_host_<type>_key' - …` followed by `done: SHA256:<43> <comment>`.
+The executor takes the newest task of type `vzcreate` for the VMID on `node` whose status
+is `OK` (`GET /nodes/{node}/tasks?vmid=…&typefilter=vzcreate&source=all`), reads its log
+(`GET /nodes/{node}/tasks/{upid}/log`), and adds:
+
+```json
+{ "hostKeys": ["rsa SHA256:…", "ed25519 SHA256:…"], "hostKeysTask": "UPID:korriban:…:vzcreate:320:root@pam:" }
+```
+
+It fails, with the other outputs still set, when the task cannot be listed or read, when
+there is none, or when its log shows no key. Proxmox lists a task another user or token
+started only to a token with `Sys.Audit` on `/nodes/{node}`.
 
 ### `verify-absent`
 
@@ -136,10 +163,12 @@ Output: `{ "present": false }`. Fails if the VMID still exists when the wait end
 
 ### `set-protection`
 
-Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "protection": false }`
+Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "kind": "qemu", "protection": false }`
 
-Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the VM's
-`protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`. Succeeds with
+Output: `{ "absent": false, "previous": true, "protection": false }`. Sets the machine's
+`protection` option with `PUT /nodes/{node}/qemu/{vmid}/config`, or for `kind: lxc`
+`PUT /nodes/{node}/lxc/{vmid}/config`. A missing `kind` means `qemu`, and a guest of
+another kind at the VMID is refused, with nothing changed. Succeeds with
 `{ "absent": true, "previous": null, "protection": null }` when the VM does not exist,
 and fails when it is on another node than `node`. It is `uncertain` when the write may
 have reached Proxmox, or was accepted and could not be read back, because a plain failure
@@ -339,6 +368,14 @@ Input (the same for both actions, except as noted):
 - `hostKey` is the pin, one `type base64 [comment]` per line. The executor writes
   `known_hosts` from it. It is the value of a plain store entry, so it travels in the input.
   The executor never scans a host.
+- With `hostKeyFingerprints: true`, `hostKey` is instead a container's pin by fingerprint:
+  one `type SHA256:<43>` per line, `type` being `rsa`, `ecdsa` or `ed25519`, as its create task
+  logged them (see `verify-guest`). `known_hosts` stays empty, and ssh gets
+  `KnownHostsCommand` (OpenSSH 8.5 or later) with `%I %H %f %t %K`: a short script that prints a
+  `known_hosts` line for the key the server presented only when that key's SHA-256 fingerprint
+  is pinned, and prints nothing otherwise. `StrictHostKeyChecking=yes` then accepts that one key
+  and refuses any other, as it would with the key in the file: a fingerprint names exactly one
+  key. `HostKeyAlgorithms` is limited to the pinned types and `FingerprintHash` is `sha256`.
 - `vars`, `approvedVars`, `secretVars`, `secretFiles` and the keys of a prepared document may not
   start with `ansible_` or `octopushy`, in any case.
 - Extra vars are, in order: `vars`, prepared values, `approvedVars`, the generated connection,

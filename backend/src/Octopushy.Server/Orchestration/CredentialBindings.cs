@@ -124,7 +124,9 @@ internal static class CredentialBindings
         {
             var role = RunContext.BareRole(name);
             // A guest's own key is the one thing under system/ a run may bind, and only its own guest's.
-            var ownKey = role == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId);
+            var ownKey = role == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId)
+                // And a container's own pin, which its create task gave.
+                || role == SecretNames.AnsibleHostKey && run is not null && key == ContainerHostKeys.Key(context.GuestResourceId ?? run.ResourceId);
             if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal) && !ownKey)
             {
                 problems.Add($"{key}: reserved system scope");
@@ -139,7 +141,9 @@ internal static class CredentialBindings
 
             if (!entries.TryGetValue(key, out var entry))
             {
-                problems.Add($"{key}: missing");
+                problems.Add(key.StartsWith(ContainerHostKeys.Prefix, StringComparison.Ordinal)
+                    ? $"{key}: missing: the container's host keys have not been read from its create task yet. A provision run's verify step reads them; plan the guest"
+                    : $"{key}: missing");
                 continue;
             }
 

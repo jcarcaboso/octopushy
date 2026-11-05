@@ -54,7 +54,24 @@ public sealed partial record WorkflowReference(string Id, int Major, int? Minor)
 public static class WorkflowKinds
 {
     public const string Vm = "vm";
+    public const string Container = "container";
     public const string Service = "service";
+
+    /// <summary>Whether a workflow of this kind makes a machine for a guest: a VM or a Proxmox container.</summary>
+    public static bool IsMachine(string? manages) => manages is Vm or Container;
+
+    /// <summary>The kind of workflow a guest of this <c>type</c> names: <c>vm</c> or <c>container</c>, the same word.</summary>
+    public static string ForGuestType(string type) => type == GuestTypes.Container ? Container : Vm;
+}
+
+/// <summary>What a guest is, from its <c>type</c>, and how Proxmox lists it.</summary>
+public static class GuestTypes
+{
+    public const string Vm = "vm";
+    public const string Container = "container";
+
+    /// <summary>The guest's kind in Proxmox: <c>qemu</c> for a VM, <c>lxc</c> for a container.</summary>
+    public static string ProxmoxKind(string? type) => type == Container ? "lxc" : "qemu";
 }
 
 /// <summary>The tools a stage can run.</summary>
@@ -113,11 +130,11 @@ public sealed record WorkflowDefinition(
     /// <summary>What its issues are filed under.</summary>
     public string Address => $"workflows/{Id}";
 
-    /// <summary>For <c>manages: vm</c>, the OpenTofu stage that makes the machine: its provision and retire runs.</summary>
-    public WorkflowStage? Machine => Manages == WorkflowKinds.Vm ? Stages.FirstOrDefault(s => s.Executor == Executors.OpenTofu) : null;
+    /// <summary>For <c>manages: vm</c> or <c>container</c>, the OpenTofu stage that makes the machine: its provision and retire runs.</summary>
+    public WorkflowStage? Machine => WorkflowKinds.IsMachine(Manages) ? Stages.FirstOrDefault(s => s.Executor == Executors.OpenTofu) : null;
 
-    /// <summary>For <c>manages: vm</c>, the Ansible stage that sets the machine up, if it has one: its configure runs.</summary>
-    public WorkflowStage? Setup => Manages == WorkflowKinds.Vm ? Stages.Skip(1).FirstOrDefault(s => s.Executor == Executors.Ansible) : null;
+    /// <summary>For <c>manages: vm</c> or <c>container</c>, the Ansible stage that sets the machine up, if it has one: its configure runs.</summary>
+    public WorkflowStage? Setup => WorkflowKinds.IsMachine(Manages) ? Stages.Skip(1).FirstOrDefault(s => s.Executor == Executors.Ansible) : null;
 
     /// <summary>Every directory a stage of the workflow runs from.</summary>
     public IEnumerable<string> Roots => Stages.Select(s => s.Root).Distinct(StringComparer.Ordinal);
@@ -127,7 +144,7 @@ public sealed record WorkflowDefinition(
 /// One stage of a workflow: one executor, run from <paramref name="Root"/>. An Ansible stage carries what can be run from it in
 /// <paramref name="Configure"/>; an OpenTofu stage has none.
 /// </summary>
-/// <param name="Verify"><c>proxmox</c> when the stage makes a VM that is checked through the Proxmox API afterwards, otherwise <c>none</c>.</param>
+/// <param name="Verify"><c>proxmox</c> when the stage makes a VM or container that is checked through the Proxmox API afterwards, otherwise <c>none</c>.</param>
 public sealed record WorkflowStage(
     string Name,
     string Executor,

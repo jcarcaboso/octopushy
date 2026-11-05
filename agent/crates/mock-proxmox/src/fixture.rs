@@ -85,12 +85,17 @@ pub struct FixtureVm {
     /// The VM's description, as its config holds it.
     #[serde(default)]
     pub description: Option<String>,
-    /// Addresses the guest agent reports, or null when the agent is not running.
+    /// Addresses the guest agent reports, or null when the agent is not running. For a container,
+    /// the first is what Proxmox reads from its namespace while it runs.
     #[serde(default)]
     pub ipv4: Option<Vec<String>>,
     /// `qemu` or `lxc`.
     #[serde(default = "default_kind")]
     pub kind: String,
+    /// For a container, the log of its create task (`vzcreate`), which `GET /nodes/{node}/tasks`
+    /// then lists; null for none.
+    #[serde(default)]
+    pub create_log: Option<Vec<String>>,
     #[serde(default = "default_vm_cpus")]
     pub max_cpu: u64,
     #[serde(default = "default_vm_mem")]

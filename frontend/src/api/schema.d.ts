@@ -1410,6 +1410,7 @@ export interface components {
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
             workflow: null | components["schemas"]["WorkflowDto"];
+            type: null | string;
         };
         InstallationDetailDto: {
             installation: components["schemas"]["InstallationSummaryDto"];
@@ -1560,6 +1561,7 @@ export interface components {
             managedBy: null | string;
             /** Format: uuid */
             managedById: null | string;
+            kind: null | string;
         };
         ObservedHostDto: {
             name: string;

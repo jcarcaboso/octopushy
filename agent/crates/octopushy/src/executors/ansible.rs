@@ -127,8 +127,12 @@ struct Host {
     #[serde(default = "default_port")]
     port: u16,
     user: String,
-    /// The pinned public keys, as `type base64 [comment]`, one per line.
+    /// The pinned public keys, as `type base64 [comment]`, one per line; or, with
+    /// `host_key_fingerprints`, the pinned SHA-256 fingerprints as `type SHA256:…`.
     host_key: String,
+    /// The pin is fingerprints: those Proxmox logged when it generated a container's host keys.
+    #[serde(default)]
+    host_key_fingerprints: bool,
 }
 
 fn default_port() -> u16 {
@@ -255,6 +259,77 @@ fn known_hosts(host: &Host) -> Result<(String, Vec<String>), Failure> {
     Ok((lines, fingerprints))
 }
 
+/// A container's host keys pinned by fingerprint: `rsa`, `ecdsa` or `ed25519` and its
+/// `SHA256:…`, one per line, as Proxmox's create task logged them.
+fn pinned_fingerprints(host: &Host) -> Result<Vec<(String, String)>, Failure> {
+    let mut pins = Vec::new();
+    for line in host
+        .host_key
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+    {
+        let mut parts = line.split_whitespace();
+        let (Some(kind), Some(fingerprint), None) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(Failure::msg(format!(
+                "the pinned host key fingerprint for {} is not `type SHA256:…`",
+                host.name
+            )));
+        };
+        if host_key_algorithms(kind).is_none()
+            || !octopushy_proxmox::is_sha256_fingerprint(fingerprint)
+        {
+            return Err(Failure::msg(format!(
+                "the pinned host key fingerprint for {} is not `type SHA256:…`",
+                host.name
+            )));
+        }
+        pins.push((kind.to_owned(), fingerprint.to_owned()));
+    }
+    if pins.is_empty() {
+        return Err(Failure::msg(format!(
+            "the pinned host key fingerprints for {} are empty",
+            host.name
+        )));
+    }
+    Ok(pins)
+}
+
+/// What ssh may negotiate for a host key of this type, as ssh-keygen names the type.
+fn host_key_algorithms(kind: &str) -> Option<&'static str> {
+    match kind {
+        "ed25519" => Some("ssh-ed25519"),
+        "ecdsa" => Some("ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521"),
+        "rsa" => Some("rsa-sha2-512,rsa-sha2-256"),
+        _ => None,
+    }
+}
+
+/// The `KnownHostsCommand` for a pin by fingerprint. ssh runs it once it has the server's host
+/// key, with `%I %H %f %t %K`: why it asks, the name it looks up in known_hosts form, the key's
+/// SHA-256 fingerprint, its type and the key itself. It prints a known_hosts line for exactly that
+/// key when its fingerprint is pinned, and nothing otherwise, so `StrictHostKeyChecking=yes` refuses
+/// any other key as it refuses one missing from known_hosts. A fingerprint names one key: the line
+/// it prints is the key the pin was made for, whoever sent it. Asked for the order of algorithms
+/// (`ORDER`, before any key), it prints nothing.
+fn known_hosts_command(pins: &[(String, String)]) -> String {
+    let patterns = pins
+        .iter()
+        .map(|(_, fingerprint)| format!("'{fingerprint}'"))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!(
+        "# Written by Octopushy for one attempt: the host keys of a container, pinned by fingerprint.\n\
+         [ \"$1\" = HOSTNAME ] || [ \"$1\" = ADDRESS ] || exit 0\n\
+         [ \"$#\" -eq 5 ] || exit 0\n\
+         case \"$3\" in\n\
+         {patterns}) printf '%s %s %s\\n' \"$2\" \"$4\" \"$5\" ;;\n\
+         esac\n\
+         exit 0\n"
+    )
+}
+
 struct Prepared {
     input: Input,
     root: PathBuf,
@@ -320,7 +395,19 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     {
         return Err(Failure::msg("invalid login user"));
     }
-    let (known, fingerprints) = known_hosts(&input.host)?;
+    let pins = if input.host.host_key_fingerprints {
+        Some(pinned_fingerprints(&input.host)?)
+    } else {
+        None
+    };
+    let (known, fingerprints) = match &pins {
+        // Nothing in the file: the command vouches for the one key whose fingerprint is pinned.
+        Some(pins) => (
+            String::new(),
+            pins.iter().map(|(k, f)| format!("{k} {f}")).collect(),
+        ),
+        None => known_hosts(&input.host)?,
+    };
 
     let home = ws.join("home");
     let out_dir = ws.join("out");
@@ -393,6 +480,31 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         "-o ServerAliveInterval=15".to_owned(),
         "-o ServerAliveCountMax=8".to_owned(),
     ];
+    if let Some(pins) = &pins {
+        let command = generated.join("known-hosts-command.sh");
+        write(&command, known_hosts_command(pins).as_bytes())?;
+        let command = tool_path(&command)?;
+        if command
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b == b'"' || b == b'%')
+        {
+            return Err(Failure::msg(format!(
+                "the workspace path {command:?} cannot be named in a KnownHostsCommand"
+            )));
+        }
+        let mut algorithms: Vec<&str> = Vec::new();
+        for (kind, _) in pins {
+            let named = host_key_algorithms(kind).expect("checked with the pin");
+            if !algorithms.contains(&named) {
+                algorithms.push(named);
+            }
+        }
+        ssh_args.push("-o FingerprintHash=sha256".to_owned());
+        ssh_args.push(format!("-o HostKeyAlgorithms={}", algorithms.join(",")));
+        ssh_args.push(format!(
+            "-o \"KnownHostsCommand=/bin/sh {command} %I %H %f %t %K\""
+        ));
+    }
     if input.expect_refused.is_some() {
         ssh_args.push("-o LogLevel=VERBOSE".to_owned());
     }
@@ -1100,6 +1212,7 @@ mod tests {
             port,
             user: "ops".into(),
             host_key: key.into(),
+            host_key_fingerprints: false,
         }
     }
 
@@ -1110,6 +1223,7 @@ mod tests {
             port: 22,
             user: user.into(),
             host_key: String::new(),
+            host_key_fingerprints: false,
         }
     }
 
@@ -1199,6 +1313,85 @@ mod tests {
     fn a_host_key_that_is_not_one_is_refused() {
         for bad in ["", "   \n", "ssh-ed25519", "nonsense AAAA", "ssh-rsa !!!"] {
             assert!(known_hosts(&host(bad, 22)).is_err(), "{bad:?}");
+        }
+    }
+
+    const ED: &str = "SHA256:Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycA0";
+    const RSA: &str = "SHA256:cnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnM";
+
+    #[test]
+    fn fingerprint_pins_are_types_and_sha256_fingerprints() {
+        let pinned = Host {
+            host_key_fingerprints: true,
+            ..host(&format!("ed25519 {ED}\nrsa {RSA}\n"), 22)
+        };
+        let pins = pinned_fingerprints(&pinned).unwrap();
+        assert_eq!(
+            pins,
+            vec![
+                ("ed25519".to_owned(), ED.to_owned()),
+                ("rsa".to_owned(), RSA.to_owned())
+            ]
+        );
+        for bad in [
+            "".to_owned(),
+            format!("dsa {ED}"),
+            format!("ed25519 {ED} extra"),
+            "ed25519 SHA256:short".to_owned(),
+            format!("ed25519 {ED}'"),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY"
+                .to_owned(),
+        ] {
+            let host = Host {
+                host_key_fingerprints: true,
+                ..host(&bad, 22)
+            };
+            assert!(pinned_fingerprints(&host).is_err(), "{bad:?}");
+        }
+    }
+
+    /// Runs the command as ssh would, through /bin/sh, with ssh's tokens as arguments.
+    fn vouches(script: &str, args: &[&str]) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known-hosts-command.sh");
+        fs::write(&path, script).unwrap();
+        let out = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "the command must not end the connection itself"
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[test]
+    fn the_known_hosts_command_vouches_only_for_a_pinned_key() {
+        let script =
+            known_hosts_command(&[("ed25519".into(), ED.into()), ("rsa".into(), RSA.into())]);
+        let key = "AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
+        assert_eq!(
+            vouches(&script, &["HOSTNAME", "10.0.0.5", ED, "ssh-ed25519", key]),
+            format!("10.0.0.5 ssh-ed25519 {key}\n")
+        );
+        assert_eq!(
+            vouches(
+                &script,
+                &["HOSTNAME", "[10.0.0.5]:2222", RSA, "ssh-rsa", "AAAA"]
+            ),
+            "[10.0.0.5]:2222 ssh-rsa AAAA\n"
+        );
+        let other = "SHA256:b3RoZXJvdGhlcm90aGVyb3RoZXJvdGhlcm90aGVyb3Q";
+        for args in [
+            vec!["HOSTNAME", "10.0.0.5", other, "ssh-ed25519", key],
+            vec!["ORDER", "10.0.0.5"],
+            vec!["HOSTNAME", "10.0.0.5", ED],
+            vec!["OTHER", "10.0.0.5", ED, "ssh-ed25519", key],
+            vec!["HOSTNAME", "10.0.0.5", "*", "ssh-ed25519", key],
+        ] {
+            assert_eq!(vouches(&script, &args), "", "{args:?}");
         }
     }
 

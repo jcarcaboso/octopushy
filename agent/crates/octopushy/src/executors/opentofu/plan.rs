@@ -282,6 +282,49 @@ mod tests {
     }
 
     #[test]
+    fn a_container_is_named_like_a_vm() {
+        // What bpg/proxmox 0.117.0 plans for a container whose keys changed with no ignore_changes,
+        // trimmed: user_account is ForceNew, so it is a replacement of the same VMID and node.
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_container.guest","type":"proxmox_virtual_environment_container","name":"guest",
+             "provider_name":"registry.opentofu.org/bpg/proxmox","action_reason":"replace_because_cannot_update",
+             "change":{"actions":["delete","create"],
+                       "before":{"vm_id":320,"node_name":"korriban","unprivileged":true},
+                       "after":{"vm_id":320,"node_name":"korriban","unprivileged":true},
+                       "after_unknown":{"id":true,"ipv4":true}}},
+            {"address":"proxmox_virtual_environment_container.new","type":"proxmox_virtual_environment_container","name":"new",
+             "provider_name":"registry.opentofu.org/bpg/proxmox",
+             "change":{"actions":["create"],"before":null,"after":{"vm_id":321,"node_name":"korriban"}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        assert_eq!(
+            s.counts,
+            Counts {
+                create: 1,
+                replace: 1,
+                ..Counts::default()
+            }
+        );
+        let replaced = &s.changes[0];
+        assert!(replaced.proxmox && !replaced.target_unknown);
+        assert_eq!(
+            (replaced.vm_id, replaced.node.as_deref()),
+            (Some(320), Some("korriban"))
+        );
+        assert_eq!(
+            replaced.targets,
+            vec![Target {
+                vm_id: Some(320),
+                node: Some("korriban".into())
+            }]
+        );
+        assert_eq!(
+            (s.changes[1].vm_id, s.changes[1].node.as_deref()),
+            (Some(321), Some("korriban"))
+        );
+    }
+
+    #[test]
     fn reports_which_proxmox_vm_a_change_touches_and_why() {
         let json = br#"{"resource_changes":[
             {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",

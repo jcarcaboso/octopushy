@@ -23,11 +23,11 @@ import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
-import { formatBytes } from "../lib/format";
+import { formatBytes, machineNoun } from "../lib/format";
 import { formatUptime } from "../lib/time";
 
-function ObservedVm({ vm }: { vm: ObservedGuest | null }) {
-  if (!vm) return <p className="muted">Not observed: the installation has not reported a VM with this VMID.</p>;
+function ObservedVm({ vm, noun }: { vm: ObservedGuest | null; noun: string }) {
+  if (!vm) return <p className="muted">Not observed: the installation has not reported a {noun} with this VMID.</p>;
   const memory = vm.maxMemoryBytes;
   const cpu = vm.maxCpu;
   return (
@@ -107,6 +107,7 @@ export function GuestPage() {
   if (!data) return isNotFound(error) ? <NotFound what="guest" /> : <ErrorMessage error={error} title="The guest could not be loaded" />;
 
   const { guest } = data;
+  const noun = machineNoun(guest.type, guest.observed?.kind);
 
   return (
     <>
@@ -147,14 +148,14 @@ export function GuestPage() {
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
         {data.missingSince && !data.retiredAt ? (
           <Callout kind="warning" title={<>Folder deleted <RelativeTime value={data.missingSince} /></>}>
-            Octopushy proposes removing the VM, using the guest's last applied
+            Octopushy proposes removing the {noun}, using the guest's last applied
             definition and its approval and destructive policy. If no removal run is shown, use Plan removal. Restore the
             folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>
         ) : null}
         {data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
-            The VM was removed and verified absent.
+            The {noun} was removed and verified absent.
           </Callout>
         ) : null}
         <div className="columns columns--main-side">
@@ -192,8 +193,8 @@ export function GuestPage() {
             <Card title="Revisions">
               <Revisions guest={data} />
             </Card>
-            <Card title="Observed VM">
-              <ObservedVm vm={guest.observed} />
+            <Card title={`Observed ${noun}`}>
+              <ObservedVm vm={guest.observed} noun={noun} />
             </Card>
             <Card title="Outputs">
               {data.outputs === null || data.outputs === undefined ? (

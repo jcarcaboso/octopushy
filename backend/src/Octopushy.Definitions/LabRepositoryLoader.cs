@@ -447,6 +447,7 @@ public sealed class LabRepositoryLoader
 
         CollectStoreUses(json, address, file, document);
         var reference = WorkflowReference.Parse(json["workflow"]!.GetValue<string>())!;
+        var type = json["type"]!.GetValue<string>();
         guests.Add(new GuestDefinition(
             id,
             lab,
@@ -460,9 +461,12 @@ public sealed class LabRepositoryLoader
             json["vmid"]!.GetValue<int>(),
             json["template"]?.GetValue<string>(),
             reference,
-            ResolveWorkflow(reference, WorkflowKinds.Vm, "guest", file, address),
+            ResolveWorkflow(reference, WorkflowKinds.ForGuestType(type), $"guest of type: {type}", file, address),
             ParsePolicy(json["policy"]),
-            ParseLabels(json["execution"])));
+            ParseLabels(json["execution"]))
+        {
+            Type = type,
+        });
     }
 
     /// <summary>The workflow a reference names, if it resolves to one that manages what names it; an error otherwise.</summary>
@@ -477,8 +481,12 @@ public sealed class LabRepositoryLoader
 
         if (workflow.Manages != manages)
         {
+            // A guest's type and its workflow's kind are one choice, written twice: say which to change.
+            var hint = WorkflowKinds.IsMachine(manages) && WorkflowKinds.IsMachine(workflow.Manages)
+                ? $" Set type: {workflow.Manages} to use it, or name a workflow that makes a {(manages == WorkflowKinds.Container ? "container" : "VM")}."
+                : "";
             Error(file, LineOf(file, "/workflow"),
-                $"{reference} resolved to {workflow.Label}, which has manages: {workflow.Manages}, and a {what} needs a workflow with manages: {manages}.", address);
+                $"{reference} resolved to {workflow.Label}, which has manages: {workflow.Manages}, and a {what} needs a workflow with manages: {manages}.{hint}", address);
             return null;
         }
 
@@ -636,7 +644,8 @@ public sealed class LabRepositoryLoader
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.address, or a static or reserved address.");
         foreach (var field in new[] { "user", "hostKey" })
         {
-            if (guest.Json["access"]?[field] is null)
+            // A container's host key is pinned from its create task when it names none: see ContainerHostKey.
+            if (guest.Json["access"]?[field] is null && !(field == "hostKey" && guest.Type == GuestTypes.Container))
                 Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.{field}.");
         }
 
@@ -710,7 +719,7 @@ public sealed class LabRepositoryLoader
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.address, or a static or reserved address.");
             foreach (var field in new[] { "user", "hostKey" })
             {
-                if (guest.Json["access"]?[field] is null)
+                if (guest.Json["access"]?[field] is null && !(field == "hostKey" && guest.Type == GuestTypes.Container))
                     Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.{field}.");
             }
 

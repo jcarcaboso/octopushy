@@ -470,3 +470,206 @@ async fn a_failed_read_after_no_change_is_a_plain_failure() {
 
     assert!(matches!(r, Err(Failure::Failed { .. })));
 }
+
+const ED25519: &str = "SHA256:Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycA0";
+const RSA: &str = "SHA256:cnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnM";
+
+/// The example installation with a container, 320 on korriban, made by a create task that
+/// generated its host keys, and one more, 321, whose template had no `/etc/ssh`.
+fn with_containers() -> Fixture {
+    let mut fixture = Fixture::example();
+    let container = |vmid: u32, name: &str, ip: &str, log: Vec<String>| {
+        serde_json::from_value::<mock_proxmox::FixtureVm>(json!({
+            "vmid": vmid, "name": name, "node": "korriban", "status": "running", "kind": "lxc",
+            "tags": ["octopushy", "home"], "protection": true, "ipv4": [ip],
+            "description": format!("Managed by Octopushy as home/korriban/{name}."),
+            "createLog": log,
+        }))
+        .unwrap()
+    };
+    fixture.vms.push(container(
+        320,
+        "krb-ct-01",
+        "10.1.0.40",
+        vec![
+            "extracting archive '/var/lib/vz/template/cache/debian-13-standard_13.6-1_amd64.tar.zst'".into(),
+            "Detected container architecture: amd64".into(),
+            "Creating SSH host key 'ssh_host_rsa_key' - this may take some time ...".into(),
+            format!("done: {RSA} root@krb-ct-01"),
+            "Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...".into(),
+            format!("done: {ED25519} root@krb-ct-01"),
+            "TASK OK".into(),
+        ],
+    ));
+    fixture.vms.push(container(
+        321,
+        "krb-ct-02",
+        "10.1.0.41",
+        vec![
+            "Detected container architecture: amd64".into(),
+            "TASK OK".into(),
+        ],
+    ));
+    fixture
+}
+
+#[tokio::test]
+async fn verify_guest_checks_a_container_through_the_lxc_endpoints() {
+    let m = mock(with_containers()).await;
+    let t = m.token();
+    let input = |vmid: u32, kind: &str, ip: Value, host_keys: bool| {
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": vmid, "kind": kind,
+            "expectRunning": true, "expectIpv4": ip, "waitSeconds": 0, "hostKeys": host_keys
+        })
+    };
+
+    let (r, lines) = exec(
+        "verify-guest",
+        input(320, "lxc", json!("10.1.0.40"), true),
+        &t,
+    )
+    .await;
+    let out = r.unwrap().outputs;
+    assert_eq!(out["status"], "running");
+    assert_eq!(out["ipv4Addresses"], json!(["10.1.0.40"]));
+    assert_eq!(
+        out["description"],
+        "Managed by Octopushy as home/korriban/krb-ct-01."
+    );
+    assert_eq!(out["checks"][0]["detail"], "container 320 exists");
+    assert!(
+        out["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["detail"] == "Proxmox reports 10.1.0.40"),
+        "{out}"
+    );
+    assert_eq!(
+        out["hostKeys"],
+        json!([format!("rsa {RSA}"), format!("ed25519 {ED25519}")])
+    );
+    assert!(
+        out["hostKeysTask"]
+            .as_str()
+            .unwrap()
+            .contains(":vzcreate:320:")
+    );
+    assert!(lines.iter().any(|l| l.contains("host key: ed25519")));
+
+    // Without asking, no task is read.
+    let (r, _) = exec("verify-guest", input(320, "lxc", Value::Null, false), &t).await;
+    assert!(r.unwrap().outputs.get("hostKeys").is_none());
+
+    // A create task that generated no key: the pin cannot be made, so verification fails.
+    let (r, _) = exec("verify-guest", input(321, "lxc", Value::Null, true), &t).await;
+    let (message, outputs) = failed(r);
+    assert!(message.contains("logged no SSH host key"), "{message}");
+    assert_eq!(outputs.unwrap()["present"], true);
+
+    // A VMID of the other kind is not the guest's machine, either way round.
+    let (r, _) = exec("verify-guest", input(210, "lxc", Value::Null, false), &t).await;
+    let (message, outputs) = failed(r);
+    assert!(
+        message.contains("VMID 210 is a qemu guest, not lxc"),
+        "{message}"
+    );
+    assert!(
+        outputs.unwrap()["description"].is_null(),
+        "nothing of the other machine is read"
+    );
+    let (r, _) = exec("verify-guest", input(320, "qemu", Value::Null, false), &t).await;
+    assert!(failed(r).0.contains("VMID 320 is a lxc guest, not qemu"));
+
+    // A stopped container has no interfaces to read.
+    m.update(|f| f.vms.iter_mut().find(|v| v.vmid == 320).unwrap().status = "stopped".into());
+    let (r, _) = exec("verify-guest", input(320, "lxc", Value::Null, false), &t).await;
+    let (message, _) = failed(r);
+    assert!(message.contains("container 320 is stopped"), "{message}");
+}
+
+#[tokio::test]
+async fn verify_guest_reads_host_keys_only_with_a_create_task_it_can_see() {
+    let m = mock(with_containers()).await;
+    m.update(|f| f.vms.iter_mut().find(|v| v.vmid == 320).unwrap().create_log = None);
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "waitSeconds": 0, "hostKeys": true
+        }),
+        &m.token(),
+    )
+    .await;
+    let (message, _) = failed(r);
+    assert!(
+        message.contains("no successful create task (vzcreate)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Sys.Audit on /nodes/korriban"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn set_protection_of_a_container() {
+    let m = mock(with_containers()).await;
+    let t = m.token();
+    let input = |vmid: u32, kind: Option<&str>, p: bool| {
+        let mut v = json!({ "connection": connection(&m), "node": "korriban", "vmid": vmid, "protection": p });
+        if let Some(kind) = kind {
+            v["kind"] = json!(kind);
+        }
+        v
+    };
+
+    let (r, _) = exec("set-protection", input(320, Some("lxc"), false), &t).await;
+    assert_eq!(
+        r.unwrap().outputs,
+        json!({ "absent": false, "previous": true, "protection": false })
+    );
+    assert!(!m.vm(320).unwrap().protection);
+    let (r, lines) = exec("set-protection", input(320, Some("lxc"), true), &t).await;
+    assert_eq!(r.unwrap().outputs["protection"], true);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("protection of container 320 on"))
+    );
+    assert!(m.vm(320).unwrap().protection);
+
+    // Without a kind it is a VM, as a controller before containers meant: a container is refused.
+    let (r, _) = exec("set-protection", input(320, None, false), &t).await;
+    assert!(failed(r).0.contains("VMID 320 is a lxc guest, not qemu"));
+    let (r, _) = exec("set-protection", input(210, Some("lxc"), false), &t).await;
+    assert!(failed(r).0.contains("VMID 210 is a qemu guest, not lxc"));
+    assert!(m.vm(320).unwrap().protection && m.vm(210).unwrap().protection);
+    let (r, _) = exec("set-protection", input(320, Some("vm"), false), &t).await;
+    assert!(failed(r).0.contains("expected qemu or lxc"));
+
+    // An absent container succeeds, as an absent VM does.
+    let (r, _) = exec("set-protection", input(404, Some("lxc"), false), &t).await;
+    assert_eq!(r.unwrap().outputs["absent"], true);
+}
+
+#[tokio::test]
+async fn verify_absent_counts_containers_in_the_one_vmid_namespace() {
+    let m = mock(with_containers()).await;
+    let (r, _) = exec(
+        "verify-absent",
+        json!({ "connection": connection(&m), "vmid": 320, "waitSeconds": 0 }),
+        &m.token(),
+    )
+    .await;
+    assert!(failed(r).0.contains("320 still exists on korriban"));
+    assert!(m.remove_vm(320));
+    let (r, _) = exec(
+        "verify-absent",
+        json!({ "connection": connection(&m), "vmid": 320, "waitSeconds": 0 }),
+        &m.token(),
+    )
+    .await;
+    assert_eq!(r.unwrap().outputs, json!({ "present": false }));
+}

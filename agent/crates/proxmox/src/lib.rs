@@ -1,9 +1,10 @@
 //! Octopushy's own client for the Proxmox VE API.
 //!
 //! It covers what Octopushy needs around OpenTofu: reading the installation
-//! (version, cluster, nodes, guests), locating a VM, reading its addresses through
-//! the QEMU guest agent, checking the token's privileges, and toggling VM
-//! protection. It grows as needed.
+//! (version, cluster, nodes, guests), locating a VM or container, reading a VM's
+//! addresses through the QEMU guest agent and a container's from Proxmox itself,
+//! checking the token's privileges, and toggling the protection of either. It grows
+//! as needed.
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), octopushy_proxmox::Error> {

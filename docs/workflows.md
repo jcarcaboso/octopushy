@@ -147,7 +147,7 @@ shared under `modules/`.
 # workflows/machine-tools/workflow.yaml
 schemaVersion: 1
 version: "1.0"                    # M.m, quoted
-manages: vm                       # vm | service; containers come later
+manages: vm                       # vm | container | service
 description: A Fedora VM, set up by Ansible with a set of tools.
 inputs: inputs.schema.json        # validates { hardware, network, inputs } from the guest
 ui: {}                            # optional hints for the form; see the form: ui hints
@@ -182,7 +182,7 @@ outcomes:
       vars: { machine_tools_allow_busy: true }
 ```
 
-For `manages: vm`:
+For `manages: vm`, and `manages: container` alike:
 
 - **The first stage is the OpenTofu stage that makes the machine.** Provision and retire runs plan and apply it; `verify`
   belongs on it only.
@@ -191,6 +191,46 @@ For `manages: vm`:
   `destructive: false` unless the stage says otherwise. No declared action may be called `setup`.
 - **`actions`** are the other playbooks of that stage, run by hand or on the guest's schedules. Each names its `stage`.
 - **`secrets` and `outcomes`** need the Ansible stage. A workflow without one has neither.
+
+### A workflow that manages a container
+
+```yaml
+# workflows/octopushy-worker-lxc/workflow.yaml
+schemaVersion: 1
+version: "1.0"
+manages: container                # a guest of type: container names it
+inputs: inputs.schema.json
+secrets: [worker_enrollment_token]
+stages:
+  - name: machine                 # the OpenTofu stage that makes the container: always first
+    executor: opentofu
+    root: ../../modules/opentofu/proxmox-lxc
+    verify: proxmox
+  - name: setup                   # at most one stage more, over SSH as for a VM
+    executor: ansible
+    root: ../../modules/ansible/octopushy-agent
+    playbook: configure.yml
+```
+
+`manages: container` has the rules of `manages: vm`, and the same runs: a provision or retire run plans and applies the first
+stage, verifies the machine through Proxmox and binds the guest to it, and the setup stage and actions run over SSH. Only the
+machine differs. Its OpenTofu stage makes a Proxmox container (`proxmox_virtual_environment_container`), and Octopushy checks
+it, and lifts and restores its protection, through the `lxc` endpoints instead of the `qemu` ones. A guest's `type` must be
+the workflow's `manages`: a `type: container` guest naming a `manages: vm` workflow is invalid, and so is the other way round,
+each with an issue that says which to change.
+
+What is different about a container:
+
+- **Its addresses come from Proxmox,** which reads them from the container's network namespace. There is no guest agent.
+- **Its SSH host key needs no person.** Proxmox generates a container's host keys when it creates it, and logs their
+  fingerprints in the create task. The verify step reads them there, and the setup stage is pinned to them, so a container
+  may leave out `access.hostKey`: see [the host key of a container](guest-configuration.md#the-host-key-of-a-container).
+- **Its keys are set once.** The provider replaces a container whose `user_account` keys change, so a container module
+  ignores later changes to them: see [SSH identity](guest-configuration.md#ssh-identity).
+- **No guest agent exec.** Proxmox has no API to run a command in a container. Octopushy runs nothing through one for a
+  VM either; anything on the machine is the setup stage's, over SSH.
+
+`octopushy-lab`'s `proxmox-lxc` and `octopushy-worker-lxc` are the workflows, and `modules/opentofu/proxmox-lxc` the module.
 
 ### A workflow that manages a service
 
@@ -390,7 +430,10 @@ ui:
 ### Generated values
 
 The [workflow wizard](changes-from-the-ui.md#the-workflow-wizard) deploys a new guest or service from a workflow. A workflow
-asks it for generated values with more `ui` hints. Each one is generic: nothing in the engine names a workflow.
+asks it for generated values with more `ui` hints. Each one is generic: nothing in the engine names a workflow. The wizard
+does not offer `manages: container` workflows yet; their hints are read only once it does. Without the wizard, each value is
+written by hand: a VMID that is free, and a store key set under **Variables**, such as an enrollment token created under
+**Agents**.
 
 ```yaml
 ui:
@@ -479,8 +522,8 @@ The run model has not changed. A workflow is read into the runs Octopushy alread
 
 | Workflow | Run | What it does |
 |---|---|---|
-| `manages: vm`, the machine stage | provision, or retire for a retired or deleted guest | plan, approval, apply of exactly that plan, verify |
-| `manages: vm`, the setup stage | configure: the `setup` action, or a declared action | preview, approval, playbook, plus the outcome approvals declared |
+| `manages: vm` or `container`, the machine stage | provision, or retire for a retired or deleted guest | plan, approval, apply of exactly that plan, verify |
+| `manages: vm` or `container`, the setup stage | configure: the `setup` action, or a declared action | preview, approval, playbook, plus the outcome approvals declared |
 | `manages: service`, all stages | pipeline | a plan or preview of every stage, one approval, then every stage applied in order |
 
 A guest has a provision run, then a setup run: a setup preview cannot describe a machine that does not exist yet, so the two
@@ -608,7 +651,7 @@ does not make planning read-only. See [credentials](proxmox-credentials.md).
 ```yaml
 # labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml
 schemaVersion: 1
-type: vm                          # Proxmox containers later
+type: vm                          # vm | container: the same as its workflow's manages
 lifecycle: active                 # active | retired
 host: korriban
 vmid: 310
@@ -646,7 +689,7 @@ installation's connection and the template, so one shared OpenTofu module provis
 state, so guests are planned, locked, and applied independently.
 
 `secrets`, `secretFiles` and `schedules` need a workflow with a setup stage, and so do `access.user` and `access.hostKey`
-for it to log in. `schedules` name the workflow's actions, `setup` included. `profiles` is passed to the machine stage and
+for it to log in. A container may leave out `access.hostKey`: its own is pinned from its create task. `schedules` name the workflow's actions, `setup` included. `profiles` is passed to the machine stage and
 not applied otherwise yet.
 
 ### Service
@@ -682,7 +725,7 @@ policy:
   closes. A change waiting for a window shows when it will run.
 - **Approving a manual change runs it at once,** unless the approver chooses to wait for the next window.
 
-### VM template
+### Template
 
 ```yaml
 # templates/fedora-44/template.yaml
@@ -694,7 +737,9 @@ source:
 availableOn: [home/korriban, home/moraband]
 ```
 
-A template is a base image, and is data: the image URL and its checksum. `source.build` naming a workflow is accepted with a
+A template is a base image, and is data: the image URL and its checksum. For a container it is an OS template, such as
+Proxmox's `debian-13-standard_13.6-1_amd64.tar.zst` with the SHA-512 its signed `aplinfo` index gives; a `fileName` may end in
+`.tar.gz`, `.tar.xz`, `.tar.zst` or `.tar.bz2`. `source.build` naming a workflow is accepted with a
 warning and cannot be used yet.
 
 ## Services and their runs
@@ -900,7 +945,7 @@ jobs:
 
 New VM → configured guest → working service:
 
-1. Add `guests/<id>/guest.yaml` under an installation, naming a workflow with `manages: vm`. Octopushy proposes provisioning:
+1. Add `guests/<id>/guest.yaml` under an installation, naming a workflow whose `manages` is its `type`, `vm` or `container`. Octopushy proposes provisioning:
    the plan of the workflow's machine stage for that guest.
 2. Once the guest is provisioned and verified, Octopushy runs the workflow's setup stage, if it has one.
 3. Add `services/<name>/service.yaml` under the guest, naming a workflow with `manages: service`. Once the guest's provision
@@ -931,7 +976,7 @@ and the lab shows a warning.
 3. **A workflows repository resolved by tags,** with immutable tags recorded per commit. Built.
 4. **Interfaces, and secrets for OpenTofu stages.** `lab.dns` goes. A stage's plan gets its token here, which is the limit
    stated above.
-5. **Containers.**
+5. **Containers.** Built: `type: container` and `manages: container`.
 6. **Clusters.**
 
 ### Left out for now

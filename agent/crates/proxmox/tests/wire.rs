@@ -273,3 +273,130 @@ async fn maps_errors() {
         other => panic!("{other:?}"),
     }
 }
+
+#[tokio::test]
+async fn reads_a_containers_status_config_and_interfaces_through_lxc() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/status/current"))
+        .respond_with(data(
+            json!({ "vmid": 320, "status": "running", "name": "ct", "uptime": 9, "type": "lxc" }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/config"))
+        .respond_with(data(json!({
+            "hostname": "ct", "protection": 1, "unprivileged": 1, "features": "nesting=1",
+            "tags": "octopushy;home", "description": "Managed by Octopushy as home/korriban/ct.\n",
+            "digest": "abc"
+        })))
+        .mount(&server)
+        .await;
+    // Proxmox 8.2 and later list every address in the guest agent's form too.
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/interfaces"))
+        .respond_with(data(json!([
+            { "name": "lo", "hwaddr": "00:00:00:00:00:00", "inet": "127.0.0.1/8", "inet6": "::1/128" },
+            { "name": "eth0", "hwaddr": "bc:24:11:00:00:02", "hardware-address": "bc:24:11:00:00:02",
+              "inet": "10.1.0.41/24", "inet6": "fe80::1/64",
+              "ip-addresses": [
+                { "ip-address": "10.1.0.40", "ip-address-type": "inet", "prefix": 24 },
+                { "ip-address": "10.1.0.41", "ip-address-type": "inet", "prefix": 24 },
+                { "ip-address": "fe80::1", "ip-address-type": "inet6", "prefix": 64 }
+              ] }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/321/interfaces"))
+        .respond_with(data(serde_json::Value::Null))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/404/config"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(
+            json!({ "data": null, "message": "Configuration file 'nodes/korriban/lxc/404.conf' does not exist\n" }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/config"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .and(body_string("protection=1"))
+        .respond_with(data(serde_json::Value::Null))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server);
+    assert_eq!(
+        c.ct_status("korriban", 320).await.unwrap().status,
+        "running"
+    );
+    let config = c.ct_config("korriban", 320).await.unwrap();
+    assert_eq!(
+        (
+            config.hostname.as_deref(),
+            config.protection,
+            config.unprivileged,
+            config.tags.len()
+        ),
+        (Some("ct"), true, true, 2)
+    );
+    assert!(
+        config
+            .description
+            .unwrap()
+            .starts_with("Managed by Octopushy as home/korriban/ct.")
+    );
+    let interfaces = c.ct_interfaces("korriban", 320).await.unwrap().unwrap();
+    let addresses: Vec<String> = octopushy_proxmox::ct_ipv4_addresses(&interfaces)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    // inet first, then any further IPv4 in the list; never loopback, never twice.
+    assert_eq!(addresses, ["10.1.0.41", "10.1.0.40"]);
+    assert!(c.ct_interfaces("korriban", 321).await.unwrap().is_none());
+    assert!(matches!(
+        c.ct_config("korriban", 404).await,
+        Err(Error::NotFound(_))
+    ));
+    c.set_ct_protection("korriban", 320, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn lists_a_guests_tasks_and_reads_a_log() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("vmid", "320"))
+        .and(query_param("typefilter", "vzcreate"))
+        .and(query_param("source", "all"))
+        .respond_with(data(json!([
+            { "upid": "UPID:korriban:1:2:3:vzcreate:320:root@pam:", "type": "vzcreate", "id": "320",
+              "user": "root@pam", "starttime": 1730191360, "endtime": 1730191372, "status": "OK" }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api2/json/nodes/korriban/tasks/UPID:korriban:1:2:3:vzcreate:320:root@pam:/log",
+        ))
+        .respond_with(data(
+            json!([{ "n": 2, "t": "TASK OK" }, { "n": 1, "t": "extracting archive" }]),
+        ))
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    let tasks = c.guest_tasks("korriban", 320, "vzcreate").await.unwrap();
+    assert_eq!(
+        (tasks[0].kind.as_str(), tasks[0].status.as_deref()),
+        ("vzcreate", Some("OK"))
+    );
+    let log = c.task_log("korriban", &tasks[0].upid).await.unwrap();
+    assert_eq!(
+        log.iter().map(|l| l.t.as_str()).collect::<Vec<_>>(),
+        ["extracting archive", "TASK OK"]
+    );
+}

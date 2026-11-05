@@ -260,6 +260,26 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_container_is_edited_from_its_form_as_a_vm_is()
+    {
+        var lab = Lab();
+        lab.Write(GuestFile, Commented.Replace("type: vm", "type: container"));
+        lab.Write("workflows/test-vm/workflow.yaml",
+            File.ReadAllText(Path.Combine(lab.Root, "workflows/test-vm/workflow.yaml")).Replace("manages: vm", "manages: container"));
+        await using var setup = await StartAsync(lab);
+        var form = await setup.FormAsync();
+        Assert.Null(form.BlockedReason);
+        Assert.Equal("container", form.Resolved!.Manages);
+
+        var request = new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096), Network: form.Network!.AsObject());
+        var change = await CommitAsync(setup, request);
+        Assert.Equal(Commented.Replace("type: vm", "type: container").Replace("memory: 2048 ", "memory: 4096 ") + "\n", setup.RemoteFile(GuestFile));
+        var run = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(change.RevisionId, run.RevisionId);
+        Assert.Equal("lxc", RunContext.Parse(run.Context).Proxmox.Kind);
+    }
+
+    [Fact]
     public async Task A_change_is_refused_when_its_file_moved_and_merged_when_only_another_file_did()
     {
         await using var setup = await StartAsync();

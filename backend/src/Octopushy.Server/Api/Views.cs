@@ -720,7 +720,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             observed is null ? null : ObservedGuest(observed, [resource]),
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
-            Workflow(resource));
+            Workflow(resource),
+            definition?["type"] is JsonValue type && type.TryGetValue<string>(out var typeText) ? typeText : null);
     }
 
     private static int? Vmid(Resource resource) =>
@@ -741,7 +742,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             g["maxMemoryBytes"]?.GetValue<long>(),
             g["uptimeSeconds"]?.GetValue<long>(),
             managed?.Address,
-            managed?.Id);
+            managed?.Id,
+            g["kind"]?.GetValue<string>());
     }
 
     private static ObservedHostDto Host(string name, bool declared, JsonObject? o, int? limit) => new(

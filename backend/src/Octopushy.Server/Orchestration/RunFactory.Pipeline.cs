@@ -49,7 +49,12 @@ public sealed partial class RunFactory
                 Bind(SecretNames.AnsibleSshKey, declared);
             else
                 secrets[RunContext.StageRole(stage.Name, SecretNames.AnsibleSshKey)] = GuestAccessCredentials.Key(guestResource.Id);
-            Bind(SecretNames.AnsibleHostKey, ConfigureInputs.Reference(guest, "hostKey")!);
+            if (ConfigureInputs.Reference(guest, "hostKey") is { } pin)
+                Bind(SecretNames.AnsibleHostKey, pin);
+            else if (ContainerHostKey.Pinned(guest))
+                secrets[RunContext.StageRole(stage.Name, SecretNames.AnsibleHostKey)] = ContainerHostKeys.Key(guestResource.Id);
+            else
+                throw new RunException($"Stage '{stage.Name}' runs on the guest, which names no access.hostKey, so its host cannot be checked.");
             foreach (var (name, reference) in stage.Secrets)
             {
                 Bind(SecretNames.AnsibleVar(name), reference);

@@ -338,6 +338,13 @@ Proxmox.
 
 ### Phase 5: LXC and DNS
 
+**LXC is built** ([a workflow that manages a container](workflows.md#a-workflow-that-manages-a-container)): guest
+`type: container` and `manages: container`, the client's `lxc` endpoints, `verify-guest`, `verify-absent` and protection
+for containers, every guard of the [safety boundary](safety-boundary.md) for them, keys set once at creation, and a host
+key pinned from the create task with no person ([the host key of a container](guest-configuration.md#the-host-key-of-a-container)).
+`octopushy-lab` has `proxmox-lxc` and `octopushy-worker-lxc` at `1.0`. The wizard does not offer container workflows
+yet. What is left is the acceptance on real Proxmox: a worker container on `umbrel`, committed in Git.
+
 - **LXC is engine work plus a workflow.** It needs guest `type: container`, client types, `verify-guest`/`verify-absent` and
   protection for containers, the access behaviour (keys are `ForceNew`), and a `proxmox-lxc` workflow in `octopushy-lab`.
 - **DNS starts as an explicit workflow stage,** such as Technitium records, before any `interfaces` abstraction. A Proxmox

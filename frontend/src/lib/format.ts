@@ -67,3 +67,8 @@ export function runResourcePath(run: { resourceKind: string; resourceId: string 
       return "/inventory";
   }
 }
+
+/** What a guest is, as its definition says (`type`) or, failing that, as Proxmox lists it (`kind`). */
+export function machineNoun(type: string | null | undefined, kind?: string | null): "VM" | "container" {
+  return type === "container" || (!type && kind === "lxc") ? "container" : "VM";
+}

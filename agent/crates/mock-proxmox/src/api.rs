@@ -3,7 +3,7 @@
 //! Responses imitate Proxmox closely where clients depend on it: the `{"data":
 //! ...}` envelope, booleans as `0`/`1`, `;`-separated tags, and errors with the
 //! message in the HTTP status line (for example `500 QEMU guest agent is not
-//! running`).
+//! running`). Containers (`kind: lxc`) answer on the `lxc` endpoints, VMs on `qemu`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,14 @@ pub fn router(state: SharedFixture) -> Router {
             "/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces",
             get(network_interfaces),
         )
+        .route("/nodes/{node}/lxc/{vmid}/status/current", get(ct_status))
+        .route(
+            "/nodes/{node}/lxc/{vmid}/config",
+            get(ct_config).put(put_ct_config),
+        )
+        .route("/nodes/{node}/lxc/{vmid}/interfaces", get(ct_interfaces))
+        .route("/nodes/{node}/tasks", get(tasks))
+        .route("/nodes/{node}/tasks/{upid}/log", get(task_log))
         .route("/access/permissions", get(permissions))
         .route("/access/acl", get(acl))
         .fallback(|| async { pve_error(StatusCode::NOT_IMPLEMENTED, "Method not implemented") })
@@ -190,6 +198,17 @@ impl IntoResponse for PveError {
 
 /// Finds a QEMU VM on `node`, answering like Proxmox when it is not there.
 fn find_vm<'a>(f: &'a Fixture, node: &str, vmid: &str) -> Result<&'a FixtureVm, PveError> {
+    find_guest(f, node, vmid, "qemu")
+}
+
+/// Finds a guest of `kind` (`qemu` or `lxc`) on `node`. Proxmox keeps each kind's configuration
+/// in its own directory, so a VMID of the other kind is "not there" for these endpoints.
+fn find_guest<'a>(
+    f: &'a Fixture,
+    node: &str,
+    vmid: &str,
+    kind: &str,
+) -> Result<&'a FixtureVm, PveError> {
     if !f.nodes.iter().any(|n| n.name == node) {
         return Err(PveError(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -212,11 +231,12 @@ fn find_vm<'a>(f: &'a Fixture, node: &str, vmid: &str) -> Result<&'a FixtureVm, 
     })?;
     f.vms
         .iter()
-        .find(|vm| vm.vmid == id && vm.node == node && vm.kind == "qemu")
+        .find(|vm| vm.vmid == id && vm.node == node && vm.kind == kind)
         .ok_or_else(|| {
+            let directory = if kind == "lxc" { "lxc" } else { "qemu-server" };
             PveError(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Configuration file 'nodes/{node}/qemu-server/{vmid}.conf' does not exist"),
+                format!("Configuration file 'nodes/{node}/{directory}/{vmid}.conf' does not exist"),
             )
         })
 }
@@ -273,12 +293,31 @@ async fn vm_config(
 }
 
 async fn put_vm_config(
-    State(state): State<SharedFixture>,
+    state: State<SharedFixture>,
     Path((node, vmid)): Path<(String, String)>,
+    form: Form<HashMap<String, String>>,
+) -> Response {
+    put_config(state, &node, &vmid, "qemu", form)
+}
+
+async fn put_ct_config(
+    state: State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+    form: Form<HashMap<String, String>>,
+) -> Response {
+    put_config(state, &node, &vmid, "lxc", form)
+}
+
+/// `protection` is the one option either kind's config endpoint changes here.
+fn put_config(
+    State(state): State<SharedFixture>,
+    node: &str,
+    vmid: &str,
+    kind: &str,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
     let mut f = state.lock().unwrap();
-    let vmid_num = match find_vm(&f, &node, &vmid) {
+    let vmid_num = match find_guest(&f, node, vmid, kind) {
         Ok(vm) => vm.vmid,
         Err(e) => return e.into_response(),
     };
@@ -343,6 +382,157 @@ async fn network_interfaces(
             }
         ]
     }))
+}
+
+async fn ct_status(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    match find_guest(&f, &node, &vmid, "lxc") {
+        Ok(ct) => {
+            let running = ct.status == "running";
+            let mut v = json!({
+                "vmid": ct.vmid, "name": ct.name, "status": ct.status, "type": "lxc",
+                "uptime": if running { ct.uptime_seconds } else { 0 },
+                "cpus": ct.max_cpu, "maxmem": ct.max_memory_bytes, "maxswap": 536_870_912,
+            });
+            if ct.template {
+                v["template"] = json!(1);
+            }
+            data(v)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn ct_config(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    match find_guest(&f, &node, &vmid, "lxc") {
+        Ok(ct) => {
+            let mut v = json!({
+                "hostname": ct.name, "cores": ct.max_cpu, "memory": ct.max_memory_bytes / 1024 / 1024,
+                "swap": 512, "ostype": "fedora", "arch": "amd64", "unprivileged": 1,
+                "features": "nesting=1", "rootfs": format!("local-lvm:vm-{}-disk-0,size=8G", ct.vmid),
+                "net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:02,ip=dhcp,type=veth",
+                "digest": format!("{:040x}", ct.vmid),
+            });
+            if ct.protection {
+                v["protection"] = json!(1);
+            }
+            if ct.template {
+                v["template"] = json!(1);
+            }
+            if !ct.tags.is_empty() {
+                v["tags"] = Value::String(ct.tags.join(";"));
+            }
+            if let Some(description) = &ct.description {
+                v["description"] = Value::String(description.clone());
+            }
+            data(v)
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// What Proxmox reads from a running container's network namespace, one address per family
+/// and interface; `null` for a container that is not running.
+async fn ct_interfaces(
+    State(state): State<SharedFixture>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    let ct = match find_guest(&f, &node, &vmid, "lxc") {
+        Ok(ct) => ct,
+        Err(e) => return e.into_response(),
+    };
+    if ct.status != "running" {
+        return data(Value::Null);
+    }
+    let mut interfaces = vec![json!({
+        "name": "lo", "hwaddr": "00:00:00:00:00:00", "inet": "127.0.0.1/8", "inet6": "::1/128",
+    })];
+    let mut addresses: Vec<Value> = ct
+        .ipv4
+        .iter()
+        .flatten()
+        .map(|ip| json!({ "ip-address": ip, "ip-address-type": "inet", "prefix": 24 }))
+        .collect();
+    addresses.push(
+        json!({ "ip-address": "fe80::be24:11ff:fe00:2", "ip-address-type": "inet6", "prefix": 64 }),
+    );
+    // inet and inet6 hold the last address of each family, as Proxmox writes them.
+    let mut eth0 = json!({
+        "name": "eth0", "hwaddr": "bc:24:11:00:00:02", "hardware-address": "bc:24:11:00:00:02",
+        "inet6": "fe80::be24:11ff:fe00:2/64", "ip-addresses": addresses,
+    });
+    if let Some(ip) = ct.ipv4.as_ref().and_then(|ips| ips.last()) {
+        eth0["inet"] = Value::String(format!("{ip}/24"));
+    }
+    interfaces.push(eth0);
+    data(Value::Array(interfaces))
+}
+
+/// The UPID of a container's create task in the mock: one per container that has a create log.
+fn create_upid(ct: &FixtureVm) -> String {
+    format!(
+        "UPID:{}:0000A0B1:0012C3D4:6720A000:vzcreate:{}:root@pam:",
+        ct.node, ct.vmid
+    )
+}
+
+/// `GET /nodes/{node}/tasks`: the create task of each container with a create log, filtered by
+/// `vmid` and `typefilter` as Proxmox filters them.
+async fn tasks(
+    State(state): State<SharedFixture>,
+    Path(node): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let f = state.lock().unwrap();
+    let listed: Vec<Value> = f
+        .vms
+        .iter()
+        .filter(|vm| vm.node == node && vm.kind == "lxc" && vm.create_log.is_some())
+        .filter(|vm| {
+            query
+                .get("vmid")
+                .is_none_or(|id| *id == vm.vmid.to_string())
+        })
+        .filter(|_| query.get("typefilter").is_none_or(|t| t == "vzcreate"))
+        .map(|ct| {
+            json!({
+                "upid": create_upid(ct), "node": ct.node, "pid": 41137, "pstart": 1230804,
+                "starttime": 1_730_191_360u64, "endtime": 1_730_191_372u64, "type": "vzcreate",
+                "id": ct.vmid.to_string(), "user": "root@pam", "status": "OK",
+            })
+        })
+        .collect();
+    data(Value::Array(listed))
+}
+
+async fn task_log(
+    State(state): State<SharedFixture>,
+    Path((node, upid)): Path<(String, String)>,
+) -> Response {
+    let f = state.lock().unwrap();
+    let Some(ct) = f
+        .vms
+        .iter()
+        .find(|vm| vm.node == node && vm.create_log.is_some() && create_upid(vm) == upid)
+    else {
+        return pve_error(StatusCode::INTERNAL_SERVER_ERROR, "no such task");
+    };
+    let lines: Vec<Value> = ct
+        .create_log
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(i, t)| json!({ "n": i + 1, "t": t }))
+        .collect();
+    data(Value::Array(lines))
 }
 
 async fn permissions(

@@ -9,6 +9,17 @@ The guards stop **mistakes** by the one operator who writes the lab repository: 
 VMID, a definition in the wrong installation, trust that no longer fits. They are not a
 boundary against hostile repository code; see [threat model](#threat-model-and-accepted-limits).
 
+**A Proxmox container is a machine to every guard here, as a VM is.** VMIDs are one
+namespace across VMs and containers, and everything below reads them that way: an
+observation lists both (`/cluster/resources?type=vm`), and the proof that it saw every
+VM covers containers too, since `VM.Audit` on `/vms` is what Proxmox checks for either. So
+a container is an observed unmanaged VMID, a VMID offered to the wizard is free of both, a
+plan's changes to `proxmox_virtual_environment_container` are checked as a VM's are, and a
+container is owned, unprotected and protected again under the same rules. A guest's
+`type` also fixes the kind of machine its VMID must be: verify and protection are told
+`qemu` or `lxc`, and a machine of the other kind at that VMID fails them, with nothing
+changed.
+
 ## Installations Octopushy only observes: `manage: false`
 
 ```yaml
@@ -86,7 +97,7 @@ when:
   name a node, such as a network bridge.
 
 A **provision** or **retire** run acts on one machine: the guest's VMID on the guest's
-host. Changing or removing that one keeps its usual rules: approval unless destructive is
+host, a VM or a container as its `type` says. Changing or removing that one keeps its usual rules: approval unless destructive is
 explicitly automatic, then unprotect, apply, and reprotect if the apply does not finish.
 **Unprotect** is sent only when the plan deletes or replaces that VM *and* the guest owns
 it (see [ownership](#ownership-reservation-and-confirmed-creation)), for a provision and a

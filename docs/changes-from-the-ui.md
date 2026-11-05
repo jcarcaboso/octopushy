@@ -270,7 +270,8 @@ because committing is off or the resource cannot be changed, is not.
 worker is the `octopushy-worker` workflow deployed like any other. Its steps:
 
 1. **Workflow.** A card for each workflow from `GET /api/workflows`: its description, what it manages, the newest release
-   of each major, and the major to use. A deploy writes `workflow: <id>@<M>`, the newest `M.x`; **Pin** writes `@M.m`.
+   of each major, and the major to use. Workflows with `manages: container` are not offered yet, and a deploy that names one
+   is refused: a container guest is written in Git for now. Once it exists, its form edits it like a VM's. A deploy writes `workflow: <id>@<M>`, the newest `M.x`; **Pin** writes `@M.m`.
 2. **Where.** For a VM: the installation, its host and the guest's name, the VMID and the template. Installations with
    `manage: false` are listed, disabled, with the reason. Hosts are those `installation.yaml` declares, with what the latest
    observation says of them; a host only observed is shown, disabled. For a service: the installation and the guest it runs on.
