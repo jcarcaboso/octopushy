@@ -190,15 +190,15 @@ describe("ChangePage", () => {
       "GET /api/changes/change-1": () =>
         change({ kind: "create-guest", status: "dismissed", final: true, notCommitted: true, runs: [], resourceId: null, cleanupPending: 1,
           generated: [
-            { secret: "worker_enrollment_token", key: "guests/home/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
+            { secret: "worker_enrollment_token", key: "proxmox/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
               state: "created", cleanupPending: true, detail: null, cleanupError: "canceling statement due to lock timeout" },
-            { secret: "admin_password", key: "guests/home/pve01/w2/admin_password", generator: "random-password", state: "removed",
-              cleanupPending: false, detail: "guests/home/pve01/w2/admin_password version 1 deleted.", cleanupError: null },
+            { secret: "admin_password", key: "proxmox/pve01/w2/admin_password", generator: "random-password", state: "removed",
+              cleanupPending: false, detail: "proxmox/pve01/w2/admin_password version 1 deleted.", cleanupError: null },
           ] }),
     });
     renderAt(<ChangePage />, { path: "/changes/:id", route: "/changes/change-1" });
     expect(await screen.findByText("1 generated value still to remove")).toBeInTheDocument();
     expect(screen.getByText(/canceling statement due to lock timeout/)).toBeInTheDocument();
-    expect(screen.getByText("guests/home/pve01/w2/admin_password version 1 deleted.")).toBeInTheDocument();
+    expect(screen.getByText("proxmox/pve01/w2/admin_password version 1 deleted.")).toBeInTheDocument();
   });
 });

@@ -33,6 +33,13 @@ Milestone 1 has shipped, up to release 0.6.1:
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
 
+Unreleased, coming after 0.6.1:
+
+- [Store keys](docs/workflows.md#store-keys) follow the lab repository's hierarchy. The deploy wizard generates a guest's
+  secrets at `proxmox/<installation>/<guest>/<secret>` and a service's at `proxmox/<installation>/<guest>/<service>/<secret>`,
+  in place of `guests/<lab>/…` and `services/<lab>/…`, and suggests `proxmox/<installation>/<guest>/host-key` for a host key.
+  Keys generated before keep working, since definitions name them.
+
 ## Direction
 
 Octopushy is becoming an engine only. Workflows live in their own repository,

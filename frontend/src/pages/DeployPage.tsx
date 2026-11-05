@@ -163,6 +163,8 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   const schema = useMemo(() => (version ? schemaOf(version) : {}), [version]);
   const target = targets.installations.find((i) => i.address === installation) ?? null;
   const address = isService ? `${guest}/${name}` : `${installation}/${name}`;
+  // Where the new resource's store keys go, as the server generates them: proxmox/<installation>/<guest>[/<service>], no lab.
+  const keyPrefix = `proxmox/${address.slice(address.indexOf("/") + 1)}`;
   const blocked = targets.blockedReason;
   const busy = preview.isPending || deploy.isPending;
 
@@ -226,7 +228,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
     }
     setSecrets(next);
     // A workflow that installs Octopushy's own host key needs none, where the installation is set up for snippet uploads.
-    if (version.setup && !hostKey && !version.managedHostKey) setHostKey(`guests/${address}/host-key`);
+    if (version.setup && !hostKey && !version.managedHostKey) setHostKey(`${keyPrefix}/host-key`);
     setStep("secrets");
   };
 
@@ -571,7 +573,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
               {Object.keys(secrets).length === 0 ? <p>This workflow takes no secrets.</p> : null}
               {Object.entries(secrets).map(([secret, state]) => (
                 <SecretField key={secret} secret={secret} state={state} required={isRequired(secret)} hint={hints.secrets[secret] ?? {}}
-                  keys={(variables.data?.entries ?? []).map((v) => v.key)} storeKey={`${isService ? "services" : "guests"}/${address}/${secret}`}
+                  keys={(variables.data?.entries ?? []).map((v) => v.key)} storeKey={`${keyPrefix}/${secret}`}
                   issues={issueAt(`/secrets/${secret}`)} onChange={(next) => setSecrets((current) => ({ ...current, [secret]: next }))} />
               ))}
               {version.setup ? (

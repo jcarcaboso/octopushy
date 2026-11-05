@@ -538,10 +538,12 @@ public sealed partial class ChangeService
                     requested is null ? $"{target.Reference.Id} does not ask for {name} to be generated: choose a store key."
                         : $"{target.Reference.Id} asks for {name} to be generated as {requested}, not {choice.Generate}.",
                     fieldIssues: [new FieldIssueDto(pointer, "This workflow does not generate it that way.")]);
-            var key = $"{(target.ResourceKind == ResourceKinds.Guest ? "guests" : "services")}/{target.Address}/{name}";
+            // proxmox/<installation>/<guest>[/<service>]/<name>, the lab repository's own hierarchy without the lab: two labs with an
+            // installation and a guest of the same names compute the same key, and the refusal below keeps the second from overwriting it.
+            var key = $"proxmox/{target.Address[(target.Address.IndexOf('/') + 1)..]}/{name}";
             if (await db.StoreEntries.AnyAsync(e => e.Key == key, ct))
                 throw new ChangeRefusal(ChangeRefusal.Reasons.Exists,
-                    $"The store already has {key}, perhaps from an earlier guest of that name. Choose it as an existing key, or delete it under Variables first.",
+                    $"The store already has {key}, perhaps from an earlier guest of that name or one in another lab. Choose it as an existing key, or delete it under Variables first.",
                     fieldIssues: [new FieldIssueDto(pointer, $"{key} is already in the store.")]);
             Generation generation;
             if (choice.Generate == SecretGenerators.AgentEnrollmentToken)

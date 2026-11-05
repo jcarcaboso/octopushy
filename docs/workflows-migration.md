@@ -93,7 +93,7 @@ workflow: fedora-vm@2
 host: pve01
 vmid: 200
 inputs: { cores: 2, memory: 1024, features: [ai-tools, cli-tools, developer, t3, tailscale] }
-secrets: { machine_tailscale_auth_key: { store: pve01-ai/tailscale-auth-key } }
+secrets: { machine_tailscale_auth_key: { store: proxmox/pve01/pve01-ai/machine_tailscale_auth_key } }
 policy: { approval: automatic, destructive: manual }
 ```
 

@@ -415,7 +415,7 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(moved, setup.RemoteHead);
 
         // Nothing generated is left behind: no store value, no enrollment token.
-        Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key.StartsWith("guests/"))));
+        Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key.StartsWith("proxmox/korriban/new-01/"))));
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
         var recorded = await setup.Server.QueryAsync(db => db.Changes.SingleAsync(c => c.Id == refused.ChangeId));
         Assert.Equal(ChangeStatuses.Refused, recorded.Status);
@@ -432,28 +432,28 @@ public class DeployTests(PostgresFixture postgres)
             {
                 ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken, Labels: ["home", "worker"], Name: "worker-new"),
                 ["admin_password"] = new(Generate: SecretGenerators.RandomPassword),
-            }) with { AccessUser = "ops", HostKey = "guests/home/korriban/new-01/host-key" };
+            }) with { AccessUser = "ops", HostKey = "proxmox/korriban/new-01/host-key" };
         var preview = await PreviewAsync(setup, request);
         Assert.True(preview.Valid, string.Join("; ", preview.Issues.Select(i => i.Message)));
-        const string Key = "guests/home/korriban/new-01/enroll_token";
-        Assert.Equal([(Key, SecretGenerators.AgentEnrollmentToken), ("guests/home/korriban/new-01/admin_password", SecretGenerators.RandomPassword)],
+        const string Key = "proxmox/korriban/new-01/enroll_token";
+        Assert.Equal([(Key, SecretGenerators.AgentEnrollmentToken), ("proxmox/korriban/new-01/admin_password", SecretGenerators.RandomPassword)],
             preview.Generated!.Select(g => (g.Key, g.Generator)));
         Assert.Contains("an agent named worker-new, labels [home, worker], valid for 72 hours", preview.Generated![0].Detail);
         // A review generates nothing.
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
 
         var change = await DeployAsync(setup, request);
-        Assert.Equal([Key, "guests/home/korriban/new-01/admin_password"], change.Generated!.Select(g => g.Key));
+        Assert.Equal([Key, "proxmox/korriban/new-01/admin_password"], change.Generated!.Select(g => g.Key));
         // What its file references is recorded before the push, for cleanup when a candidate is not in the mirror.
         var recordedKeys = (await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync(c => c.Id == change.Id))).StoreKeys!;
         Assert.Contains(Key, recordedKeys);
-        Assert.Contains("guests/home/korriban/new-01/host-key", recordedKeys);
+        Assert.Contains("proxmox/korriban/new-01/host-key", recordedKeys);
         Assert.All(change.Generated!, g => Assert.Equal(GeneratedValueStates.Created, g.State));
         var file = setup.RemoteFile(NewFile);
         Assert.Contains("secrets:                          # values are in the variable store, never in Git\n"
             + $"  enroll_token: {{ store: {Key} }}  # generated at deploy: one-time enrollment token\n", file);
-        Assert.Contains("  admin_password: { store: guests/home/korriban/new-01/admin_password }  # generated at deploy: random password\n", file);
-        Assert.Contains("access:\n  user: ops\n  hostKey: { store: guests/home/korriban/new-01/host-key }  # a plain entry", file);
+        Assert.Contains("  admin_password: { store: proxmox/korriban/new-01/admin_password }  # generated at deploy: random password\n", file);
+        Assert.Contains("access:\n  user: ops\n  hostKey: { store: proxmox/korriban/new-01/host-key }  # a plain entry", file);
 
         var token = await setup.Server.QueryAsync(db => db.EnrollmentTokens.SingleAsync());
         Assert.Equal("worker-new", token.Name);
@@ -464,13 +464,42 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(1, version);
         Assert.StartsWith("opy1.", value);
         Assert.Equal(token.TokenHash, Octopushy.Server.Agents.EnrollmentService.TokenHash(value.Split('.')[1]));
-        var password = (await setup.Server.QueryAsync(db => db.StoreEntries.SingleAsync(e => e.Key == "guests/home/korriban/new-01/admin_password")));
+        var password = (await setup.Server.QueryAsync(db => db.StoreEntries.SingleAsync(e => e.Key == "proxmox/korriban/new-01/admin_password")));
         Assert.Equal(Visibilities.Secret, password.Visibility);
 
         // The value is nowhere in Git, and not in what the API returns.
         var history = TestWorkflows.Run(setup.Remote.Root, "log", "-p", "--all");
         Assert.DoesNotContain(value, history);
         Assert.DoesNotContain(value, await (await setup.Client.GetAsync($"/api/changes/{change.Id}")).Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_generated_key_already_in_the_store_such_as_one_from_a_guest_of_the_same_name_in_another_lab_refuses_the_deploy()
+    {
+        await using var setup = await StartAsync();
+        // The key leaves the lab out, so new-01 on a korriban installation in another lab generated the same one.
+        const string Key = "proxmox/korriban/new-01/enroll_token";
+        await using (var scope = setup.Server.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>().SetAsync(Key, "the other lab's value", Visibilities.Secret,
+                "Generated at deploy for away/korriban/new-01 (agent-enrollment-token, change x).", CancellationToken.None);
+        var head = setup.RemoteHead;
+        var request = Guest(head, 320, workflow: "agent-vm@1",
+            secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken) });
+
+        foreach (var path in new[] { "/api/deploy/preview", "/api/deploy" })
+        {
+            var refused = await RefusedAsync(setup, request, path);
+            Assert.Equal(ChangeRefusal.Reasons.Exists, refused.Reason);
+            Assert.Contains($"The store already has {Key}", refused.Message);
+            Assert.Contains(refused.FieldIssues, i => i.Pointer == "/secrets/enroll_token");
+        }
+
+        // Nothing is written over or made, and nothing is pushed.
+        Assert.Equal(head, setup.RemoteHead);
+        Assert.Equal(("the other lab's value", 1), (await setup.Server.Services.CreateAsyncScope().ServiceProvider
+            .GetRequiredService<Octopushy.Server.Store.VariableStore>().GetAsync(Key, CancellationToken.None))!.Value);
+        Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
+        Assert.Equal(0, await setup.Server.QueryAsync(db => db.GeneratedValues.CountAsync()));
     }
 
     [Fact]
@@ -484,8 +513,8 @@ public class DeployTests(PostgresFixture postgres)
             with { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
         Assert.Equal(ChangeRefusal.Reasons.Invalid, refused.Reason);
         Assert.Equal(head, setup.RemoteHead);
-        Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key.StartsWith("guests/"))));
-        Assert.False(await setup.Server.QueryAsync(db => db.StoreVersions.AnyAsync(v => v.Key.StartsWith("guests/"))));
+        Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key.StartsWith("proxmox/korriban/new-01/"))));
+        Assert.False(await setup.Server.QueryAsync(db => db.StoreVersions.AnyAsync(v => v.Key.StartsWith("proxmox/korriban/new-01/"))));
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
     }
 
@@ -541,6 +570,7 @@ public class DeployTests(PostgresFixture postgres)
     {
         await using var setup = await StartAsync();
         // As a request cancelled before its push leaves it: recorded as committing, its token and value made, no candidate commit.
+        // Its key is where earlier versions generated one: cleanup goes by the recorded key, whatever its layout.
         const string Key = "guests/home/korriban/lost-01/enroll_token";
         var (id, token) = await OwnedAsync(setup, ChangeStatuses.Committing, Key, token: true, vmid: 330);
         Assert.Equal(331, (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}&from=330"))!.Vmid);
@@ -560,7 +590,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task Cleanup_of_an_abandoned_deploy_never_removes_what_a_later_deploy_or_a_person_wrote_under_its_key()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         // A was superseded; its value went, and B, a later deploy of the same name still being pushed, wrote the same key.
         var (a, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         await setup.Server.WithDbAsync(async db =>
@@ -589,7 +619,7 @@ public class DeployTests(PostgresFixture postgres)
 
         // A person who deletes a key a finished deploy generated and sets it again by hand keeps it too, even at version 1
         // and with the very same description copied over: the version was not made by that deploy.
-        const string Manual = "guests/home/korriban/manual-01/enroll_token";
+        const string Manual = "proxmox/korriban/manual-01/enroll_token";
         var (c, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Manual, address: "home/korriban/manual-01");
         var copied = (await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Manual))).Description;
         await setup.Server.WithDbAsync(async db =>
@@ -611,7 +641,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task A_removal_that_fails_stays_pending_shows_on_the_change_and_is_retried_at_the_next_sync()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
 
         // Someone holds the entry's row: the removal waits for its lock, gives up, and is left for the next sync.
@@ -645,7 +675,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task A_dismissed_deploy_whose_commit_turns_up_keeps_what_the_definition_uses()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/landed-01/enroll_token";
+        const string Key = "proxmox/korriban/landed-01/enroll_token";
         var (id, token) = await OwnedAsync(setup, ChangeStatuses.Dismissed, Key, address: "home/korriban/landed-01", token: true);
         // Its commit was on the branch after all: the head defines the guest, and it uses the generated key.
         setup.PushElsewhere("labs/home/proxmox/korriban/guests/landed-01/guest.yaml",
@@ -697,11 +727,11 @@ public class DeployTests(PostgresFixture postgres)
         using var lab = new TestRepository();
         lab.Write("octopushy.yaml", "schemaVersion: 1\n");
         // Not a valid guest, with the reference in JSON style: it still names the key.
-        lab.Write("labs/home/proxmox/korriban/guests/odd-01/guest.yaml", """{ "colour": "blue", "secrets": { "pw": { "store": "guests/home/korriban/odd-01/password" } } }""");
-        lab.Write("labs/home/proxmox/korriban/guests/deep-01/guest.yaml", "list:\n  - nested: [ { store: 'guests/home/korriban/deep-01/key' } ]\n");
+        lab.Write("labs/home/proxmox/korriban/guests/odd-01/guest.yaml", """{ "colour": "blue", "secrets": { "pw": { "store": "proxmox/korriban/odd-01/password" } } }""");
+        lab.Write("labs/home/proxmox/korriban/guests/deep-01/guest.yaml", "list:\n  - nested: [ { store: 'proxmox/korriban/deep-01/key' } ]\n");
         var keys = GeneratedValues.ReferencedKeys(lab.Root)!;
-        Assert.Contains("guests/home/korriban/odd-01/password", keys);
-        Assert.Contains("guests/home/korriban/deep-01/key", keys);
+        Assert.Contains("proxmox/korriban/odd-01/password", keys);
+        Assert.Contains("proxmox/korriban/deep-01/key", keys);
 
         lab.Write("labs/home/proxmox/korriban/guests/garbled-01/guest.yaml", "secrets: [\n  : {\n");
         Assert.Null(GeneratedValues.ReferencedKeys(lab.Root));
@@ -711,7 +741,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task Dismissing_a_deploy_removes_nothing_by_itself()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         var (id, _) = await OwnedAsync(setup, ChangeStatuses.Unknown, Key);
         var dismissed = await setup.Client.PostAsync($"/api/changes/{id}/dismiss", null);
         Assert.True(dismissed.IsSuccessStatusCode, await dismissed.Content.ReadAsStringAsync());
@@ -731,7 +761,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task A_key_a_commit_of_an_open_change_references_is_not_removed()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         const string File = "labs/home/proxmox/korriban/guests/other-01/guest.yaml";
         var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         // Another change, not settled, recorded a commit that references the key; the branch head does not.
@@ -759,7 +789,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task A_key_an_open_change_recorded_writing_is_not_removed_even_when_its_commit_is_not_here()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         var (id, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         // Another deploy of the same guest, unknown, writes the key in what it recorded; its candidate is not in the mirror.
         await setup.Server.WithDbAsync(async db =>
@@ -782,7 +812,7 @@ public class DeployTests(PostgresFixture postgres)
     public async Task An_open_edit_whose_candidate_is_not_here_keeps_every_key_its_written_file_references()
     {
         await using var setup = await StartAsync();
-        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        const string Key = "proxmox/korriban/lost-01/enroll_token";
         var (owned, _) = await OwnedAsync(setup, ChangeStatuses.Superseded, Key);
         // An ordinary edit of another guest: it changes only hardware, and the file it writes keeps a reference to the key in a
         // section it does not change. Its candidate commit is not in the mirror.
