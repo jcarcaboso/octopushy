@@ -154,6 +154,80 @@ and authenticate with client certificates, so TLS must end at the backend. Let t
 host name resolve to the container itself. If agents can only reach the proxy, use a TCP
 router with `tls.passthrough: true` on its own entry point or host name.
 
+## Snippet uploads, for guests' host keys
+
+A guest Octopushy creates can get an SSH host key of Octopushy's, delivered in a cloud-init
+snippet, so nobody reads a key off its console. The Proxmox API cannot upload a snippet, so each
+host needs a one-time setup, once Octopushy is on a release that ships
+[`snippets.sh`](snippets.sh). On the installation's page, **Create upload key**, then run the
+command it shows as root on each host, for example in the host's shell in the Proxmox web
+interface. It has this form:
+
+```sh
+OCTOPUSHY_SNIPPETS_KEY='ssh-ed25519 AAAA… octopushy-snippets@home/pve01' \
+  OCTOPUSHY_SNIPPETS_USER='octopushy-snippets' OCTOPUSHY_SNIPPETS_DATASTORE='local' \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/v<version>/deploy/proxmox/snippets.sh)"
+```
+
+It changes, and prints:
+
+| | What |
+|---|---|
+| Datastore | `snippets` added to the content of `local` (`OCTOPUSHY_SNIPPETS_DATASTORE` picks another directory datastore), and its `snippets` directory made writable by the account's group, mode 2770 |
+| Account | `octopushy-snippets` (`OCTOPUSHY_SNIPPETS_USER`), a system user with no password and no shell |
+| Chroot | `/var/lib/octopushy-snippets`, holding only the snippets directory at its own path, through a bind mount kept by a systemd mount unit |
+| sshd | `/etc/ssh/sshd_config.d/00-octopushy-snippets.conf`: one `Match User` block allowing only that key, only SFTP, only in the chroot, files created mode 0600, no forwarding or TTY. The key is in `/etc/ssh/octopushy-snippets/authorized_keys`, marked `restrict` |
+
+Before it changes anything, it refuses:
+- root, or an account or group that exists and that it did not create;
+- an `sshd_config` that does not start with `Include /etc/ssh/sshd_config.d/*.conf`;
+- a configuration `sshd -t` already rejects;
+- a drop-in of its name that it did not write, or one that sorts before it;
+- any other sshd file that mentions the account.
+
+Its block sorts first and names only that account, so sshd applies it to every connection of that
+account and to no one else, and it lets the account in with its key alone: no CA certificate,
+key or principals command, password, host-based, GSSAPI or Kerberos login, even where the host
+allows them. sshd's files are copied first, with their modes, checked with `sshd -t` and reloaded,
+or put back byte for byte if anything fails, for setup and `--remove` alike. It refuses a link
+at any path it writes or backs up. `--remove` also refuses while the account has a process, such
+as an open SFTP session, while any process uses the chroot, or while the chroot holds something
+it did not make. It locks and expires the account and deletes its key first, and removes the
+block last, so if any step fails part way, the account still cannot log in. It gives root the
+snippets it keeps before freeing the account's UID. Then it prints the host's own SSH host key. Store that line in **Variables** as a **plain** value,
+under the key the installation's `snippets.hosts.<host>.hostKey` names; uploads connect to that
+key and nothing else. Running the script again changes nothing.
+
+Then list the host in the lab repository's `installation.yaml`:
+
+```yaml
+snippets:
+  hosts:
+    pve01:
+      hostKey: { store: proxmox/pve01/ssh-host-key }   # the plain value the script printed
+```
+
+From then on a guest on that host whose workflow's machine stage has `hostKey: managed`, and that
+names no `access.hostKey`, gets Octopushy's host key, generated for it and pinned by Octopushy. Its
+private half reaches only the guest's provision plans, and a new machine for the guest gets a new
+key. Dropping `access.hostKey` from a guest that already exists moves its user data to a snippet,
+which replaces the VM, under its `policy.destructive`.
+
+To undo it on a host:
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/v<version>/deploy/proxmox/snippets.sh)" -- --remove
+```
+
+That removes the account, chroot, mount unit, sshd block and key, gives the snippets directory
+back to root, and leaves the datastore's content and any snippets as they are. To stop offering
+snippets as well, run `pvesm set local --content` with the list it had before.
+
+Agents that provision those guests then need to reach each host's sshd, port 22 unless
+`snippets.hosts.<host>.port` says otherwise, as well as its API.
+[Host key trust](../../docs/guest-configuration.md#host-key-trust) has the rest, including who can
+read a guest's private host key.
+
 ## Updating
 
 On the Proxmox host:

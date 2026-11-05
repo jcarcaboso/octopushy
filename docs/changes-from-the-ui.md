@@ -278,7 +278,9 @@ worker is the `octopushy-worker` workflow deployed like any other. Its steps:
    it requires.
 4. **Secrets.** For each secret the workflow declares, or describes in `ui.secrets`, an existing store key, or a value
    generated when the workflow asks for one ([generated values](workflows.md#generated-values)). For a workflow with a setup
-   stage, its login and the store key of the guest's host key, which the person sets after the first boot.
+   stage, its login and the store key of the guest's host key, which the person sets after the first boot. A workflow whose
+   machine stage has `hostKey: managed` starts that field empty: where the installation lists the host under
+   `snippets.hosts`, the guest gets Octopushy's own host key, pinned with no person in the loop.
 5. **Review.** The exact file and diff Git will record, the commit message, what will be generated and where it is stored,
    and the validation. A VMID taken since the wizard opened is refused here, with the next free one offered.
 6. **Deploy,** with a box: **approve the plan in the same click**. Then the change page follows it, as for an edit.

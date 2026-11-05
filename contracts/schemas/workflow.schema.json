@@ -95,6 +95,10 @@
         },
         "image": { "description": "Overrides the server's default image for the executor. Ignored by an agent with the local tool runtime.", "type": "string", "minLength": 1 },
         "verify": { "description": "OpenTofu, the stage that makes a VM only: proxmox (the default) checks the VM through the Proxmox API afterwards.", "enum": ["proxmox", "none"] },
+        "hostKey": {
+          "description": "OpenTofu, the stage that makes a VM only. managed: its module installs the SSH host key Octopushy generates for each guest, given as the sensitive variable octopushy_host_key, in a cloud-init snippet it uploads where octopushy_snippets says. A guest on an installation whose snippets.hosts lists its host then needs no access.hostKey. See docs/guest-configuration.md.",
+          "enum": ["managed"]
+        },
         "playbook": { "description": "Ansible: what runs when the guest, the service or this workflow changes. Relative to root.", "type": "string", "minLength": 1 },
         "prepare": { "description": "Ansible: a playbook run on the agent before approval, with no secrets and no access to the guest. Relative to root.", "type": "string", "minLength": 1 },
         "destructive": { "description": "Ansible: whether the playbook can delete data or a service. False when not set.", "type": "boolean" },
@@ -104,7 +108,7 @@
       "allOf": [
         {
           "if": { "properties": { "executor": { "const": "ansible" } }, "required": ["executor"] },
-          "then": { "required": ["playbook"], "properties": { "verify": false } },
+          "then": { "required": ["playbook"], "properties": { "verify": false, "hostKey": false } },
           "else": { "properties": { "playbook": false, "prepare": false, "destructive": false, "timeoutMinutes": false } }
         }
       ],

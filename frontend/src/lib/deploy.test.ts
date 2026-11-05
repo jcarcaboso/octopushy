@@ -3,7 +3,7 @@ import type { WorkflowSummary, WorkflowVersion } from "../api/types";
 import { defaultsOf, newestPerMajor, readDeployHints, referenceOf, requiredByForm, valueAt } from "./deploy";
 
 function version(v: string, usable = true): WorkflowVersion {
-  return { id: "fedora-vm", version: v, commit: null, usable, issue: null, manages: "vm", description: null, inputs: null, ui: null, secrets: [], setup: false };
+  return { id: "fedora-vm", version: v, commit: null, usable, issue: null, manages: "vm", description: null, inputs: null, ui: null, secrets: [], setup: false, managedHostKey: false };
 }
 
 describe("deploy helpers", () => {

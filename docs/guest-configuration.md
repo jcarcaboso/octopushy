@@ -63,7 +63,7 @@ secretFiles:                            # extra var name -> a private file holdi
 access:
   address: 10.15.60.10                  # defaults to the static or reserved address
   user: ops
-  hostKey: { store: access/pve01-ai/host-key }
+  # hostKey: { store: access/pve01-ai/host-key }   # only for a machine Octopushy did not create
 ```
 
 - **The machine stage makes the machine, the setup stage configures it.** They are separate runs
@@ -396,64 +396,304 @@ preview -> approval -> verify-current -> authorize-key -> verify-key -> promote-
 
 ### Host key trust
 
-`access.hostKey` is a store reference to the guest's public host key, in the form
-`ssh-ed25519 AAAA…`. One entry per line is allowed. It is a required field, and a key that
-is not set blocks the run with **Referenced but not set**. Octopushy writes a private
-`known_hosts` from it and connects with `StrictHostKeyChecking=yes` and a null global
-file. It **never scans** a host: the first thing it learns about a host's key is what an
-operator put in the store.
+A configure run connects with `StrictHostKeyChecking=yes`, a private `known_hosts` and a null
+global file. It **never scans** a host: the key it accepts comes from one of two places.
 
-The value lives in the store rather than in Git for the same reason trust does: a commit
-may point a guest at a new address, but it cannot put a new key behind one. It can only
-reference an entry an operator set. It has to be a plain entry, because a preview receives
-it: a secret posing as a pin is refused.
+**A guest Octopushy creates gets a host key of Octopushy's.** Decided November 3, 2026, and built
+on workflows on November 5, 2026. Octopushy generates an Ed25519 key for the guest before the
+machine exists, the provision run puts it in the guest's cloud-init user data, and every configure,
+rotation and pipeline run pins its public half. Nobody reads a key off a console. That needs three
+things, and validation says which is missing:
 
-A mismatch is a failed run that says so. A rebuilt VM has a new key, so its configure run
-fails closed until someone sets the new one. That is the point, not a defect to smooth over.
+- a guest Octopushy provisions and runs Ansible work on, from its workflow's setup stage or a
+  service's stage, as for [its login key](#ssh-identity), and no `access.hostKey`;
+- a workflow whose machine stage has `hostKey: managed`, which says its module installs the key it
+  is given. Only the first stage of a workflow with `manages: vm` may say it;
+- an installation whose `snippets.hosts` lists the guest's host, once that host is [set up](#setting-up-a-host).
 
-**Where the value comes from, for a VM made by cloud-init.** The guest generates its key on
-first boot, and the channels that could read it automatically are closed: on Fedora the
-guest agent runs as `virt_qemu_ga_t`, which cannot read `sshd_key_t`, cannot run `ssh`, and
-cannot connect to the SSH port even on loopback. That was observed in `nodes`, and the rules
-are confirmed against the policy in `selinux-policy-targeted-44.11`. On November 2, 2026 the
-first of these was also confirmed on a real Fedora 44 cloud image with SELinux enforcing, at
-`pve01-ai`'s size, through the guest agent's own protocol: `guest-exec` of `cat` on the host key
-is refused, and the same call on a copy labelled `etc_t` works. So:
+```yaml
+# workflows/fedora-vm/workflow.yaml, in the workflows repository
+stages:
+  - name: machine
+    executor: opentofu
+    root: ../../modules/opentofu/proxmox-vm
+    hostKey: managed            # the module installs octopushy_host_key from a snippet
 
-1. **Read it through the Proxmox console.** Use the guest agent to set a short-lived
-   password, which it is allowed to do, log in on the console, and read the key:
+# labs/home/proxmox/pve01/installation.yaml, in the lab repository
+snippets:
+  datastore: local              # the default; a directory datastore with snippets content
+  hosts:
+    pve01:
+      hostKey: { store: proxmox/pve01/ssh-host-key }   # plain: what snippets.sh printed
+      # address: 10.15.5.100     # default: the host of its API endpoint; port defaults to 22
+```
 
-   ```sh
-   qm guest passwd <vmid> ops                  # on the Proxmox host
-   # then, on the VM's console in the Proxmox interface:
-   cat /etc/ssh/ssh_host_ed25519_key.pub
-   sudo passwd -l ops
-   ```
+| | Where it is | Who gets it |
+|---|---|---|
+| Private half | The secret `system/guest-host-key/<resource id>`, one store version per key, which no definition can name | The **plan** of a provision run, as the sensitive variable `TF_VAR_octopushy_host_key`. The apply uses the saved plan. The OpenTofu steps of the guest's provision and retire runs also get every version, to mask and for nothing else (below). No configure run, preview, verify step or API response ever holds it |
+| Public half | `GuestHostKey`, one row per version, on the guest's page | The plan, in `octopushy_snippets.hostPublicKey`, and every configure, rotation and pipeline run as its pin |
 
-   Put the line in Variables as a **plain** value. This is the route for a VM that already
-   exists, such as `pve01-ai`. The chain of authentication is your Proxmox login, then the
-   VM's console, with no network path to the guest involved. It costs a person a minute per
-   VM, and again after a rebuild. It writes to the guest, briefly. The password change worked on
-   that test VM through `guest-set-user-password`, which is what `qm guest passwd` sends; `qm`
-   itself and the console login were not part of the test.
-2. **For new VMs, have cloud-init leave a copy the guest agent may read.** A cloud-config
-   with `runcmd: [[install, -Dm0644, /etc/ssh/ssh_host_ed25519_key.pub, /etc/octopushy/ssh-host-ed25519.pub]]`
-   creates a file labelled `etc_t`, which `virt_qemu_ga_t` can read with no policy change.
-   Then `qm guest exec <vmid> -- cat /etc/octopushy/ssh-host-ed25519.pub` gives the key with
-   no console password. This needs a cloud-config snippet, which the current `proxmox-vm`
-   module does not use, and the read is by hand for now. The read worked on that test VM, with
-   the copy made by `sudo` rather than by cloud-init. An agent step could make it automatic
-   later and write to the same pin; nothing here would change.
+**The one secret an OpenTofu run gets besides the Proxmox token.** A provision run's OpenTofu
+environment otherwise holds the Proxmox token and nothing else, and a service's OpenTofu stage holds
+nothing at all. This is a narrow exception, checked where every run's credentials are checked, not a
+change to that rule:
 
-**The trade-off, plainly.** The pin is exactly as trustworthy as the channel it was read
-through. Route 1 and 2 both anchor it in Proxmox: anyone who controls the hypervisor can lie
-about the guest, and they already own it. With `tls.verify: false` on the installation, a
-person using the Proxmox interface or API is trusting that TLS session too. What this rules
-out is a machine on the network answering in the guest's place, which is the attack
-host-key checking exists for. Copying the key from a laptop's `known_hosts`, or from
-`ssh-keyscan`, is possible and Octopushy cannot tell the difference, but that is
-trust-on-first-use: the first key seen is not authenticated. If you do that on an isolated
-VLAN, it is your decision, and you should know that it is one.
+- only a provision run for a guest whose host key is Octopushy's carries the three snippet roles,
+  `opentofu.host-key`, `snippets.ssh-key` and `snippets.host-key`; any other run that holds one is
+  refused, and so is one that lacks one;
+- each role has its one environment name, `TF_VAR_octopushy_host_key` and
+  `PROXMOX_VE_SSH_PRIVATE_KEY`, and only those may be mapped; the host's key is written to a file;
+- the guest's private host key goes to the plan step alone, the upload key to the apply step alone,
+  and each binds only its own guest's or its own installation's `system/` entry;
+- the agent summarizes the plan as before: the JSON plan itself, which holds the snippet, is never
+  logged or returned, and the module marks the variable sensitive. Both keys are released secrets of
+  their attempts, so the agent and the controller mask them like any other;
+- a step can print a key it was not given: an apply's saved plan holds the snippet its plan wrote,
+  and the state holds the one an earlier apply wrote, with an older version. So every OpenTofu step of
+  the guest's provision and retire runs also gets every version of the guest's private host key, under
+  names of the form `mask.opentofu.host-key.v<n>` that no environment variable maps. The agent and the
+  controller mask them in logs, errors and outputs, and the provider never sees them. Each is recorded
+  in `SecretResolution` like any release.
+
+**Which key, and when the pin moves.** Each version has three facts:
+
+- **carried:** the store's current version, the key the next plan carries;
+- **spent:** an apply carrying it was handed to an agent. That is recorded before the assignment is
+  sent, and stays whatever the apply does: one that finished, failed, timed out or was lost may all
+  have uploaded the snippet and made or started a machine, which may then hold the key on its disks,
+  its cloud-init drive or a backup;
+- **delivered:** an apply carrying it finished. The newest delivered version is the pin.
+
+Octopushy compares what a plan does with the key it carried:
+
+| The plan | It carried | What happens |
+|---|---|---|
+| Makes the guest's machine: the first one, or a replacement | A key no other run's apply carried | It goes on |
+| Makes the guest's machine | A key another run's apply carried, delivered or not | Octopushy makes a new key and plans again with it, in the same run. A new machine never starts with a key another machine may hold |
+| Keeps the machine | The newest key any apply carried, delivered or not | It goes on, and the pin moves to it when the apply finishes. Each machine is made with a key no earlier one held, so this is the key the machine may hold, even when the apply that made it failed afterwards |
+| Keeps the machine | A key that was only ever planned, such as one a rejected replacement left | Octopushy plans again with the newest key an apply carried. Not the pin: an apply that failed after making a new machine leaves a newer key on it than the pin |
+| Keeps the machine | An older key an apply carried, while a newer one an apply carried exists | The run stops and says why. Which of the two the machine holds cannot be told, and Octopushy does not guess: check which key the guest serves, or replace the VM, which gives it a new key |
+
+**Where it is asked.** The rule is asked when the plan finishes, again before the plan is approved,
+by policy or by a person, and again just before the apply is handed out. A plan whose key no longer
+fits by then is refused at the apply, and the run says to plan again. So no path skips it: a plan
+recorded before a crash, or a key another run spent since, is caught at the next of these.
+
+**Planning again is one change.** The new key, the run's pinned version of it and the plan going back
+to pending are saved together, with the result of the plan that caused them, or not at all. An
+interruption at any point leaves either the plan as it came back, which the next check plans again,
+or the new plan under way.
+
+The plan that is kept says why it was made again, and the approval is of that plan. The pin moves
+when the apply that delivered a new key finishes, in the same save that records the apply, and not
+before: while a replacement waits for approval, configure runs still pin the old machine's key, and
+the guest's page shows both. A run whose plans keep changing their mind, three times, stops and asks
+for a new one. Until any apply has delivered a key, a configure run waits and says so, because the
+guest still has whatever key its image made.
+
+Once Octopushy holds a host key for a guest, the guest keeps it while it is offered, whatever happens
+to its Ansible work: dropping the snippet would replace the VM. A stage runs on the guest its service
+is on, so it pins that guest's key. A guest that names `access.hostKey` keeps that pin, which wins:
+that is how a machine Octopushy did not create is reached. Retiring the guest deletes every version of
+both halves, and the record of where the private halves were released stays in `SecretResolution`.
+
+**How it reaches the guest.** Proxmox's own user data carries no host keys, and its API cannot
+upload the snippet that would: it accepts only ISO images, container templates and `import`
+content, and `cicustom` reads only `snippets` volumes. So the module writes everything Proxmox
+would have written, adds `ssh_deletekeys`, `ssh_genkeytypes: [ed25519]` and `ssh_keys`, and the
+provider uploads it over SFTP. Proxmox computes the `instance-id` from the user data, so cloud-init
+treats the VM as new, deletes the image's keys and installs Octopushy's. On a real Fedora 44 VM
+with SELinux enforcing, the key it served was exactly the one given, labelled `sshd_key_t`, and the
+only one.
+
+**The upload.** The provider logs in as the account [`snippets.sh`](#setting-up-a-host) creates,
+with a key Octopushy generates per installation at `system/installation-snippets/<installation>`.
+Only provision applies get it, as `PROXMOX_VE_SSH_PRIVATE_KEY`, and only for a guest whose host
+key is Octopushy's. The provider trusts any host it has not seen, so Octopushy writes the host's
+own key, from the plain entry `snippets.hosts.<host>.hostKey` names, to the attempt's
+`HOME/.ssh/known_hosts`, and the provider refuses any other: a real `tofu apply` with a different
+key there failed with *REMOTE HOST IDENTIFICATION HAS CHANGED* and uploaded nothing.
+
+**Who can read the private key, plainly.** The owner accepted this on November 3, 2026:
+
+- **anyone with `VM.Audit` on the VM**, through `GET /nodes/{node}/qemu/{vmid}/cloudinit/dump?type=user`,
+  which returns the snippet. Today that is every token that can see the VM, so **narrowing the
+  Proxmox tokens matters more** once guests use this;
+- root on the Proxmox host: the snippet file (mode 0600, owned by the upload account) and the
+  cloud-init drive built from it;
+- OpenTofu's saved plan and Octopushy's built-in state, both encrypted at rest, and in the clear in
+  the agent's workspace while the plan or apply runs;
+- the guest's root, in cloud-init's copy of its user data.
+
+Someone holding it can answer as the guest. Everyone on that list except API users with only
+`VM.Audit` already controls the guest or its hypervisor.
+
+**What a hostile OpenTofu module can do with this, plainly.** The [safety boundary](safety-boundary.md)
+leaves hostile OpenTofu and provider code out of scope: a module runs with the credentials its step
+holds. For a workflow that says `hostKey: managed`, that has two consequences:
+
+- **while planning,** before anyone approves anything, the module can read the guest's private host
+  key, which its plan is given, and send it anywhere it can reach;
+- **during an approved apply,** it can use the installation's upload key, over SFTP, as the snippet
+  account: read, replace or delete any snippet in that datastore, including other guests' snippets,
+  which hold their private host keys. `snippets.sh` confines the account to that directory, and
+  nothing else on the host.
+
+Only review of the workflows repository guards against this, as for any module. Opt in only workflows
+whose modules you review.
+
+**A guest that switches to this is a new machine.** The provider replaces a VM whose
+`user_data_file_id` changes, so dropping `access.hostKey` from a guest that exists plans a
+replacement, which follows `policy.destructive`. There is no migration for a machine that already
+exists: recreate it. A workflow that adds `hostKey: managed` is a minor version for that reason:
+a guest that keeps its `access.hostKey` gets no snippet, and its machine does not change.
+
+**Afterwards, a change to what the snippet holds keeps the VM.** A person's key in
+`access.sshAuthorizedKeys`, for example, uploads the snippet again: the provider deletes the file
+and uploads it under the same name. The VM names the snippet by a volume id known when planning,
+`<datastore>:snippets/octopushy-<vmid>-user-data.yaml`, so its configuration does not change and
+the plan leaves it alone. Proxmox rebuilds the cloud-init drive from the snippet each time it
+starts the VM, so the change reaches the guest at its next start from Proxmox, where cloud-init
+sees a new instance and applies it; a reboot from inside the guest does not rebuild the drive.
+
+**The upload is not atomic, an accepted limit.** The provider deletes the file, then creates it
+under its final name and writes into it, and Proxmox reads whatever is there when it starts the VM.
+A start from Proxmox in that moment, or after an upload that failed, reads a missing, empty or
+partial file. On a real Fedora 44 VM with SELinux enforcing:
+
+- **no file:** the start fails, and the next one works (from qemu-server's source);
+- **an empty file, or one cut so it is no longer YAML:** a new instance. cloud-init deletes the host
+  keys and makes new ones, so the pin no longer matches and configure runs are refused. A person's
+  existing `authorized_keys` still work;
+- **a file cut inside the private key:** sshd does not start, so nothing reaches the guest over SSH;
+- **the whole snippet at the next start:** Octopushy's key is back, alone, and the pin matches.
+
+So Octopushy refuses the guest's unexpected identity, and the next start from Proxmox with the
+whole snippet heals it. That is fail-closed for Octopushy only: other SSH access to the guest,
+such as a person's key, may still work in the meantime. The apply
+itself never starts or reboots the VM in that moment: the VM waits on the snippet, and an upload
+that fails stops the apply before any call for the VM, which octopushy-lab's test checks. What is
+left is a start by something else, such as a person, HA or the host booting, during the few
+milliseconds of an upload, or after one that failed and before the next apply.
+
+**An apply that does not finish**, failed or lost, leaves its key spent and the pin where it was.
+A machine may now hold either key: a new one made with the new key, or the old with the old. The next
+plan follows the rule above: a plan that makes a machine again gets a new key, and one that keeps the
+machine carries the newest spent key, even past a replacement that was planned and rejected since.
+Where the machine serves a key the pin does not hold, configure runs are refused until an apply
+delivers the key in its snippet and the machine is started from Proxmox. It fails closed, and a person
+may have to start the VM.
+
+**Masks outlive a restart.** The controller remembers in memory what each attempt was sent, to mask
+what it reports. A restart, or an attempt that reports after it was closed, loses that. So before it
+keeps a log line, an error or an output of an attempt it does not know, it reads back every value the
+attempt was given from `SecretResolution` and the encrypted store. If one cannot be read back, because
+its version is gone, it keeps no log line, no error and no outputs of that attempt, only a note that
+they were withheld. A step that needs the outputs, such as a plan before its approval, then fails.
+
+**What replaces the VM.** Changing a guest's `vmid` or the installation's `snippets.datastore`
+changes `user_data_file_id`, so the provider replaces the VM, as it does when a guest first gets
+this, and the new machine gets a new key. Each follows the guest's `policy.destructive`.
+
+**For a machine Octopushy did not create**, `access.hostKey` is a store reference to its public
+host key, in the form `ssh-ed25519 AAAA…`. One entry per line is allowed. It has to be a plain
+entry, because a preview receives it: a secret posing as a pin is refused. The value lives in the
+store rather than in Git for the same reason trust does: a commit may point a guest at a new
+address, but it cannot put a new key behind one. A mismatch is a failed run that says so, and a
+rebuilt machine of that kind fails closed until someone sets its new key. On Fedora the guest agent
+cannot read the key (`virt_qemu_ga_t` is refused `sshd_key_t`, and also `cloud_log_t`, where
+cloud-init logs the fingerprint; confirmed on a real Fedora 44 cloud image with SELinux enforcing on
+November 2, 2026), so read it through the Proxmox console:
+
+```sh
+qm guest passwd <vmid> ops                  # on the Proxmox host
+# then, on the VM's console in the Proxmox interface:
+cat /etc/ssh/ssh_host_ed25519_key.pub
+sudo passwd -l ops
+```
+
+That pin is exactly as trustworthy as the channel it was read through, here your Proxmox login.
+Anyone who controls the hypervisor can lie about the guest, and they already own it; with
+`tls.verify: false` on the installation, a person using the Proxmox interface or API is trusting
+that TLS session too. Copying a key from a laptop's `known_hosts` or from `ssh-keyscan` is
+trust-on-first-use, which Octopushy cannot tell apart; on an isolated VLAN that is your decision,
+and you should know that it is one.
+
+#### Setting up a host
+
+Once per Proxmox host, as root, for example in the host's shell in the Proxmox web interface. The
+installation's page has a **Create upload key** button and then shows the exact command, with the
+key, the installation's `snippets.user` and `snippets.datastore`, and this release's script:
+
+```sh
+OCTOPUSHY_SNIPPETS_KEY='ssh-ed25519 AAAA… octopushy-snippets@home/pve01' \
+  OCTOPUSHY_SNIPPETS_USER='octopushy-snippets' OCTOPUSHY_SNIPPETS_DATASTORE='local' \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/v<version>/deploy/proxmox/snippets.sh)"
+```
+
+[`deploy/proxmox/snippets.sh`](../deploy/proxmox/snippets.sh) adds `snippets` to the datastore's
+content, creates the account `octopushy-snippets` with no password and no shell, and lets it log in
+only with that key, only over SFTP, only inside a chroot that holds the datastore's snippets
+directory at its own path, where it creates files mode 0600. It is safe by construction rather
+than by testing one connection:
+
+- **The block is read first.** The drop-in is `00-<account>.conf`, and the script refuses unless
+  `sshd_config` starts with Debian's `Include /etc/ssh/sshd_config.d/*.conf` and no drop-in sorts
+  before it. sshd takes the first value it finds for these settings, so the block wins for every
+  connection of the account.
+- **It names one account.** The block is `Match User <account>` with no other condition, so no
+  other user's settings can change.
+- **Only the key in its file lets the account in.** The block turns off every other way: no CA
+  certificate (`TrustedUserCAKeys none`), no `AuthorizedKeysCommand` or principals, no password,
+  keyboard-interactive, host-based, GSSAPI or Kerberos login, and no forwarding of any kind, even
+  where the host sets them for everyone. Before reloading, it checks each of these with `sshd -T`.
+- **Before it changes anything**, it refuses: root, an account or group that exists and that it did
+  not create, a configuration `sshd -t` already rejects, a drop-in of its name that it did not write,
+  and any other sshd file that mentions the account, such as a `Match User` block for it on some
+  addresses. It also refuses a link, or anything but a regular file or a real directory, at any
+  path it writes or backs up: the drop-in, the key file and its directory, the mount unit and the
+  chroot's directories. This holds for `--remove` too, which also refuses while the account has a
+  process, such as an open SFTP session, while any process uses the chroot, such as one working in
+  it, which would keep it from being unmounted, or while the chroot holds anything it did not make.
+- **sshd's files are written, checked and reloaded, or put back.** It copies them first, with
+  their modes, into a directory only root can read. After writing, it checks `sshd -t` and
+  reloads only then. If that or the reload fails, it puts the copies back, reloads again if the
+  first reload went through, and sshd keeps running what it had, for setup and `--remove` alike.
+  Every `sshd -T` it runs names a whole connection (user, host, address, local address and port,
+  routing domain), so a `Match` on any of them is evaluated.
+- **`--remove` takes the block away last.** It locks and expires the account and deletes its key
+  first. The block still turns off every other way in, so the account cannot log in at all from
+  that moment. Then it unmounts the chroot, gives root the snippets the account owns, deletes the
+  account, its group and the mount unit, and only then removes the drop-in, checks `sshd -t` and
+  reloads. If any step fails part way, the block is still there and nothing gets in as the
+  account, not even with a certificate from a CA the host trusts. Running `--remove` again carries
+  on from there; running setup again clears the expiry and puts the key back.
+- **What is not put back.** Setup's earlier steps (the datastore's content, the account, the chroot
+  and its mount) stay if sshd's step fails; a second run or `--remove` deals with them. In
+  `--remove`, only the drop-in is put back if its own step fails: the steps before it, which leave
+  the account with no way in, are not undone.
+- **Kept snippets stay root's.** `--remove` keeps the snippets, which hold guests' private host
+  keys. Before the account's UID is freed, it gives root every file the account owns there,
+  without following links, keeping each file's mode, so an account made later with the same UID
+  reads none of them. The directory goes back to mode `00755`, without the setgid bit.
+
+It prints what it changed, and the host's own SSH host key. Store that key as a plain value under the name
+`snippets.hosts.<host>.hostKey` gives. Running it again changes nothing; running it with a new key
+replaces the old one. `bash snippets.sh --remove` undoes it, and leaves the datastore's content and
+its snippets alone. [`tests/proxmox-snippets/run.sh`](../tests/proxmox-snippets/run.sh) runs all of
+this on Debian bookworm and trixie, as Proxmox VE 8 and 9 use, with Proxmox's own commands stubbed.
+
+**Why a key Octopushy generates.** Nobody copies a private key: what leaves Octopushy is the public
+half, for the script. The account can write snippets and nothing else, so a leaked key writes
+snippets. A password would have to be typed into the host, would need password logins enabled for
+the account, and could be replayed. The key's line is marked `restrict` as well.
+
+**Containers** do not use this: Proxmox makes a container's host keys itself when it creates it.
+`hostKey: managed` is refused on any stage but the first stage of a workflow with `manages: vm`, and
+Octopushy's key goes only to a guest of `type: vm`. A run that logs in to a guest chooses its pin
+explicitly: the guest's `access.hostKey`, or Octopushy's key for a VM whose workflow delivers one to a
+host set up for it. A missing `access.hostKey` alone is never taken to mean Octopushy's key: any other
+guest without one is refused.
 
 ## Secrets
 
@@ -518,7 +758,8 @@ has the reasoning; the result:
   endpoint changed, gets no configure run, because the host running it is the
   same trust domain as its provisioning.
 - **One new gate, and it is the host key.** Credentials go only to endpoints an operator
-  trusted. For a guest, the endpoint's identity is its host key, set out of band.
+  trusted. For a guest, the endpoint's identity is its host key: Octopushy's own, which it
+  delivered, or one an operator set out of band.
 - **What the pin does not do.** It stops a machine on the network answering as the guest,
   and it stops a setting in a play or an `ansible.cfg` from turning the check off: the
   connection is pinned with extra vars, including the `ssh` binary. It does not stop hostile
@@ -604,12 +845,13 @@ this executor settles that question in the same direction.
 
 **Replacing a protected VM** (PR 19, merged) meets this at one point: a provision run that
 replaces a VM resets the guest's proposed configuration, so the new VM is configured, and
-its new host key fails closed until the pin is updated. A configure run has no plan and
+its new host key fails closed until the pin is updated, unless the key is Octopushy's, whose pin moves
+with the apply that made the new machine. A configure run has no plan and
 never lifts protection, so none of that logic applies to it.
 
 ## What this does not do
 
-- No host key read by the agent. Route 2 above is by hand.
+- No host key for a machine Octopushy did not create, other than the one a person pins.
 - No container guests until `type: container` lands.
 - No drift detection. A run shows what happened when it ran, not what is true now.
 - A deferred run waiting for approval holds the guest until someone decides. There is no

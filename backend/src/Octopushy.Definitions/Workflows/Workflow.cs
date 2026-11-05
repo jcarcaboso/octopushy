@@ -134,7 +134,14 @@ public sealed record WorkflowStage(
     string Root,
     string Verify,
     string? Image,
-    ConfigureActions? Configure);
+    ConfigureActions? Configure)
+{
+    /// <summary>
+    /// For the stage that makes a VM, <c>hostKey: managed</c>: its module installs the SSH host key Octopushy generates
+    /// for each guest, in a cloud-init snippet. See <see cref="ManagedHostKey"/>.
+    /// </summary>
+    public bool ManagedHostKey { get; init; }
+}
 
 /// <summary>What an Ansible stage offers: the action that runs on change, any others, the outcomes it may report, and the secrets it needs.</summary>
 public sealed record ConfigureActions(

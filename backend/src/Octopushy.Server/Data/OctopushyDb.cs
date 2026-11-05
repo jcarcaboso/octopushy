@@ -27,6 +27,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
     public DbSet<GuestScheduleState> GuestSchedules => Set<GuestScheduleState>();
     public DbSet<GuestAccessKey> GuestAccessKeys => Set<GuestAccessKey>();
 
+    public DbSet<GuestHostKey> GuestHostKeys => Set<GuestHostKey>();
+
+    public DbSet<InstallationSnippetKey> InstallationSnippetKeys => Set<InstallationSnippetKey>();
+
     public DbSet<Run> Runs => Set<Run>();
 
     public DbSet<Step> Steps => Set<Step>();
@@ -158,6 +162,14 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasKey(x => new { x.ResourceId, x.Version });
             e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
         });
+
+        model.Entity<GuestHostKey>(e =>
+        {
+            e.HasKey(x => new { x.ResourceId, x.Version });
+            e.HasOne<Resource>().WithMany().HasForeignKey(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        model.Entity<InstallationSnippetKey>(e => e.HasKey(x => x.Installation));
 
         model.Entity<Step>(e =>
         {

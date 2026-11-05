@@ -892,6 +892,67 @@
         }
       }
     },
+    "/api/installations/{id}/snippets-key": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "createInstallationSnippetsKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnippetAccessDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/installations/{id}/observe": {
       "post": {
         "tags": [
@@ -6004,6 +6065,16 @@
             "items": {
               "$ref": "#/components/schemas/ServiceSummaryDto"
             }
+          },
+          "hostKey": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedHostKeyDto"
+              }
+            ]
           }
         }
       },
@@ -6233,6 +6304,16 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "snippets": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SnippetAccessDto"
+              }
             ]
           }
         }
@@ -6653,6 +6734,68 @@
             ]
           },
           "removedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ManagedHostKeyDto": {
+        "required": [
+          "pinned",
+          "next"
+        ],
+        "type": "object",
+        "properties": {
+          "pinned": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedHostKeyVersionDto"
+              }
+            ]
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedHostKeyVersionDto"
+              }
+            ]
+          }
+        }
+      },
+      "ManagedHostKeyVersionDto": {
+        "required": [
+          "version",
+          "publicKey",
+          "fingerprint",
+          "createdAt",
+          "deliveredAt"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "publicKey": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deliveredAt": {
             "type": [
               "null",
               "string"
@@ -7875,6 +8018,89 @@
           }
         }
       },
+      "SnippetAccessDto": {
+        "required": [
+          "publicKey",
+          "fingerprint",
+          "createdAt",
+          "declared",
+          "datastore",
+          "user",
+          "hosts",
+          "command"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "fingerprint": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "declared": {
+            "type": "boolean"
+          },
+          "datastore": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SnippetHostDto"
+            }
+          },
+          "command": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SnippetHostDto": {
+        "required": [
+          "host",
+          "address",
+          "port",
+          "hostKeyStore",
+          "hostKeySet"
+        ],
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hostKeyStore": {
+            "type": "string"
+          },
+          "hostKeySet": {
+            "type": "boolean"
+          }
+        }
+      },
       "StartedRun": {
         "required": [
           "runId"
@@ -8768,6 +8994,10 @@
             }
           },
           "setup": {
+            "type": "boolean",
+            "default": false
+          },
+          "managedHostKey": {
             "type": "boolean",
             "default": false
           }

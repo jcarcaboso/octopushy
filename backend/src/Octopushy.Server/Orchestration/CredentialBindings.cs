@@ -9,7 +9,10 @@ namespace Octopushy.Server.Orchestration;
 internal static class CredentialBindings
 {
     // CA certificates are public trust material. Other current bindings feed credential channels.
-    internal static bool RequiresSecret(string name) => RunContext.BareRole(name) is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey);
+    internal static bool RequiresSecret(string name) => RunContext.BareRole(name) is not (SecretNames.ProxmoxCa or SecretNames.AnsibleHostKey or SecretNames.SnippetsHostKey);
+
+    /// <summary>A pin goes to steps that hold no secret, or is written to a file, so a secret must not pose as one.</summary>
+    private static bool IsPin(string role) => role is SecretNames.AnsibleHostKey or SecretNames.SnippetsHostKey;
 
     internal static List<string> Validate(RunContext context)
     {
@@ -51,14 +54,32 @@ internal static class CredentialBindings
                 {
                     "PROXMOX_VE_ENDPOINT" => value == context.Proxmox.Endpoint,
                     "PROXMOX_VE_INSECURE" => value == (context.Proxmox.VerifyTls ? "false" : "true"),
+                    SecretNames.SnippetsUserEnv => value == context.Snippets?.User,
                     _ => false,
                 }))
                     problems.Add($"Proxmox provider environment '{name}' is reserved; inspect and replan");
+                if (name == SecretNames.GuestHostKeyEnv)
+                    problems.Add($"'{name}' is reserved for the guest's host key; inspect and replan");
             }
             if (tofu.SecretEnv.GetValueOrDefault("PROXMOX_VE_API_TOKEN") != SecretNames.ProxmoxToken)
                 problems.Add("Proxmox provider token mapping is reserved; inspect and replan");
-            foreach (var (name, _) in tofu.SecretEnv.Where(e => e.Key != "PROXMOX_VE_API_TOKEN"))
+            // The one exception to "only the Proxmox token": a snippet upload, which carries exactly the guest's private
+            // host key and the upload key, each under its own name. See docs/guest-configuration.md#host-key-trust.
+            var uploads = context.Snippets is not null;
+            foreach (var (name, role) in tofu.SecretEnv.Where(e => e.Key != "PROXMOX_VE_API_TOKEN"))
+            {
+                if (uploads && (name, role) is (SecretNames.GuestHostKeyEnv, SecretNames.GuestHostKey) or (SecretNames.SnippetsKeyEnv, SecretNames.SnippetsKey))
+                    continue;
                 problems.Add($"OpenTofu secret environment '{name}' is not allowed; only the Proxmox token is released; inspect and replan");
+            }
+        }
+
+        // The snippet roles exist exactly when the run uploads a snippet, and only a provision run does.
+        var uploading = context.Snippets is not null && context.OpenTofu is not null;
+        foreach (var role in SecretNames.SnippetRoles)
+        {
+            if (context.Secrets.ContainsKey(role) != uploading)
+                problems.Add($"The role {role} belongs to a snippet upload, and this run {(uploading ? "lacks it" : "makes none")}; inspect and replan");
         }
         return problems;
     }
@@ -88,9 +109,13 @@ internal static class CredentialBindings
         var problems = new List<string>();
         if (context.Secrets.Keys.Any(n => n is SecretNames.ProxmoxSharedToken or SecretNames.ProxmoxReadOnlyToken or SecretNames.ProxmoxPrivilegedToken or SecretNames.ProxmoxToken))
             problems.Add("A configure run carries no Proxmox credentials; inspect and replan");
-        // A rotation takes the guest's own key by step, so it binds only the pin.
-        if ((context.AccessRotation is null && !context.Secrets.ContainsKey(SecretNames.AnsibleSshKey)) || !context.Secrets.ContainsKey(SecretNames.AnsibleHostKey))
+        // A rotation takes the guest's own key by step, so it binds only the pin. A guest whose host key is Octopushy's
+        // binds no pin: the public half comes from the guest's own record.
+        if ((context.AccessRotation is null && !context.Secrets.ContainsKey(SecretNames.AnsibleSshKey))
+            || context.Secrets.ContainsKey(SecretNames.AnsibleHostKey) == context.ManagedHostKey)
             problems.Add("A configure run needs an SSH key and a pinned host key; inspect and replan");
+        if (context.Snippets is not null || context.Secrets.Keys.Any(n => SecretNames.SnippetRoles.Contains(RunContext.BareRole(n))))
+            problems.Add("A configure run carries no snippet upload credentials; inspect and replan");
         return problems;
     }
 
@@ -123,8 +148,15 @@ internal static class CredentialBindings
         foreach (var (name, key) in bindings)
         {
             var role = RunContext.BareRole(name);
-            // A guest's own key is the one thing under system/ a run may bind, and only its own guest's.
-            var ownKey = role == SecretNames.AnsibleSshKey && run is not null && key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId);
+            // The server's own keys are the only things under system/ a run may bind, and each only by its own guest or
+            // installation: the guest's login key, and for a snippet upload the guest's host key and the installation's upload key.
+            var ownKey = run is not null && role switch
+            {
+                SecretNames.AnsibleSshKey => key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId),
+                SecretNames.GuestHostKey => context.Snippets is not null && key == GuestHostCredentials.Key(run.ResourceId),
+                SecretNames.SnippetsKey => context.Snippets is { } uploads && key == InstallationSnippetCredentials.Key(uploads.Installation),
+                _ => false,
+            };
             if (key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal) && !ownKey)
             {
                 problems.Add($"{key}: reserved system scope");
@@ -139,7 +171,9 @@ internal static class CredentialBindings
 
             if (!entries.TryGetValue(key, out var entry))
             {
-                problems.Add($"{key}: missing");
+                problems.Add(role == SecretNames.SnippetsKey
+                    ? $"{key}: missing. Create the snippet upload key on the installation's page, and run deploy/proxmox/snippets.sh on each host with it"
+                    : $"{key}: missing");
                 continue;
             }
 
@@ -150,7 +184,7 @@ internal static class CredentialBindings
             }
 
             // A pin is public and goes to steps with no secrets, so a secret must not pose as one.
-            if (role == SecretNames.AnsibleHostKey && entry.Visibility == Visibilities.Secret)
+            if (IsPin(role) && entry.Visibility == Visibilities.Secret)
             {
                 problems.Add($"{key}: a host key is public; store it as plain");
                 continue;

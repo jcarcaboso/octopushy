@@ -169,6 +169,10 @@ public sealed class WorkflowReader
             var machine = manages == WorkflowKinds.Vm && index == 0;
             if (node["verify"] is not null && !machine)
                 Invalid($"{at}/verify", $"Stage '{name}' cannot verify: only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, does.");
+            // A VM's only: a container's host keys are Proxmox's, made when it creates the container.
+            var makesVm = manages == WorkflowKinds.Vm && index == 0 && executor == Executors.OpenTofu;
+            if (node["hostKey"] is not null && !makesVm)
+                Invalid($"{at}/hostKey", $"Stage '{name}' cannot install a managed host key: only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, does.");
 
             ConfigureActions? configure = null;
             if (executor == Executors.Ansible)
@@ -207,7 +211,10 @@ public sealed class WorkflowReader
                 root,
                 machine ? node["verify"]?.GetValue<string>() ?? "proxmox" : "none",
                 node["image"]?.GetValue<string>(),
-                configure));
+                configure)
+            {
+                ManagedHostKey = makesVm && node["hostKey"]?.GetValue<string>() == "managed",
+            });
         }
 
         var ansible = stages.Where(s => s.Executor == Executors.Ansible).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);

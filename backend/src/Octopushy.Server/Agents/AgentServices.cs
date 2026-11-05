@@ -85,6 +85,7 @@ public sealed class AgentChannelService(
     AgentConnections connections,
     RunEngine engine,
     AttemptLogStore logs,
+    AttemptMasks masks,
     Microsoft.Extensions.Options.IOptions<Options.OctopushyOptions> options,
     TimeProvider clock,
     ILogger<AgentChannelService> logger) : AgentChannel.AgentChannelBase
@@ -164,6 +165,8 @@ public sealed class AgentChannelService(
                         {
                             ownAttempts.Add(attemptId);
                             var lines = message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList();
+                            // A restarted controller reads the attempt's secrets back before it keeps a line.
+                            await masks.EnsureAsync(attemptId, call.Token);
                             await logs.AppendAsync(attemptId, (long)message.Log.FirstSequence, lines, call.Token);
                         }
 

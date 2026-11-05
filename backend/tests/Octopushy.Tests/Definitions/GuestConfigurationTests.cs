@@ -80,7 +80,7 @@ public class GuestConfigurationTests
         Assert.Equal("10.1.0.31", inputs.Address);
         Assert.Equal(22, inputs.Port);
         Assert.Equal("access/app/ssh-key", inputs.SshKey!.Key);
-        Assert.Equal("access/app/host-key", inputs.HostKey.Key);
+        Assert.Equal("access/app/host-key", inputs.HostKey!.Key);
         Assert.Equal(WorkflowDefinition.SetupAction, inputs.Configure.OnChange!.Id);
         Assert.Equal("site.yml", inputs.Configure.OnChange.Playbook);
         Assert.Equal("modules/ansible/app", inputs.Stage.Root);
