@@ -13,12 +13,12 @@ public static class ContainerHostKey
     /// of its valid services alike. <c>access.hostKey</c> always wins.
     /// </summary>
     public static bool Wanted(LabRepository repository, GuestDefinition guest) =>
-        Pinned(guest)
-        && (guest.Setup is not null
-            || repository.Services.Any(s => s.GuestAddress == guest.Address && repository.IsValid(s.Address)
-                && s.Stages.Any(stage => stage.Definition.Executor == Executors.Ansible)));
+        Pinned(guest) && (guest.Setup is not null || ManagedAccess.RunsPlaybooks(repository, guest));
 
-    /// <summary>A container with no <c>access.hostKey</c>: its Ansible work is pinned to what its create task logged.</summary>
+    /// <summary>
+    /// A container with no <c>access.hostKey</c>: its Ansible work is pinned to what its create task logged. The decision is
+    /// <see cref="ManagedHostKey.TrustOf(InstallationDefinition?, GuestDefinition)"/>'s, which needs no installation for it.
+    /// </summary>
     public static bool Pinned(GuestDefinition guest) =>
-        guest.Type == GuestTypes.Container && guest.Json["access"]?["hostKey"] is null;
+        ManagedHostKey.TrustOf((InstallationDefinition?)null, guest) == HostKeyTrust.Container;
 }

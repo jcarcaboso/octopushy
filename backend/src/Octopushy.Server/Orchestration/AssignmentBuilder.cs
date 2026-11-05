@@ -55,9 +55,23 @@ public sealed partial class AssignmentBuilder(
         var token = TokenFor(stepName, context);
         return action.Executor == "opentofu"
             ? context.OpenTofu!.SecretEnv.Values
-                .Select(n => n == SecretNames.ProxmoxToken ? token : n).Distinct(StringComparer.Ordinal).ToList()
+                .Select(n => n == SecretNames.ProxmoxToken ? token : n)
+                .Where(n => ReleasedTo(n, stepName))
+                .Concat(stepName == StepNames.Apply && context.Snippets is not null ? [SecretNames.SnippetsHostKey] : [])
+                .Distinct(StringComparer.Ordinal).ToList()
             : new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList();
     }
+
+    /// <summary>
+    /// The guest's private host key goes to the plan, which writes it into the snippet and keeps it in the saved plan,
+    /// and the upload key to the apply, which is the only step that uploads.
+    /// </summary>
+    private static bool ReleasedTo(string name, string stepName) => name switch
+    {
+        SecretNames.GuestHostKey => stepName == StepNames.Plan,
+        SecretNames.SnippetsKey => stepName == StepNames.Apply,
+        _ => true,
+    };
 
     public static string TokenFor(string stepName) => stepName is
         StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect
@@ -114,21 +128,50 @@ public sealed partial class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
         }
+        // The last time the host key rule is asked before a machine may get the key; then the key counts as spent.
+        if (stepName == StepNames.Apply && run is { Operation: Operations.Provision } && context.Snippets is not null)
+            await SpendHostKeyAsync(run, context, cancellationToken);
 
         // State leaves the controller under the gates above, like any other credential.
         var state = action.Executor == "opentofu"
             ? await states.CheckOutAsync(attempt, run!, context, stepName == StepNames.Apply, cancellationToken)
             : null;
+        // Only these server-owned keys may leave system/ here, and the general resolver keeps refusing them.
+        var own = names.Where(n => n is SecretNames.GuestHostKey or SecretNames.SnippetsKey).ToList();
+        var stored = names.Except(own).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
-            names.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
-            names.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
+            stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
+            stored.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
             attempt.Id,
             agentId,
             cancellationToken);
+        if (missing.Count == 0)
+        {
+            foreach (var name in own)
+            {
+                var key = context.Secrets[name];
+                var version = context.SecretVersions[name];
+                if (await store.GetVersionInternalAsync(key, version, cancellationToken) is not { } value)
+                {
+                    missing.Add($"{key} v{version}");
+                    continue;
+                }
+
+                db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+                values[name] = value;
+            }
+        }
         if (missing.Count > 0)
         {
+            foreach (var audit in db.ChangeTracker.Entries<SecretResolution>().Where(e => e.State == EntityState.Added).ToList())
+                audit.State = EntityState.Detached;
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
+        if (action.Executor == "opentofu" && run is { Operation: Operations.Provision or Operations.Retire })
+            await AddHostKeyMasksAsync(attempt, run, values, agentId, cancellationToken);
+        if (own.Count > 0 || values.Keys.Any(k => k.StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal)))
+            await db.SaveChangesAsync(cancellationToken);
+        values.Remove(SecretNames.SnippetsHostKey, out var nodeHostKey);
         var token = TokenFor(stepName, context);
         values[SecretNames.ProxmoxToken] = values[token];
         values.Remove(token);
@@ -153,9 +196,13 @@ public sealed partial class AssignmentBuilder(
                 ["image"] = tofu.Image,
                 ["variables"] = await VariablesAsync(run, context, tofu, cancellationToken),
                 ["env"] = new JsonObject(tofu.Env.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
-                ["secretEnv"] = new JsonObject(tofu.SecretEnv.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
+                // Only what this step holds: the agent refuses a name it was not given a value for.
+                ["secretEnv"] = new JsonObject(tofu.SecretEnv.Where(p => p.Value == SecretNames.ProxmoxToken || values.ContainsKey(p.Value))
+                    .Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 ["destroy"] = run.Operation == Operations.Retire,
             };
+            if (nodeHostKey is not null)
+                input["knownHosts"] = KnownHosts(nodeHostKey, context.Snippets!);
             assignment.FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(run, context, cancellationToken));
             if (stepName == StepNames.Apply)
             {
@@ -398,7 +445,75 @@ public sealed partial class AssignmentBuilder(
                 key = await GuestAccessCredentials.EnsureAsync(db, store, run.ResourceId, context.Proxmox.Name ?? run.ResourceId.ToString(), clock.GetUtcNow(), cancellationToken);
             variables["guest"]!["sshAuthorizedKeys"]!.AsArray().Add(key.PublicKey);
         }
+        // The public half of the version this run pinned, which is the private half its plan holds.
+        if (context.Snippets is not null && variables["octopushy_snippets"] is JsonObject snippets)
+        {
+            var version = context.SecretVersions.GetValueOrDefault(SecretNames.GuestHostKey);
+            var hostKey = await db.GuestHostKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Version == version, cancellationToken)
+                ?? throw new AssignmentException($"The guest has no host key of Octopushy's at version {version}.");
+            snippets["hostPublicKey"] = hostKey.PublicKey;
+        }
 
         return variables;
+    }
+
+    /// <summary>
+    /// Refuses an apply whose plan's host key no longer fits the machine it makes, whatever path led here, and otherwise
+    /// marks the key as spent: from the moment this apply is handed out, a machine may hold it. The mark is saved with the
+    /// hand-off, before the assignment is sent. A mark this run made itself, by an earlier hand-off, is its own.
+    /// </summary>
+    private async Task SpendHostKeyAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    {
+        var version = context.SecretVersions.GetValueOrDefault(SecretNames.GuestHostKey);
+        var plan = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == StepNames.Plan && s.Stage == null)
+            .Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
+        var outputs = plan is null ? null : JsonNode.Parse(plan);
+        var keys = await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
+        var makes = GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs);
+        if (GuestHostCredentials.Fit(keys, version, makes, run.Id).Fit != HostKeyFit.Fits)
+            throw new AssignmentException("The host key this plan carries no longer fits: it may be on another machine, or this machine was never given it. Plan again.");
+        await GuestHostCredentials.SpentAsync(db, run.ResourceId, version, run.Id, clock.GetUtcNow(), cancellationToken);
+    }
+
+    /// <summary>
+    /// Every version of the guest's private host key, for the agent and the controller to mask, never for the provider. An
+    /// OpenTofu step of the guest holds them whether or not it was given one: the saved plan holds the snippet the plan wrote,
+    /// and the state the snippet an earlier apply wrote, with an older version. A step that already holds one under its own
+    /// role is not given it twice. Each is recorded as released to the attempt.
+    /// </summary>
+    private async Task AddHostKeyMasksAsync(Attempt attempt, Run run, Dictionary<string, string> values, Guid agentId, CancellationToken cancellationToken)
+    {
+        var key = GuestHostCredentials.Key(run.ResourceId);
+        var versions = await db.StoreVersions.AsNoTracking().Where(v => v.Key == key && v.RevokedAt == null)
+            .Select(v => v.Version).OrderBy(v => v).ToListAsync(cancellationToken);
+        foreach (var version in versions)
+        {
+            if (await store.GetVersionInternalAsync(key, version, cancellationToken) is not { } value || values.ContainsValue(value))
+                continue;
+            values[SecretNames.HostKeyMask(version)] = value;
+            db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+        }
+    }
+
+    /// <summary>
+    /// What the OpenTofu provider may connect to for an upload: the host's own key, for any name, because the provider
+    /// looks a node up by an address it formats itself. Any other key is refused, and the provider never adds one beside it.
+    /// </summary>
+    internal static string KnownHosts(string hostKey, SnippetsContext uploads)
+    {
+        var lines = new List<string>();
+        foreach (var line in hostKey.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !parts[0].StartsWith("ssh-", StringComparison.Ordinal) && !parts[0].StartsWith("ecdsa-", StringComparison.Ordinal)
+                || !parts[0].All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '@')
+                || !parts[1].All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '='))
+                throw new CredentialUnavailableException($"Blocked credentials: the SSH host key of {uploads.Address} is not a public key line.");
+            lines.Add($"* {parts[0]} {parts[1]}");
+        }
+
+        return lines.Count == 0
+            ? throw new CredentialUnavailableException($"Blocked credentials: the SSH host key of {uploads.Address} is empty.")
+            : string.Join("\n", lines) + "\n";
     }
 }

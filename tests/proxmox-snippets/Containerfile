@@ -1,0 +1,18 @@
+# A stand-in for a Proxmox host's sshd and storage: Debian with systemd and OpenSSH, and pvesh and
+# pvesm replaced by stubs that keep one datastore in a JSON file. Nothing of Proxmox itself runs.
+ARG DEBIAN=trixie
+FROM docker.io/library/debian:${DEBIAN}
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      systemd systemd-sysv openssh-server openssh-client python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && ssh-keygen -A && systemctl enable ssh \
+ && mkdir -p /var/lib/vz/images /var/lib/vz/template/iso /var/lib/vz/dump /etc/pve-stub
+COPY pvesh pvesm /usr/local/bin/
+# Only for the tests that force a failure: inactive until a file in /run/fault says otherwise.
+COPY fault-sshd /usr/local/sbin/sshd
+COPY fault-systemctl /usr/local/sbin/systemctl
+COPY fault-userdel /usr/local/sbin/userdel
+RUN echo '{"local": {"type": "dir", "path": "/var/lib/vz", "content": "iso,vztmpl,backup,import"}}' > /etc/pve-stub/storage.json \
+ && echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

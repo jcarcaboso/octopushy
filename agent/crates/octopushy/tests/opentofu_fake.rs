@@ -53,6 +53,8 @@ case "$1" in
     if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
     echo "Plan: 2 to add, 1 to change, 1 to destroy."
     echo "debug: provider token $PROXMOX_VE_API_TOKEN" >&2
+    # What a saved plan or state would let the tool print: a value nothing in the environment holds.
+    if [ -f "$REC/diagnostics.txt" ]; then echo "diagnostics: $(cat "$REC/diagnostics.txt")" >&2; fi
     exit "${FAKE_PLAN_EXIT:-2}" ;;
   show)
     if grep -q 'destroy=1' "$last"; then
@@ -239,6 +241,111 @@ fn env_of(fx: &Fixture, step: &str) -> HashMap<String, String> {
         .filter_map(|l| l.split_once('='))
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect()
+}
+
+#[tokio::test]
+async fn known_hosts_are_written_where_the_provider_reads_them_and_nothing_else_is() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let mut with_hosts = input(false, json!({}));
+    with_hosts["knownHosts"] = json!(
+        "* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiijI7PL8NeaSlRIfsOf1JSG69ZMULksy817NNUwsNZ\n"
+    );
+    let r = run(
+        &fx,
+        "hosts-1",
+        "preview",
+        &with_hosts,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let ssh = r.workspace.join("home/.ssh");
+    let path = ssh.join("known_hosts");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        with_hosts["knownHosts"].as_str().unwrap()
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        Path::new(&env_of(&fx, "plan")["HOME"]),
+        r.workspace.join("home")
+    );
+
+    // Without it there is no file for the provider to trust a first host into.
+    fx.reset();
+    let r = run(
+        &fx,
+        "hosts-2",
+        "preview",
+        &input(false, json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    assert!(!r.workspace.join("home/.ssh").exists());
+
+    // A line that is not one is refused before anything runs.
+    fx.reset();
+    let mut bad = input(false, json!({}));
+    bad["knownHosts"] = json!("ssh-ed25519\r\n");
+    let r = run(
+        &fx,
+        "hosts-3",
+        "preview",
+        &bad,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(r.result.is_err());
+    assert_eq!(fx.read("args.log"), "");
+}
+
+#[tokio::test]
+async fn a_secret_given_only_to_mask_is_masked_and_never_in_the_tools_environment() {
+    let fx = Fixture::new();
+    // The controller sends a value the plan and state hold, such as a guest's private host key, under a name no
+    // secretEnv maps: the agent masks it, and OpenTofu never gets it.
+    std::fs::write(fx.rec.join("diagnostics.txt"), EXTRA_SECRET).unwrap();
+    let mut unmapped = input(false, json!({}));
+    unmapped["secretEnv"] = json!({ "PROXMOX_VE_API_TOKEN": "proxmox.token" });
+    let r = run(
+        &fx,
+        "mask-only",
+        "preview",
+        &unmapped,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    assert!(
+        r.lines.iter().any(|(_, l)| l == "diagnostics: ***"),
+        "{:#?}",
+        r.lines
+    );
+    assert_no_secrets(&fx, &r);
+    assert!(!fx.read("env.log").contains(EXTRA_SECRET));
 }
 
 #[tokio::test]

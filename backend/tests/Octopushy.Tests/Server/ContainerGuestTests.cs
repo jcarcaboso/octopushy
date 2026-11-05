@@ -565,4 +565,25 @@ public class ContainerGuestTests(PostgresFixture postgres)
         await server.TickAsync();
         Assert.Equal(($"{Ed25519}\n", 1), (await PinAsync(server))!.Value);
     }
+
+    [Fact]
+    public async Task Keys_in_verify_outputs_that_cannot_be_masked_after_a_restart_pin_nothing()
+    {
+        var (server, agent) = await StartAsync(Container());
+        await using var _ = server;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["create"]), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        var verify = await agent.NextAsync("verify-guest");
+        Assert.NotNull(Input(verify)["hostKeys"]);
+
+        // The server forgets what it sent, and the token the verify was given can no longer be read back to mask with.
+        await server.RestartFixtureAsync();
+        await server.WithDbAsync(db => db.StoreVersions.Where(v => v.Key == "proxmox/korriban/read-only-token").ExecuteDeleteAsync());
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Ed25519));
+        await server.TickAsync();
+
+        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(verify.AttemptId)));
+        Assert.Null(attempt.Outputs);
+        Assert.Null(await PinAsync(server));
+    }
 }

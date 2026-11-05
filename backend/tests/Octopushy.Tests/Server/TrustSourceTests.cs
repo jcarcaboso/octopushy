@@ -100,4 +100,98 @@ public class TrustSourceTests
             Assert.Equal(wanted, RunContext.Parse(run.Context).ContainerHostKey);
         }
     }
+
+    /// <summary>#43's managed VM fixture, with services, with or without a declared access.hostKey.</summary>
+    private static TestRepository ManagedVm(bool declared) =>
+        ManagedHostKeyTests.Managed(declaredPin: declared, start: ServiceDefinitionTests.Repository());
+
+    /// <summary>What each run that logs in pins: the store key it binds, if any, and whether it pins the managed key.</summary>
+    private static Dictionary<string, (string? Bound, bool Managed)> Sources(TestRepository test, Guid id)
+    {
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Guest), string.Join("\n", repository.IssuesFor(Guest).Select(i => i.Message)));
+        var factory = new RunFactory(Options.Create(new OctopushyOptions()), TimeProvider.System);
+        var guest = repository.Guest(Guest)!;
+        var resource = new Resource { Id = id, Address = Guest, Kind = ResourceKinds.Guest, Lab = "home" };
+        var revision = new DefinitionRevision { Id = Guid.NewGuid(), Commit = new string('a', 40) };
+        (string?, bool) Of(Run run)
+        {
+            var context = RunContext.Parse(run.Context);
+            var bound = context.Secrets.Where(s => RunContext.BareRole(s.Key) == SecretNames.AnsibleHostKey).Select(s => s.Value).Distinct().ToList();
+            Assert.True(bound.Count <= 1, "a run binds one pin at most");
+            return (bound.SingleOrDefault(), context.ManagedHostKey);
+        }
+        return new()
+        {
+            ["setup"] = Of(factory.Configure(repository, guest, resource, revision, "setup", "manual", null, null)),
+            ["rotation"] = Of(factory.RotateAccess(repository, guest, resource, revision, new AccessRotationContext(1, 2, [1]))),
+            ["service"] = Of(factory.Pipeline(repository, repository.Service(ServiceDefinitionTests.Address)!,
+                new Resource { Id = Guid.NewGuid(), Address = ServiceDefinitionTests.Address, Kind = ResourceKinds.Service, Lab = "home" },
+                resource, revision, "manual")),
+        };
+    }
+
+    [Fact]
+    public void Each_run_takes_exactly_one_source_in_the_agreed_order()
+    {
+        var id = Guid.NewGuid();
+        // 1. A declared key wins over both automatic sources.
+        using (var test = ManagedVm(declared: true))
+            Assert.All(Sources(test, id), s => Assert.Equal((Manual, false), s.Value));
+        using (var test = Lab("container", hostKey: true))
+            Assert.All(Sources(test, id), s => Assert.Equal((Manual, false), s.Value));
+        // 2. A container names none: its create task's pin, never the managed key.
+        using (var test = Lab("container", hostKey: false))
+            Assert.All(Sources(test, id), s => Assert.Equal((ContainerHostKeys.Key(id), false), s.Value));
+        // 3. A VM whose workflow opts in names none: the managed key, binding no store pin, never a container's.
+        using (var test = ManagedVm(declared: false))
+            Assert.All(Sources(test, id), s => Assert.Equal(((string?)null, true), s.Value));
+    }
+
+    [Fact]
+    public void Trust_of_each_kind_is_decided_in_one_place()
+    {
+        using var vm = ManagedVm(declared: false);
+        var repository = LabRepositoryLoader.Load(vm.Root);
+        var guest = repository.Guest(Guest)!;
+        Assert.Equal(HostKeyTrust.Managed, ManagedHostKey.TrustOf(repository, guest));
+        Assert.False(ContainerHostKey.Pinned(guest));
+        Assert.False(ContainerHostKey.Wanted(repository, guest));
+
+        using var declared = ManagedVm(declared: true);
+        repository = LabRepositoryLoader.Load(declared.Root);
+        Assert.Equal(HostKeyTrust.Declared, ManagedHostKey.TrustOf(repository, repository.Guest(Guest)!));
+
+        using var container = Lab("container", hostKey: false);
+        repository = LabRepositoryLoader.Load(container.Root);
+        guest = repository.Guest(Guest)!;
+        Assert.Equal(HostKeyTrust.Container, ManagedHostKey.TrustOf(repository, guest));
+        Assert.False(ManagedHostKey.Offered(repository, guest));
+        Assert.True(ContainerHostKey.Pinned(guest));
+
+        // A VM that names none and whose workflow does not opt in has no source: its runs are refused.
+        using var plain = Lab("vm", hostKey: false);
+        repository = LabRepositoryLoader.Load(plain.Root);
+        Assert.Equal(HostKeyTrust.None, ManagedHostKey.TrustOf(repository, repository.Guest(Guest)!));
+    }
+
+    [Fact]
+    public void A_container_workflow_with_a_managed_host_key_is_refused_by_the_loader_and_the_validator()
+    {
+        using var test = Lab("container", hostKey: false);
+        var workflow = Path.Combine(test.Root, "workflows/app/workflow.yaml");
+        var text = File.ReadAllText(workflow);
+        Assert.Contains("    root: ../../modules/opentofu/test-vm\n", text);
+        test.Write("workflows/app/workflow.yaml", text.Replace("    root: ../../modules/opentofu/test-vm\n", "    root: ../../modules/opentofu/test-vm\n    hostKey: managed\n"));
+
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var issue = Assert.Single(repository.Issues, i => i.Severity == IssueSeverity.Error && i.Address == "workflows/app");
+        Assert.Contains("cannot have hostKey: managed: a container's SSH host keys are made by Proxmox", issue.Message);
+        Assert.False(repository.IsValid(Guest));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(Octopushy.Validate.Validator.Invalid, Octopushy.Validate.Validator.Run([test.Root], output, error));
+        Assert.Contains("cannot have hostKey: managed", output.ToString() + error.ToString());
+    }
 }

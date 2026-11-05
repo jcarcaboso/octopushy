@@ -49,12 +49,8 @@ public sealed partial class RunFactory
                 Bind(SecretNames.AnsibleSshKey, declared);
             else
                 secrets[RunContext.StageRole(stage.Name, SecretNames.AnsibleSshKey)] = GuestAccessCredentials.Key(guestResource.Id);
-            if (ConfigureInputs.Reference(guest, "hostKey") is { } pin)
-                Bind(SecretNames.AnsibleHostKey, pin);
-            else if (ContainerHostKey.Pinned(guest))
-                secrets[RunContext.StageRole(stage.Name, SecretNames.AnsibleHostKey)] = ContainerHostKeys.Key(guestResource.Id);
-            else
-                throw new RunException($"Stage '{stage.Name}' runs on the guest, which names no access.hostKey, so its host cannot be checked.");
+            // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+            BindHostKey(repository, guest, guestResource.Id, pin => Bind(SecretNames.AnsibleHostKey, pin));
             foreach (var (name, reference) in stage.Secrets)
             {
                 Bind(SecretNames.AnsibleVar(name), reference);
@@ -106,6 +102,8 @@ public sealed partial class RunFactory
             RequestedSecretVersions = requestedVersions,
             Stages = stages,
             GuestResourceId = guestResource.Id,
+            // A stage logs in to the guest its service is on, so it pins that guest's host key, Octopushy's when the guest names none.
+            ManagedHostKey = stages.Any(s => s.Ansible is not null) && PinsManagedHostKey(repository, guest),
         });
         run.InputsHash = inputs.Hash;
 

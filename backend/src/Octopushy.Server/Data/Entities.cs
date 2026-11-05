@@ -583,6 +583,60 @@ public sealed class GuestScheduleState
 }
 
 /// <summary>
+/// One version of a guest's SSH host key, when the key is Octopushy's: the public half, which configure runs pin. The
+/// private half is the store version <see cref="Version"/> of the secret <c>system/guest-host-key/&lt;resource id&gt;</c>,
+/// released only to the plan of a provision run, which puts it in the guest's cloud-init snippet. The store's current
+/// version is the one a plan carries; the newest version an apply delivered is the pin.
+/// </summary>
+public sealed class GuestHostKey
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>The store version holding the private half.</summary>
+    public int Version { get; set; }
+
+    public required string PublicKey { get; set; }
+
+    public required string Fingerprint { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>
+    /// When an apply carrying this version was first handed to an agent, and by which run. From then on a machine may hold
+    /// it, on its disks, its cloud-init drive or a backup, whatever the apply's outcome, so no other machine is given it.
+    /// It is set before the apply can run, and is not proof of anything; <see cref="DeliveredAt"/> is.
+    /// </summary>
+    public DateTimeOffset? SpentAt { get; set; }
+
+    public Guid? SpentRunId { get; set; }
+
+    /// <summary>
+    /// When an apply carrying this version finished, and which run it was. From then on configure runs pin it, until a
+    /// newer version is delivered, as when the machine is replaced.
+    /// </summary>
+    public DateTimeOffset? DeliveredAt { get; set; }
+
+    public Guid? DeliveredRunId { get; set; }
+}
+
+/// <summary>
+/// The key Octopushy uploads snippets to an installation's hosts with, through the SFTP-only account
+/// <c>deploy/proxmox/snippets.sh</c> creates. The private half is the secret at
+/// <c>system/installation-snippets/&lt;installation address&gt;</c>, released only to provision applies.
+/// </summary>
+public sealed class InstallationSnippetKey
+{
+    /// <summary>The installation's address, such as <c>home/pve01</c>.</summary>
+    public required string Installation { get; set; }
+
+    public required string PublicKey { get; set; }
+
+    public required string Fingerprint { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
 /// One version of Octopushy's key for a guest, and what is known about it on the guest. This is
 /// kept apart from the provisioning hash, so what is authorized can change without a plan. The
 /// store's current version says which one runs use; this says where each one stands.

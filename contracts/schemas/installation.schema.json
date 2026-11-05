@@ -64,7 +64,33 @@
       }
     },
     "execution": { "$ref": "common.schema.json#/$defs/execution" },
-    "policy": { "$ref": "common.schema.json#/$defs/policy" }
+    "policy": { "$ref": "common.schema.json#/$defs/policy" },
+    "snippets": {
+      "description": "Lets Octopushy upload a guest's cloud-init snippet to these hosts over SFTP, as deploy/proxmox/snippets.sh sets up once on each. A guest whose workflow's machine stage has hostKey: managed then gets a host key of Octopushy's.",
+      "type": "object",
+      "properties": {
+        "datastore": { "description": "A directory datastore with snippets content. Default: local.", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+        "user": { "description": "The SFTP-only account on each host. Default: octopushy-snippets.", "type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$" },
+        "hosts": {
+          "description": "Each host set up for uploads, by its id under hosts.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "hostKey": { "description": "The host's own SSH public host key, as snippets.sh prints it, in a plain store entry. An upload connects to nothing else.", "$ref": "common.schema.json#/$defs/storeRef" },
+              "address": { "description": "Where the host's sshd listens. Default: the host of its API endpoint.", "type": "string", "minLength": 1 },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            },
+            "required": ["hostKey"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["hosts"],
+      "additionalProperties": false
+    }
   },
   "required": ["schemaVersion", "type", "connection", "hosts"],
   "additionalProperties": false

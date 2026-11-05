@@ -109,8 +109,11 @@ public sealed record GuestDefinition(
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {
-    /// <summary><c>vm</c> or <c>container</c>; see <see cref="GuestTypes"/>.</summary>
-    public string Type { get; init; } = GuestTypes.Vm;
+    /// <summary>
+    /// <c>vm</c> or <c>container</c>, as <c>guest.yaml</c>'s <c>type</c> says; see <see cref="GuestTypes"/>. The one accessor of
+    /// a guest's kind: it reads the definition, so there is no second copy to disagree with it.
+    /// </summary>
+    public string Type => Json["type"]?.GetValue<string>() ?? GuestTypes.Vm;
 
     /// <summary>How Proxmox lists the guest: <c>qemu</c> or <c>lxc</c>.</summary>
     public string ProxmoxKind => GuestTypes.ProxmoxKind(Type);

@@ -225,7 +225,8 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
       };
     }
     setSecrets(next);
-    if (version.setup && !hostKey) setHostKey(`guests/${address}/host-key`);
+    // A workflow that installs Octopushy's own host key needs none, where the installation is set up for snippet uploads.
+    if (version.setup && !hostKey && !version.managedHostKey) setHostKey(`guests/${address}/host-key`);
     setStep("secrets");
   };
 
@@ -586,7 +587,9 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                       <label htmlFor="deploy-host-key">Host key, as a store key</label>
                       <input id="deploy-host-key" className="mono" value={hostKey} onChange={(e) => setHostKey(e.target.value)} aria-invalid={issueAt("/hostKey").length > 0} />
                       <span className="field__hint">
-                        A plain entry you set from the guest's console after its first boot. Setup waits for it: Octopushy never scans a host.
+                        {version.managedHostKey
+                          ? "Leave it empty: this workflow gives the guest a host key of Octopushy's, delivered when it is created and pinned on its own. That needs the installation to list the guest's host under snippets.hosts; validation says if it does not."
+                          : "A plain entry you set from the guest's console after its first boot. Setup waits for it: Octopushy never scans a host."}
                       </span>
                       <FieldErrors issues={issueAt("/hostKey")} />
                     </div>

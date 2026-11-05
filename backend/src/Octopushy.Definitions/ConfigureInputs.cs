@@ -18,7 +18,10 @@ public sealed record ConfigureInputs(
     string User,
     /// <summary>A key the guest names itself; null means Octopushy's own, see <see cref="ManagedAccess"/>.</summary>
     StoreReference? SshKey,
-    /// <summary>The pin the guest names itself; null for a container that names none, see <see cref="ContainerHostKey"/>.</summary>
+    /// <summary>
+    /// The pin the guest names itself; null when its host key is Octopushy's: a VM's managed key (<see cref="ManagedHostKey"/>)
+    /// or a container's create-task fingerprints (<see cref="ContainerHostKey"/>), as <see cref="ManagedHostKey.TrustOf(LabRepository, GuestDefinition)"/> decides.
+    /// </summary>
     StoreReference? HostKey,
     JsonObject Vars,
     IReadOnlyDictionary<string, StoreReference> SecretVars,

@@ -18,6 +18,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { EmptyRow, Table } from "../components/Table";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
+import { SnippetAccessCard } from "../components/SnippetAccess";
 import { WaitingNote } from "../components/WaitingNote";
 import { humanize, plural } from "../lib/format";
 import { folderLink } from "./variables/folders";
@@ -253,6 +254,7 @@ export function InstallationPage() {
                 ]}
               />
             </Card>
+            {data.snippets ? <SnippetAccessCard id={installation.id} snippets={data.snippets} /> : null}
             <Card title="Issues" meta={data.issues.length || undefined} id="issues">
               <IssueList issues={data.issues} />
             </Card>

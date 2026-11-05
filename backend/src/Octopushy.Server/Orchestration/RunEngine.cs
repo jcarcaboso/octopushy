@@ -92,6 +92,7 @@ public sealed partial class RunEngine(
             }
             db.Runs.Add(run);
         }
+        await EnsureHostKeysAsync(db, db.ChangeTracker.Entries<Run>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList(), cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         signal.Wake();
     }
@@ -284,6 +285,9 @@ public sealed partial class RunEngine(
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
+        // A plan whose key does not fit goes back to being planned before anything approves it, by policy or by a person.
+        if (!inFlight && await RecheckHostKeyAsync(db, run, context, cancellationToken))
+            context = RunContext.Parse(run.Context);
         foreach (var step in run.Steps.OrderBy(s => s.Ordinal))
         {
             if (StepStatuses.IsDone(step.Status))
@@ -528,6 +532,9 @@ public sealed partial class RunEngine(
             return;
         }
 
+        if (step.Name == StepNames.Plan && await ReplanForHostKeyAsync(db, run, step, outputs, cancellationToken))
+            return;
+
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
         switch (step.Name)
@@ -583,6 +590,7 @@ public sealed partial class RunEngine(
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
                 await ProposeServicesAgainAsync(db, run, cancellationToken);
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
+                await RecordDeliveredHostKeyAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Apply:
                 resource.Outputs = null;
@@ -638,6 +646,7 @@ public sealed partial class RunEngine(
                 resource.ReservedAt = null;
                 resource.ReservationAppliedAt = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+                await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;

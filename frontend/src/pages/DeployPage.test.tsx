@@ -21,7 +21,7 @@ const catalog: WorkflowCatalog = {
       description: "A Fedora VM running an Octopushy agent.",
       versions: ["1.1", "1.0"].map((version) => ({
         id: "octopushy-worker", version, commit: base, usable: true, issue: null, manages: "vm",
-        description: "A Fedora VM running an Octopushy agent.", inputs: worker, secrets: ["worker_enrollment_token"], setup: true,
+        description: "A Fedora VM running an Octopushy agent.", inputs: worker, secrets: ["worker_enrollment_token"], setup: true, managedHostKey: false,
         ui: {
           vmid: { generate: "next-vmid" },
           access: { user: "ops" },
@@ -37,7 +37,7 @@ const catalog: WorkflowCatalog = {
       manages: "service",
       description: "A web service.",
       versions: [{ id: "web", version: "2.0", commit: base, usable: true, issue: null, manages: "service", description: "A web service.",
-        inputs: null, secrets: [], setup: false, ui: null }],
+        inputs: null, secrets: [], setup: false, managedHostKey: false, ui: null }],
     },
   ],
 };

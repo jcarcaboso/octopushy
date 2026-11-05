@@ -250,6 +250,15 @@ export function useDeployService(id: string) {
 }
 
 /** Starts a staged rotation of the key Octopushy logs in to a guest with. */
+/** Makes the installation's snippet upload key, or returns the one it has. */
+export function useCreateSnippetsKey(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/installations/{id}/snippets-key", { params: { path: { id } } })),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["installation"] }),
+  });
+}
+
 export function useRotateGuestAccess(id: string) {
   const refresh = useRefreshRuns();
   return useMutation({

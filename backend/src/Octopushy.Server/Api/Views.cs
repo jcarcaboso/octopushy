@@ -386,7 +386,67 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             configure,
             await ManagedAccessAsync(id, cancellationToken),
-            await ServicesOfAsync(resource, latest, cancellationToken));
+            await ServicesOfAsync(resource, latest, cancellationToken),
+            await ManagedHostKeyAsync(id, cancellationToken));
+    }
+
+    /// <summary>The guest's host key, when it is Octopushy's: the pin, and the version plans carry when that is another.</summary>
+    private async Task<ManagedHostKeyDto?> ManagedHostKeyAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var keys = await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == id).ToListAsync(cancellationToken);
+        if (keys.Count == 0)
+            return null;
+        var name = GuestHostCredentials.Key(id);
+        var carried = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
+        static ManagedHostKeyVersionDto Of(GuestHostKey k) => new(k.Version, k.PublicKey, k.Fingerprint, k.CreatedAt, k.DeliveredAt);
+        var pinned = keys.Where(k => k.DeliveredAt is not null).MaxBy(k => k.Version);
+        var next = keys.Find(k => k.Version == carried);
+        return new ManagedHostKeyDto(pinned is null ? null : Of(pinned), next is null || next.Version == pinned?.Version ? null : Of(next));
+    }
+
+    /// <summary>
+    /// The command that sets up one host: the installation's own account and datastore, so what it sets up is what
+    /// uploads use, and the script of the release this server is, so it matches.
+    /// </summary>
+    public static string SnippetsCommand(string publicKey, string user, string datastore)
+    {
+        var version = typeof(Views).Assembly.GetName().Version;
+        var reference = version is null ? "main" : $"v{version.Major}.{version.Minor}.{version.Build}";
+        return $"OCTOPUSHY_SNIPPETS_KEY={ShellQuote(publicKey)} OCTOPUSHY_SNIPPETS_USER={ShellQuote(user)} "
+            + $"OCTOPUSHY_SNIPPETS_DATASTORE={ShellQuote(datastore)} "
+            + $"bash -c \"$(curl -fsSL https://raw.githubusercontent.com/jcarcaboso/octopushy/{reference}/deploy/proxmox/snippets.sh)\"";
+    }
+
+    /// <summary>One word for a POSIX shell, whatever it holds: single quotes, with each one inside closed and reopened.</summary>
+    public static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
+
+    /// <summary>An installation's snippet uploads, from its latest definition and the key Octopushy made for it.</summary>
+    public async Task<SnippetAccessDto> SnippetAccessAsync(string address, JsonNode? definition, CancellationToken cancellationToken)
+    {
+        var key = await InstallationSnippetCredentials.FindAsync(db, address, cancellationToken);
+        var snippets = definition?["snippets"] as JsonObject;
+        var hosts = new List<SnippetHostDto>();
+        foreach (var (host, node) in (snippets?["hosts"] as JsonObject) ?? [])
+        {
+            var store = node?["hostKey"]?["store"]?.GetValue<string>() ?? "";
+            var endpoint = definition?["hosts"]?[host]?["endpoint"]?.GetValue<string>() ?? definition?["connection"]?["endpoint"]?.GetValue<string>();
+            var sshd = node?["address"]?.GetValue<string>()
+                ?? (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ? uri.Host : "");
+            hosts.Add(new SnippetHostDto(host, sshd, node?["port"]?.GetValue<int>() ?? 22, store,
+                await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == store && e.CurrentVersion > 0, cancellationToken)));
+        }
+
+        var datastore = snippets?["datastore"]?.GetValue<string>() ?? SnippetSettings.DefaultDatastore;
+        var user = snippets?["user"]?.GetValue<string>() ?? SnippetSettings.DefaultUser;
+        return new SnippetAccessDto(
+            key?.PublicKey,
+            key?.Fingerprint,
+            key?.CreatedAt,
+            snippets is not null,
+            datastore,
+            user,
+            hosts,
+            key is null ? null : SnippetsCommand(key.PublicKey, user, datastore));
     }
 
     /// <summary>The services the repository shows on a guest, and those it no longer does until they are dealt with.</summary>
@@ -589,7 +649,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             definition?["connection"]?["token"]?["store"]?.GetValue<string>(),
             definition?["connection"]?["tls"]?["verify"]?.GetValue<bool>() ?? (definition is null ? null : true),
             observedGuests,
-            observation?["cluster"]?["name"]?.GetValue<string>());
+            observation?["cluster"]?["name"]?.GetValue<string>(),
+            await SnippetAccessAsync(resource.Address, definition, cancellationToken));
     }
 
     public async Task<OverviewDto> OverviewAsync(RepositoryDto repository, CancellationToken cancellationToken)

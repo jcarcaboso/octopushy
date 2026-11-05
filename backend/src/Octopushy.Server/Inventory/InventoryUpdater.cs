@@ -161,6 +161,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         var guestIds = guests.Select(g => g.Id).ToList();
         var issued = (await db.GuestAccessKeys.AsNoTracking().Where(k => guestIds.Contains(k.ResourceId)).Select(k => k.ResourceId).Distinct()
             .ToListAsync(cancellationToken)).ToHashSet();
+        // The same for its host key; see ManagedHostKey.Wanted.
+        var hostKeys = (await db.GuestHostKeys.AsNoTracking().Where(k => guestIds.Contains(k.ResourceId)).Select(k => k.ResourceId).Distinct()
+            .ToListAsync(cancellationToken)).ToHashSet();
         foreach (var resource in guests)
         {
             if (!resource.Valid)
@@ -170,7 +173,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             }
 
             var guest = repository.Guest(resource.Address)!;
-            var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id));
+            var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id), hostKeys.Contains(resource.Id));
             var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
             // A desired hash only counts as proposed while a run exists for its occurrence: one recorded without its run, as a
             // crash could leave before revisions were applied in one transaction, is proposed now, even by a later revision that
@@ -188,7 +191,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             Run proposed;
             try
             {
-                proposed = factory.Guest(repository, guest, resource, revision, "revision", issued.Contains(resource.Id));
+                proposed = factory.Guest(repository, guest, resource, revision, "revision", issued.Contains(resource.Id), hostKeys.Contains(resource.Id));
             }
             catch (RunException error)
             {

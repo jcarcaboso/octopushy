@@ -80,6 +80,22 @@ public sealed record RunContext
     public HostKeysRequestContext? HostKeysRequest { get; init; }
 
     /// <summary>
+    /// Whether the guest's host key is Octopushy's: a configure, rotation or pipeline run then pins the public half of the
+    /// version an apply delivered last, instead of a store entry. See <see cref="Store.GuestHostCredentials"/>.
+    /// </summary>
+    public bool ManagedHostKey { get; init; }
+
+    /// <summary>
+    /// Where a provision run uploads the guest's snippet, for a guest whose host key is Octopushy's. Only such a run
+    /// binds the snippet roles: <see cref="SecretNames.GuestHostKey"/> to its plan, <see cref="SecretNames.SnippetsKey"/>
+    /// and <see cref="SecretNames.SnippetsHostKey"/> to its apply.
+    /// </summary>
+    public SnippetsContext? Snippets { get; init; }
+
+    /// <summary>Why this run's plan was made again with another host key, shown on the plan once the new one is made.</summary>
+    public string? HostKeyReplan { get; init; }
+
+    /// <summary>
     /// A pipeline run's stages, in order. Each names one <see cref="OpenTofu"/> or <see cref="Ansible"/>,
     /// and a step of the stage sees the context <see cref="ForStage"/> makes. In <see cref="Secrets"/> and
     /// its version maps, the roles of a stage are written <c>stage/role</c>, so two stages can bind the
@@ -165,6 +181,9 @@ public sealed record StageContext(string Name, string Workflow, OpenTofuContext?
 /// everything after that; <see cref="Remove"/> are the versions it takes off the guest.
 /// </summary>
 public sealed record AccessRotationContext(int Current, int Candidate, IReadOnlyList<int> Remove);
+
+/// <summary>An installation's snippet uploads: whose key opens which account, on which sshd.</summary>
+public sealed record SnippetsContext(string Installation, string User, string Address, int Port);
 
 public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy, bool DestructiveExplicit = false);
 
@@ -284,6 +303,29 @@ public static class SecretNames
     public const string AnsibleSshKey = "ansible.ssh-key";
     public const string AnsibleRefusedKeys = "ansible.refused-keys";
     public const string AnsibleHostKey = "ansible.host-key";
+
+    /// <summary>A guest's private host key, for its provision run's plan only, which writes it into the guest's snippet.</summary>
+    public const string GuestHostKey = "opentofu.host-key";
+    /// <summary>The installation's snippet upload key, for provision applies only.</summary>
+    public const string SnippetsKey = "snippets.ssh-key";
+    /// <summary>The Proxmox host's own SSH host key, which the upload is pinned to. Public, like any pin.</summary>
+    public const string SnippetsHostKey = "snippets.host-key";
+
+    /// <summary>The environment the OpenTofu provider takes the upload login from, and the module the guest's private host key.</summary>
+    public const string SnippetsKeyEnv = "PROXMOX_VE_SSH_PRIVATE_KEY";
+    public const string SnippetsUserEnv = "PROXMOX_VE_SSH_USERNAME";
+    public const string GuestHostKeyEnv = "TF_VAR_octopushy_host_key";
+
+    /// <summary>
+    /// A version of the guest's private host key that an OpenTofu step holds in its saved plan or state, given to the agent
+    /// and the controller to mask and never mapped to the provider's environment. Not a binding of the run.
+    /// </summary>
+    public static string HostKeyMask(int version) => $"{HostKeyMaskPrefix}{version}";
+
+    public const string HostKeyMaskPrefix = "mask.opentofu.host-key.v";
+
+    /// <summary>The roles only a snippet upload binds.</summary>
+    public static readonly IReadOnlyList<string> SnippetRoles = [GuestHostKey, SnippetsKey, SnippetsHostKey];
 
     /// <summary>A guest's <c>setup.secrets</c> entry.</summary>
     public static string AnsibleVar(string name) => $"ansible.var.{name}";

@@ -11,9 +11,13 @@ namespace Octopushy.Server.Orchestration;
 public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
-    /// <remarks><paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says.</remarks>
-    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued);
+    /// <remarks>
+    /// <paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says,
+    /// and <paramref name="hostKeyIssued"/> the same for its host key, as <see cref="GuestHostCredentials.IssuedAsync"/> says.
+    /// </remarks>
+    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued,
+        bool hostKeyIssued = false) =>
+        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued, hostKeyIssued);
 
     /// <summary>
     /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
@@ -21,16 +25,16 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// </summary>
     public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
         string removedIn, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued);
+        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued, false);
 
     private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
-        string? removedIn, bool keyIssued)
+        string? removedIn, bool keyIssued, bool hostKeyIssued)
     {
         var removal = removedIn is not null;
         if (removal && guest.Retired)
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
         Managed(repository, guest.InstallationAddress);
-        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued);
+        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
         var connection = inputs.Installation.Connection;
@@ -71,6 +75,25 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ["PROXMOX_VE_API_TOKEN"] = SecretNames.ProxmoxToken,
         };
         var retire = guest.Retired || removal;
+        // A guest whose host key is Octopushy's: the plan gets the private half to write into the snippet, and the apply
+        // gets the upload key and the host's own key to pin. A retire deletes the snippet through the API and needs none.
+        var snippets = !retire && ManagedHostKey.Wanted(repository, guest, hostKeyIssued) ? ManagedHostKey.Settings(inputs.Installation) : null;
+        SnippetsContext? uploads = null;
+        if (snippets is not null)
+        {
+            var node = snippets.Hosts[guest.Host];
+            secrets[SecretNames.GuestHostKey] = GuestHostCredentials.Key(resource.Id);
+            secrets[SecretNames.SnippetsKey] = InstallationSnippetCredentials.Key(inputs.Installation.Address);
+            secrets[SecretNames.SnippetsHostKey] = node.HostKey.Key;
+            if (node.HostKey.Version is { } pinVersion)
+                requestedVersions[SecretNames.SnippetsHostKey] = pinVersion;
+            env[SecretNames.SnippetsUserEnv] = snippets.User;
+            secretEnv[SecretNames.GuestHostKeyEnv] = SecretNames.GuestHostKey;
+            secretEnv[SecretNames.SnippetsKeyEnv] = SecretNames.SnippetsKey;
+            uploads = new SnippetsContext(inputs.Installation.Address, snippets.User, node.Address, node.Port);
+        }
+        else
+            inputs.Variables.Remove("octopushy_snippets");
         var context = new RunContext
         {
             Address = guest.Address,
@@ -84,6 +107,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
             ContainerHostKey = !retire && ContainerHostKey.Wanted(repository, guest),
+            Snippets = uploads,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Stage.Root,
@@ -148,12 +172,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        if (inputs.HostKey is { } pin)
-            Bind(SecretNames.AnsibleHostKey, pin);
-        else if (ContainerHostKey.Pinned(guest))
-            secrets[SecretNames.AnsibleHostKey] = ContainerHostKeys.Key(resource.Id);
-        else
-            throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
+        // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+        var managedHostKey = BindHostKey(repository, guest, resource.Id, pin => Bind(SecretNames.AnsibleHostKey, pin)) == HostKeyTrust.Managed;
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -180,6 +200,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
+            ManagedHostKey = managedHostKey,
             Ansible = new AnsibleContext(
                 inputs.Workflow.Label,
                 action.Id,
@@ -224,15 +245,18 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
         var user = guest.Json["access"]?["user"]?.GetValue<string>()
             ?? throw new RunException("This guest names no access.user to log in as.");
-        // A container's own pin is what its create task logged, when it names none.
-        var hostKey = ConfigureInputs.Reference(guest, "hostKey")
-            ?? (ContainerHostKey.Pinned(guest) ? new StoreReference(ContainerHostKeys.Key(resource.Id), null) : null)
-            ?? throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
+        // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+        StoreReference? hostKey = null;
+        var managedHostKey = BindHostKey(repository, guest, resource.Id, pin => hostKey = pin) == HostKeyTrust.Managed;
         var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = hostKey.Key };
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (hostKey.Version is { } hostVersion)
-            requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        if (hostKey is not null)
+        {
+            secrets[SecretNames.AnsibleHostKey] = hostKey.Key;
+            if (hostKey.Version is { } hostVersion)
+                requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        }
         var installation = repository.Installation(guest.InstallationAddress)!;
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -248,6 +272,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             AccessRotation = rotation,
+            ManagedHostKey = managedHostKey,
             Ansible = new AnsibleContext(
                 GuestAccessPlaybooks.Root,
                 Operations.RotateAccess,
@@ -321,6 +346,42 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     }
 
     public static string RetireHash(string inputsHash) => "retire:" + inputsHash;
+
+    /// <summary>
+    /// Whether a run that logs in to the guest pins Octopushy's key rather than the guest's <c>access.hostKey</c>. The
+    /// choice is explicit: a missing <c>access.hostKey</c> alone never means Octopushy's key, only a VM whose workflow
+    /// delivers one to a host set up for it does, and anything else is refused.
+    /// </summary>
+    internal static bool PinsManagedHostKey(LabRepository repository, GuestDefinition guest) =>
+        BindHostKey(repository, guest, Guid.Empty, _ => { }) == HostKeyTrust.Managed;
+
+    /// <summary>
+    /// The one place a run that logs in to a guest gets its host key from: setup, a service's Ansible stage, a pipeline and a
+    /// rotation alike, their previews included. <see cref="ManagedHostKey.TrustOf(LabRepository, GuestDefinition)"/> decides,
+    /// in its order: the guest's <c>access.hostKey</c>, bound as declared; a container's create-task pin, bound as its own
+    /// <c>system/container-host-key/&lt;id&gt;</c>; or a VM's managed key, which binds no store entry, the run pinning the
+    /// version an apply delivered instead. Anything else is refused. A run takes exactly one of them.
+    /// </summary>
+    internal static HostKeyTrust BindHostKey(LabRepository repository, GuestDefinition guest, Guid guestResourceId, Action<StoreReference> bind)
+    {
+        var trust = ManagedHostKey.TrustOf(repository, guest);
+        switch (trust)
+        {
+            case HostKeyTrust.Declared:
+                bind(ConfigureInputs.Reference(guest, "hostKey")!);
+                break;
+            case HostKeyTrust.Container:
+                bind(new StoreReference(ContainerHostKeys.Key(guestResourceId), null));
+                break;
+            case HostKeyTrust.Managed:
+                break;
+            default:
+                throw new RunException("This guest names no access.hostKey, and its host key is not Octopushy's: it is not a container, "
+                    + "and its workflow does not deliver one to a VM on a host listed under its installation's snippets.hosts. Its host cannot be checked.");
+        }
+
+        return trust;
+    }
 
     /// <summary>
     /// Refuses a run in an installation Octopushy only observes. Its guests are invalid already; this is

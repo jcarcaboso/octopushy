@@ -12,12 +12,17 @@ public sealed partial class AssignmentBuilder
 {
     public const string PreviewArtifact = "preview.json";
 
+    /// <summary>What a run that would pin Octopushy's host key is told before any apply delivered one.</summary>
+    public const string GuestHostKeyNotDelivered = "Blocked credentials: this guest's host key is Octopushy's, and no provision run has "
+        + "delivered it yet. Provision the guest first.";
+
     /// <summary>
     /// A preview gets only the pin, which is public: it runs repository code that nobody has
     /// approved. The rest goes to the steps after approval.
     /// </summary>
     private static List<string> AnsibleSecretsFor(string stepName, RunContext context) =>
-        stepName == StepNames.Preview ? [SecretNames.AnsibleHostKey] : context.Secrets.Keys.ToList();
+        stepName != StepNames.Preview ? context.Secrets.Keys.ToList()
+        : context.ManagedHostKey ? [] : [SecretNames.AnsibleHostKey];
 
     /// <summary>Builds a configure run's attempt, after the checks every assignment goes through.</summary>
     private async Task<Assignment> BuildAnsibleAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
@@ -52,6 +57,9 @@ public sealed partial class AssignmentBuilder
             throw new AssignmentException(GuestWork.OwnKeyNotDelivered);
         // A container's own pin is the other: public, and the guest's alone.
         var ownPin = names.Contains(SecretNames.AnsibleHostKey) && context.Secrets[SecretNames.AnsibleHostKey] == ContainerHostKeys.Key(guestId);
+        // One host key source per run, as RunFactory.BindHostKey chose it: never a container's pin and a managed key at once.
+        if (context.ManagedHostKey && context.Secrets.Any(s => RunContext.BareRole(s.Key) == SecretNames.AnsibleHostKey))
+            throw new AssignmentException("This run names two host key sources, a store pin and Octopushy's managed key. Inspect and replan.");
         var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey) && !(ownPin && n == SecretNames.AnsibleHostKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
             stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
@@ -107,7 +115,14 @@ public sealed partial class AssignmentBuilder
         if (missing.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         values.Remove(SecretNames.AnsibleHostKey, out var hostKey);
-        if (string.IsNullOrWhiteSpace(hostKey))
+        if (context.ManagedHostKey)
+        {
+            // Octopushy's own key, the version an apply delivered last: before any apply carried one, the guest still has
+            // whatever key its image made, and nothing here connects to that.
+            hostKey = (await GuestHostCredentials.PinnedAsync(db, guestId, cancellationToken))?.PublicKey
+                ?? throw new CredentialUnavailableException(GuestHostKeyNotDelivered);
+        }
+        else if (string.IsNullOrWhiteSpace(hostKey))
             throw new CredentialUnavailableException($"Blocked credentials: {context.Secrets[SecretNames.AnsibleHostKey]}: empty");
 
         var input = new JsonObject
