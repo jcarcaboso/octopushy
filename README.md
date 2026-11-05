@@ -30,6 +30,9 @@ Since 0.5.0, on `main`:
   and name, fill in its form, and deploy a new guest or service as one commit. A workflow can ask for generated values, such
   as the next free VMID or a one-time agent enrollment token put in the store, and a deploy can approve its first plan in the
   same click when that plan only creates.
+- Proxmox containers as guests: `type: container` with a workflow that `manages: container`, provisioned, verified,
+  protected and retired as a VM is, with the container's SSH host key pinned from its create task, so no person reads
+  it off a console.
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.

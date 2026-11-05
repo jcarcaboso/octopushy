@@ -156,7 +156,7 @@ public static class SafetyBoundary
         return verified?["node"]?.ToString() == context.Proxmox.Node && tags.Contains(OwnerTag)
                && description.Contains(OwnerDescription(context.Address), StringComparison.Ordinal)
             ? null
-            : $"VM {context.Proxmox.Vmid} on {context.Proxmox.Node} does not carry Octopushy's tag '{OwnerTag}' and the description "
+            : $"{context.Proxmox.Machine} {context.Proxmox.Vmid} on {context.Proxmox.Node} does not carry Octopushy's tag '{OwnerTag}' and the description "
               + $"'{OwnerDescription(context.Address)}', so Octopushy does not record it as this guest's. Its provision module has to set both.";
     }
 

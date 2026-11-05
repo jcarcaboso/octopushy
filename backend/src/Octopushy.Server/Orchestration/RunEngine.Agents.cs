@@ -436,7 +436,7 @@ public sealed partial class RunEngine
                         step.Detail = late ? "The result arrived after the agent had stopped reporting." : null;
                         step.Outputs = outputs?.ToJsonString();
                         if (step.Status == StepStatuses.Succeeded)
-                            await ApplyEffectsAsync(db, run, step, outputs, cancellationToken);
+                            await ApplyEffectsAsync(db, services.GetRequiredService<VariableStore>(), run, step, outputs, cancellationToken);
                         break;
                     case AttemptStatuses.Cancelled:
                         step.Status = StepStatuses.Cancelled;

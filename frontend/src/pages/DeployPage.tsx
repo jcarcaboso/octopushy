@@ -114,7 +114,8 @@ export function DeployPage() {
     <Wizard
       key={targets.data.baseCommit ?? "none"}
       targets={targets.data}
-      workflows={workflows.data.workflows}
+      // The wizard deploys VMs and services only for now; container guests are written in Git.
+      workflows={workflows.data.workflows.filter((w) => w.manages !== "container")}
       reload={() => void targets.refetch()}
       reloading={targets.isFetching}
     />

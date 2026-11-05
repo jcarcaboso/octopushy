@@ -79,12 +79,12 @@ pids+=($!)
 
 guest_status() {
   # Empty until the first revision is loaded.
-  call "$api/api/inventory" | jq -r '[.labs[]?.installations[]?.guests[]? | select(.address=="e2e/korriban/e2e-vm-01") | .status][0] // "absent"'
+  call "$api/api/inventory" | jq -r --arg a "${1:-e2e/korriban/e2e-vm-01}" '[.labs[]?.installations[]?.guests[]? | select(.address==$a) | .status][0] // "absent"'
 }
 wait_for() {
-  local want=$1 status=""
+  local want=$1 address=${2:-e2e/korriban/e2e-vm-01} status=""
   for attempt in $(seq 1 120); do
-    status=$(guest_status)
+    status=$(guest_status "$address")
     [[ $status == "$want" ]] && { echo "guest is $status"; return 0; }
     [[ $status == failed || $status == uncertain ]] && break
     # A run stays blocked until the engine's next pass after the installation is trusted.
@@ -113,6 +113,43 @@ echo "$state" | jq '{headVersion, lockHeld, versions: [.versions[] | {version, s
 [[ $(jq -r .headVersion <<<"$state") == 1 && $(jq '.versions[0].resources' <<<"$state") -gt 0 ]] \
   || { echo "The guest's state is missing."; exit 1; }
 [[ $(jq -r .lockHeld <<<"$state") == false ]] || { echo "The state lock is still held."; exit 1; }
+
+log "A container"
+# Added here, not to the shared lab and fixture, which the other end-to-end tests start from. The workflow is the VM's
+# with manages: container, so its plan is terraform_data too; verify reads the container through the lxc endpoints.
+# Like the VM's, that plan never makes the guest own its machine, so a later observation of VMID 320 makes the guest
+# invalid; the container is added just before its sync, and is not retired here.
+mkdir -p "$work/lab/workflows/test-ct" "$work/lab/labs/e2e/proxmox/korriban/guests/e2e-ct-01"
+sed 's/^manages: vm$/manages: container/; s/^description: .*/description: Stands in for a container with terraform_data./' \
+  "$work/lab/workflows/test-vm/workflow.yaml" >"$work/lab/workflows/test-ct/workflow.yaml"
+cp "$work/lab/workflows/test-vm/inputs.schema.json" "$work/lab/workflows/test-ct/"
+cat >"$work/lab/labs/e2e/proxmox/korriban/guests/e2e-ct-01/guest.yaml" <<'YAML'
+schemaVersion: 1
+type: container
+host: korriban
+vmid: 320
+hardware: { cores: 1, memory: 512, disks: [{ size: 8 }] }
+network: { bridge: vmbr0, mode: static, address: 10.1.0.32/24, gateway: 10.1.0.1 }
+workflow: test-ct@1
+YAML
+curl -sfk -X POST https://127.0.0.1:18006/mock/vms -H 'Content-Type: application/json' -d '{
+  "vmid": 320, "name": "e2e-ct-01", "node": "korriban", "status": "running", "kind": "lxc",
+  "tags": ["octopushy", "e2e"], "protection": true, "ipv4": ["10.1.0.32"],
+  "description": "Managed by Octopushy as e2e/korriban/e2e-ct-01."
+}' >/dev/null
+git -C "$work/lab" add -A
+git -C "$work/lab" -c user.name=e2e -c user.email=e2e@example.invalid commit -q -m "Add e2e-ct-01"
+call -X POST "$api/api/repository/sync" >/dev/null
+wait_for in-sync e2e/korriban/e2e-ct-01
+container=$(call "$api/api/inventory" | jq -r '[.labs[].installations[].guests[] | select(.address=="e2e/korriban/e2e-ct-01")][0].id')
+call "$api/api/guests/$container" | jq -e '.guest.type == "container"' >/dev/null || { echo "The guest is not shown as a container."; exit 1; }
+run=$(call "$api/api/runs?limit=20" | jq -r '[.[] | select(.operation=="provision" and .address=="e2e/korriban/e2e-ct-01")][0].id')
+call "$api/api/runs/$run" | jq -r '.steps[] | "\(.name): \(.status)"'
+verify=$(call "$api/api/runs/$run" | jq -r '.steps[] | select(.name=="verify") | .attempts[-1].id')
+call "$api/api/attempts/$verify/log?limit=1000" | jq -r '.lines[].text' | grep -q "verifying container 320 on korriban" \
+  || { echo "The container was not verified as one."; exit 1; }
+call "$api/api/runs/$run" | jq -e '[.steps[] | select(.name=="verify")][0].outputs.ipv4Addresses == ["10.1.0.32"]' >/dev/null \
+  || { echo "The container's address did not come from Proxmox."; exit 1; }
 
 log "Retiring"
 printf 'lifecycle: retired\n' >>"$work/lab/labs/e2e/proxmox/korriban/guests/e2e-vm-01/guest.yaml"

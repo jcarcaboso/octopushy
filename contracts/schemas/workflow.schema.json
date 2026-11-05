@@ -12,12 +12,12 @@
       "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})(?![\\s\\S])"
     },
     "manages": {
-      "description": "vm: a guest names it, and its first stage creates the machine. service: a service on a guest names it.",
-      "enum": ["vm", "service"]
+      "description": "vm or container: a guest of that type names it, and its first stage creates the machine, a VM or a Proxmox container. service: a service on a guest names it.",
+      "enum": ["vm", "container", "service"]
     },
     "description": { "type": "string" },
     "inputs": {
-      "description": "A JSON Schema inside this workflow's folder. For manages: vm it validates { hardware, network, inputs } from the guest, for manages: service { inputs } from the service.",
+      "description": "A JSON Schema inside this workflow's folder. For manages: vm or container it validates { hardware, network, inputs } from the guest, for manages: service { inputs } from the service.",
       "type": "string",
       "minLength": 1
     },
@@ -32,13 +32,13 @@
       "uniqueItems": true
     },
     "stages": {
-      "description": "manages: vm has the OpenTofu stage that makes the machine, then at most one Ansible stage that sets it up. manages: service has one or more stages, planned and previewed, approved once, then applied in order.",
+      "description": "manages: vm and container have the OpenTofu stage that makes the machine, then at most one Ansible stage that sets it up. manages: service has one or more stages, planned and previewed, approved once, then applied in order.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/stage" }
     },
     "actions": {
-      "description": "What else can be run from an Ansible stage, by name: by hand or on a guest's schedules. manages: vm only.",
+      "description": "What else can be run from an Ansible stage, by name: by hand or on a guest's schedules. manages: vm or container only.",
       "type": "object",
       "minProperties": 1,
       "propertyNames": { "$ref": "common.schema.json#/$defs/id" },
@@ -94,9 +94,9 @@
           "minLength": 1
         },
         "image": { "description": "Overrides the server's default image for the executor. Ignored by an agent with the local tool runtime.", "type": "string", "minLength": 1 },
-        "verify": { "description": "OpenTofu, the stage that makes a VM only: proxmox (the default) checks the VM through the Proxmox API afterwards.", "enum": ["proxmox", "none"] },
+        "verify": { "description": "OpenTofu, the stage that makes a VM or container only: proxmox (the default) checks the machine through the Proxmox API afterwards.", "enum": ["proxmox", "none"] },
         "hostKey": {
-          "description": "OpenTofu, the stage that makes a VM only. managed: its module installs the SSH host key Octopushy generates for each guest, given as the sensitive variable octopushy_host_key, in a cloud-init snippet it uploads where octopushy_snippets says. A guest on an installation whose snippets.hosts lists its host then needs no access.hostKey. See docs/guest-configuration.md.",
+          "description": "OpenTofu, the stage that makes a VM only, never a container's. managed: its module installs the SSH host key Octopushy generates for each guest, given as the sensitive variable octopushy_host_key, in a cloud-init snippet it uploads where octopushy_snippets says. A guest on an installation whose snippets.hosts lists its host then needs no access.hostKey. See docs/guest-configuration.md.",
           "enum": ["managed"]
         },
         "playbook": { "description": "Ansible: what runs when the guest, the service or this workflow changes. Relative to root.", "type": "string", "minLength": 1 },

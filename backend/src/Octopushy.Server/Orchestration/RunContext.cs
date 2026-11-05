@@ -65,6 +65,21 @@ public sealed record RunContext
     public bool ManagedAccess { get; init; }
 
     /// <summary>
+    /// Whether the verify step reads the SSH host keys Proxmox logged when it created this container, to pin its Ansible
+    /// work to them. See <see cref="Definitions.ContainerHostKey"/>.
+    /// </summary>
+    public bool ContainerHostKey { get; init; }
+
+    /// <summary>
+    /// The principal a container's provision apply was sent with, <c>user@realm!token</c>, recorded as it is sent: who
+    /// Proxmox names as the owner of the create task. Not secret.
+    /// </summary>
+    public string? ApplyPrincipal { get; init; }
+
+    /// <summary>The verify attempt that was asked for a container's host keys, and which creation it was asked about.</summary>
+    public HostKeysRequestContext? HostKeysRequest { get; init; }
+
+    /// <summary>
     /// Whether the guest's host key is Octopushy's: a configure, rotation or pipeline run then pins the public half of the
     /// version an apply delivered last, instead of a store entry. See <see cref="Store.GuestHostCredentials"/>.
     /// </summary>
@@ -206,9 +221,19 @@ public sealed record AnsibleContext(
     /// <summary>What changed under the workflow and its project since the guest's last successful run; null when it has none.</summary>
     IReadOnlyList<string>? ChangedFiles);
 
+/// <summary>
+/// A verify attempt that was asked to read a container's host keys from the creation by run <paramref name="CreatedBy"/>.
+/// <paramref name="Optional"/> when this run created nothing and retries an earlier creation's read.
+/// </summary>
+public sealed record HostKeysRequestContext(Guid AttemptId, Guid CreatedBy, bool Optional);
+
 /// <summary>A declared outcome, as the run was built with it.</summary>
 public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
 
+/// <param name="Kind">
+/// How Proxmox lists the guest's machine, <c>qemu</c> or <c>lxc</c>, for the steps that check it or change its protection
+/// through the API. Null in a run made before containers, which was a VM's.
+/// </param>
 public sealed record ProxmoxContext(
     string Endpoint,
     bool VerifyTls,
@@ -216,7 +241,15 @@ public sealed record ProxmoxContext(
     string? Node,
     int? Vmid,
     string? Name,
-    string? ExpectIpv4);
+    string? ExpectIpv4,
+    string? Kind = null)
+{
+    /// <summary>The machine's kind as the agent is told it: a run made before containers was a VM's.</summary>
+    public string MachineKind => Kind ?? "qemu";
+
+    /// <summary>The machine as messages name it: <c>VM</c> or <c>container</c>.</summary>
+    public string Machine => MachineKind == "lxc" ? "container" : "VM";
+}
 
 /// <summary>Step names, shared with the API. <c>observe</c> is not a step: it names the work of an observation.</summary>
 public static class StepNames

@@ -229,12 +229,27 @@ async fn require_audit(c: &Client, vmid: u32) -> Result<(), Failure> {
 // ---------------------------------------------------------------------------
 // verify-guest
 
+/// The kind of machine the controller expects at the VMID: `qemu` (the default, and what a
+/// controller before containers meant) or `lxc`. Verify and protection use its endpoints, and a
+/// machine of another kind at that VMID fails them: it is not the guest's.
+fn expected_kind(kind: &Option<String>) -> Result<GuestKind, Failure> {
+    match kind.as_deref().unwrap_or("qemu") {
+        "qemu" => Ok(GuestKind::Qemu),
+        "lxc" => Ok(GuestKind::Lxc),
+        other => Err(Failure::msg(format!(
+            "kind {other:?} is not a machine Octopushy manages; expected qemu or lxc"
+        ))),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifyGuestInput {
     connection: Connection,
     node: String,
     vmid: u32,
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default = "yes")]
@@ -243,7 +258,43 @@ struct VerifyGuestInput {
     expect_ipv4: Option<String>,
     #[serde(default = "default_guest_wait")]
     wait_seconds: u64,
+    /// Read the SSH host keys Proxmox generated for a container when the controller's apply created
+    /// it, from that create task, once every other check passes. Only for `lxc`.
+    #[serde(default)]
+    host_keys: Option<HostKeysRequest>,
 }
+
+/// Which creation the host keys must come from: the apply that ran from `applyStartedSecondsAgo`
+/// to `applyFinishedSecondsAgo` before the controller made this assignment, as `createdBy`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HostKeysRequest {
+    created_by: String,
+    apply_started_seconds_ago: u64,
+    apply_finished_seconds_ago: u64,
+    /// The controller retries the read of an earlier creation: when it cannot vouch for the keys,
+    /// the verification still passes, and `hostKeysError` says why.
+    #[serde(default)]
+    optional: bool,
+}
+
+/// How far the window of an apply may be off: the time between the controller making the
+/// assignment and the executor starting, and the seconds the two clocks round to.
+const CREATE_WINDOW_TOLERANCE: u64 = 120;
+
+/// Tasks that change which machine a VMID is: a later one means the machine at the VMID may not be
+/// the one a create task made. A clone's task names its source, and a clone onto a VMID that is in
+/// use needs a destroy first, which is listed.
+const IDENTITY_TASKS: &[&str] = &[
+    "vzcreate",
+    "vzrestore",
+    "vzdestroy",
+    "vzmigrate",
+    "qmcreate",
+    "qmrestore",
+    "qmdestroy",
+    "qmigrate",
+];
 
 fn default_guest_wait() -> u64 {
     180
@@ -309,48 +360,67 @@ fn parse_ipv4(s: &str) -> Result<Ipv4Addr, Failure> {
 async fn evaluate_guest(
     c: &Client,
     input: &VerifyGuestInput,
+    kind: &GuestKind,
     expect_ip: Option<Ipv4Addr>,
 ) -> Result<GuestReport, PveError> {
     let vmid = input.vmid;
+    let noun = kind.noun();
     let mut report = GuestReport::default();
     let check = |name, ok, detail: String| Check { name, ok, detail };
 
     let Some(vm) = c.find_vm(vmid).await? else {
-        report
-            .checks
-            .push(check("present", false, format!("VM {vmid} does not exist")));
+        report.checks.push(check(
+            "present",
+            false,
+            format!("{noun} {vmid} does not exist"),
+        ));
         return Ok(report);
     };
     report.present = true;
     report.node = Some(vm.node.clone());
     report.name = vm.name.clone();
     report.tags = vm.tags.clone();
-    if vm.kind == GuestKind::Qemu {
-        match c.vm_config(&vm.node, vmid).await {
-            Ok(config) => {
-                report.description = config
-                    .other
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-            }
-            // It vanished between the two requests; the next round sees that.
-            Err(PveError::NotFound(_)) => {}
-            Err(e) => return Err(e),
-        }
-    }
     report
         .checks
-        .push(check("present", true, format!("VM {vmid} exists")));
+        .push(check("present", true, format!("{noun} {vmid} exists")));
+    // VMIDs are one namespace across VMs and containers: a machine of the other kind is not this one.
+    if &vm.kind != kind {
+        report.checks.push(check(
+            "kind",
+            false,
+            format!(
+                "VMID {vmid} is a {} guest, not {}",
+                vm.kind.as_str(),
+                kind.as_str()
+            ),
+        ));
+        return Ok(report);
+    }
+    let description = match kind {
+        GuestKind::Lxc => c.ct_config(&vm.node, vmid).await.map(|c| c.description),
+        _ => c.vm_config(&vm.node, vmid).await.map(|config| {
+            config
+                .other
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }),
+    };
+    match description {
+        Ok(description) => report.description = description,
+        // It vanished between the two requests; the next round sees that.
+        Err(PveError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
 
     let placed = vm.node == input.node;
     report.checks.push(check(
         "placement",
         placed,
         if placed {
-            format!("VM {vmid} is on {}", vm.node)
+            format!("{noun} {vmid} is on {}", vm.node)
         } else {
-            format!("VM {vmid} is on {}, not {}", vm.node, input.node)
+            format!("{noun} {vmid} is on {}, not {}", vm.node, input.node)
         },
     ));
 
@@ -367,16 +437,15 @@ async fn evaluate_guest(
         ));
     }
 
-    let is_qemu = vm.kind == GuestKind::Qemu;
-    let status = if is_qemu {
-        match c.vm_status(&vm.node, vmid).await {
-            Ok(s) => s.status,
-            // It vanished between the two requests; the next round sees that.
-            Err(PveError::NotFound(_)) => vm.status.clone(),
-            Err(e) => return Err(e),
-        }
-    } else {
-        vm.status.clone()
+    let current = match kind {
+        GuestKind::Lxc => c.ct_status(&vm.node, vmid).await.map(|s| s.status),
+        _ => c.vm_status(&vm.node, vmid).await.map(|s| s.status),
+    };
+    let status = match current {
+        Ok(status) => status,
+        // It vanished between the two requests; the next round sees that.
+        Err(PveError::NotFound(_)) => vm.status.clone(),
+        Err(e) => return Err(e),
     };
     report.status = Some(status.clone());
     let running = status == "running";
@@ -385,7 +454,7 @@ async fn evaluate_guest(
             "running",
             running,
             format!(
-                "VM {vmid} is {}",
+                "{noun} {vmid} is {}",
                 if status.is_empty() {
                     "in an unknown state"
                 } else {
@@ -395,21 +464,51 @@ async fn evaluate_guest(
         ));
     }
 
-    if !is_qemu {
-        report.checks.push(check(
-            "address",
-            false,
-            format!(
-                "VM {vmid} is a {} guest; addresses come from the QEMU guest agent",
-                vm.kind.as_str()
-            ),
-        ));
-    } else if !running && !input.expect_running {
+    if !running && !input.expect_running {
         report.checks.push(check(
             "address",
             true,
-            "not checked: the VM is not running and expectRunning is false".to_owned(),
+            format!("not checked: the {noun} is not running and expectRunning is false"),
         ));
+    } else if kind == &GuestKind::Lxc {
+        // Proxmox reads a container's addresses from its network namespace: no agent inside is needed.
+        match c.ct_interfaces(&vm.node, vmid).await {
+            Ok(interfaces) => {
+                report.ipv4 = interfaces
+                    .as_deref()
+                    .map(octopushy_proxmox::ct_ipv4_addresses)
+                    .unwrap_or_default();
+                let list = report
+                    .ipv4
+                    .iter()
+                    .map(|ip| ip.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let (ok, detail) = match expect_ip {
+                    _ if interfaces.is_none() => (
+                        false,
+                        "Proxmox reports no interfaces: the container is not running".to_owned(),
+                    ),
+                    _ if report.ipv4.is_empty() => (
+                        false,
+                        "Proxmox reports no IPv4 address for the container".to_owned(),
+                    ),
+                    Some(want) if !report.ipv4.contains(&want) => {
+                        (false, format!("Proxmox reports {list}, not {want}"))
+                    }
+                    _ => (true, format!("Proxmox reports {list}")),
+                };
+                report.checks.push(check("address", ok, detail));
+            }
+            Err(PveError::NotFound(_)) => {
+                report.checks.push(check(
+                    "address",
+                    false,
+                    format!("{noun} {vmid} disappeared"),
+                ));
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         match c.guest_network_interfaces(&vm.node, vmid).await {
             Ok(ifaces) => {
@@ -450,26 +549,66 @@ async fn evaluate_guest(
 }
 
 async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
+    let started = Instant::now();
     let input: VerifyGuestInput = ctx.input()?;
+    let kind = expected_kind(&input.kind)?;
     let expect_ip = input.expect_ipv4.as_deref().map(parse_ipv4).transpose()?;
     let c = client(cfg, ctx, &input.connection)?;
     require_audit(&c, input.vmid).await?;
     ctx.log.agent(format!(
-        "verifying VM {} on {} (up to {}s)",
-        input.vmid, input.node, input.wait_seconds
+        "verifying {} {} on {} (up to {}s)",
+        kind.noun(),
+        input.vmid,
+        input.node,
+        input.wait_seconds
     ));
 
     let deadline = Instant::now() + Duration::from_secs(input.wait_seconds);
     let mut last_report: Option<GuestReport> = None;
     let mut last_summary = String::new();
     loop {
-        match evaluate_guest(&c, &input, expect_ip).await {
+        match evaluate_guest(&c, &input, &kind, expect_ip).await {
             Ok(report) if report.passed() => {
                 for check in &report.checks {
                     ctx.log
                         .agent(format!("{}: ok ({})", check.name, check.detail));
                 }
-                return Ok(Success::outputs(report.to_json()));
+                let mut outputs = report.to_json();
+                if let Some(request) = &input.host_keys {
+                    match created_host_keys(
+                        &c,
+                        &kind,
+                        &input.node,
+                        input.vmid,
+                        request,
+                        started.elapsed().as_secs(),
+                    )
+                    .await
+                    {
+                        Ok(keys) => {
+                            for key in &keys.keys {
+                                ctx.log.agent(format!(
+                                    "host key: {} {} (from {})",
+                                    key.kind, key.fingerprint, keys.task
+                                ));
+                            }
+                            outputs["hostKeys"] = json!(
+                                keys.keys
+                                    .iter()
+                                    .map(|k| format!("{} {}", k.kind, k.fingerprint))
+                                    .collect::<Vec<_>>()
+                            );
+                            outputs["hostKeysTask"] = json!(keys.task);
+                        }
+                        Err(e) if request.optional => {
+                            ctx.log
+                                .agent(format!("the host keys could not be read again: {e}"));
+                            outputs["hostKeysError"] = json!(e);
+                        }
+                        Err(e) => return Err(Failure::with_outputs(e, report.to_json())),
+                    }
+                }
+                return Ok(Success::outputs(outputs));
             }
             Ok(report) => {
                 let summary = report.failures();
@@ -496,8 +635,10 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         let now = Instant::now();
         if now >= deadline {
             let message = format!(
-                "VM {} did not pass verification within {}s: {last_summary}",
-                input.vmid, input.wait_seconds
+                "{} {} did not pass verification within {}s: {last_summary}",
+                kind.noun(),
+                input.vmid,
+                input.wait_seconds
             );
             return Err(match last_report {
                 Some(r) => Failure::with_outputs(message, r.to_json()),
@@ -506,6 +647,112 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         }
         ctx.sleep(cfg.poll_interval.min(deadline - now)).await?;
     }
+}
+
+/// The host keys of a container, and the task they come from.
+struct CreatedKeys {
+    task: String,
+    keys: Vec<octopushy_proxmox::CreatedHostKey>,
+}
+
+/// The SSH host keys Proxmox generated for a container when the controller's apply created it.
+///
+/// Proxmox writes them into the container's root file system before it first starts, and logs their
+/// fingerprints in the create task, so that log is the container's identity, through the API the
+/// installation is trusted for, but only for the container that task made. So the task is the one
+/// creation of this VMID on this node that the apply can have made, in Proxmox's own clock:
+///
+/// - a `vzcreate` that succeeded, started by `createdBy`, and started inside the apply's window;
+/// - exactly one such task;
+/// - and no task that changes which machine the VMID is (a destroy, restore, migration or another
+///   create) after it.
+///
+/// Anything else fails: an older create, a restored or cloned container, or a history that cannot
+/// be read. Nothing falls back to another task, or to asking the container.
+async fn created_host_keys(
+    c: &Client,
+    kind: &GuestKind,
+    node: &str,
+    vmid: u32,
+    request: &HostKeysRequest,
+    elapsed: u64,
+) -> Result<CreatedKeys, String> {
+    if kind != &GuestKind::Lxc {
+        return Err(
+            "host keys are read from a container's create task; this is not a container".to_owned(),
+        );
+    }
+    let audit = format!("Reading a task another token started needs Sys.Audit on /nodes/{node}");
+    let now = c
+        .node_time(node)
+        .await
+        .map_err(|e| format!("the clock of {node} could not be read: {e}"))?;
+    let tasks = c
+        .guest_tasks(node, vmid)
+        .await
+        .map_err(|e| format!("the tasks of container {vmid} could not be listed: {e}. {audit}"))?;
+    // The window in the node's clock: the assignment was made `elapsed` seconds before now.
+    let from = now
+        .saturating_sub(request.apply_started_seconds_ago + elapsed)
+        .saturating_sub(CREATE_WINDOW_TOLERANCE);
+    let to =
+        now.saturating_sub(request.apply_finished_seconds_ago + elapsed) + CREATE_WINDOW_TOLERANCE;
+    let id = vmid.to_string();
+    let of_vmid: Vec<_> = tasks
+        .iter()
+        .filter(|t| t.id.as_deref() == Some(id.as_str()))
+        .collect();
+    let created: Vec<_> = of_vmid
+        .iter()
+        .filter(|t| t.kind == "vzcreate" && t.status.as_deref() == Some("OK"))
+        .filter(|t| t.principal().as_deref() == Some(request.created_by.as_str()))
+        .filter(|t| t.starttime.is_some_and(|s| (from..=to).contains(&s)))
+        .collect();
+    let task = match created.as_slice() {
+        [task] => *task,
+        [] => {
+            return Err(format!(
+                "Proxmox lists no successful create task (vzcreate) of container {vmid} on {node} by {} during this apply, \
+                 so the container's host keys have no provenance: it may have been restored or cloned, or made by someone else. \
+                 Planning again will not change that: set access.hostKey, or rebuild it with Octopushy. {audit}",
+                request.created_by
+            ));
+        }
+        many => {
+            return Err(format!(
+                "Proxmox lists {} create tasks of container {vmid} on {node} during this apply; which one made it is not known",
+                many.len()
+            ));
+        }
+    };
+    let made_at = task.starttime.unwrap_or(0);
+    if let Some(later) = of_vmid.iter().find(|t| {
+        t.upid != task.upid
+            && IDENTITY_TASKS.contains(&t.kind.as_str())
+            && t.starttime.is_none_or(|s| s >= made_at)
+    }) {
+        return Err(format!(
+            "after the create task {}, Proxmox lists {} ({}) for VMID {vmid}: the machine there may not be the one it made. \
+             Planning again will not change that: set access.hostKey, or rebuild the container with Octopushy",
+            task.upid, later.kind, later.upid
+        ));
+    }
+    let log = c
+        .task_log(node, &task.upid)
+        .await
+        .map_err(|e| format!("the log of {} could not be read: {e}. {audit}", task.upid))?;
+    let keys = octopushy_proxmox::created_host_keys(&log);
+    if keys.is_empty() {
+        return Err(format!(
+            "the create task {} of container {vmid} logged no SSH host key: Proxmox makes them only for a template with /etc/ssh. \
+             Use a template with OpenSSH, or set access.hostKey",
+            task.upid
+        ));
+    }
+    Ok(CreatedKeys {
+        task: task.upid.clone(),
+        keys,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -569,15 +816,19 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         connection: Connection,
         node: String,
         vmid: u32,
+        #[serde(default)]
+        kind: Option<String>,
         protection: bool,
     }
     let input: Input = ctx.input()?;
+    let kind = expected_kind(&input.kind)?;
+    let noun = kind.noun();
     let c = client(cfg, ctx, &input.connection)?;
     require_audit(&c, input.vmid).await?;
 
     let Some(vm) = c.find_vm(input.vmid).await? else {
         ctx.log.agent(format!(
-            "VM {} does not exist; nothing to change",
+            "{noun} {} does not exist; nothing to change",
             input.vmid
         ));
         return Ok(Success::outputs(
@@ -586,20 +837,21 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     };
     if vm.node != input.node {
         return Err(Failure::msg(format!(
-            "VM {} is on {}, not {}; refusing to change its protection",
+            "{noun} {} is on {}, not {}; refusing to change its protection",
             input.vmid, vm.node, input.node
         )));
     }
-    if vm.kind != GuestKind::Qemu {
+    if vm.kind != kind {
         return Err(Failure::msg(format!(
-            "VM {} is a {} guest; only QEMU VMs are supported",
+            "VMID {} is a {} guest, not {}; refusing to change its protection",
             input.vmid,
-            vm.kind.as_str()
+            vm.kind.as_str(),
+            kind.as_str()
         )));
     }
 
-    let previous = match c.vm_config(&vm.node, input.vmid).await {
-        Ok(config) => config.protection,
+    let previous = match protection_of(&c, &kind, &vm.node, input.vmid).await {
+        Ok(protection) => protection,
         Err(PveError::NotFound(_)) => {
             return Ok(Success::outputs(
                 json!({ "absent": true, "previous": null, "protection": null }),
@@ -610,26 +862,34 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let word = |b: bool| if b { "on" } else { "off" };
     if previous == input.protection {
         ctx.log.agent(format!(
-            "protection of VM {} is already {}",
+            "protection of {noun} {} is already {}",
             input.vmid,
             word(previous)
         ));
     } else {
         ctx.log.agent(format!(
-            "turning protection of VM {} {}",
+            "turning protection of {noun} {} {}",
             input.vmid,
             word(input.protection)
         ));
-        c.set_vm_protection(&vm.node, input.vmid, input.protection)
-            .await
-            .map_err(|e| protection_failure(e, input.vmid))?;
+        let written = match kind {
+            GuestKind::Lxc => {
+                c.set_ct_protection(&vm.node, input.vmid, input.protection)
+                    .await
+            }
+            _ => {
+                c.set_vm_protection(&vm.node, input.vmid, input.protection)
+                    .await
+            }
+        };
+        written.map_err(|e| protection_failure(e, noun, input.vmid))?;
     }
-    let now = match c.vm_config(&vm.node, input.vmid).await {
-        Ok(config) => config.protection,
+    let now = match protection_of(&c, &kind, &vm.node, input.vmid).await {
+        Ok(protection) => protection,
         // Proxmox accepted the write, so a failed read-back cannot mean nothing changed.
         Err(e) if previous != input.protection => {
             return Err(Failure::Uncertain(format!(
-                "{e}; Proxmox accepted the change to the protection of VM {} but it could not be confirmed",
+                "{e}; Proxmox accepted the change to the protection of {noun} {} but it could not be confirmed",
                 input.vmid
             )));
         }
@@ -638,7 +898,7 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     if now != input.protection {
         return Err(Failure::with_outputs(
             format!(
-                "Proxmox still reports protection {} for VM {}",
+                "Proxmox still reports protection {} for {noun} {}",
                 word(now),
                 input.vmid
             ),
@@ -650,15 +910,28 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     ))
 }
 
+/// The `protection` option of a VM's or a container's configuration.
+async fn protection_of(
+    c: &Client,
+    kind: &GuestKind,
+    node: &str,
+    vmid: u32,
+) -> Result<bool, PveError> {
+    match kind {
+        GuestKind::Lxc => c.ct_config(node, vmid).await.map(|c| c.protection),
+        _ => c.vm_config(node, vmid).await.map(|c| c.protection),
+    }
+}
+
 /// A failed `set-protection` request. A rejection (bad token, missing privilege, a client error)
 /// changed nothing. When the request may have reached Proxmox but the answer was lost or was a
 /// server-side error, the agent cannot tell whether the change was made.
-fn protection_failure(error: PveError, vmid: u32) -> Failure {
+fn protection_failure(error: PveError, noun: &str, vmid: u32) -> Failure {
     let may_have_applied = matches!(error, PveError::Transport(_) | PveError::Decode { .. })
         || matches!(error, PveError::Status { status, .. } if status >= 500);
     if may_have_applied {
         Failure::Uncertain(format!(
-            "{error}; Proxmox may have changed the protection of VM {vmid}"
+            "{error}; Proxmox may have changed the protection of {noun} {vmid}"
         ))
     } else {
         error.into()
@@ -687,7 +960,7 @@ mod tests {
         ];
         for e in uncertain {
             assert!(
-                matches!(protection_failure(e, 210), Failure::Uncertain(m) if m.contains("VM 210")),
+                matches!(protection_failure(e, "VM", 210), Failure::Uncertain(m) if m.contains("VM 210")),
             );
         }
         let rejected = [
@@ -699,7 +972,10 @@ mod tests {
             status(499),
         ];
         for e in rejected {
-            assert!(matches!(protection_failure(e, 210), Failure::Failed { .. }));
+            assert!(matches!(
+                protection_failure(e, "container", 210),
+                Failure::Failed { .. }
+            ));
         }
     }
 }

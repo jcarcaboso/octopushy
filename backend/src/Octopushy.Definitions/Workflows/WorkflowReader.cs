@@ -166,13 +166,16 @@ public sealed class WorkflowReader
             else if (executor == Executors.OpenTofu)
                 CheckOpenTofuRoot(root, name, at, Invalid, address, ref errors);
 
-            var machine = manages == WorkflowKinds.Vm && index == 0;
+            var machine = WorkflowKinds.IsMachine(manages) && index == 0;
             if (node["verify"] is not null && !machine)
-                Invalid($"{at}/verify", $"Stage '{name}' cannot verify: only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, does.");
+                Invalid($"{at}/verify", $"Stage '{name}' cannot verify: only the OpenTofu stage that makes a machine, the first of a workflow with manages: vm or manages: container, does.");
             // A VM's only: a container's host keys are Proxmox's, made when it creates the container.
             var makesVm = manages == WorkflowKinds.Vm && index == 0 && executor == Executors.OpenTofu;
             if (node["hostKey"] is not null && !makesVm)
-                Invalid($"{at}/hostKey", $"Stage '{name}' cannot install a managed host key: only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, does.");
+                Invalid($"{at}/hostKey", manages == WorkflowKinds.Container
+                    ? $"Stage '{name}' cannot have hostKey: managed: a container's SSH host keys are made by Proxmox when it creates the container, "
+                      + "and Octopushy pins them from its create task. Only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, installs a managed host key."
+                    : $"Stage '{name}' cannot install a managed host key: only the OpenTofu stage that makes a VM, the first of a workflow with manages: vm, does.");
 
             ConfigureActions? configure = null;
             if (executor == Executors.Ansible)
@@ -183,7 +186,7 @@ public sealed class WorkflowReader
                 if (prepare is not null)
                     CheckPlaybook(root, prepare, $"the prepare playbook of stage '{name}'", $"{at}/prepare", Invalid);
                 var onChange = new WorkflowAction(
-                    manages == WorkflowKinds.Vm ? WorkflowDefinition.SetupAction : name,
+                    WorkflowKinds.IsMachine(manages) ? WorkflowDefinition.SetupAction : name,
                     node["description"]?.GetValue<string>(),
                     playbook,
                     prepare,
@@ -224,12 +227,12 @@ public sealed class WorkflowReader
                 Invalid($"/actions/{actionId}/stage", $"Action {actionId} names the stage '{stage}', and the workflow has no Ansible stage of that name.");
         }
 
-        if (manages == WorkflowKinds.Vm)
+        if (WorkflowKinds.IsMachine(manages))
         {
             if (stages.Count == 0 || stages[0].Executor != Executors.OpenTofu)
-                Invalid("/stages/0", "A workflow with manages: vm starts with the OpenTofu stage that makes the machine.");
+                Invalid("/stages/0", $"A workflow with manages: {manages} starts with the OpenTofu stage that makes the machine.");
             if (stages.Count > 2 || stages.Skip(1).Any(s => s.Executor != Executors.Ansible))
-                Invalid("/stages", "A workflow with manages: vm has at most one stage after the machine's, and it is the Ansible stage that sets the machine up.");
+                Invalid("/stages", $"A workflow with manages: {manages} has at most one stage after the machine's, and it is the Ansible stage that sets the machine up.");
             if (declared.ContainsKey(WorkflowDefinition.SetupAction))
                 Invalid($"/actions/{WorkflowDefinition.SetupAction}", "setup is the action that runs the setup stage's playbook; give this action another name.");
             if (ansible.Count == 0)

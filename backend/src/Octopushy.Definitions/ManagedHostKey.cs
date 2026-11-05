@@ -14,6 +14,8 @@ public enum HostKeyTrust
     Declared,
     /// <summary>The key Octopushy generated for a VM it creates, and delivered.</summary>
     Managed,
+    /// <summary>A container's: the fingerprints Proxmox logged when it created it. See <see cref="ContainerHostKey"/>.</summary>
+    Container,
 }
 
 /// <summary>An installation's snippet uploads, from its <c>snippets</c> block.</summary>
@@ -61,17 +63,27 @@ public static class ManagedHostKey
         workflow?.Manages == WorkflowKinds.Vm && workflow.Machine?.ManagedHostKey == true;
 
     /// <summary>Whether the guest is a VM: only a VM gets a host key Octopushy generates.</summary>
-    public static bool IsVm(GuestDefinition guest) => guest.Json["type"]?.GetValue<string>() == "vm";
+    public static bool IsVm(GuestDefinition guest) => guest.Type == GuestTypes.Vm;
 
     /// <summary>
-    /// Where a guest's host key pin comes from, chosen explicitly and never from a missing <c>access.hostKey</c> alone:
-    /// <see cref="HostKeyTrust.Declared"/> when the guest names one, <see cref="HostKeyTrust.Managed"/> for a VM whose workflow
-    /// delivers Octopushy's key to a host set up for it, and <see cref="HostKeyTrust.None"/> otherwise, which no run may log
-    /// in with.
+    /// Where a guest's host key pin comes from, chosen here once for every run that logs in, and never from a missing
+    /// <c>access.hostKey</c> alone. In this order:
+    /// <list type="number">
+    /// <item><see cref="HostKeyTrust.Declared"/> when the guest names <c>access.hostKey</c>, which always wins;</item>
+    /// <item><see cref="HostKeyTrust.Container"/> for a container, pinned to the fingerprints its create task logged;</item>
+    /// <item><see cref="HostKeyTrust.Managed"/> for a VM whose workflow delivers Octopushy's key to a host set up for it;</item>
+    /// <item><see cref="HostKeyTrust.None"/> otherwise, which no run may log in with.</item>
+    /// </list>
+    /// A container never takes a managed key, and a VM never a container's pin.
     /// </summary>
     public static HostKeyTrust TrustOf(LabRepository repository, GuestDefinition guest) =>
+        TrustOf(repository.Installation(guest.InstallationAddress), guest);
+
+    /// <inheritdoc cref="TrustOf(LabRepository, GuestDefinition)"/>
+    public static HostKeyTrust TrustOf(InstallationDefinition? installation, GuestDefinition guest) =>
         guest.Json["access"]?["hostKey"] is not null ? HostKeyTrust.Declared
-        : Offered(repository, guest) ? HostKeyTrust.Managed
+        : guest.Type == GuestTypes.Container ? HostKeyTrust.Container
+        : Offered(installation, guest) ? HostKeyTrust.Managed
         : HostKeyTrust.None;
 
     /// <summary>Whether Octopushy could give this guest a key: its workflow delivers one, to a host set up for it.</summary>

@@ -33,7 +33,7 @@ function describe(step: Step, operation: string): string | null {
   switch (step.name) {
     case "plan":
       return operation === "retire"
-        ? "OpenTofu plans destroying the VM; the saved plan is what gets applied."
+        ? "OpenTofu plans destroying the machine; the saved plan is what gets applied."
         : "OpenTofu plans the change; the saved plan is what gets applied.";
     case "approval":
       return operation === "pipeline"
@@ -50,15 +50,15 @@ function describe(step: Step, operation: string): string | null {
     case "playbook-approved":
       return "Runs the same commit and preview once more, with what the workflow says approving adds.";
     case "unprotect":
-      return "Removes the VM's protection so it can be deleted.";
+      return "Removes the machine's protection so it can be deleted.";
     case "apply":
       return "OpenTofu applies exactly the approved plan.";
     case "reprotect":
-      return "Puts the VM's protection back, because the plan was not applied in full.";
+      return "Puts the machine's protection back, because the plan was not applied in full.";
     case "verify":
-      return "Checks the VM through the Proxmox API.";
+      return "Checks the VM or container through the Proxmox API.";
     case "verify-absent":
-      return "Checks through the Proxmox API that the VM is gone.";
+      return "Checks through the Proxmox API that the machine is gone.";
     default:
       return null;
   }

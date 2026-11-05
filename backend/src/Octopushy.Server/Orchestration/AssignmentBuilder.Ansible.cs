@@ -55,7 +55,12 @@ public sealed partial class AssignmentBuilder
         if ((ownKey || (rotation is not null && step.Name != StepNames.Preview))
             && !await GuestAccessCredentials.DeliveredAsync(db, guestId, cancellationToken))
             throw new AssignmentException(GuestWork.OwnKeyNotDelivered);
-        var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey)).ToList();
+        // A container's own pin is the other: public, and the guest's alone.
+        var ownPin = names.Contains(SecretNames.AnsibleHostKey) && context.Secrets[SecretNames.AnsibleHostKey] == ContainerHostKeys.Key(guestId);
+        // One host key source per run, as RunFactory.BindHostKey chose it: never a container's pin and a managed key at once.
+        if (context.ManagedHostKey && context.Secrets.Any(s => RunContext.BareRole(s.Key) == SecretNames.AnsibleHostKey))
+            throw new AssignmentException("This run names two host key sources, a store pin and Octopushy's managed key. Inspect and replan.");
+        var stored = names.Where(n => !(ownKey && n == SecretNames.AnsibleSshKey) && !(ownPin && n == SecretNames.AnsibleHostKey)).ToList();
         var (values, missing) = await store.ResolveForAttemptAsync(
             stored.ToDictionary(n => n, n => new Definitions.StoreReference(context.Secrets[n], context.SecretVersions[n]), StringComparer.Ordinal),
             stored.Where(CredentialBindings.RequiresSecret).ToHashSet(StringComparer.Ordinal),
@@ -93,6 +98,20 @@ public sealed partial class AssignmentBuilder
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        if (ownPin)
+        {
+            var key = ContainerHostKeys.Key(guestId);
+            var version = context.SecretVersions[SecretNames.AnsibleHostKey];
+            if (await store.GetVersionInternalAsync(key, version, cancellationToken) is { } pin)
+            {
+                values[SecretNames.AnsibleHostKey] = pin;
+                db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            else
+                missing.Add($"{key} v{version}");
+        }
+
         if (missing.Count > 0)
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         values.Remove(SecretNames.AnsibleHostKey, out var hostKey);
@@ -120,6 +139,8 @@ public sealed partial class AssignmentBuilder
                 ["port"] = ansible.Port,
                 ["user"] = ansible.User,
                 ["hostKey"] = hostKey,
+                // A container's pin is the fingerprints Proxmox logged when it made the host keys: see ContainerHostKeys.
+                ["hostKeyFingerprints"] = ownPin,
             },
             ["vars"] = rotation is null ? ansible.Vars.DeepClone() : await RotationVarsAsync(run, rotation, step.Name, cancellationToken),
             ["context"] = new JsonObject

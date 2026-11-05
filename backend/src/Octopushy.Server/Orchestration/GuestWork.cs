@@ -80,7 +80,8 @@ public static class GuestWork
     /// <summary>What a run that would log in with Octopushy's key is told when there is no record the key reached the machine.</summary>
     public const string OwnKeyNotDelivered = "Octopushy has no record that its own key reached this machine: no successful apply of the guest's "
         + "provisioning has carried the public key, and no login with it has worked. Octopushy puts its key on a machine only that way, "
-        + "so nothing that would log in with it starts. For a machine Octopushy did not create, name the key to log in with in access.sshKey.";
+        + "so nothing that would log in with it starts. For a machine Octopushy did not create, name the key to log in with in access.sshKey. "
+        + "A container takes the key only when it is created, so one made before it needed Octopushy's key has to be rebuilt.";
 
     /// <summary>
     /// Why Ansible work on this guest, from its workflow's setup stage or a service's stage alike, may not log in with Octopushy's key,

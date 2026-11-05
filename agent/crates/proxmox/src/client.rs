@@ -94,6 +94,21 @@ impl fmt::Debug for Client {
     }
 }
 
+/// How many tasks one request of [`Client::guest_tasks`] asks for.
+const TASK_PAGE: usize = 500;
+/// How many pages [`Client::guest_tasks`] reads before it gives up on a whole history.
+const MAX_TASK_PAGES: usize = 200;
+/// How many times [`Client::guest_tasks`] reads a history that changed while it was read.
+const TASK_SCANS: usize = 3;
+
+/// A response: `data`, and `total`, which Proxmox gives beside a paged list.
+#[derive(serde::Deserialize)]
+struct Envelope<T> {
+    data: T,
+    #[serde(default, deserialize_with = "crate::de::opt_u64")]
+    total: Option<u64>,
+}
+
 /// Status-line phrases Proxmox uses when the guest agent cannot answer.
 const GUEST_AGENT_UNAVAILABLE: &[&str] = &[
     "guest agent is not running",
@@ -153,6 +168,20 @@ impl Client {
         form: Option<&[(&str, &str)]>,
         json: Option<&serde_json::Value>,
     ) -> Result<T> {
+        self.request_envelope::<T>(method, segments, query, form, json)
+            .await
+            .map(|e| e.data)
+    }
+
+    /// The whole `{"data": …}` envelope, with the attributes Proxmox puts beside `data`.
+    async fn request_envelope<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        form: Option<&[(&str, &str)]>,
+        json: Option<&serde_json::Value>,
+    ) -> Result<Envelope<T>> {
         let url = self.url(segments);
         let path = format!("/{}", segments.join("/"));
         tracing::debug!(%method, %path, "proxmox request");
@@ -181,16 +210,10 @@ impl Client {
             return Err(status_error(status, reason.as_deref(), &body));
         }
 
-        #[derive(serde::Deserialize)]
-        struct Envelope<T> {
-            data: T,
-        }
-        serde_json::from_slice::<Envelope<T>>(&body)
-            .map(|e| e.data)
-            .map_err(|e| Error::Decode {
-                path,
-                message: e.to_string(),
-            })
+        serde_json::from_slice::<Envelope<T>>(&body).map_err(|e| Error::Decode {
+            path,
+            message: e.to_string(),
+        })
     }
 
     async fn get<T: DeserializeOwned>(
@@ -269,6 +292,186 @@ impl Client {
             .await
             .map_err(missing_vm)?;
         Ok(())
+    }
+
+    /// `GET /nodes/{node}/lxc/{vmid}/status/current`.
+    pub async fn ct_status(&self, node: &str, vmid: u32) -> Result<CtStatus> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "status", "current"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// `GET /nodes/{node}/lxc/{vmid}/config`.
+    pub async fn ct_config(&self, node: &str, vmid: u32) -> Result<CtConfig> {
+        let id = vmid.to_string();
+        self.get(&["nodes", node, "lxc", &id, "config"], &[])
+            .await
+            .map_err(missing_vm)
+    }
+
+    /// Sets the container's `protection` option (`PUT /nodes/{node}/lxc/{vmid}/config`).
+    pub async fn set_ct_protection(&self, node: &str, vmid: u32, protection: bool) -> Result<()> {
+        let id = vmid.to_string();
+        let value = if protection { "1" } else { "0" };
+        let _: serde_json::Value = self
+            .request(
+                Method::PUT,
+                &["nodes", node, "lxc", &id, "config"],
+                &[],
+                Some(&[("protection", value)]),
+                None,
+            )
+            .await
+            .map_err(missing_vm)?;
+        Ok(())
+    }
+
+    /// The container's network interfaces, read by Proxmox from its network namespace
+    /// (`GET /nodes/{node}/lxc/{vmid}/interfaces`). A container has no guest agent and needs none.
+    ///
+    /// Returns `None` when the container is not running: Proxmox then has no namespace to read.
+    pub async fn ct_interfaces(&self, node: &str, vmid: u32) -> Result<Option<Vec<CtInterface>>> {
+        let id = vmid.to_string();
+        let result: Result<Option<Vec<CtInterface>>> = self
+            .get(&["nodes", node, "lxc", &id, "interfaces"], &[])
+            .await;
+        match result.map_err(missing_vm) {
+            Ok(interfaces) => Ok(interfaces),
+            Err(Error::Status { status, message })
+                if status >= 500 && message.to_ascii_lowercase().contains("not running") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `GET /nodes/{node}/tasks`: every finished and running task of one VMID, of every type,
+    /// newest first. Proxmox lists the tasks of another user or token only to a token with
+    /// `Sys.Audit` on `/nodes/{node}`.
+    ///
+    /// The history is paged by offset, and it changes while it is read: a new task goes in at
+    /// offset 0 and moves every other one down, so a page can repeat what the one before held and
+    /// leave a task out. So a read counts only when it shows the history held still: every page
+    /// gives the same `total`, which the tasks read add up to, no task is listed twice, and the
+    /// first page reads the same again at the end. Otherwise the whole history is read again, up
+    /// to [`TASK_SCANS`] times, and then this fails rather than return part of it. A history
+    /// longer than [`MAX_TASK_PAGES`] pages fails too.
+    pub async fn guest_tasks(&self, node: &str, vmid: u32) -> Result<Vec<Task>> {
+        let mut why = String::new();
+        for _ in 0..TASK_SCANS {
+            match self.scan_tasks(node, vmid).await? {
+                Ok(tasks) => return Ok(tasks),
+                Err(unstable) => why = unstable,
+            }
+        }
+        Err(Error::Decode {
+            path: format!("/nodes/{node}/tasks"),
+            message: format!(
+                "the task history of VMID {vmid} changed while it was read, {TASK_SCANS} times ({why}), so it cannot be read whole"
+            ),
+        })
+    }
+
+    /// One read of the whole history: the tasks, or why the history did not hold still.
+    async fn scan_tasks(
+        &self,
+        node: &str,
+        vmid: u32,
+    ) -> Result<std::result::Result<Vec<Task>, String>> {
+        let mut all: Vec<Task> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut total: Option<u64> = None;
+        let mut first_page: Vec<String> = Vec::new();
+        for page_number in 0..MAX_TASK_PAGES {
+            let (page, listed) = self.task_page(node, vmid, all.len()).await?;
+            if page_number == 0 {
+                total = listed;
+                first_page = page.iter().map(|t| t.upid.clone()).collect();
+                if total.is_some_and(|n| n > (MAX_TASK_PAGES * TASK_PAGE) as u64) {
+                    break;
+                }
+            } else if listed != total {
+                return Ok(Err(format!("its total went from {total:?} to {listed:?}")));
+            }
+            let last = page.len() < TASK_PAGE;
+            for task in page {
+                if !seen.insert(task.upid.clone()) {
+                    return Ok(Err(format!("{} was listed twice", task.upid)));
+                }
+                all.push(task);
+            }
+            if last || total.is_some_and(|n| all.len() as u64 >= n) {
+                if total.is_some_and(|n| all.len() as u64 != n) {
+                    return Ok(Err(format!("{} tasks were read of {total:?}", all.len())));
+                }
+                let (again, _) = self.task_page(node, vmid, 0).await?;
+                if again.iter().map(|t| &t.upid).ne(first_page.iter()) {
+                    return Ok(Err("its newest tasks changed".into()));
+                }
+                return Ok(Ok(all));
+            }
+        }
+        Err(Error::Decode {
+            path: format!("/nodes/{node}/tasks"),
+            message: format!(
+                "the task history of VMID {vmid} is longer than {} entries, so it cannot be read whole",
+                MAX_TASK_PAGES * TASK_PAGE
+            ),
+        })
+    }
+
+    /// One page of a VMID's task history from `start`, and the `total` Proxmox gives beside it.
+    async fn task_page(
+        &self,
+        node: &str,
+        vmid: u32,
+        start: usize,
+    ) -> Result<(Vec<Task>, Option<u64>)> {
+        let id = vmid.to_string();
+        let (start, limit) = (start.to_string(), TASK_PAGE.to_string());
+        let page: Envelope<Vec<Task>> = self
+            .request_envelope(
+                Method::GET,
+                &["nodes", node, "tasks"],
+                &[
+                    ("vmid", &id),
+                    ("source", "all"),
+                    ("start", &start),
+                    ("limit", &limit),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        Ok((page.data, page.total))
+    }
+
+    /// `GET /nodes/{node}/time`: the node's clock, in Unix seconds, which its tasks' times are in.
+    pub async fn node_time(&self, node: &str) -> Result<u64> {
+        #[derive(serde::Deserialize)]
+        struct Time {
+            #[serde(deserialize_with = "crate::de::opt_u64")]
+            time: Option<u64>,
+        }
+        let time: Time = self.get(&["nodes", node, "time"], &[]).await?;
+        time.time.ok_or_else(|| Error::Decode {
+            path: format!("/nodes/{node}/time"),
+            message: "no time".into(),
+        })
+    }
+
+    /// `GET /nodes/{node}/tasks/{upid}/log`: every line of a task's log, in order.
+    pub async fn task_log(&self, node: &str, upid: &str) -> Result<Vec<TaskLogLine>> {
+        let mut lines: Vec<TaskLogLine> = self
+            .get(
+                &["nodes", node, "tasks", upid, "log"],
+                &[("start", "0"), ("limit", "100000")],
+            )
+            .await?;
+        lines.sort_by_key(|l| l.n);
+        Ok(lines)
     }
 
     /// Executes an argument array through QEMU's guest agent; never retries a POST.
@@ -453,7 +656,8 @@ fn status_error(status: StatusCode, reason: Option<&str>, body: &[u8]) -> Error 
 }
 
 /// Proxmox answers requests for a missing VM with HTTP 500 "Configuration file
-/// 'nodes/x/qemu-server/210.conf' does not exist"; report that as not found.
+/// 'nodes/x/qemu-server/210.conf' does not exist", and for a missing container with the same
+/// message naming `lxc/210.conf`; report that as not found.
 fn missing_vm(err: Error) -> Error {
     match err {
         Error::Status {

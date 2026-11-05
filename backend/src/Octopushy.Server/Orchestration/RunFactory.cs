@@ -106,6 +106,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
+            ContainerHostKey = !retire && ContainerHostKey.Wanted(repository, guest),
             Snippets = uploads,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
@@ -114,7 +115,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 inputs.Variables,
                 env,
                 secretEnv),
-            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest)),
+            Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest),
+                guest.ProxmoxKind),
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             Verify = inputs.Stage.Verify,
@@ -131,7 +133,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             foreach (var step in run.Steps.Where(s => s.Name is StepNames.Verify or StepNames.VerifyAbsent))
             {
                 step.Status = StepStatuses.Skipped;
-                step.Detail = "The workflow does not verify this VM through Proxmox.";
+                step.Detail = $"The workflow does not verify this {(guest.Type == GuestTypes.Container ? "container" : "VM")} through Proxmox.";
             }
         }
 
@@ -170,10 +172,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        // One trust source, chosen explicitly: the guest's own pin, or Octopushy's key for a VM it delivered one to.
-        var managedHostKey = PinsManagedHostKey(repository, guest);
-        if (!managedHostKey)
-            Bind(SecretNames.AnsibleHostKey, inputs.HostKey!);
+        // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+        var managedHostKey = BindHostKey(repository, guest, resource.Id, pin => Bind(SecretNames.AnsibleHostKey, pin)) == HostKeyTrust.Managed;
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -245,9 +245,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
         var user = guest.Json["access"]?["user"]?.GetValue<string>()
             ?? throw new RunException("This guest names no access.user to log in as.");
-        // One trust source, chosen explicitly: the guest's own pin, or Octopushy's key for a VM it delivered one to.
-        var managedHostKey = PinsManagedHostKey(repository, guest);
-        var hostKey = managedHostKey ? null : ConfigureInputs.Reference(guest, "hostKey");
+        // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+        StoreReference? hostKey = null;
+        var managedHostKey = BindHostKey(repository, guest, resource.Id, pin => hostKey = pin) == HostKeyTrust.Managed;
         var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -352,13 +352,36 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// choice is explicit: a missing <c>access.hostKey</c> alone never means Octopushy's key, only a VM whose workflow
     /// delivers one to a host set up for it does, and anything else is refused.
     /// </summary>
-    internal static bool PinsManagedHostKey(LabRepository repository, GuestDefinition guest) => ManagedHostKey.TrustOf(repository, guest) switch
+    internal static bool PinsManagedHostKey(LabRepository repository, GuestDefinition guest) =>
+        BindHostKey(repository, guest, Guid.Empty, _ => { }) == HostKeyTrust.Managed;
+
+    /// <summary>
+    /// The one place a run that logs in to a guest gets its host key from: setup, a service's Ansible stage, a pipeline and a
+    /// rotation alike, their previews included. <see cref="ManagedHostKey.TrustOf(LabRepository, GuestDefinition)"/> decides,
+    /// in its order: the guest's <c>access.hostKey</c>, bound as declared; a container's create-task pin, bound as its own
+    /// <c>system/container-host-key/&lt;id&gt;</c>; or a VM's managed key, which binds no store entry, the run pinning the
+    /// version an apply delivered instead. Anything else is refused. A run takes exactly one of them.
+    /// </summary>
+    internal static HostKeyTrust BindHostKey(LabRepository repository, GuestDefinition guest, Guid guestResourceId, Action<StoreReference> bind)
     {
-        HostKeyTrust.Declared => false,
-        HostKeyTrust.Managed => true,
-        _ => throw new RunException("This guest names no access.hostKey, and its host key is not Octopushy's: its workflow does not deliver one "
-            + "to a VM on a host listed under its installation's snippets.hosts. Its host cannot be checked."),
-    };
+        var trust = ManagedHostKey.TrustOf(repository, guest);
+        switch (trust)
+        {
+            case HostKeyTrust.Declared:
+                bind(ConfigureInputs.Reference(guest, "hostKey")!);
+                break;
+            case HostKeyTrust.Container:
+                bind(new StoreReference(ContainerHostKeys.Key(guestResourceId), null));
+                break;
+            case HostKeyTrust.Managed:
+                break;
+            default:
+                throw new RunException("This guest names no access.hostKey, and its host key is not Octopushy's: it is not a container, "
+                    + "and its workflow does not deliver one to a VM on a host listed under its installation's snippets.hosts. Its host cannot be checked.");
+        }
+
+        return trust;
+    }
 
     /// <summary>
     /// Refuses a run in an installation Octopushy only observes. Its guests are invalid already; this is

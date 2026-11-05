@@ -49,9 +49,8 @@ public sealed partial class RunFactory
                 Bind(SecretNames.AnsibleSshKey, declared);
             else
                 secrets[RunContext.StageRole(stage.Name, SecretNames.AnsibleSshKey)] = GuestAccessCredentials.Key(guestResource.Id);
-            // One trust source, chosen explicitly: the guest's own pin, or Octopushy's key for a VM it delivered one to.
-            if (!PinsManagedHostKey(repository, guest))
-                Bind(SecretNames.AnsibleHostKey, ConfigureInputs.Reference(guest, "hostKey")!);
+            // One trust source, chosen where every run that logs in chooses it: see BindHostKey.
+            BindHostKey(repository, guest, guestResource.Id, pin => Bind(SecretNames.AnsibleHostKey, pin));
             foreach (var (name, reference) in stage.Secrets)
             {
                 Bind(SecretNames.AnsibleVar(name), reference);

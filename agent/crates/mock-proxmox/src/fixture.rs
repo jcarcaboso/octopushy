@@ -39,6 +39,64 @@ pub struct Fixture {
     /// What `GET /access/acl` lists; by default one propagating grant on `/`.
     #[serde(default)]
     pub acl: Option<Vec<serde_json::Value>>,
+    /// The task history of every node, as `GET /nodes/{node}/tasks` lists it. It is the
+    /// installation's record, apart from the guests that exist now: a task stays after its
+    /// guest is destroyed, and a VMID that is used again has the tasks of each guest it had.
+    #[serde(default)]
+    pub tasks: Vec<FixtureTask>,
+    /// Tasks that start while the history is being read: each joins `tasks` once
+    /// `GET /nodes/{node}/tasks` has been answered that many times.
+    #[serde(default)]
+    pub tasks_later: Vec<(usize, FixtureTask)>,
+    /// How many times `GET /nodes/{node}/tasks` has been answered.
+    #[serde(skip)]
+    pub task_reads: usize,
+    /// What `GET /nodes/{node}/time` says it is, in Unix seconds; the mock's clock by default.
+    #[serde(default)]
+    pub time: Option<u64>,
+}
+
+/// One task in a node's history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureTask {
+    pub node: String,
+    /// `vzcreate`, `vzrestore`, `vzdestroy`, `qmcreate`, …
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The VMID it is about, as Proxmox gives it: a string.
+    pub id: String,
+    /// Who started it: `user@realm` or `user@realm!token`.
+    pub user: String,
+    pub starttime: u64,
+    #[serde(default)]
+    pub endtime: Option<u64>,
+    /// `OK`, an error, or null while it runs.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub log: Vec<String>,
+    /// Listed from the node's active list rather than its archive: Proxmox then gives a token's
+    /// owner whole in `user`, as for a running task, even once it has finished.
+    #[serde(default)]
+    pub active: bool,
+    /// The worker's process id, which makes the UPID unique as on a real node.
+    #[serde(default = "default_pid")]
+    pub pid: u32,
+}
+
+fn default_pid() -> u32 {
+    0xA0B1
+}
+
+impl FixtureTask {
+    /// The task's UPID, made from what it is, as Proxmox's are.
+    pub fn upid(&self) -> String {
+        format!(
+            "UPID:{}:{:08X}:0012C3D4:{:08X}:{}:{}:{}:",
+            self.node, self.pid, self.starttime, self.kind, self.id, self.user
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +143,8 @@ pub struct FixtureVm {
     /// The VM's description, as its config holds it.
     #[serde(default)]
     pub description: Option<String>,
-    /// Addresses the guest agent reports, or null when the agent is not running.
+    /// Addresses the guest agent reports, or null when the agent is not running. For a container,
+    /// the first is what Proxmox reads from its namespace while it runs.
     #[serde(default)]
     pub ipv4: Option<Vec<String>>,
     /// `qemu` or `lxc`.

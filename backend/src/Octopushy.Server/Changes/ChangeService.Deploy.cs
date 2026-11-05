@@ -382,6 +382,7 @@ public sealed partial class ChangeService
             throw new ChangeRefusal(ChangeRefusal.Reasons.Exists, $"{folder} is already in the repository: choose another name.",
                 fieldIssues: [new FieldIssueDto("/name", $"{name} is already there.")]);
 
+        // The wizard deploys VMs and services; a container guest is written in Git, so a container workflow is refused here.
         var (reference, workflow, release) = await ResolveWorkflowAsync(db, request.Workflow,
             resourceKind == ResourceKinds.Guest ? WorkflowKinds.Vm : WorkflowKinds.Service, ct);
         var lab = address.Split('/')[0];

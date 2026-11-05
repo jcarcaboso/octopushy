@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-pub use fixture::{Fixture, FixtureCluster, FixtureNode, FixtureVm};
+pub use fixture::{Fixture, FixtureCluster, FixtureNode, FixtureTask, FixtureVm};
 
 /// How to serve the mock.
 #[derive(Debug, Clone)]

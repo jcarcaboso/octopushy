@@ -208,7 +208,9 @@ public sealed record ObservedGuestDto(
     long? MaxMemoryBytes,
     long? UptimeSeconds,
     string? ManagedBy,
-    Guid? ManagedById);
+    Guid? ManagedById,
+    /// <summary><c>qemu</c> for a VM, <c>lxc</c> for a container, as Proxmox lists it.</summary>
+    string? Kind);
 
 public sealed record ObservedHostDto(
     string Name,
@@ -234,7 +236,9 @@ public sealed record GuestSummaryDto(
     ObservedGuestDto? Observed,
     RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun,
-    WorkflowDto? Workflow);
+    WorkflowDto? Workflow,
+    /// <summary>The definition's <c>type</c>: <c>vm</c> or <c>container</c>; null when it has none that can be read.</summary>
+    string? Type);
 
 /// <summary>
 /// The workflow a guest or service names, as written (<c>fedora-vm@2</c>), and the version the latest revision resolved

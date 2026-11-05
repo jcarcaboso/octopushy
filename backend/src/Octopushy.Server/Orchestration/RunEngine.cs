@@ -447,8 +447,8 @@ public sealed partial class RunEngine(
         }
 
         var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
-        var vmNote = recoversVm ? $" The plan recreates VM {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
-            : removesVm ? " The plan destroys a VM and its disks."
+        var vmNote = recoversVm ? $" The plan recreates {context.Proxmox.Machine} {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
+            : removesVm ? $" The plan destroys a {context.Proxmox.Machine} and its disks."
             : "";
         step.ApprovalRequired = manual || destructiveManual || vmHeld;
         if (!step.ApprovalRequired)
@@ -470,7 +470,7 @@ public sealed partial class RunEngine(
 
         // A deploy that asked to approve its plan in the same click: only a first plan that does nothing but create.
         var preApproval = run.Operation == Operations.Provision
-            ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs) ?? (removesVm ? "It destroys a VM." : null), needed: true, cancellationToken)
+            ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs) ?? (removesVm ? $"It destroys a {context.Proxmox.Machine}." : null), needed: true, cancellationToken)
             : (false, null);
         if (preApproval.Approved)
             return true;
@@ -516,7 +516,7 @@ public sealed partial class RunEngine(
     }
 
     /// <summary>Records what a finished step established about its resource.</summary>
-    private async Task ApplyEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
+    private async Task ApplyEffectsAsync(OctopushyDb db, VariableStore store, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
     {
         if (step.Stage is not null)
         {
@@ -564,14 +564,14 @@ public sealed partial class RunEngine(
                     if (!GuestVmPlan.RemovesGuestVm(outputs, planned))
                     {
                         unprotect.Status = StepStatuses.Skipped;
-                        unprotect.Detail = "The plan does not replace or delete this guest's VM, so its protection stays as it is.";
+                        unprotect.Detail = $"The plan does not replace or delete this guest's {planned.Proxmox.Machine}, so its protection stays as it is.";
                     }
                     else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
                              || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
                     {
                         // Only a VM the guest owns loses its protection: one it is bound to, or its own create that did not finish.
                         unprotect.Status = StepStatuses.Skipped;
-                        unprotect.Detail = $"This guest does not own VM {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
+                        unprotect.Detail = $"This guest does not own {planned.Proxmox.Machine} {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
                     }
                 }
 
@@ -603,7 +603,7 @@ public sealed partial class RunEngine(
                     var verifying = RunContext.Parse(run.Context);
                     if (!SafetyBoundary.Reserves(resource, verifying) || resource.ReservationAppliedAt is null)
                     {
-                        step.Detail = $"VM {verifying.Proxmox.Vmid} on {verifying.Proxmox.Node} is not recorded as this guest's: "
+                        step.Detail = $"{verifying.Proxmox.Machine} {verifying.Proxmox.Vmid} on {verifying.Proxmox.Node} is not recorded as this guest's: "
                             + "no apply of an approved plan of this guest has created it.";
                     }
                     else if (SafetyBoundary.MarksMissing(outputs, verifying) is { } missing)
@@ -620,6 +620,19 @@ public sealed partial class RunEngine(
                     }
                 }
 
+                // A container's host keys, as the create task of the apply that made it logged them, are the pin of its
+                // Ansible work. Only the answer of the attempt that was asked, about a container this guest owns: keys an
+                // attempt reports without being asked, as after the token that applied was revoked, pin nothing.
+                if (RunContext.Parse(run.Context) is { ContainerHostKey: true, HostKeysRequest: { } asked } pinning
+                    && step.Attempts.OrderByDescending(a => a.Number).FirstOrDefault()?.Id == asked.AttemptId
+                    && resource.BoundVmid == pinning.Proxmox.Vmid && resource.BoundInstallation == resource.ParentAddress)
+                {
+                    if (ContainerHostKeys.Read(outputs) is { } fingerprints)
+                        await ContainerHostKeys.RecordAsync(store, resource.Id, fingerprints, cancellationToken);
+                    else if (outputs?["hostKeysError"]?.ToString() is { Length: > 0 } unread)
+                        step.Detail = $"The container's host keys could not be read again from the run that created it: {unread}";
+                }
+
                 resource.VerifiedAt = now;
                 break;
             case StepNames.VerifyAbsent:
@@ -634,6 +647,7 @@ public sealed partial class RunEngine(
                 resource.ReservationAppliedAt = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+                await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:
@@ -693,21 +707,21 @@ public sealed partial class RunEngine(
         if (restore.Status is not (StepStatuses.Queued or StepStatuses.Running))
             return false;
         run.Status = RunStatuses.Running;
-        run.Detail = $"Restoring the protection of VM {context.Proxmox.Vmid}: the plan was not applied in full.";
+        run.Detail = $"Restoring the protection of {context.Proxmox.Machine} {context.Proxmox.Vmid}: the plan was not applied in full.";
         return true;
     }
 
     /// <summary>What became of the protection this run lifted, for the end of the run's detail.</summary>
     private static string ProtectionOutcome(Run run, RunContext context)
     {
-        var vmid = context.Proxmox.Vmid;
+        var vmid = $"{context.Proxmox.Machine} {context.Proxmox.Vmid}";
         return run.Steps.SingleOrDefault(s => s.Name == StepNames.Reprotect) switch
         {
             null => "",
             { Status: StepStatuses.Succeeded, Outputs: var outputs } when outputs is not null && JsonNode.Parse(outputs)?["absent"] is JsonValue absent
-                && absent.TryGetValue<bool>(out var gone) && gone => $" VM {vmid} no longer exists, so there was no protection to restore. Plan again to create it.",
-            { Status: StepStatuses.Succeeded } => $" Protection of VM {vmid} is back on. Plan again to retry.",
-            _ => $" Protection of VM {vmid} could not be restored and may still be off. Plan again to retry, or turn it on in Proxmox.",
+                && absent.TryGetValue<bool>(out var gone) && gone => $" {vmid} no longer exists, so there was no protection to restore. Plan again to create it.",
+            { Status: StepStatuses.Succeeded } => $" Protection of {vmid} is back on. Plan again to retry.",
+            _ => $" Protection of {vmid} could not be restored and may still be off. Plan again to retry, or turn it on in Proxmox.",
         };
     }
 

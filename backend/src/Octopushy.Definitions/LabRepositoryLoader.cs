@@ -447,6 +447,7 @@ public sealed class LabRepositoryLoader
 
         CollectStoreUses(json, address, file, document);
         var reference = WorkflowReference.Parse(json["workflow"]!.GetValue<string>())!;
+        var type = json["type"]!.GetValue<string>();
         guests.Add(new GuestDefinition(
             id,
             lab,
@@ -460,7 +461,7 @@ public sealed class LabRepositoryLoader
             json["vmid"]!.GetValue<int>(),
             json["template"]?.GetValue<string>(),
             reference,
-            ResolveWorkflow(reference, WorkflowKinds.Vm, "guest", file, address),
+            ResolveWorkflow(reference, WorkflowKinds.ForGuestType(type), $"guest of type: {type}", file, address),
             ParsePolicy(json["policy"]),
             ParseLabels(json["execution"])));
     }
@@ -477,8 +478,12 @@ public sealed class LabRepositoryLoader
 
         if (workflow.Manages != manages)
         {
+            // A guest's type and its workflow's kind are one choice, written twice: say which to change.
+            var hint = WorkflowKinds.IsMachine(manages) && WorkflowKinds.IsMachine(workflow.Manages)
+                ? $" Set type: {workflow.Manages} to use it, or name a workflow that makes a {(manages == WorkflowKinds.Container ? "container" : "VM")}."
+                : "";
             Error(file, LineOf(file, "/workflow"),
-                $"{reference} resolved to {workflow.Label}, which has manages: {workflow.Manages}, and a {what} needs a workflow with manages: {manages}.", address);
+                $"{reference} resolved to {workflow.Label}, which has manages: {workflow.Manages}, and a {what} needs a workflow with manages: {manages}.{hint}", address);
             return null;
         }
 
@@ -646,10 +651,9 @@ public sealed class LabRepositoryLoader
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.address, or a static or reserved address.");
         if (guest.Json["access"]?["user"] is null)
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.user.");
-        if (guest.Json["access"]?["hostKey"] is null
-            && !ManagedHostKey.Offered(installations.Find(i => i.Address == guest.InstallationAddress), guest))
+        if (ManagedHostKey.TrustOf(installations.Find(i => i.Address == guest.InstallationAddress), guest) == HostKeyTrust.None)
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.hostKey, unless its machine stage has "
-                + $"hostKey: managed and its installation lists host {guest.Host} under snippets.hosts.");
+                + $"hostKey: managed and its installation lists host {guest.Host} under snippets.hosts. A container needs none: its keys are pinned from its create task.");
 
         var secrets = ConfigureInputs.Secrets(guest, "secrets");
         var files = ConfigureInputs.Secrets(guest, "secretFiles");
@@ -721,10 +725,9 @@ public sealed class LabRepositoryLoader
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.address, or a static or reserved address.");
             if (guest.Json["access"]?["user"] is null)
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.user.");
-            if (guest.Json["access"]?["hostKey"] is null
-                && !ManagedHostKey.Offered(installations.Find(i => i.Address == guest.InstallationAddress), guest))
+            if (ManagedHostKey.TrustOf(installations.Find(i => i.Address == guest.InstallationAddress), guest) == HostKeyTrust.None)
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.hostKey, unless the guest's machine stage "
-                    + $"has hostKey: managed and its installation lists host {guest.Host} under snippets.hosts.");
+                    + $"has hostKey: managed and its installation lists host {guest.Host} under snippets.hosts. A container needs none: its keys are pinned from its create task.");
 
             foreach (var name in workflow.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
             {

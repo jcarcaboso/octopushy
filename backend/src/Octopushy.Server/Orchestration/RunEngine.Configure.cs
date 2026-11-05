@@ -233,7 +233,14 @@ public sealed partial class RunEngine
     /// <summary>An apply carrying Octopushy's key finished. Whether it reached the machine is for a login to show.</summary>
     private static async Task RecordProvisionedKeyAsync(OctopushyDb db, Run run, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        if (!RunContext.Parse(run.Context).ManagedAccess)
+        var context = RunContext.Parse(run.Context);
+        if (!context.ManagedAccess)
+            return;
+        // A container takes its keys only when it is created: its module ignores them afterwards, since the provider would
+        // replace it for them. So only an apply that made this guest's container carried the key to it.
+        if (context.Proxmox.MachineKind == "lxc"
+            && (run.Steps.SingleOrDefault(s => s.Name == StepNames.Plan)?.Outputs is not { } plan
+                || !GuestVmPlan.MakesGuestMachine(JsonNode.Parse(plan), context)))
             return;
         var key = await db.GuestAccessKeys.FirstOrDefaultAsync(k => k.ResourceId == run.ResourceId && k.Bootstrap, cancellationToken);
         if (key is not null)

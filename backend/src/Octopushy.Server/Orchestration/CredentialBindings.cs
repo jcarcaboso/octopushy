@@ -149,10 +149,12 @@ internal static class CredentialBindings
         {
             var role = RunContext.BareRole(name);
             // The server's own keys are the only things under system/ a run may bind, and each only by its own guest or
-            // installation: the guest's login key, and for a snippet upload the guest's host key and the installation's upload key.
+            // installation: the guest's login key, a container's create-task pin, and for a snippet upload the guest's host
+            // key and the installation's upload key.
             var ownKey = run is not null && role switch
             {
                 SecretNames.AnsibleSshKey => key == GuestAccessCredentials.Key(context.GuestResourceId ?? run.ResourceId),
+                SecretNames.AnsibleHostKey => key == ContainerHostKeys.Key(context.GuestResourceId ?? run.ResourceId),
                 SecretNames.GuestHostKey => context.Snippets is not null && key == GuestHostCredentials.Key(run.ResourceId),
                 SecretNames.SnippetsKey => context.Snippets is { } uploads && key == InstallationSnippetCredentials.Key(uploads.Installation),
                 _ => false,
@@ -171,7 +173,9 @@ internal static class CredentialBindings
 
             if (!entries.TryGetValue(key, out var entry))
             {
-                problems.Add(role == SecretNames.SnippetsKey
+                problems.Add(key.StartsWith(ContainerHostKeys.Prefix, StringComparison.Ordinal)
+                    ? $"{key}: missing: the container's host keys have not been read from its create task. {ContainerHostKeys.Recovery}"
+                    : role == SecretNames.SnippetsKey
                     ? $"{key}: missing. Create the snippet upload key on the installation's page, and run deploy/proxmox/snippets.sh on each host with it"
                     : $"{key}: missing");
                 continue;
@@ -207,7 +211,9 @@ internal static class CredentialBindings
             var value = versions.SingleOrDefault(v => v.Key == key && v.Version == version);
             if (value is null || value.RevokedAt is not null || value.ActivatedAt is null)
             {
-                problems.Add($"{key} v{version}: {(value is null ? "missing" : value.RevokedAt is not null ? "revoked" : "candidate not promoted")}");
+                problems.Add(value?.RevokedAt is not null && key.StartsWith(ContainerHostKeys.Prefix, StringComparison.Ordinal)
+                    ? $"{key} v{version}: revoked: the container may have been replaced since its host keys were read. {ContainerHostKeys.Recovery}"
+                    : $"{key} v{version}: {(value is null ? "missing" : value.RevokedAt is not null ? "revoked" : "candidate not promoted")}");
                 continue;
             }
 

@@ -2,7 +2,11 @@ using System.Text.Json.Nodes;
 
 namespace Octopushy.Server.Orchestration;
 
-/// <summary>What a provision plan does to Proxmox VMs, read from the plan step's outputs.</summary>
+/// <summary>
+/// What a provision plan does to Proxmox machines, VMs and containers alike, read from the plan step's outputs. A
+/// container's VMID is in the same namespace as a VM's, and replacing either wipes its disks, so every rule here is the same
+/// for both.
+/// </summary>
 public static class GuestVmPlan
 {
     public const string VmResourceType = "proxmox_virtual_environment_vm";
@@ -13,7 +17,10 @@ public static class GuestVmPlan
 
     private static IEnumerable<JsonNode> Removals(JsonNode? outputs) =>
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>()
-            .Where(c => c["type"]?.ToString() == VmResourceType && Actions(c).Contains("delete"));
+            .Where(c => IsMachine(c) && Actions(c).Contains("delete"));
+
+    /// <summary>A Proxmox VM or container: what a guest's machine stage makes.</summary>
+    private static bool IsMachine(JsonNode change) => change["type"]?.ToString() is VmResourceType or ContainerResourceType;
 
     private static List<string?> Actions(JsonNode change) =>
         (change["actions"] as JsonArray ?? []).Select(a => a?.ToString()).ToList();
@@ -29,14 +36,14 @@ public static class GuestVmPlan
     /// </summary>
     public static bool MakesGuestMachine(JsonNode? outputs, RunContext context) =>
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
-            c["type"]?.ToString() is VmResourceType or ContainerResourceType
+            IsMachine(c)
             && Actions(c).Contains("create")
             && IsGuests(c, context));
 
     /// <summary>The plan makes a machine it cannot place: its VMID or host is not known until apply, or the agent did not say.</summary>
     public static bool MakesUnnamedMachine(JsonNode? outputs) =>
         (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
-            c["type"]?.ToString() is VmResourceType or ContainerResourceType
+            IsMachine(c)
             && Actions(c).Contains("create")
             && (c["vmId"] is null || c["node"] is null));
 
@@ -107,7 +114,7 @@ public static class GuestVmPlan
         var what = string.Join("; ", foreign);
         return stage
             ? $"Stage {context.Stage} would change a Proxmox resource that acts on a machine ({what}). A pipeline stage owns no machine, so Octopushy refuses this plan whatever the policy says."
-            : $"The plan would change a Proxmox resource that is not this guest's VM {context.Proxmox.Vmid} on {context.Proxmox.Node} ({what}). "
+            : $"The plan would change a Proxmox resource that is not this guest's {context.Proxmox.Machine} {context.Proxmox.Vmid} on {context.Proxmox.Node} ({what}). "
               + "Octopushy refuses to act on a machine it does not manage, whatever the policy says.";
     }
 
@@ -141,15 +148,15 @@ public static class GuestVmPlan
         return $"{change["address"]?.ToString() ?? change["type"]?.ToString()} {verb} {named}{(unknown ? ", some of it not known until apply" : "")}";
     }
 
-    /// <summary>The plan deletes or replaces some Proxmox VM, its disks included.</summary>
+    /// <summary>The plan deletes or replaces some Proxmox VM or container, its disks included.</summary>
     public static bool RemovesVm(JsonNode? outputs) => Removals(outputs).Any();
 
-    /// <summary>The plan deletes or replaces the VM this guest owns. Nothing else justifies lifting its protection.</summary>
+    /// <summary>The plan deletes or replaces the machine this guest owns. Nothing else justifies lifting its protection.</summary>
     public static bool RemovesGuestVm(JsonNode? outputs, RunContext context) =>
         Removals(outputs).Any(c => IsGuests(c, context));
 
     /// <summary>
-    /// The only VM the plan removes is this guest's, and OpenTofu replaces it because creating it did not finish.
+    /// The only machine the plan removes is this guest's, and OpenTofu replaces it because creating it did not finish.
     /// A replacement for any other reason, such as an edit, does not count.
     /// </summary>
     public static bool RecreatesFailedVm(JsonNode? outputs, RunContext context) =>

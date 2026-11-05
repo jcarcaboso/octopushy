@@ -88,8 +88,9 @@ public sealed record InstallationDefinition(
 }
 
 /// <summary>
-/// A VM. <paramref name="WorkflowReference"/> is what <c>guest.yaml</c> names; <paramref name="Workflow"/> is the version it
-/// resolved to, a workflow with <c>manages: vm</c>, or null when it resolved to none.
+/// A VM or a Proxmox container, as its <see cref="Type"/> says. <paramref name="WorkflowReference"/> is what <c>guest.yaml</c>
+/// names; <paramref name="Workflow"/> is the version it resolved to, a workflow whose <c>manages</c> is the guest's type, or
+/// null when it resolved to none.
 /// </summary>
 public sealed record GuestDefinition(
     string Id,
@@ -108,6 +109,15 @@ public sealed record GuestDefinition(
     PolicySettings? Policy,
     IReadOnlyList<string>? AgentLabels)
 {
+    /// <summary>
+    /// <c>vm</c> or <c>container</c>, as <c>guest.yaml</c>'s <c>type</c> says; see <see cref="GuestTypes"/>. The one accessor of
+    /// a guest's kind: it reads the definition, so there is no second copy to disagree with it.
+    /// </summary>
+    public string Type => Json["type"]?.GetValue<string>() ?? GuestTypes.Vm;
+
+    /// <summary>How Proxmox lists the guest: <c>qemu</c> or <c>lxc</c>.</summary>
+    public string ProxmoxKind => GuestTypes.ProxmoxKind(Type);
+
     public string InstallationAddress => $"{Lab}/{Installation}";
 
     public string Address => $"{Lab}/{Installation}/{Id}";

@@ -25,11 +25,12 @@ import { folderLink } from "./variables/folders";
 
 function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
   return (
-    <Table label="Observed VMs" className="table--observed">
+    <Table label="Observed guests" className="table--observed">
       <thead>
         <tr>
           <th scope="col">VMID</th>
           <th scope="col">Name</th>
+          <th scope="col">Kind</th>
           <th scope="col">Host</th>
           <th scope="col">Power</th>
           <th scope="col">Tags</th>
@@ -38,7 +39,9 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
       </thead>
       <tbody>
         {vms.length === 0 ? (
-          <EmptyRow colSpan={6}>{observed ? "Proxmox reported no VMs." : "Not observed yet. Observe the installation to list its VMs."}</EmptyRow>
+          <EmptyRow colSpan={7}>
+            {observed ? "Proxmox reported no VMs or containers." : "Not observed yet. Observe the installation to list its VMs and containers."}
+          </EmptyRow>
         ) : null}
         {vms.map((vm) => (
           <tr key={String(vm.vmid)}>
@@ -52,6 +55,7 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
                 </>
               ) : null}
             </td>
+            <td>{vm.kind === "lxc" ? "Container" : vm.kind === "qemu" ? "VM" : (vm.kind ?? <span className="muted">—</span>)}</td>
             <td className="mono">{vm.host ?? "—"}</td>
             <td>{vm.status ?? <span className="muted">—</span>}</td>
             <td>
@@ -192,7 +196,7 @@ export function InstallationPage() {
               <GuestTable guests={installation.guests} label="Declared guests" />
             </Card>
             <Card
-              title="Observed VMs"
+              title="Observed guests"
               meta={unmanaged > 0 ? `${data.observedGuests.length} · ${plural(unmanaged, "unmanaged")}` : data.observedGuests.length || undefined}
               id="observed"
               flush

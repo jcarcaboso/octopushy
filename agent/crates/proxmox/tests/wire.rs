@@ -273,3 +273,335 @@ async fn maps_errors() {
         other => panic!("{other:?}"),
     }
 }
+
+#[tokio::test]
+async fn reads_a_containers_status_config_and_interfaces_through_lxc() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/status/current"))
+        .respond_with(data(
+            json!({ "vmid": 320, "status": "running", "name": "ct", "uptime": 9, "type": "lxc" }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/config"))
+        .respond_with(data(json!({
+            "hostname": "ct", "protection": 1, "unprivileged": 1, "features": "nesting=1",
+            "tags": "octopushy;home", "description": "Managed by Octopushy as home/korriban/ct.\n",
+            "digest": "abc"
+        })))
+        .mount(&server)
+        .await;
+    // Proxmox 8.2 and later list every address in the guest agent's form too.
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/interfaces"))
+        .respond_with(data(json!([
+            { "name": "lo", "hwaddr": "00:00:00:00:00:00", "inet": "127.0.0.1/8", "inet6": "::1/128" },
+            { "name": "eth0", "hwaddr": "bc:24:11:00:00:02", "hardware-address": "bc:24:11:00:00:02",
+              "inet": "10.1.0.41/24", "inet6": "fe80::1/64",
+              "ip-addresses": [
+                { "ip-address": "10.1.0.40", "ip-address-type": "inet", "prefix": 24 },
+                { "ip-address": "10.1.0.41", "ip-address-type": "inet", "prefix": 24 },
+                { "ip-address": "fe80::1", "ip-address-type": "inet6", "prefix": 64 }
+              ] }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/321/interfaces"))
+        .respond_with(data(serde_json::Value::Null))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/lxc/404/config"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(
+            json!({ "data": null, "message": "Configuration file 'nodes/korriban/lxc/404.conf' does not exist\n" }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api2/json/nodes/korriban/lxc/320/config"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .and(body_string("protection=1"))
+        .respond_with(data(serde_json::Value::Null))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server);
+    assert_eq!(
+        c.ct_status("korriban", 320).await.unwrap().status,
+        "running"
+    );
+    let config = c.ct_config("korriban", 320).await.unwrap();
+    assert_eq!(
+        (
+            config.hostname.as_deref(),
+            config.protection,
+            config.unprivileged,
+            config.tags.len()
+        ),
+        (Some("ct"), true, true, 2)
+    );
+    assert!(
+        config
+            .description
+            .unwrap()
+            .starts_with("Managed by Octopushy as home/korriban/ct.")
+    );
+    let interfaces = c.ct_interfaces("korriban", 320).await.unwrap().unwrap();
+    let addresses: Vec<String> = octopushy_proxmox::ct_ipv4_addresses(&interfaces)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    // inet first, then any further IPv4 in the list; never loopback, never twice.
+    assert_eq!(addresses, ["10.1.0.41", "10.1.0.40"]);
+    assert!(c.ct_interfaces("korriban", 321).await.unwrap().is_none());
+    assert!(matches!(
+        c.ct_config("korriban", 404).await,
+        Err(Error::NotFound(_))
+    ));
+    c.set_ct_protection("korriban", 320, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn lists_a_guests_tasks_and_reads_a_log() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("vmid", "320"))
+        .and(query_param("source", "all"))
+        .respond_with(data(json!([
+            { "upid": "UPID:korriban:1:2:3:vzcreate:320:root@pam:", "type": "vzcreate", "id": "320",
+              "user": "root@pam", "starttime": 1730191360, "endtime": 1730191372, "status": "OK" }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api2/json/nodes/korriban/tasks/UPID:korriban:1:2:3:vzcreate:320:root@pam:/log",
+        ))
+        .respond_with(data(
+            json!([{ "n": 2, "t": "TASK OK" }, { "n": 1, "t": "extracting archive" }]),
+        ))
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    let tasks = c.guest_tasks("korriban", 320).await.unwrap();
+    assert_eq!(
+        (tasks[0].kind.as_str(), tasks[0].status.as_deref()),
+        ("vzcreate", Some("OK"))
+    );
+    let log = c.task_log("korriban", &tasks[0].upid).await.unwrap();
+    assert_eq!(
+        log.iter().map(|l| l.t.as_str()).collect::<Vec<_>>(),
+        ["extracting archive", "TASK OK"]
+    );
+}
+
+#[tokio::test]
+async fn reads_a_nodes_clock() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/time"))
+        .respond_with(data(
+            json!({ "time": 1800000000, "localtime": 1800003600, "timezone": "Europe/Madrid" }),
+        ))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        client(&server).node_time("korriban").await.unwrap(),
+        1_800_000_000
+    );
+}
+
+#[tokio::test]
+async fn review_guest_task_history_is_not_silently_limited_to_one_page() {
+    let server = MockServer::start().await;
+    let page: Vec<_> = (0..1000)
+        .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!(page)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "1000"))
+        .respond_with(data(
+            json!([{"upid":"older-create", "type":"vzcreate", "id":"320"}]),
+        ))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    assert_eq!(tasks.len(), 1001, "the history endpoint has another page");
+}
+
+#[tokio::test]
+async fn a_server_that_ignores_start_is_not_taken_for_a_whole_history() {
+    let server = MockServer::start().await;
+    let page: Vec<_> = (0..500)
+        .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!(page)))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("listed twice"), "{error}");
+}
+
+#[tokio::test]
+async fn an_archived_token_task_is_its_whole_principal() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(data(json!([
+            // Archived: pve-manager splits a token's owner (PVE/API2/Tasks.pm, convert_token_task).
+            { "upid": "UPID:korriban:1:2:3:vzcreate:320:octopushy@pve!writer:", "type": "vzcreate", "id": "320",
+              "user": "octopushy@pve", "tokenid": "writer", "status": "OK", "starttime": 3 },
+            // Active: the whole principal in user.
+            { "upid": "UPID:korriban:1:2:4:vzstart:320:octopushy@pve!writer:", "type": "vzstart", "id": "320",
+              "user": "octopushy@pve!writer", "starttime": 4 },
+            { "upid": "UPID:korriban:1:2:5:vzstart:320:octopushy@pve:", "type": "vzstart", "id": "320",
+              "user": "octopushy@pve", "starttime": 5 }
+        ])))
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    let principals: Vec<_> = tasks.iter().map(|t| t.principal()).collect();
+    assert_eq!(
+        principals,
+        [
+            Some("octopushy@pve!writer".to_owned()),
+            Some("octopushy@pve!writer".to_owned()),
+            Some("octopushy@pve".to_owned())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn probe_changing_total_must_not_return_incomplete_history() {
+    let server = MockServer::start().await;
+    let tasks: Vec<_> = (0..501)
+        .map(|i| json!({"upid":format!("task-{i}"),"type":"vzstart","id":"320"}))
+        .collect();
+    // First snapshot has 501 tasks. Between reads a restore appears at offset 0.
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "0"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"total":501,"data":tasks[..500]})),
+        )
+        .mount(&server)
+        .await;
+    let mut later = vec![json!({"upid":"new-restore","type":"vzrestore","id":"320"})];
+    later.extend(tasks);
+    Mock::given(path("/api2/json/nodes/korriban/tasks"))
+        .and(query_param("start", "500"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"total":502,"data":later[500..]})),
+        )
+        .mount(&server)
+        .await;
+    let result = client(&server).guest_tasks("korriban", 320).await;
+    if let Ok(tasks) = &result {
+        eprintln!(
+            "Returned {} tasks, {} distinct, restore visible: {}",
+            tasks.len(),
+            tasks
+                .iter()
+                .map(|t| &t.upid)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            tasks.iter().any(|t| t.kind == "vzrestore")
+        );
+    }
+    assert!(
+        result.is_err(),
+        "changing total and duplicate UPIDs must fail closed instead of omitting the restore"
+    );
+}
+
+/// A history of `total` tasks `task-0`…, newest first, paged by `start`, whose first page reads
+/// another newest task the first `moved` times it is asked for, or every other time for `usize::MAX`.
+fn paged(total: usize, moved: usize) -> impl Fn(&wiremock::Request) -> ResponseTemplate {
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    move |req: &wiremock::Request| {
+        let start: usize = req
+            .url
+            .query_pairs()
+            .find(|(k, _)| k == "start")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
+        let mut page: Vec<_> = (start..(start + 500).min(total))
+            .map(|i| json!({"upid": format!("task-{i}"), "type": "vzstart", "id": "320"}))
+            .collect();
+        // `usize::MAX`: it moves between every two reads, so no scan sees the same first page twice.
+        let read = if start == 0 {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        } else {
+            usize::MAX
+        };
+        if read != usize::MAX
+            && (read < moved && moved != usize::MAX || moved == usize::MAX && read % 2 == 0)
+        {
+            page[0] = json!({"upid": "head", "type": "vzstart", "id": "320"});
+        }
+        ResponseTemplate::new(200).set_body_json(json!({"data": page, "total": total}))
+    }
+}
+
+#[tokio::test]
+async fn a_history_whose_newest_tasks_moved_is_read_again_and_then_refused() {
+    // The first page reads otherwise at the end of the first scan only: the second scan holds still.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(700, 1))
+        .mount(&server)
+        .await;
+    let tasks = client(&server).guest_tasks("korriban", 320).await.unwrap();
+    assert_eq!((tasks.len(), tasks[0].upid.as_str()), (700, "task-0"));
+
+    // It keeps moving: every scan fails its check, and the read fails rather than return a part of it.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(700, usize::MAX))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("changed while it was read, 3 times"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_history_longer_than_the_cap_is_refused_from_its_total() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/tasks"))
+        .respond_with(paged(100_001, 0))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .guest_tasks("korriban", 320)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("100000"), "{error}");
+}

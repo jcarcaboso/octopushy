@@ -233,7 +233,12 @@ public class ManagedHostKeyReviewTests(PostgresFixture postgres)
         var json = guest.Json.DeepClone().AsObject();
         json["type"] = "container";
         var container = guest with { Json = json };
+        // The kind is read through its one accessor, which the definition decides: this is a container to every rule.
+        Assert.Equal((GuestTypes.Container, "lxc"), (container.Type, container.ProxmoxKind));
+        Assert.Equal((GuestTypes.Vm, false), (guest.Type, ManagedHostKey.IsVm(container)));
         // A container names no access.hostKey because Proxmox pins it some other way, not because its key is Octopushy's.
+        Assert.Equal(HostKeyTrust.Container, ManagedHostKey.TrustOf(repository, container));
+        Assert.Equal(HostKeyTrust.Managed, ManagedHostKey.TrustOf(repository, guest));
         Assert.False(ManagedHostKey.Wanted(repository, container, keyIssued: false));
         Assert.False(ManagedHostKey.Wanted(repository, container, keyIssued: true));
         Assert.False(ManagedHostKey.Offered(repository, container));
@@ -259,17 +264,24 @@ public class ManagedHostKeyReviewTests(PostgresFixture postgres)
             () => factory.Pipeline(repository, repository.Service(ServiceDefinitionTests.Address)!, resource, resource, revision, "manual"),
         }, make => Assert.Throws<RunException>(make));
 
-        // A guest that is not a VM, on a workflow that opts in: neither.
+        // A container, even on a workflow that opts in, never takes Octopushy's managed key: it is pinned to its own create
+        // task's fingerprints instead, and nothing else.
         using var opted = ManagedHostKeyTests.Managed();
         var optedIn = LabRepositoryLoader.Load(opted.Root);
         var vm = optedIn.Guest(Guest)!;
         var json = vm.Json.DeepClone().AsObject();
         json["type"] = "container";
         var container = vm with { Json = json };
+        Assert.Equal(GuestTypes.Container, container.Type);
         Assert.All(new Func<Run>[]
         {
             () => factory.Configure(optedIn, container, resource, revision, "setup", "manual", null, null),
             () => factory.RotateAccess(optedIn, container, resource, revision, new AccessRotationContext(1, 2, [1])),
-        }, make => Assert.Throws<RunException>(make));
+        }, make =>
+        {
+            var context = RunContext.Parse(make().Context);
+            Assert.False(context.ManagedHostKey);
+            Assert.Equal(ContainerHostKeys.Key(resource.Id), context.Secrets[SecretNames.AnsibleHostKey]);
+        });
     }
 }
