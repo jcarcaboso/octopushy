@@ -609,6 +609,43 @@ describe("VariablesPage folders", () => {
     expect(within(screen.getByRole("navigation", { name: "Folder" })).getByText("site-a")).toHaveAttribute("aria-current", "page");
   });
 
+  it("deletes a key that nothing uses, whatever its history", async () => {
+    const user = userEvent.setup();
+    let entries = store().entries;
+    const { requests } = mockApi({
+      "GET /api/variables": () => store({ entries }),
+      "DELETE /api/variables": () => {
+        entries = entries.filter((e) => e.key !== siteACa);
+      },
+    });
+    renderFolder("/variables?folder=proxmox/site-a");
+    await user.click(await screen.findByRole("button", { name: `Delete ${siteACa}` }));
+    const dialog = screen.getByRole("dialog", { name: `Delete ${siteACa}?` });
+    expect(dialog).toHaveTextContent("What each run was given stays on record");
+    expect(dialog).not.toHaveTextContent("It is still used by these");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(requests.find((r) => r.method === "DELETE")?.search).toBe(`?key=${encodeURIComponent(siteACa)}`);
+    expect(screen.queryByTitle(siteACa)).not.toBeInTheDocument();
+  });
+
+  it("names what still uses a key, and shows the server's exact reason when deleting it is refused", async () => {
+    const user = userEvent.setup();
+    const reason = `'${siteBToken}' is still used by recipe/site-b, run #12. Delete it once nothing uses it.`;
+    mockApi({
+      "GET /api/variables": () => store(),
+      "DELETE /api/variables": () => problem(400, reason),
+    });
+    renderFolder("/variables?folder=proxmox/site-b");
+    await user.click(await screen.findByRole("button", { name: `Delete ${siteBToken}` }));
+    const dialog = screen.getByRole("dialog", { name: `Delete ${siteBToken}?` });
+    expect(dialog).toHaveTextContent("It is still used by these");
+    expect(within(dialog).getByText("recipe/site-b")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(reason);
+    expect(screen.getByRole("dialog", { name: `Delete ${siteBToken}?` })).toBeInTheDocument();
+  });
+
   it("lands on the parent when the last key of a folder is deleted", async () => {
     const user = userEvent.setup();
     let entries = store().entries;

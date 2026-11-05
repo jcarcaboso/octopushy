@@ -360,6 +360,31 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("revisions", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.DeletedStoreKey", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<DateTimeOffset>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("DeletedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<int>("LatestVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("latest_version");
+
+                    b.HasKey("Key")
+                        .HasName("pk_deleted_store_keys");
+
+                    b.ToTable("deleted_store_keys", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.EnrollmentToken", b =>
                 {
                     b.Property<Guid>("Id")

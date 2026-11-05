@@ -4,6 +4,7 @@ using Octopushy.Definitions.Yaml;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Changes;
 
@@ -199,7 +200,7 @@ public static class GeneratedValues
             else if (await db.SecretResolutions.AnyAsync(r => r.Key == key, CancellationToken.None))
             {
                 kept = true;
-                notes.Add($"{key} was given to a run, so its history is kept: revoke it under Variables if it must go.");
+                notes.Add($"{key} was given to a run, so it is left as it is: delete it under Variables once nothing uses it.");
             }
             else
             {
@@ -214,6 +215,9 @@ public static class GeneratedValues
                     await transaction.RollbackAsync(CancellationToken.None);
                     throw new InvalidOperationException($"{key} changed while it was being removed.");
                 }
+
+                // A key written again, by a person or a later deploy, continues after this version.
+                await VariableStore.RecordDeletionAsync(db, key, version, "cleanup", now, CancellationToken.None);
 
                 notes.Add($"{key} version {version} deleted.");
             }
@@ -249,14 +253,27 @@ public static class GeneratedValues
     /// landed, as far as the mirror holds them. A dismissed change is among them: a dismissal proves nothing. Null, so nothing is
     /// removed, when a file is not YAML, or a commit is not in the mirror and the change predates its recorded keys.
     /// </summary>
-    private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror)
+    private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror) =>
+        await KeysByOpenChangeAsync(db, mirror) is { } open ? open.SelectMany(c => c.Keys).ToHashSet(StringComparer.Ordinal) : null;
+
+    /// <summary>
+    /// The changes that are not final and may still bring <paramref name="key"/> to the branch, as a person reads them, by the
+    /// same rule as cleanup. Null when one of them cannot be read, so nothing can be said.
+    /// </summary>
+    public static async Task<List<string>?> OpenChangesUsingAsync(OctopushyDb db, RepositoryMirror mirror, string key) =>
+        await KeysByOpenChangeAsync(db, mirror) is { } open
+            ? open.Where(c => c.Keys.Contains(key)).Select(c => $"the {c.Change.Kind} change of {c.Change.Address} ({c.Change.Status})").ToList()
+            : null;
+
+    private static async Task<List<(ResourceChange Change, HashSet<string> Keys)>?> KeysByOpenChangeAsync(OctopushyDb db, RepositoryMirror mirror)
     {
         var finals = ChangeStatuses.Final;
-        var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status))
-            .Select(c => new { c.Commit, c.CandidateCommits, c.Files, c.Edited, c.StoreKeys }).ToListAsync(CancellationToken.None);
-        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status)).OrderBy(c => c.CreatedAt).ToListAsync(CancellationToken.None);
+        var result = new List<(ResourceChange, HashSet<string>)>();
         foreach (var change in open)
         {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            result.Add((change, keys));
             if (change.StoreKeys is { } recorded)
                 keys.UnionWith(recorded);
             if (change.Edited is { } edited && !Collect(edited, keys))
@@ -285,7 +302,7 @@ public static class GeneratedValues
             }
         }
 
-        return keys;
+        return result;
     }
 
     /// <summary>Every store key a run that has not finished was built with.</summary>

@@ -518,6 +518,66 @@ public class DeployTests(PostgresFixture postgres)
         Assert.Equal(0, await setup.Server.QueryAsync(db => db.EnrollmentTokens.CountAsync()));
     }
 
+    [Fact]
+    public async Task A_generated_value_a_person_deletes_is_not_brought_back_and_a_later_one_continues_its_numbering()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "guests/home/korriban/lost-01/enroll_token";
+        var (id, _) = await OwnedAsync(setup, ChangeStatuses.Uncertain, Key);
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var change = await db.Changes.SingleAsync(c => c.Id == id);
+            change.StoreKeys = [Key];
+            await db.SaveChangesAsync();
+        });
+
+        // Its change may still land a definition that uses it.
+        var refused = await setup.Client.DeleteAsync("/api/variables?key=" + Key);
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Contains("the create-guest change of home/korriban/lost-01 (uncertain)",
+            (await refused.Content.ReadFromJsonAsync<JsonObject>())!["title"]!.GetValue<string>());
+        Assert.True(await StoredAsync(setup, Key));
+
+        // Final now, and nothing references it: the person deletes it before cleanup does.
+        await setup.Server.WithDbAsync(db => db.Changes.Where(c => c.Id == id).ExecuteUpdateAsync(c => c.SetProperty(x => x.Status, ChangeStatuses.Superseded)));
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.Client.DeleteAsync("/api/variables?key=" + Key)).StatusCode);
+        Assert.False(await StoredAsync(setup, Key));
+        await setup.Server.SyncAsync();
+        var value = await ValueOfAsync(setup, id);
+        Assert.Equal(GeneratedValueStates.Removed, value.State);
+        Assert.Contains("already gone", value.Detail);
+        Assert.False(await StoredAsync(setup, Key));
+
+        // Set again by hand, it continues after the generated version, so the value's record never matches it.
+        await using (var scope = setup.Server.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>().SetAsync(Key, "set by hand", Visibilities.Secret, null,
+                CancellationToken.None);
+        Assert.Equal(2, (await setup.Server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == Key))).CurrentVersion);
+        await setup.Server.SyncAsync();
+        Assert.True(await StoredAsync(setup, Key));
+    }
+
+    [Fact]
+    public async Task A_deploy_that_generates_a_deleted_key_records_the_version_it_wrote_and_its_cleanup_removes_it()
+    {
+        await using var setup = await StartAsync();
+        const string Key = "proxmox/korriban/new-01/enroll_token";
+        await setup.Server.SetSecretAsync(Key, "an earlier guest's token");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.Client.DeleteAsync("/api/variables?key=" + Key)).StatusCode);
+
+        var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 320, workflow: "agent-vm@1",
+            secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken) })
+            with { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
+        Assert.Equal(ChangeRefusal.Reasons.Invalid, refused.Reason);
+        var value = await setup.Server.QueryAsync(db => db.GeneratedValues.AsNoTracking().SingleAsync(v => v.Key == Key));
+        Assert.Equal(2, value.StoreVersion);
+        Assert.Equal(GeneratedValueStates.Removed, value.State);
+        Assert.Contains("version 2 deleted", value.Detail);
+        Assert.False(await StoredAsync(setup, Key));
+        var deleted = await setup.Server.QueryAsync(db => db.DeletedStoreKeys.AsNoTracking().SingleAsync(d => d.Key == Key));
+        Assert.Equal((2, "cleanup"), (deleted.LatestVersion, deleted.DeletedBy));
+    }
+
     /// <summary>
     /// Records a deploy of <paramref name="address"/> in <paramref name="status"/> that generated <paramref name="key"/>, as the
     /// wizard leaves it: the change, the value's record of what it owns, the store entry it wrote and, if asked, its token.

@@ -523,12 +523,16 @@ public static partial class Endpoints
         })
         .WithName("setVariable");
 
-        group.MapDelete("", async (string key, RunEngine engine, RevisionCache revisions, CancellationToken ct) =>
+        group.MapDelete("", async (string key, HttpContext http, RunEngine engine, RevisionCache revisions, RepositoryMirror mirror, CancellationToken ct) =>
         {
             await engine.ExecuteAsync(async (db, services) =>
             {
-                var uses = await UsesAsync(db, revisions, ct);
-                await services.GetRequiredService<VariableStore>().DeleteAsync(key, uses.GetValueOrDefault(key) ?? [], ct);
+                VariableStore.CheckUserKey(key);
+                var uses = (await UsesAsync(db, revisions, ct)).GetValueOrDefault(key) ?? [];
+                // A change that may still land a definition that uses the key keeps it, as it keeps a generated value.
+                var changes = await GeneratedValues.OpenChangesUsingAsync(db, mirror, key)
+                    ?? throw new StoreException("A commit of an open change could not be read, so whether it uses this key is not known. Delete it once that change is settled.");
+                await services.GetRequiredService<VariableStore>().DeleteAsync(key, [.. uses, .. changes], http.User.Identity?.Name ?? "administrator", ct);
                 return true;
             }, ct);
             return TypedResults.NoContent();

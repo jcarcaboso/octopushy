@@ -1151,6 +1151,23 @@ public sealed class StoreVersion
     public string? RevocationNote { get; set; }
 }
 
+/// <summary>
+/// The last version a store key had when it was deleted. A key written again continues after it, so a version number names one
+/// value only: what <see cref="SecretResolution"/>, a run's pinned versions and a guest's followed versions recorded never comes
+/// to point at a later value. It holds no secret material.
+/// </summary>
+public sealed class DeletedStoreKey
+{
+    public required string Key { get; set; }
+
+    public int LatestVersion { get; set; }
+
+    public DateTimeOffset DeletedAt { get; set; }
+
+    /// <summary>The person who deleted it, or <c>cleanup</c> for a generated value removed by its cleanup.</summary>
+    public required string DeletedBy { get; set; }
+}
+
 /// <summary>Audit record of a secret released to an attempt; never holds the value.</summary>
 public sealed class SecretResolution
 {

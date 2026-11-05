@@ -86,13 +86,36 @@ All endpoints require the existing authenticated administrator session:
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
 | `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote}`. |
 | `POST /api/variables/revoke` | `{key, version, reason}`. |
+| `DELETE /api/variables?key=…` | Deletes the key once nothing needs it; see below. |
 
 Promotion compares the expected active version; stale or concurrent changes
 return `409`, requiring a refresh and review. Candidate allocation also uses
 optimistic concurrency so simultaneous writes cannot overwrite a version.
 All `system/` keys remain unavailable to these user lifecycle endpoints.
-Keys with pinned run history or resolution records cannot be deleted; revoke
-instead. Plain values remain API-readable, so do not put credentials in them.
+Plain values remain API-readable, so do not put credentials in them.
+
+**Deleting a key.** A key is deleted once nothing needs its value. Deleting is
+refused, naming what holds it, while any of these uses the key:
+
+- a definition at the branch head;
+- a change that is not final and may still bring it to the branch, by the same
+  rule as [generated-value cleanup](changes-from-the-ui.md#the-workflow-wizard).
+  If a commit of such a change cannot be read, deleting is refused until it settles;
+- a run that has not finished, pinned or not: one waiting for approval, or not
+  dispatched yet, takes its value later;
+- an attempt that has not finished, such as a queued observation, which may still
+  be given it, or one that was given it and still reports, whose logs and outputs
+  are masked with it.
+
+Otherwise every version's encrypted value goes, and the key leaves the list. What
+stays is the evidence: the resolution records of which attempt and agent received
+which version, and the runs that pinned it. A finished attempt needs nothing more:
+what it reported was masked when it was kept, and a late result from an uncertain
+attempt is withheld rather than kept unmasked. A key that was ever released to
+Proxmox or OpenTofu work stays refused to playbooks, set again or not. The key's
+last version number is kept, in `deleted_store_keys` (migration
+`DeletedStoreKeys`), so a key set again continues after it and an old version
+number never names a new value. `system/` keys cannot be deleted here.
 
 ## Encryption-key custody
 

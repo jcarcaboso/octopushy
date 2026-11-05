@@ -62,7 +62,7 @@ public class VariableStoreTests(PostgresFixture postgres)
         Assert.Null(await store.GetPlainAsync("dns/token", CancellationToken.None));
         Assert.Equal(("second", 2), await store.GetAsync("dns/token", CancellationToken.None));
         await Assert.ThrowsAsync<StoreException>(() => store.SetAsync("dns/token", "x", Visibilities.Plain, null, CancellationToken.None));
-        await Assert.ThrowsAsync<StoreException>(() => store.DeleteAsync("dns/token", ["home/korriban"], CancellationToken.None));
+        await Assert.ThrowsAsync<StoreException>(() => store.DeleteAsync("dns/token", ["home/korriban"], "test", CancellationToken.None));
 
         var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
         var stored = await db.StoreVersions.AsNoTracking().Where(v => v.Key == "dns/token").ToListAsync();

@@ -609,8 +609,10 @@ public sealed partial class ChangeService
                 secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(generation.Length)).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..generation.Length];
             }
 
-            // A new key's first version is 1, and the store saves it together with this record.
-            value.StoreVersion = 1;
+            // A new key's first version: 1, or the one after the last it had before it was deleted. The store saves it together
+            // with this record. The key is not in the store, so no deletion moves that number, and another write of it in
+            // between makes this one a conflict on the entry.
+            value.StoreVersion = await store.NextVersionAsync(generation.Key, ct);
             value.State = GeneratedValueStates.Created;
             value.UpdatedAt = clock.GetUtcNow();
             try
