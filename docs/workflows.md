@@ -157,6 +157,7 @@ stages:
     executor: opentofu
     root: ../../modules/opentofu/proxmox-vm
     verify: proxmox               # the default; none skips verification through Proxmox
+    hostKey: managed              # optional: the module installs the host key Octopushy generates
   - name: setup                   # at most one stage more: the Ansible stage that sets the VM up
     executor: ansible
     root: ../../modules/ansible/machine-tools
@@ -185,7 +186,10 @@ outcomes:
 For `manages: vm`:
 
 - **The first stage is the OpenTofu stage that makes the machine.** Provision and retire runs plan and apply it; `verify`
-  belongs on it only.
+  belongs on it only, and so does `hostKey: managed`: its module installs, from a cloud-init snippet, the SSH host key
+  Octopushy generates for each guest, so a guest on a host set up for snippet uploads needs no `access.hostKey`. That
+  module then gets the guest's private host key as the sensitive variable `octopushy_host_key`, at plan only, and where
+  to upload the snippet as `octopushy_snippets`. See [host key trust](guest-configuration.md#host-key-trust).
 - **At most one stage follows, and it is an Ansible stage: the guest's setup.** Its `playbook` is the action named
   `setup`, which runs whenever the guest's inputs, secrets, access, the workflow, or the guest's files change. It is
   `destructive: false` unless the stage says otherwise. No declared action may be called `setup`.
@@ -410,7 +414,7 @@ ui:
 |---|---|
 | `vmid: { generate: next-vmid, from }` | Proposes the smallest VMID at or above `from` (100 by default; installations have no setting for it) that is free on the installation: not observed anywhere on it, since a cluster shares its VMIDs, not written in any `guest.yaml` under it at the head commit, valid or not, not bound to or reserved by a guest, and not held by a deploy that is not final yet. The person can change it. |
 | `template` | Starts the template choice there. |
-| `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot. |
+| `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot, unless the workflow's machine stage has `hostKey: managed`: then the field starts empty, and Octopushy's own key is used where the installation lists the host under `snippets.hosts`. |
 | `secrets.<name>.generate` | Offers to generate the secret instead of naming a store key: `agent-enrollment-token` or `random-password`. |
 | `secrets.<name>.labels`, `.name` | For `agent-enrollment-token`: dotted paths into the form whose values start the token's labels and name. Without `labels`, the lab's agent labels. |
 | `secrets.<name>.length` | For `random-password`: 16 to 128 characters, 32 by default. |
@@ -595,6 +599,22 @@ Hosts are listed in it rather than given folders, because guests are not nested 
 own datastores, bridges, and capacity limits, and is its own failure domain. A cluster lists several hosts and may give each
 its own endpoint. Defining an installation does not mean Octopushy manages the cluster, its membership, or its storage.
 
+`snippets` sets a host up for the cloud-init snippets that carry a guest's host key, once
+[`deploy/proxmox/snippets.sh`](../deploy/proxmox/snippets.sh) has run on it:
+
+```yaml
+snippets:
+  datastore: local                # a directory datastore with snippets content; the default
+  user: octopushy-snippets        # the SFTP-only account snippets.sh creates; the default
+  hosts:
+    moraband:
+      hostKey: { store: proxmox/moraband/ssh-host-key }   # the host's own SSH host key, plain
+      # address: 10.1.0.50        # default: the host of its API endpoint; port: 22
+```
+
+Each upload connects only to that host key. A guest whose workflow's machine stage has `hostKey: managed`, on a host
+listed here, gets a host key of Octopushy's. See [host key trust](guest-configuration.md#host-key-trust).
+
 `manage: false` makes an installation observed only: Octopushy reads its hosts and VMs and changes nothing there. No guest or
 service may be defined under it, no run is made for it, and its token goes only to observations. See the
 [safety boundary](safety-boundary.md).
@@ -632,7 +652,8 @@ schedules:                        # actions of the workflow, in cron, in the lab
   - { action: update-tools, cron: "0 6 * * *" }
 access:
   user: ops
-  hostKey: { store: access/krb-app-01/host-key }  # read through Proxmox, never scanned
+  hostKey: { store: access/krb-app-01/host-key }  # read through Proxmox, never scanned; not needed when
+                                                  # the workflow delivers Octopushy's own (hostKey: managed)
   # address defaults to the static or reserved address. Octopushy logs in with its own key for
   # this guest; only a machine it did not create names one: sshKey: { store: access/deploy/ssh-key }
 policy:
@@ -645,8 +666,9 @@ schema, so Octopushy does not need a VM model of its own. The machine stage also
 installation's connection and the template, so one shared OpenTofu module provisions every guest. Each guest has its own
 state, so guests are planned, locked, and applied independently.
 
-`secrets`, `secretFiles` and `schedules` need a workflow with a setup stage, and so do `access.user` and `access.hostKey`
-for it to log in. `schedules` name the workflow's actions, `setup` included. `profiles` is passed to the machine stage and
+`secrets`, `secretFiles` and `schedules` need a workflow with a setup stage, and so does `access.user` for it to log in.
+So does `access.hostKey`, unless the workflow's machine stage has `hostKey: managed` and the installation lists the guest's
+host under `snippets.hosts`: then the guest's host key is Octopushy's ([host key trust](guest-configuration.md#host-key-trust)). `schedules` name the workflow's actions, `setup` included. `profiles` is passed to the machine stage and
 not applied otherwise yet.
 
 ### Service

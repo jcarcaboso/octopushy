@@ -372,7 +372,18 @@ public sealed record GuestDetailDto(
     IReadOnlyList<RunSummaryDto> Runs,
     GuestConfigurationDto? Configuration,
     ManagedAccessDto? ManagedAccess,
-    IReadOnlyList<ServiceSummaryDto> Services);
+    IReadOnlyList<ServiceSummaryDto> Services,
+    ManagedHostKeyDto? HostKey = null);
+
+/// <summary>
+/// A guest's SSH host key, when it is Octopushy's. <see cref="Pinned"/> is the version an apply delivered last, which
+/// configure runs connect to; null until one did. <see cref="Next"/> is the version plans carry when it is another one,
+/// as for a new machine a plan makes: it becomes the pin when the apply that makes the machine finishes.
+/// </summary>
+public sealed record ManagedHostKeyDto(ManagedHostKeyVersionDto? Pinned, ManagedHostKeyVersionDto? Next);
+
+/// <summary>One version of a guest's host key: only its public half.</summary>
+public sealed record ManagedHostKeyVersionDto(int Version, string PublicKey, string Fingerprint, DateTimeOffset CreatedAt, DateTimeOffset? DeliveredAt);
 
 /// <summary>A service on a guest, read from the repository, with its own status: one failing says nothing about the guest or the others.</summary>
 public sealed record ServiceSummaryDto(
@@ -413,7 +424,25 @@ public sealed record InstallationDetailDto(
     string? TokenKey,
     bool? VerifyTls,
     IReadOnlyList<ObservedGuestDto> ObservedGuests,
-    string? ClusterName);
+    string? ClusterName,
+    SnippetAccessDto? Snippets = null);
+
+/// <summary>
+/// An installation's snippet uploads: the public half of Octopushy's key for them, if one was made, what the
+/// installation's definition declares, and the command that sets up one of its hosts.
+/// </summary>
+public sealed record SnippetAccessDto(
+    string? PublicKey,
+    string? Fingerprint,
+    DateTimeOffset? CreatedAt,
+    bool Declared,
+    string Datastore,
+    string User,
+    IReadOnlyList<SnippetHostDto> Hosts,
+    string? Command);
+
+/// <summary>A host declared for uploads, and whether its own SSH host key is in Variables yet.</summary>
+public sealed record SnippetHostDto(string Host, string Address, int Port, string HostKeyStore, bool HostKeySet);
 
 /// <summary>An installation whose latest observation did not succeed.</summary>
 public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At);

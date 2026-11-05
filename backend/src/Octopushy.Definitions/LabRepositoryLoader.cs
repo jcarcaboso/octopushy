@@ -544,6 +544,16 @@ public sealed class LabRepositoryLoader
             Error(installation.File, null, "A standalone installation lists exactly one host.", installation.Address);
         }
 
+        foreach (var (id, host) in (installation.Json["snippets"]?["hosts"] as JsonObject) ?? [])
+        {
+            if (!installation.Hosts.ContainsKey(id))
+                Error(installation.File, LineOf(installation.File, $"/snippets/hosts/{id}"), $"snippets.hosts.{id} is not a host of this installation.", installation.Address);
+            // The upload's pin is public and an API token is not; neither stands in for the other.
+            var key = host?["hostKey"]?["store"]?.GetValue<string>();
+            if (key is not null && (key == installation.Connection.ReadOnlyToken.Key || key == installation.Connection.PrivilegedToken.Key))
+                Error(installation.File, LineOf(installation.File, $"/snippets/hosts/{id}/hostKey"), "A host's SSH host key cannot be the installation's API token.", installation.Address);
+        }
+
         foreach (var group in guests.GroupBy(g => g.Vmid).Where(g => g.Count() > 1))
         {
             foreach (var guest in group)
@@ -634,11 +644,12 @@ public sealed class LabRepositoryLoader
 
         if (ConfigureInputs.AddressOf(guest) is null)
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.address, or a static or reserved address.");
-        foreach (var field in new[] { "user", "hostKey" })
-        {
-            if (guest.Json["access"]?[field] is null)
-                Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.{field}.");
-        }
+        if (guest.Json["access"]?["user"] is null)
+            Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.user.");
+        if (guest.Json["access"]?["hostKey"] is null
+            && !ManagedHostKey.Offered(installations.Find(i => i.Address == guest.InstallationAddress), guest))
+            Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.hostKey, unless its machine stage has "
+                + $"hostKey: managed and its installation lists host {guest.Host} under snippets.hosts.");
 
         var secrets = ConfigureInputs.Secrets(guest, "secrets");
         var files = ConfigureInputs.Secrets(guest, "secretFiles");
@@ -708,11 +719,12 @@ public sealed class LabRepositoryLoader
             // No access.sshKey means Octopushy's own key, as for a guest's setup: see ManagedAccess.
             if (ConfigureInputs.AddressOf(guest) is null)
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.address, or a static or reserved address.");
-            foreach (var field in new[] { "user", "hostKey" })
-            {
-                if (guest.Json["access"]?[field] is null)
-                    Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.{field}.");
-            }
+            if (guest.Json["access"]?["user"] is null)
+                Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.user.");
+            if (guest.Json["access"]?["hostKey"] is null
+                && !ManagedHostKey.Offered(installations.Find(i => i.Address == guest.InstallationAddress), guest))
+                Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.hostKey, unless the guest's machine stage "
+                    + $"has hostKey: managed and its installation lists host {guest.Host} under snippets.hosts.");
 
             foreach (var name in workflow.Secrets.Where(n => !secrets.ContainsKey(n) && !files.ContainsKey(n)))
             {

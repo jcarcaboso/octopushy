@@ -10,6 +10,8 @@ namespace Octopushy.Server.Changes;
 /// <summary>
 /// One version of a workflow as a form needs it: what it manages, its inputs schema and its <c>ui</c> hints, served as they
 /// are written. <see cref="Usable"/> is false for a release that is never resolved to, and <see cref="Issue"/> says why.
+/// <see cref="ManagedHostKey"/> is whether its machine stage installs a host key of Octopushy's, so a new guest on a host
+/// set up for snippet uploads needs no <c>access.hostKey</c>.
 /// </summary>
 public sealed record WorkflowVersionDto(
     string Id,
@@ -22,7 +24,8 @@ public sealed record WorkflowVersionDto(
     JsonNode? Inputs,
     JsonNode? Ui,
     IReadOnlyList<string> Secrets,
-    bool Setup = false);
+    bool Setup = false,
+    bool ManagedHostKey = false);
 
 /// <summary>A workflow and its versions, newest first.</summary>
 public sealed record WorkflowSummaryDto(string Id, string? Manages, string? Description, IReadOnlyList<WorkflowVersionDto> Versions);
@@ -101,7 +104,8 @@ public sealed class WorkflowCatalog(RevisionCache revisions, WorkflowsMirrors mi
         workflow.SchemaJson?.DeepClone(),
         workflow.Ui?.DeepClone(),
         workflow.Secrets,
-        workflow.Setup is not null);
+        workflow.Setup is not null,
+        Definitions.ManagedHostKey.Delivers(workflow));
 
     private async Task<WorkflowVersionDto> ReleaseAsync(string repository, WorkflowReleaseRecord record, bool available, CancellationToken ct)
     {

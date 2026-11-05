@@ -37,7 +37,8 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             // The latest observation may be newer than the sync that found this guest valid.
             if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
                 throw new RunException(collision);
-            var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken));
+            var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
+                await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken));
             // Planned by hand, it is still the run of the work it plans: the desired work already recorded keeps its occurrence,
             // so cancelling it on purpose is not undone by the next sync.
             GuestRemoval.Record(resource, run.InputsHash!, revision.Id, run, sameWork: resource.DesiredInputsHash == run.InputsHash);

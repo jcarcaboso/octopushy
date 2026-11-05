@@ -26,7 +26,9 @@ public sealed record ProvisionInputs(
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
     /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>
-    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision, bool keyIssued = false)
+    /// <param name="hostKeyIssued">Whether Octopushy already holds a host key for the guest; see <see cref="ManagedHostKey.Wanted"/>.</param>
+    public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision, bool keyIssued = false,
+        bool hostKeyIssued = false)
     {
         var installation = repository.Installation(guest.InstallationAddress)
             ?? throw new InvalidOperationException($"{guest.Address} has no installation.");
@@ -88,6 +90,19 @@ public sealed record ProvisionInputs(
                 : null,
         };
 
+        // Where the guest's snippet goes. Its public host key joins it when a run is built, so it is never in Git;
+        // the private half goes to the plan alone, as a sensitive variable. See ManagedHostKey.
+        var snippets = ManagedHostKey.Wanted(repository, guest, hostKeyIssued) ? ManagedHostKey.Settings(installation) : null;
+        if (snippets is not null)
+        {
+            var node = snippets.Hosts[guest.Host];
+            variables["octopushy_snippets"] = new JsonObject
+            {
+                ["datastore"] = snippets.Datastore,
+                ["node"] = new JsonObject { ["name"] = host.Id, ["address"] = node.Address, ["port"] = node.Port },
+            };
+        }
+
         var guestJson = guest.Json.DeepClone().AsObject();
         foreach (var field in NotProvisioned)
         {
@@ -120,6 +135,12 @@ public sealed record ProvisionInputs(
         if (ManagedAccess.Wanted(repository, guest, keyIssued))
         {
             hashed["managedAccess"] = true;
+        }
+        // That the host key is Octopushy's changes the machine, and so does where its snippet goes. Which key, and how
+        // the upload logs in, do not. Omitted otherwise, as above.
+        if (snippets is not null)
+        {
+            hashed["managedHostKey"] = new JsonObject { ["datastore"] = snippets.Datastore };
         }
 
         return new ProvisionInputs(guest, installation, host, workflow, stage, template, variables, Canonical.Hash(hashed));

@@ -93,6 +93,7 @@ public sealed partial class RunEngine(
             db.Runs.Add(run);
         }
         await db.SaveChangesAsync(cancellationToken);
+        await EnsureHostKeysAsync(db, runs, cancellationToken);
         signal.Wake();
     }
 
@@ -528,6 +529,9 @@ public sealed partial class RunEngine(
             return;
         }
 
+        if (step.Name == StepNames.Plan && await ReplanForHostKeyAsync(db, run, step, outputs, cancellationToken))
+            return;
+
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
         switch (step.Name)
@@ -583,6 +587,7 @@ public sealed partial class RunEngine(
                 await ProposeConfigurationAgainAsync(db, run, cancellationToken);
                 await ProposeServicesAgainAsync(db, run, cancellationToken);
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
+                await RecordDeliveredHostKeyAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Apply:
                 resource.Outputs = null;
@@ -625,6 +630,7 @@ public sealed partial class RunEngine(
                 resource.ReservedAt = null;
                 resource.ReservationAppliedAt = null;
                 await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+                await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;
             case StepNames.Playbook or StepNames.PlaybookApproved:

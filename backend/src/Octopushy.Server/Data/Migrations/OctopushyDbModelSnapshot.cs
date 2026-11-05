@@ -613,6 +613,44 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("guest_configurations", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.GuestHostKey", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("delivered_at");
+
+                    b.Property<Guid?>("DeliveredRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("delivered_run_id");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<string>("PublicKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("public_key");
+
+                    b.HasKey("ResourceId", "Version")
+                        .HasName("pk_guest_host_keys");
+
+                    b.ToTable("guest_host_keys", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>
                 {
                     b.Property<Guid>("ResourceId")
@@ -647,6 +685,32 @@ namespace Octopushy.Server.Data.Migrations
                         .HasName("pk_guest_schedules");
 
                     b.ToTable("guest_schedules", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.InstallationSnippetKey", b =>
+                {
+                    b.Property<string>("Installation")
+                        .HasColumnType("text")
+                        .HasColumnName("installation");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<string>("PublicKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("public_key");
+
+                    b.HasKey("Installation")
+                        .HasName("pk_installation_snippet_keys");
+
+                    b.ToTable("installation_snippet_keys", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.InstallationTrust", b =>
@@ -1778,6 +1842,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_guest_configurations_resources_resource_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.GuestHostKey", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithMany()
+                        .HasForeignKey("ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_guest_host_keys_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.GuestScheduleState", b =>

@@ -53,7 +53,7 @@
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "user": { "description": "The login of an Ansible stage.", "type": "string", "pattern": "^[a-z_][a-z0-9_.-]*(?![\\s\\S])" },
         "sshKey": { "description": "For a machine Octopushy did not create: an unencrypted OpenSSH private key, stored as a secret. Without it, Octopushy generates and uses its own key for this guest.", "$ref": "common.schema.json#/$defs/storeRef" },
-        "hostKey": { "description": "The guest's public SSH host key, read through a trusted channel and stored by an operator. Octopushy never scans for it.", "$ref": "common.schema.json#/$defs/storeRef" },
+        "hostKey": { "description": "The guest's public SSH host key, read through a trusted channel and stored by an operator. Octopushy never scans for it. Without it, a guest whose workflow's machine stage has hostKey: managed, on a host its installation lists under snippets.hosts, uses the key Octopushy generates and delivers; any other guest with Ansible work needs it.", "$ref": "common.schema.json#/$defs/storeRef" },
         "sshAuthorizedKeys": { "type": "array", "items": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)" } }
       },
       "additionalProperties": false

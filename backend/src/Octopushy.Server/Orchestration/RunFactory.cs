@@ -11,9 +11,13 @@ namespace Octopushy.Server.Orchestration;
 public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeProvider clock)
 {
     /// <summary>A provision run (plan, approval, unprotect when the plan removes the VM, apply, verify) or, for a retired guest, a retire run.</summary>
-    /// <remarks><paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says.</remarks>
-    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued);
+    /// <remarks>
+    /// <paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says,
+    /// and <paramref name="hostKeyIssued"/> the same for its host key, as <see cref="GuestHostCredentials.IssuedAsync"/> says.
+    /// </remarks>
+    public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued,
+        bool hostKeyIssued = false) =>
+        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued, hostKeyIssued);
 
     /// <summary>
     /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
@@ -21,16 +25,16 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// </summary>
     public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
         string removedIn, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued);
+        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued, false);
 
     private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
-        string? removedIn, bool keyIssued)
+        string? removedIn, bool keyIssued, bool hostKeyIssued)
     {
         var removal = removedIn is not null;
         if (removal && guest.Retired)
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
         Managed(repository, guest.InstallationAddress);
-        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued);
+        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
         var connection = inputs.Installation.Connection;
@@ -71,6 +75,25 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ["PROXMOX_VE_API_TOKEN"] = SecretNames.ProxmoxToken,
         };
         var retire = guest.Retired || removal;
+        // A guest whose host key is Octopushy's: the plan gets the private half to write into the snippet, and the apply
+        // gets the upload key and the host's own key to pin. A retire deletes the snippet through the API and needs none.
+        var snippets = !retire && ManagedHostKey.Wanted(repository, guest, hostKeyIssued) ? ManagedHostKey.Settings(inputs.Installation) : null;
+        SnippetsContext? uploads = null;
+        if (snippets is not null)
+        {
+            var node = snippets.Hosts[guest.Host];
+            secrets[SecretNames.GuestHostKey] = GuestHostCredentials.Key(resource.Id);
+            secrets[SecretNames.SnippetsKey] = InstallationSnippetCredentials.Key(inputs.Installation.Address);
+            secrets[SecretNames.SnippetsHostKey] = node.HostKey.Key;
+            if (node.HostKey.Version is { } pinVersion)
+                requestedVersions[SecretNames.SnippetsHostKey] = pinVersion;
+            env[SecretNames.SnippetsUserEnv] = snippets.User;
+            secretEnv[SecretNames.GuestHostKeyEnv] = SecretNames.GuestHostKey;
+            secretEnv[SecretNames.SnippetsKeyEnv] = SecretNames.SnippetsKey;
+            uploads = new SnippetsContext(inputs.Installation.Address, snippets.User, node.Address, node.Port);
+        }
+        else
+            inputs.Variables.Remove("octopushy_snippets");
         var context = new RunContext
         {
             Address = guest.Address,
@@ -83,6 +106,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
             DefinitionRemovedIn = removedIn,
             ManagedAccess = ManagedAccess.Wanted(repository, guest, keyIssued),
+            Snippets = uploads,
             OpenTofu = new OpenTofuContext(
                 guest.Stack,
                 inputs.Stage.Root,
@@ -146,7 +170,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        Bind(SecretNames.AnsibleHostKey, inputs.HostKey);
+        // Without a pin of its own, the guest's host key is Octopushy's, which no store entry holds.
+        if (inputs.HostKey is { } pin)
+            Bind(SecretNames.AnsibleHostKey, pin);
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -173,6 +199,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
+            ManagedHostKey = inputs.HostKey is null,
             Ansible = new AnsibleContext(
                 inputs.Workflow.Label,
                 action.Id,
@@ -217,13 +244,19 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
         var user = guest.Json["access"]?["user"]?.GetValue<string>()
             ?? throw new RunException("This guest names no access.user to log in as.");
-        var hostKey = ConfigureInputs.Reference(guest, "hostKey")
-            ?? throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
+        // Without a pin of its own, the guest's host key is Octopushy's, from the guest's record.
+        var hostKey = ConfigureInputs.Reference(guest, "hostKey");
+        if (hostKey is null && !ManagedHostKey.Offered(repository, guest))
+            throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
         var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [SecretNames.AnsibleHostKey] = hostKey.Key };
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (hostKey.Version is { } hostVersion)
-            requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        if (hostKey is not null)
+        {
+            secrets[SecretNames.AnsibleHostKey] = hostKey.Key;
+            if (hostKey.Version is { } hostVersion)
+                requestedVersions[SecretNames.AnsibleHostKey] = hostVersion;
+        }
         var installation = repository.Installation(guest.InstallationAddress)!;
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
@@ -239,6 +272,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             AccessRotation = rotation,
+            ManagedHostKey = hostKey is null,
             Ansible = new AnsibleContext(
                 GuestAccessPlaybooks.Root,
                 Operations.RotateAccess,

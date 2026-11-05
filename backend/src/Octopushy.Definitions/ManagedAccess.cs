@@ -19,7 +19,7 @@ public static class ManagedAccess
         && (keyIssued || guest.Setup is not null || RunsPlaybooks(repository, guest));
 
     /// <summary>Whether a valid service on the guest has a stage that runs on it: an Ansible stage.</summary>
-    private static bool RunsPlaybooks(LabRepository repository, GuestDefinition guest) =>
+    public static bool RunsPlaybooks(LabRepository repository, GuestDefinition guest) =>
         repository.Services.Any(s => s.GuestAddress == guest.Address && repository.IsValid(s.Address)
             && s.Stages.Any(stage => stage.Definition.Executor == Executors.Ansible));
 }

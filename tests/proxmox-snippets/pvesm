@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Answers `pvesm set <id> --content <list>`, and records each call."""
+import json, sys
+args = sys.argv[1:]
+path = "/etc/pve-stub/storage.json"
+stores = json.load(open(path))
+if len(args) == 4 and args[0] == "set" and args[2] == "--content" and args[1] in stores:
+    stores[args[1]]["content"] = args[3]
+    json.dump(stores, open(path, "w"))
+    open("/etc/pve-stub/calls", "a").write(" ".join(args) + "\n")
+    sys.exit(0)
+sys.exit(f"pvesm stub: unsupported {args}")

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test only: userdel, except that it fails as a busy account would (exit 8) while
+# /run/fault/userdel exists.
+if [ -f /run/fault/userdel ]; then echo "fault: userdel: user is currently used by a process" >&2; exit 8; fi
+exec /usr/sbin/userdel "$@"

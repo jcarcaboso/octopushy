@@ -11,6 +11,7 @@ import { DefinitionView } from "../components/DefinitionView";
 import { IssueList } from "../components/IssueList";
 import { GuestConfigurationCard } from "../components/GuestConfiguration";
 import { ManagedAccessCard } from "../components/ManagedAccess";
+import { ManagedHostKeyCard } from "../components/ManagedHostKey";
 import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
 import { Commit } from "../components/Mono";
@@ -186,6 +187,7 @@ export function GuestPage() {
             </Card>
             {data.configuration ? <GuestConfigurationCard id={guest.id} configuration={data.configuration} /> : null}
             {data.managedAccess ? <ManagedAccessCard id={guest.id} access={data.managedAccess} /> : null}
+            {data.hostKey ? <ManagedHostKeyCard hostKey={data.hostKey} /> : null}
             <Card title="Identity">
               <Identity guest={data} />
             </Card>

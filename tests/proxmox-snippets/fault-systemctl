@@ -1,0 +1,10 @@
+#!/bin/sh
+# Test only: systemctl, except that the first `reload ssh` reloads and then fails, once
+# /run/fault/reload exists, as a reload that went through but reported an error would.
+if [ "${1:-}" = "reload" ] && [ -f /run/fault/reload ]; then
+  rm -f /run/fault/reload
+  /usr/bin/systemctl "$@"
+  echo "fault: reload reported a failure" >&2
+  exit 1
+fi
+exec /usr/bin/systemctl "$@"
