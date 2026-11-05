@@ -507,10 +507,16 @@ the VMID it holds is unknown. A guest that is YAML but fails validation still ho
   and its new value set in the same key.
 - `random-password` is 32 random URL-safe characters, or `length`.
 
-Each goes into the variable store as a secret, under `guests/<lab>/<installation>/<guest>/<name>`, or
-`services/<address>/<name>` for a service: the address keeps two guests of one name on two installations apart. The new
-definition references it, `{ store: … }`. The value is never shown, returned by the API, logged, or written to Git. A key that
-is already in the store refuses the deploy rather than replacing it. Each value records what it wrote: the store version, tagged
+Each goes into the variable store as a secret, under `proxmox/<installation>/<guest>/<name>`, or
+`proxmox/<installation>/<guest>/<service>/<name>` for a service, with the secret's name verbatim ([store
+keys](#store-keys)). The new definition references it, `{ store: … }`. The value is never shown, returned by the API,
+logged, or written to Git. A key that is already in the store refuses the deploy rather than replacing it. The key
+leaves the lab out, so a guest in another lab with the same installation and guest names would get the same key: its
+deploy is refused, and the first guest's value is untouched. Give the second guest's secret a key of its own. Choose the existing
+key only for a value both may reuse, such as a password: an agent enrollment token enrolls one agent, so the second guest
+needs a new token from **Agents**, stored at a key of its own. Earlier versions generated keys under `guests/<lab>/…` and
+`services/<lab>/…`; definitions name those keys explicitly, so they keep working, and cleanup goes by the key each value
+recorded. Each value records what it wrote: the store version, tagged
 with the value's id, and its token. Once its change is final, and nothing at the branch head, no open change and no unfinished
 run references the key, cleanup removes exactly that version, while it is still the one present, and revokes the token unless
 it was used. A removal that fails is retried at every sync
@@ -586,6 +592,24 @@ it, so the change is a replacement made in this order:
 
 A reference to a key that is not set is listed under **Referenced but not set** and blocks its run until the key is set, so
 a step taken out of order stops the work rather than delivering nothing.
+
+### Store keys
+
+A key is any name, but keys are easier to follow under **Variables** when they follow the lab repository's own hierarchy,
+`labs/<lab>/proxmox/<installation>/guests/<guest>/services/<service>`, without the lab:
+
+| Key | Holds | Example |
+|---|---|---|
+| `proxmox/<installation>/<key>` | An installation's own values | `proxmox/pve01/api-token`, `proxmox/pve01/ssh-host-key` |
+| `proxmox/<installation>/<guest>/<secret>` | A guest's secrets | `proxmox/pve01/bb/machine_tailscale_auth_key` |
+| `proxmox/<installation>/<guest>/<service>/<secret>` | A service's secrets | `proxmox/korriban/krb-app-01/web/web_password` |
+| `shared/<name>` | A value several guests reuse ([shared store values](guest-configuration.md#shared-store-values)) | `shared/git-ssh-key` |
+| `system/…` | Octopushy's own keys, which definitions cannot reference. They keep their own layout, lab included | `system/installation-snippets/home/pve01` |
+
+The last segment of a secret's key is its name in the definition's `secrets:` or `secretFiles:` map, verbatim, underscores
+included. The deploy wizard generates values at these keys ([generated values](#generated-values)), and suggests
+`proxmox/<installation>/<guest>/host-key` for a guest's host key. Only `system/` is enforced; the rest is a convention, and
+a key in another layout works the same.
 
 ### Repository settings: `octopushy.yaml`
 
@@ -690,15 +714,15 @@ network:
 inputs:                           # given to every stage, validated by the workflow's schema
   machine_tools_channel: stable
 secrets:                          # extra var -> store key; only the playbook gets these
-  machine_tools_token: { store: machines/krb-app-01/tools-token }
+  machine_tools_token: { store: proxmox/korriban/krb-app-01/machine_tools_token }
 schedules:                        # actions of the workflow, in cron, in the lab's timezone
   - { action: update-tools, cron: "0 6 * * *" }
 access:
   user: ops
-  hostKey: { store: access/krb-app-01/host-key }  # read through Proxmox, never scanned; not needed when
-                                                  # the workflow delivers Octopushy's own (hostKey: managed)
+  hostKey: { store: proxmox/korriban/krb-app-01/host-key }  # read through Proxmox, never scanned; not needed when
+                                                            # the workflow delivers Octopushy's own (hostKey: managed)
   # address defaults to the static or reserved address. Octopushy logs in with its own key for
-  # this guest; only a machine it did not create names one: sshKey: { store: access/deploy/ssh-key }
+  # this guest; only a machine it did not create names one: sshKey: { store: shared/deploy-ssh-key }
 policy:
   approval: automatic             # changes, including recreating the VM, run on their own
   destructive: manual             # deleting this VM or its disks waits for approval
@@ -726,7 +750,7 @@ schemaVersion: 1
 workflow: web@1                   # a workflow with manages: service
 inputs: { port: 8000 }            # given to every stage
 secrets:
-  web_password: { store: services/web/password }
+  web_password: { store: proxmox/korriban/krb-app-01/web/web_password }
 policy: { approval: manual }
 ```
 

@@ -279,7 +279,8 @@ worker is the `octopushy-worker` workflow deployed like any other. Its steps:
    it requires.
 4. **Secrets.** For each secret the workflow declares, or describes in `ui.secrets`, an existing store key, or a value
    generated when the workflow asks for one ([generated values](workflows.md#generated-values)). For a workflow with a setup
-   stage, its login and the store key of the guest's host key, which the person sets after the first boot. A workflow whose
+   stage, its login and the store key of the guest's host key, which the person sets after the first boot, suggested as
+   `proxmox/<installation>/<guest>/host-key` ([store keys](workflows.md#store-keys)). A workflow whose
    machine stage has `hostKey: managed` starts that field empty: where the installation lists the host under
    `snippets.hosts`, the guest gets Octopushy's own host key, pinned with no person in the loop.
 5. **Review.** The exact file and diff Git will record, the commit message, what will be generated and where it is stored,
@@ -317,7 +318,9 @@ it, and each generated secret says so. A deploy is refused, with nothing committ
   workflow changed on the branch since the review, even without a sync and even at the same version, refuses it with *"The
   workflow release changed since the review … Review again."*. The installation is read from that commit too, so a host
   added since the review must be in the observation;
-- when it does not validate, or a store key it would generate is already set (`invalid`, `exists`).
+- when it does not validate, or a store key it would generate is already set (`invalid`, `exists`), such as one a guest of
+  the same name generated earlier, or one in another lab on an installation of the same name: generated keys leave the lab
+  out ([generated values](workflows.md#generated-values)).
 
 A deploy is recorded `committing` before anything is generated or pushed, with a record of each value it will make. Each
 part of a value is recorded in the same save that makes it: the enrollment token's id, and the store version it writes,

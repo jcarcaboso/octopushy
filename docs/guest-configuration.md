@@ -57,13 +57,13 @@ workflow: ai-server@1
 inputs:                                 # extra vars, validated by the workflow's schema
   ai_server_hostname: pve01-ai
 secrets:                                # extra var name -> store reference
-  ai_server_tailscale_key: { store: pve01-ai/tailscale-key }
+  ai_server_tailscale_key: { store: proxmox/pve01/pve01-ai/ai_server_tailscale_key }
 secretFiles:                            # extra var name -> a private file holding the value
-  ai_server_git_private_key_src: { store: pve01-ai/git-ssh-key }
+  ai_server_git_private_key_src: { store: proxmox/pve01/pve01-ai/ai_server_git_private_key_src }
 access:
   address: 10.15.60.10                  # defaults to the static or reserved address
   user: ops
-  # hostKey: { store: access/pve01-ai/host-key }   # only for a machine Octopushy did not create
+  # hostKey: { store: proxmox/pve01/pve01-ai/host-key }   # only for a machine Octopushy did not create
 ```
 
 - **The machine stage makes the machine, the setup stage configures it.** They are separate runs
@@ -104,7 +104,7 @@ provisioning has not caught up either.
 
 **Decided November 3, 2026.** One store key can hold a credential many guests use, such as a Git
 SSH key, a GitHub CLI `hosts.yml` or a GitLab CLI config. Promoting a new version of it reaches
-every guest that names it:
+every guest that names it. Such a key goes under `shared/`, by convention ([store keys](workflows.md#store-keys)):
 
 ```yaml
 secrets:

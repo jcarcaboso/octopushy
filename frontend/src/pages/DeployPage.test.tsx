@@ -78,7 +78,7 @@ function preview(overrides: Partial<ChangePreview> = {}): ChangePreview {
     message: "w2: deploy octopushy-worker@1\n\nOctopushy-Change: <given when committed>\n", baseCommit: base, files: [file], diff, valid: true,
     issues: [], fieldIssues: [], refused: null, nextVmid: null,
     reviewedRelease: `octopushy-worker@1.1 at ${base}`, reviewDigest: "d".repeat(64),
-    generated: [{ secret: "worker_enrollment_token", key: "guests/home/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
+    generated: [{ secret: "worker_enrollment_token", key: "proxmox/pve01/w2/worker_enrollment_token", generator: "agent-enrollment-token",
       detail: "a one-time enrollment token for an agent named w2, labels [home], valid for 72 hours" }],
     ...overrides,
   };
@@ -134,14 +134,14 @@ async function toReview(user: ReturnType<typeof userEvent.setup>) {
 
   const token = screen.getByRole("group", { name: /worker_enrollment_token/ });
   expect(within(token).getByRole("radio", { name: /Generate a one-time agent enrollment token/ })).toBeChecked();
-  expect(within(token).getByText("guests/home/pve01/w2/worker_enrollment_token")).toBeInTheDocument();
+  expect(within(token).getByText("proxmox/pve01/w2/worker_enrollment_token")).toBeInTheDocument();
   expect(within(token).getByLabelText("Labels")).toHaveValue("home");
   expect(screen.getByLabelText("Login")).toHaveValue("ops");
   // Needed only when the form selects what uses it: optional here, and left out.
   const extra = screen.getByRole("group", { name: /worker_extra_key/ });
   expect(within(extra).getByText("optional")).toBeInTheDocument();
   expect(within(extra).getByRole("radio", { name: "Leave it out" })).toBeChecked();
-  expect(screen.getByLabelText("Host key, as a store key")).toHaveValue("guests/home/pve01/w2/host-key");
+  expect(screen.getByLabelText("Host key, as a store key")).toHaveValue("proxmox/pve01/w2/host-key");
   await user.click(screen.getByRole("button", { name: /Review the deploy/ }));
 }
 
@@ -166,7 +166,7 @@ describe("DeployPage", () => {
     const sent = requests.find((r) => r.method === "POST" && r.path === "/api/deploy/preview")!.body as Record<string, unknown>;
     expect(sent).toMatchObject({
       kind: "create-guest", baseCommit: base, parent: "home/pve01", name: "w2", workflow: "octopushy-worker@1", host: "pve01", vmid: 311,
-      template: null, accessUser: "ops", hostKey: "guests/home/pve01/w2/host-key", approveAtDeploy: false,
+      template: null, accessUser: "ops", hostKey: "proxmox/pve01/w2/host-key", approveAtDeploy: false,
       secrets: { worker_enrollment_token: { generate: "agent-enrollment-token", labels: ["home"], name: "w2" } },
     });
     // Prefilled from the schema: the required disks list starts with its one required item.
