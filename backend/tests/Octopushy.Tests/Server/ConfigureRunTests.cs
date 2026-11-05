@@ -649,9 +649,9 @@ public class ConfigureRunTests(PostgresFixture postgres)
         var playbook = await agent.NextAsync("run");
         var logs = server.Services.GetRequiredService<AttemptLogStore>();
         var attempt = Guid.Parse(playbook.AttemptId);
-        Assert.Equal("line *** printed alone", logs.Mask(attempt, "line b3BlbnNzaC1rZXk printed alone"));
+        Assert.Equal("line *** printed alone", logs.MaskDiagnostic(attempt, "line b3BlbnNzaC1rZXk printed alone"));
         logs.RegisterSecrets(attempt, ["ab12\ncd34"]);
-        Assert.Equal("*** and ***", logs.Mask(attempt, "ab12 and cd34"));
+        Assert.Equal("*** and ***", logs.MaskDiagnostic(attempt, "ab12 and cd34"));
     }
 
     [Fact]

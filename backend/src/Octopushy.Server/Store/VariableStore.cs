@@ -302,7 +302,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     /// written again continues after it. Refused while a definition, an open change, a run that has not finished, or an attempt
     /// that may still receive it or report uses it.
     /// </summary>
-    /// <param name="referencedBy">What else uses the key, as the caller knows it: definitions at the branch head, open changes.</param>
+    /// <param name="referencedBy">What else holds the key, as the caller knows it: see <see cref="Api.VariableUses.HoldingAsync"/>.</param>
     public async Task DeleteAsync(string key, IReadOnlyCollection<string> referencedBy, string actor, CancellationToken cancellationToken)
     {
         CheckUserKey(key);

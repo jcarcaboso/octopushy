@@ -397,7 +397,7 @@ public sealed partial class RunEngine
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
-            logs.Close(attempt.Id);
+            await logs.CloseAsync(attempt.Id, cancellationToken);
 
             if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
                 && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu is not null

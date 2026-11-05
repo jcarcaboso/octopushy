@@ -136,7 +136,7 @@ public sealed partial class RunEngine
             await db.Attempts.Where(a => oldAttempts.Contains(a.Id)).ExecuteDeleteAsync(cancellationToken);
             foreach (var id in oldAttempts)
             {
-                logs.Delete(id);
+                await logs.DeleteAsync(id, cancellationToken);
             }
         }
     }

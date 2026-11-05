@@ -138,6 +138,8 @@ public class RecoveryTests(PostgresFixture postgres) : IDisposable
             await db.SaveChangesAsync();
         });
         await source.Services.GetRequiredService<ArtifactStore>().SaveAsync(planId, "plan.tar.gz", content, CancellationToken.None);
+        // As the assignment registered them: a line is kept only once what the attempt holds is known.
+        source.Services.GetRequiredService<AttemptLogStore>().RegisterSecrets(applyId, ["fixture-token"]);
         await source.Services.GetRequiredService<AttemptLogStore>().AppendAsync(applyId, 0, [(0, "stderr", "fixture outcome unknown")], CancellationToken.None);
 
         await using var services = await RestoreServicesAsync(source);

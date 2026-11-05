@@ -38,33 +38,37 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     /// <summary>Whether this process knows the attempt's secrets: it sent them, or rebuilt them since it started.</summary>
     public bool Knows(Guid attemptId) => _secrets.ContainsKey(attemptId);
 
-    /// <summary>Masks what an attempt returned as data, such as outputs, with every secret known for it.</summary>
-    public string Mask(Guid attemptId, string text)
+    /// <summary>
+    /// The values to mask an attempt's reports with, or null when they are not all known: never registered, forgotten when it
+    /// was closed, or rebuilt after a restart with some that could not be read back. Each caller then withholds rather than
+    /// passes the text through. An attempt that holds no secret is registered with none, and its reports are kept as they are.
+    /// </summary>
+    private string[]? Known(Guid attemptId) =>
+        _secrets.TryGetValue(attemptId, out var known) && known.Complete ? known.Values : null;
+
+    private static string Replace(string[] values, string text)
     {
-        if (_secrets.TryGetValue(attemptId, out var known))
+        foreach (var value in values)
         {
-            foreach (var value in known.Values)
-            {
-                text = text.Replace(value, "***", StringComparison.Ordinal);
-            }
+            text = text.Replace(value, "***", StringComparison.Ordinal);
         }
 
         return text;
     }
 
     /// <summary>
-    /// Masks a diagnostic, a log line or an error, that is kept and shown. When the attempt's secrets could not all be
-    /// recovered, nothing it printed is kept: a line could hold the one that is missing.
+    /// Masks a diagnostic, a log line or an error, that is kept and shown. Unless every secret the attempt holds is known,
+    /// nothing it printed is kept: a line could hold the one that is missing.
     /// </summary>
     public string MaskDiagnostic(Guid attemptId, string text) =>
-        _secrets.TryGetValue(attemptId, out var known) && !known.Complete ? Withheld : Mask(attemptId, text);
+        Known(attemptId) is { } values ? Replace(values, text) : Withheld;
 
     /// <summary>
-    /// Masks what an attempt returned as data, or refuses to: null when its secrets could not all be recovered, so
-    /// outputs that might hold the one that is missing are never kept, and nothing shown is derived from them.
+    /// Masks what an attempt returned as data, or refuses to: null unless every secret the attempt holds is known, so outputs
+    /// that might hold the one that is missing are never kept, and nothing shown is derived from them.
     /// </summary>
     public string? MaskOutputs(Guid attemptId, string text) =>
-        _secrets.TryGetValue(attemptId, out var known) && !known.Complete ? null : Mask(attemptId, text);
+        Known(attemptId) is { } values ? Replace(values, text) : null;
 
     /// <summary>Appends the lines not stored yet; returns the number of lines stored in total.</summary>
     public async Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken)
@@ -74,7 +78,9 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
         await gate.WaitAsync(cancellationToken);
         try
         {
-            var next = _state[attemptId].Next;
+            // Closed while this waited: what it masks with is forgotten too, so the lines below are withheld, and the count
+            // is read again from the file.
+            var next = _state.TryGetValue(attemptId, out var state) && state.Gate == gate ? state.Next : CountLines(path);
             Directory.CreateDirectory(_directory);
             await using var writer = new StreamWriter(path, append: true);
             for (var i = 0; i < lines.Count; i++)
@@ -121,17 +127,34 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
         return result;
     }
 
-    /// <summary>Forgets in-memory state for a finished attempt.</summary>
-    public void Close(Guid attemptId)
+    /// <summary>
+    /// Forgets in-memory state for a finished attempt. It waits for a write of the attempt's lines under way, so a line is
+    /// either masked before the values are forgotten or withheld after: never kept with nothing to mask it.
+    /// </summary>
+    public async Task CloseAsync(Guid attemptId, CancellationToken cancellationToken)
     {
-        _state.TryRemove(attemptId, out _);
-        _secrets.TryRemove(attemptId, out _);
+        if (!_state.TryGetValue(attemptId, out var state))
+        {
+            _secrets.TryRemove(attemptId, out _);
+            return;
+        }
+
+        await state.Gate.WaitAsync(cancellationToken);
+        try
+        {
+            _secrets.TryRemove(attemptId, out _);
+            _state.TryRemove(attemptId, out _);
+        }
+        finally
+        {
+            state.Gate.Release();
+        }
     }
 
     /// <summary>Removes a finished attempt's log, for attempts that are not kept.</summary>
-    public void Delete(Guid attemptId)
+    public async Task DeleteAsync(Guid attemptId, CancellationToken cancellationToken)
     {
-        Close(attemptId);
+        await CloseAsync(attemptId, cancellationToken);
         File.Delete(PathFor(attemptId));
     }
 

@@ -474,7 +474,7 @@ public static partial class Endpoints
     {
         group.MapGet("", async (VariableStore store, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
         {
-            var uses = await UsesAsync(db, revisions, ct);
+            var uses = await VariableUses.ByKeyAsync(db, revisions, ct);
             var entries = await store.ListAsync(ct);
             var visible = new List<VariableDto>();
             foreach (var entry in entries.Where(e => !e.Key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal)))
@@ -528,11 +528,8 @@ public static partial class Endpoints
             await engine.ExecuteAsync(async (db, services) =>
             {
                 VariableStore.CheckUserKey(key);
-                var uses = (await UsesAsync(db, revisions, ct)).GetValueOrDefault(key) ?? [];
-                // A change that may still land a definition that uses the key keeps it, as it keeps a generated value.
-                var changes = await GeneratedValues.OpenChangesUsingAsync(db, mirror, key)
-                    ?? throw new StoreException("A commit of an open change could not be read, so whether it uses this key is not known. Delete it once that change is settled.");
-                await services.GetRequiredService<VariableStore>().DeleteAsync(key, [.. uses, .. changes], http.User.Identity?.Name ?? "administrator", ct);
+                var holders = await VariableUses.HoldingAsync(db, revisions, mirror, key, ct);
+                await services.GetRequiredService<VariableStore>().DeleteAsync(key, holders, http.User.Identity?.Name ?? "administrator", ct);
                 return true;
             }, ct);
             return TypedResults.NoContent();
@@ -647,7 +644,7 @@ public static partial class Endpoints
                 }
             }
 
-            var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
+            var revision = await VariableUses.HeadRevisionAsync(db, ct);
             if (revision is not null)
             {
                 var repository = await revisions.GetAsync(revision, ct);
@@ -664,48 +661,6 @@ public static partial class Endpoints
                 uses.GetValueOrDefault(v.Version) ?? [])).ToList());
         })
         .WithName("listVariableVersions");
-    }
-
-    /// <summary>Who uses each store key: definitions in the latest revision, and runs still in progress.</summary>
-    private static async Task<Dictionary<string, List<string>>> UsesAsync(OctopushyDb db, RevisionCache revisions, CancellationToken ct)
-    {
-        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        void Add(string key, string consumer)
-        {
-            if (!result.TryGetValue(key, out var list))
-            {
-                result[key] = list = [];
-            }
-
-            if (!list.Contains(consumer))
-            {
-                list.Add(consumer);
-            }
-        }
-
-        var revision = await db.Revisions.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(ct);
-        if (revision is not null)
-        {
-            var repository = await revisions.GetAsync(revision, ct);
-            foreach (var use in repository.StoreUses)
-            {
-                Add(use.Key, use.Consumer);
-            }
-        }
-
-        var active = await db.Runs.AsNoTracking()
-            .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
-            .Select(r => new { r.Number, r.Context })
-            .ToListAsync(ct);
-        foreach (var run in active)
-        {
-            foreach (var key in RunContext.Parse(run.Context).Secrets.Values)
-            {
-                Add(key, $"run #{run.Number}");
-            }
-        }
-
-        return result;
     }
 
     private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct, bool workflows = true)

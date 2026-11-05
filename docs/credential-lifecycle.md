@@ -97,7 +97,15 @@ Plain values remain API-readable, so do not put credentials in them.
 **Deleting a key.** A key is deleted once nothing needs its value. Deleting is
 refused, naming what holds it, while any of these uses the key:
 
-- a definition at the branch head;
+- a definition at the branch head: the revision the last sync loaded as the head,
+  which after a rollback is the earlier revision again, not the newest one on
+  record. Every definition file at that commit, and at the branch as last fetched,
+  is also read as plain YAML whether it validates or not, so a definition with a
+  schema error still keeps the keys it names. If one of those files is not YAML,
+  or the commit cannot be read, nothing is deleted;
+- the observations the scheduler sends. While the head is invalid it keeps
+  observing each installation from the latest valid revision, with that
+  revision's credentials, so those are kept too;
 - a change that is not final and may still bring it to the branch, by the same
   rule as [generated-value cleanup](changes-from-the-ui.md#the-workflow-wizard).
   If a commit of such a change cannot be read, deleting is refused until it settles;
@@ -107,15 +115,25 @@ refused, naming what holds it, while any of these uses the key:
   be given it, or one that was given it and still reports, whose logs and outputs
   are masked with it.
 
+**Used by** on the Variables page reads the same head revision.
+
 Otherwise every version's encrypted value goes, and the key leaves the list. What
 stays is the evidence: the resolution records of which attempt and agent received
 which version, and the runs that pinned it. A finished attempt needs nothing more:
-what it reported was masked when it was kept, and a late result from an uncertain
-attempt is withheld rather than kept unmasked. A key that was ever released to
-Proxmox or OpenTofu work stays refused to playbooks, set again or not. The key's
-last version number is kept, in `deleted_store_keys` (migration
-`DeletedStoreKeys`), so a key set again continues after it and an old version
-number never names a new value. `system/` keys cannot be deleted here.
+what it reported was masked when it was kept. A late result from an uncertain
+attempt is masked with the values the controller still holds in memory for it,
+if it holds them, as when the result arrives before a restart. Otherwise the
+controller reads them back from the store, and if one of them was deleted, the
+attempt's log lines, error and outputs are withheld rather than kept unmasked.
+Masking never passes text through for an attempt whose values it does not hold:
+an attempt with no secrets is registered with none, and one closed or unknown has
+what it reports withheld.
+
+A key that was ever released to Proxmox or OpenTofu work stays refused to
+playbooks, set again or not. The key's last version number is kept, in
+`deleted_store_keys` (migration `DeletedStoreKeys`), so a key set again continues
+after it and an old version number never names a new value. `system/` keys
+cannot be deleted here.
 
 ## Encryption-key custody
 

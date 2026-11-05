@@ -5,7 +5,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Definitions;
+using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
 
@@ -158,6 +161,136 @@ public class VariableDeletionTests(PostgresFixture postgres)
         // system/ keys stay out of reach.
         await Assert.ThrowsAsync<StoreException>(() => store.DeleteAsync("system/guest-access/x", [], "ops", CancellationToken.None));
     }
+
+    private const string InstallationFile = "labs/home/proxmox/korriban/installation.yaml";
+
+    [Fact]
+    public async Task After_a_rollback_the_key_the_branch_head_uses_is_kept_and_listed_as_used()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        await server.SyncAndTrustAsync(client);
+        var original = TestWorkflows.Run(server.Repository.Root, "rev-parse", "HEAD").Trim();
+        await ReplaceConnectionKeysAsync(server, "Replace connection keys");
+        await server.SyncAsync();
+        TestWorkflows.Run(server.Repository.Root, "reset", "--quiet", "--hard", original);
+        await server.SyncAsync();
+        await FinishAllAsync(server);
+        // The head is the earlier revision again, while a newer one is on record.
+        var head = await server.QueryAsync(db => RepositoryTrust.HeadRevisions(db).Select(r => r.Commit).SingleAsync());
+        Assert.Equal(original, head);
+        Assert.NotEqual(head, await server.QueryAsync(db => db.Revisions.OrderByDescending(r => r.Sequence).Select(r => r.Commit).FirstAsync()));
+
+        var list = await client.GetFromJsonAsync<JsonObject>("/api/variables");
+        var token = list!["entries"]!.AsArray().Single(v => v!["key"]!.GetValue<string>() == Token)!;
+        Assert.Contains("home/korriban", token["usedBy"]!.AsArray().Select(u => u!.GetValue<string>()));
+        var response = await client.DeleteAsync("/api/variables?key=" + Token);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains($"{InstallationFile} at the branch head", await TitleAsync(response));
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Token)));
+    }
+
+    [Fact]
+    public async Task A_definition_that_fails_validation_still_keeps_the_keys_it_names()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        await server.SyncAndTrustAsync(client);
+        var text = await File.ReadAllTextAsync(Path.Combine(server.Repository.Root, InstallationFile));
+        Assert.Contains(Token, text);
+        server.Repository.Write(InstallationFile, text.Replace("schemaVersion: 1", "schemaVersion: 999"));
+        server.Commit("A schema typo, its references unchanged");
+        await server.SyncAsync();
+        await FinishAllAsync(server);
+        Assert.False((await server.ResourceAsync("home/korriban")).Valid);
+
+        var response = await client.DeleteAsync("/api/variables?key=" + Token);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains($"{InstallationFile} at the branch head", await TitleAsync(response));
+
+        // A definition file that is not YAML at all could name any key: nothing is deleted while it is there.
+        await server.SetSecretAsync("unused/key", "a value nothing uses");
+        server.Repository.Write("labs/home/broken.yaml", "a: [unclosed");
+        server.Commit("Not YAML");
+        await server.SyncAsync();
+        response = await client.DeleteAsync("/api/variables?key=unused/key");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("could not be read", await TitleAsync(response));
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == "unused/key")));
+    }
+
+    [Fact]
+    public async Task While_the_head_is_invalid_the_keys_scheduled_observations_send_are_kept()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        await server.SyncAndTrustAsync(client);
+        server.Repository.Write("octopushy.yaml", "schemaVersion: 999\n");
+        await ReplaceConnectionKeysAsync(server, "An invalid head that names other connection keys");
+        await server.SyncAsync();
+        await FinishAllAsync(server);
+
+        var response = await client.DeleteAsync("/api/variables?key=" + Token);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal($"'{Token}' is still used by scheduled observations of home/korriban. Delete it once nothing uses it.", await TitleAsync(response));
+        // And the scheduler can still observe with it.
+        await server.WithDbAsync(db => db.Resources.Where(r => r.Kind == ResourceKinds.Installation)
+            .ExecuteUpdateAsync(u => u.SetProperty(r => r.ObserveRequestedAt, DateTimeOffset.UtcNow.AddDays(-1))));
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        Assert.Null((await server.ResourceAsync("home/korriban")).ObserveError);
+    }
+
+    [Fact]
+    public async Task What_an_attempt_reports_is_withheld_unless_every_secret_it_holds_is_known()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        const string Secret = "a synthetic secret value";
+
+        // Never registered: nothing says what to mask, so nothing passes through.
+        var unknown = Guid.CreateVersion7();
+        await logs.AppendAsync(unknown, 0, [(0, "stderr", $"line {Secret}")], CancellationToken.None);
+        Assert.Equal(AttemptLogStore.Withheld, (await logs.ReadAsync(unknown, -1, 10, CancellationToken.None)).Single().Text);
+        Assert.Null(logs.MaskOutputs(unknown, $"{{\"v\":\"{Secret}\"}}"));
+        Assert.Equal(AttemptLogStore.Withheld, logs.MaskDiagnostic(unknown, $"error {Secret}"));
+
+        // Registered with no secrets: its lines are kept as they are.
+        var plain = Guid.CreateVersion7();
+        logs.RegisterSecrets(plain, []);
+        await logs.AppendAsync(plain, 0, [(0, "stdout", "an ordinary line")], CancellationToken.None);
+        Assert.Equal("an ordinary line", (await logs.ReadAsync(plain, -1, 10, CancellationToken.None)).Single().Text);
+
+        // Registered, then closed by its result before a log handler that had already checked appends: withheld, never plaintext.
+        var raced = Guid.CreateVersion7();
+        logs.RegisterSecrets(raced, [Secret]);
+        await logs.AppendAsync(raced, 0, [(0, "stderr", $"before {Secret}")], CancellationToken.None);
+        await logs.CloseAsync(raced, CancellationToken.None);
+        await logs.AppendAsync(raced, 1, [(0, "stderr", $"after {Secret}")], CancellationToken.None);
+        var lines = await logs.ReadAsync(raced, -1, 10, CancellationToken.None);
+        Assert.Equal(["before ***", AttemptLogStore.Withheld], lines.Select(l => l.Text));
+        Assert.Equal([0L, 1L], lines.Select(l => l.Sequence));
+        Assert.DoesNotContain(Secret, await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "logs", $"{raced}.jsonl")));
+    }
+
+    private static async Task ReplaceConnectionKeysAsync(ServerHarness server, string message)
+    {
+        await server.SetSecretAsync("replacement/read", "a replacement read-only token");
+        await server.SetSecretAsync("replacement/write", "a replacement privileged token");
+        var text = await File.ReadAllTextAsync(Path.Combine(server.Repository.Root, InstallationFile));
+        server.Repository.Write(InstallationFile, text.Replace(Token, "replacement/read").Replace(Writer, "replacement/write"));
+        server.Commit(message);
+    }
+
+    /// <summary>Ends every run and attempt, so only definitions and scheduled work hold a key.</summary>
+    private static Task FinishAllAsync(ServerHarness server) =>
+        server.WithDbAsync(async db =>
+        {
+            await db.Runs.ExecuteUpdateAsync(q => q.SetProperty(x => x.Status, RunStatuses.Succeeded));
+            await db.Attempts.ExecuteUpdateAsync(q => q.SetProperty(x => x.Status, AttemptStatuses.Succeeded));
+        });
+
+    private static async Task<string> TitleAsync(HttpResponseMessage response) =>
+        (await response.Content.ReadFromJsonAsync<JsonObject>())!["title"]!.GetValue<string>();
 
     private static async Task<StoreException> RefusedAsync(ServerHarness server, string key)
     {

@@ -33,11 +33,21 @@ public static class GeneratedValues
     /// <c>octopushy.yaml</c> and the YAML under <c>labs/</c> and <c>templates/</c>, read as plain YAML whether the file validates
     /// or not. Null, so that nothing is removed, when the snapshot or any of those files cannot be read.
     /// </summary>
-    public static IReadOnlySet<string>? ReferencedKeys(string root)
+    public static IReadOnlySet<string>? ReferencedKeys(string root) =>
+        KeysByFile(root) is { } files ? files.Values.SelectMany(k => k).ToHashSet(StringComparer.Ordinal) : null;
+
+    /// <summary>
+    /// The definition files in the snapshot at <paramref name="root"/> that reference <paramref name="key"/>, by path from the
+    /// root, read as <see cref="ReferencedKeys"/> reads them. Null when the snapshot or any of those files cannot be read.
+    /// </summary>
+    public static List<string>? FilesReferencing(string root, string key) =>
+        KeysByFile(root)?.Where(f => f.Value.Contains(key)).Select(f => f.Key).Order(StringComparer.Ordinal).ToList();
+
+    private static Dictionary<string, HashSet<string>>? KeysByFile(string root)
     {
         if (!Directory.Exists(root))
             return null;
-        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         try
         {
             var files = DefinitionFolders.Select(f => Path.Combine(root, f)).Where(Directory.Exists)
@@ -46,8 +56,10 @@ public static class GeneratedValues
                 .Append(Path.Combine(root, "octopushy.yaml")).Where(File.Exists);
             foreach (var file in files)
             {
+                var keys = new HashSet<string>(StringComparer.Ordinal);
                 if (!Collect(File.ReadAllText(file), keys))
                     return null;
+                result[Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/')] = keys;
             }
         }
         catch (IOException)
@@ -55,7 +67,7 @@ public static class GeneratedValues
             return null;
         }
 
-        return keys;
+        return result;
     }
 
     /// <summary>Every store key the files a change writes reference: what any of its candidate commits would bring to the branch.</summary>
