@@ -341,11 +341,19 @@ public sealed partial class RunEngine
             // What the attempt reports is masked with what it was sent, read back if this process does not know it.
             await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
             JsonNode? outputs = null;
+            var outputsWithheld = false;
             if (!string.IsNullOrWhiteSpace(result.OutputsJson))
             {
                 try
                 {
-                    outputs = JsonNode.Parse(logs.Mask(attempt.Id, result.OutputsJson));
+                    if (logs.MaskOutputs(attempt.Id, result.OutputsJson) is { } masked)
+                        outputs = JsonNode.Parse(masked);
+                    else
+                    {
+                        // Fails closed: no outputs are kept, so a step that needs them, such as a plan's approval, refuses.
+                        outputsWithheld = true;
+                        logger.LogWarning("Attempt {Attempt} returned outputs that cannot be fully masked; they are not kept.", attemptId);
+                    }
                 }
                 catch (JsonException)
                 {
@@ -385,7 +393,7 @@ public sealed partial class RunEngine
                 _ => AttemptStatuses.Failed,
             };
             attempt.LateResult = late;
-            attempt.Error = string.IsNullOrEmpty(result.Error) ? null : logs.MaskDiagnostic(attempt.Id, result.Error);
+            attempt.Error = string.IsNullOrEmpty(result.Error) ? (outputsWithheld ? AttemptLogStore.Withheld : null) : logs.MaskDiagnostic(attempt.Id, result.Error);
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;

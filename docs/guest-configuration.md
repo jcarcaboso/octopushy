@@ -588,8 +588,8 @@ may have to start the VM.
 what it reports. A restart, or an attempt that reports after it was closed, loses that. So before it
 keeps a log line, an error or an output of an attempt it does not know, it reads back every value the
 attempt was given from `SecretResolution` and the encrypted store. If one cannot be read back, because
-its version is gone, it keeps no log line and no error of that attempt, only a note that they were
-withheld.
+its version is gone, it keeps no log line, no error and no outputs of that attempt, only a note that
+they were withheld. A step that needs the outputs, such as a plan before its approval, then fails.
 
 **What replaces the VM.** Changing a guest's `vmid` or the installation's `snippets.datastore`
 changes `user_data_file_id`, so the provider replaces the VM, as it does when a guest first gets

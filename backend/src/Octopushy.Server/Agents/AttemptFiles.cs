@@ -59,6 +59,13 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     public string MaskDiagnostic(Guid attemptId, string text) =>
         _secrets.TryGetValue(attemptId, out var known) && !known.Complete ? Withheld : Mask(attemptId, text);
 
+    /// <summary>
+    /// Masks what an attempt returned as data, or refuses to: null when its secrets could not all be recovered, so
+    /// outputs that might hold the one that is missing are never kept, and nothing shown is derived from them.
+    /// </summary>
+    public string? MaskOutputs(Guid attemptId, string text) =>
+        _secrets.TryGetValue(attemptId, out var known) && !known.Complete ? null : Mask(attemptId, text);
+
     /// <summary>Appends the lines not stored yet; returns the number of lines stored in total.</summary>
     public async Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken)
     {

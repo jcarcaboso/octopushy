@@ -550,13 +550,21 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         // The version the attempt was given is gone from the store, so it cannot be read back to mask with.
         await server.WithDbAsync(db => db.StoreVersions.Where(v => v.Key == GuestHostCredentials.Key(resource.Id)).ExecuteDeleteAsync());
 
-        await agent.ReportAsync(apply, Outcome.Failed, error: $"provider diagnostic {line}");
+        await agent.ReportAsync(apply, Outcome.Failed, new JsonObject { ["outputs"] = new JsonObject { ["note"] = $"output {line}" } },
+            error: $"provider diagnostic {line}");
         await server.TickAsync();
         var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(apply.AttemptId)));
         Assert.Equal(AttemptLogStore.Withheld, attempt.Error);
+        // Outputs that cannot be fully masked are not kept at all, so nothing shown is derived from them.
+        Assert.Null(attempt.Outputs);
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
-        Assert.DoesNotContain(line, run.Steps.Single(s => s.Name == StepNames.Apply).Detail ?? "");
+        var step = run.Steps.Single(s => s.Name == StepNames.Apply);
+        Assert.DoesNotContain(line, step.Detail ?? "");
+        Assert.DoesNotContain(line, step.Outputs ?? "");
         Assert.DoesNotContain(line, run.Detail ?? "");
+        using var resumed = server.CreateClient();
+        (await resumed.PostAsJsonAsync("/api/auth/login", new { username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
+        Assert.DoesNotContain(line, await resumed.GetStringAsync($"/api/runs/{run.Id}"));
     }
 
     [Fact]
