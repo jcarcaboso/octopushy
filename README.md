@@ -7,32 +7,28 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.5.0:
+Milestone 1 has shipped, up to release 0.6.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
   [workflows repository](docs/workflows.md#workflows-from-their-own-repository), or from the lab repository's own
   `workflows/`. A tag never moves, and a new minor release reaches every guest on its major under that guest's policy.
-- Proxmox VMs provisioned, verified and retired with OpenTofu, with state kept by Octopushy.
-- [Guest setup with Ansible](docs/guest-configuration.md) once a VM exists, and
+- Proxmox VMs and LXC containers provisioned, verified and retired with OpenTofu, with state kept by Octopushy. A VM
+  Octopushy creates gets an SSH host key Octopushy generated, and a container's keys are pinned from the Proxmox task
+  that created it, so neither needs a person to pin it ([host key trust](docs/guest-configuration.md#host-key-trust)).
+- [Guest setup with Ansible](docs/guest-configuration.md) once a machine exists, and
   [services](docs/workflows.md#services-and-their-runs) of OpenTofu and Ansible stages.
 - Actions on a schedule declared in Git, and SSH access keys that Octopushy manages and rotates.
 - A [repository editor](docs/repository-editor.md) that publishes drafts as commits.
-
-Since 0.5.0, on `main`:
-
 - [Changes from the UI](docs/changes-from-the-ui.md): a guest or service is edited from its workflow's inputs schema, upgraded
   to a newer major, or a guest removed, and each change is one commit to the lab repository, compare-and-swap against the
   commit its form was loaded from and authored by the operator. Octopushy syncs it at once, and its change page follows it
   through plan and approval to applied. This needs `Octopushy__RepositoryEditor__PublishEnabled=true` and a repository
   credential that can push, such as a deploy key with write access.
 - A [workflow wizard](docs/changes-from-the-ui.md#the-workflow-wizard), **Deploy**: pick a workflow, an installation, host
-  and name, fill in its form, and deploy a new guest or service as one commit. A workflow can ask for generated values, such
-  as the next free VMID or a one-time agent enrollment token put in the store, and a deploy can approve its first plan in the
-  same click when that plan only creates.
-- Proxmox containers as guests: `type: container` with a workflow that `manages: container`, provisioned, verified,
-  protected and retired as a VM is, with the container's SSH host key pinned from its create task, so no person reads
-  it off a console.
+  and name, fill in its form, and deploy a new VM guest or service as one commit. It does not offer container workflows
+  yet. A workflow can ask for generated values, such as the next free VMID or a one-time agent enrollment token put in the
+  store, and a deploy can approve its first plan in the same click when that plan only creates.
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
