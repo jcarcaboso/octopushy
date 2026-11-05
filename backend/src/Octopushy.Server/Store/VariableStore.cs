@@ -36,6 +36,20 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     private async Task SetValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken,
         Guid? generation = null)
     {
+        await PutValueAsync(key, value, visibility, description, internalWrite, cancellationToken, generation);
+        await SaveAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds a version of a server-owned value and makes it current, without saving: the caller's own save commits it
+    /// together with its other changes, or not at all. Returns the new version.
+    /// </summary>
+    public Task<int> AddInternalAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken) =>
+        PutValueAsync(key, value, visibility, description, true, cancellationToken);
+
+    private async Task<int> PutValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken,
+        Guid? generation = null)
+    {
         if (!KeyPattern().IsMatch(key))
         {
             throw new StoreException("A key is one or more segments of letters, digits, '.', '_', or '-', separated by '/'.");
@@ -47,7 +61,9 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         }
 
         var now = clock.GetUtcNow();
-        var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
+        // An entry added earlier in this unit of work and not saved yet is the same entry.
+        var entry = db.StoreEntries.Local.FirstOrDefault(e => e.Key == key)
+            ?? await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
         if (entry is null)
         {
             entry = new StoreEntry { Key = key, Visibility = visibility, CreatedAt = now };
@@ -80,7 +96,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             ActivationNote = "Initial value or immediate plain/system value update; not an automated credential check.",
             GenerationId = generation,
         });
-        await SaveAsync(cancellationToken);
+        return entry.CurrentVersion;
     }
 
     /// <summary>Stores a replacement without changing the active version.</summary>

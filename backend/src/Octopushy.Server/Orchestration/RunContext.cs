@@ -283,6 +283,14 @@ public static class SecretNames
     public const string SnippetsUserEnv = "PROXMOX_VE_SSH_USERNAME";
     public const string GuestHostKeyEnv = "TF_VAR_octopushy_host_key";
 
+    /// <summary>
+    /// A version of the guest's private host key that an OpenTofu step holds in its saved plan or state, given to the agent
+    /// and the controller to mask and never mapped to the provider's environment. Not a binding of the run.
+    /// </summary>
+    public static string HostKeyMask(int version) => $"{HostKeyMaskPrefix}{version}";
+
+    public const string HostKeyMaskPrefix = "mask.opentofu.host-key.v";
+
     /// <summary>The roles only a snippet upload binds.</summary>
     public static readonly IReadOnlyList<string> SnippetRoles = [GuestHostKey, SnippetsKey, SnippetsHostKey];
 

@@ -20,6 +20,8 @@ namespace Octopushy.Server.Data.Migrations
                     public_key = table.Column<string>(type: "text", nullable: false),
                     fingerprint = table.Column<string>(type: "text", nullable: false),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    spent_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    spent_run_id = table.Column<Guid>(type: "uuid", nullable: true),
                     delivered_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     delivered_run_id = table.Column<Guid>(type: "uuid", nullable: true)
                 },

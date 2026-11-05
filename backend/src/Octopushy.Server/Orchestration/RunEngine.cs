@@ -92,8 +92,8 @@ public sealed partial class RunEngine(
             }
             db.Runs.Add(run);
         }
+        await EnsureHostKeysAsync(db, db.ChangeTracker.Entries<Run>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList(), cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        await EnsureHostKeysAsync(db, runs, cancellationToken);
         signal.Wake();
     }
 
@@ -285,6 +285,9 @@ public sealed partial class RunEngine(
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
+        // A plan whose key does not fit goes back to being planned before anything approves it, by policy or by a person.
+        if (!inFlight && await RecheckHostKeyAsync(db, run, context, cancellationToken))
+            context = RunContext.Parse(run.Context);
         foreach (var step in run.Steps.OrderBy(s => s.Ordinal))
         {
             if (StepStatuses.IsDone(step.Status))

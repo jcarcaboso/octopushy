@@ -170,9 +170,10 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Bind(SecretNames.AnsibleSshKey, declared);
         else
             secrets[SecretNames.AnsibleSshKey] = GuestAccessCredentials.Key(resource.Id);
-        // Without a pin of its own, the guest's host key is Octopushy's, which no store entry holds.
-        if (inputs.HostKey is { } pin)
-            Bind(SecretNames.AnsibleHostKey, pin);
+        // One trust source, chosen explicitly: the guest's own pin, or Octopushy's key for a VM it delivered one to.
+        var managedHostKey = PinsManagedHostKey(repository, guest);
+        if (!managedHostKey)
+            Bind(SecretNames.AnsibleHostKey, inputs.HostKey!);
         foreach (var (name, reference) in inputs.SecretVars)
         {
             Bind(SecretNames.AnsibleVar(name), reference);
@@ -199,7 +200,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
-            ManagedHostKey = inputs.HostKey is null,
+            ManagedHostKey = managedHostKey,
             Ansible = new AnsibleContext(
                 inputs.Workflow.Label,
                 action.Id,
@@ -244,10 +245,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             ?? throw new RunException("This guest has no address to reach it at: set access.address, or a static or reserved address.");
         var user = guest.Json["access"]?["user"]?.GetValue<string>()
             ?? throw new RunException("This guest names no access.user to log in as.");
-        // Without a pin of its own, the guest's host key is Octopushy's, from the guest's record.
-        var hostKey = ConfigureInputs.Reference(guest, "hostKey");
-        if (hostKey is null && !ManagedHostKey.Offered(repository, guest))
-            throw new RunException("This guest names no access.hostKey, so its host cannot be checked.");
+        // One trust source, chosen explicitly: the guest's own pin, or Octopushy's key for a VM it delivered one to.
+        var managedHostKey = PinsManagedHostKey(repository, guest);
+        var hostKey = managedHostKey ? null : ConfigureInputs.Reference(guest, "hostKey");
         var port = guest.Json["access"]?["port"]?.GetValue<int>() ?? 22;
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -272,7 +272,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
             AccessRotation = rotation,
-            ManagedHostKey = hostKey is null,
+            ManagedHostKey = managedHostKey,
             Ansible = new AnsibleContext(
                 GuestAccessPlaybooks.Root,
                 Operations.RotateAccess,
@@ -346,6 +346,19 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     }
 
     public static string RetireHash(string inputsHash) => "retire:" + inputsHash;
+
+    /// <summary>
+    /// Whether a run that logs in to the guest pins Octopushy's key rather than the guest's <c>access.hostKey</c>. The
+    /// choice is explicit: a missing <c>access.hostKey</c> alone never means Octopushy's key, only a VM whose workflow
+    /// delivers one to a host set up for it does, and anything else is refused.
+    /// </summary>
+    internal static bool PinsManagedHostKey(LabRepository repository, GuestDefinition guest) => ManagedHostKey.TrustOf(repository, guest) switch
+    {
+        HostKeyTrust.Declared => false,
+        HostKeyTrust.Managed => true,
+        _ => throw new RunException("This guest names no access.hostKey, and its host key is not Octopushy's: its workflow does not deliver one "
+            + "to a VM on a host listed under its installation's snippets.hosts. Its host cannot be checked."),
+    };
 
     /// <summary>
     /// Refuses a run in an installation Octopushy only observes. Its guests are invalid already; this is

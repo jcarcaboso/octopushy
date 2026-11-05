@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261105105100_ManagedHostKeys")]
+    [Migration("20261105121303_ManagedHostKeys")]
     partial class ManagedHostKeys
     {
         /// <inheritdoc />
@@ -647,6 +647,14 @@ namespace Octopushy.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("public_key");
+
+                    b.Property<DateTimeOffset?>("SpentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("spent_at");
+
+                    b.Property<Guid?>("SpentRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("spent_run_id");
 
                     b.HasKey("ResourceId", "Version")
                         .HasName("pk_guest_host_keys");

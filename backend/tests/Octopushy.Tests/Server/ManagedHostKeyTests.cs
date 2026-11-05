@@ -165,7 +165,11 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         Assert.Equal(SecretNames.SnippetsKey, applyInput["secretEnv"]![SecretNames.SnippetsKeyEnv]!.GetValue<string>());
         Assert.Equal("* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiijI7PL8NeaSlRIfsOf1JSG69ZMULksy817NNUwsNZ\n", applyInput["knownHosts"]!.GetValue<string>());
         Assert.False(apply.Secrets.ContainsKey(SecretNames.SnippetsHostKey));
-        Assert.DoesNotContain(Everything(apply), v => v.Contains(privateHalf));
+        // The apply's saved plan holds the private half, so the agent and the controller get it to mask, and only to mask:
+        // no environment variable maps it, and the input does not hold it.
+        Assert.Equal(privateHalf, apply.Secrets[SecretNames.HostKeyMask(1)]);
+        Assert.DoesNotContain(applyInput["secretEnv"]!.AsObject(), p => p.Value!.GetValue<string>().StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal));
+        Assert.DoesNotContain(privateHalf, apply.InputJson);
         Assert.DoesNotContain(Everything(verify), v => v.Contains(privateHalf) || v.Contains(apply.Secrets[SecretNames.SnippetsKey]));
         Assert.Equal(snippets["publicKey"]!.GetValue<string>(),
             (await server.QueryAsync(db => db.InstallationSnippetKeys.AsNoTracking().SingleAsync())).PublicKey);
@@ -175,7 +179,10 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         Assert.Equal(provision.Id, (await KeysAsync(server)).Single().DeliveredRunId);
         var released = await server.QueryAsync(db => db.SecretResolutions.AsNoTracking().Select(r => new { r.Key, r.AttemptId }).ToListAsync());
         Assert.Contains(released, r => r.Key == GuestHostCredentials.Key(resource.Id) && r.AttemptId == Guid.Parse(plan.AttemptId));
-        Assert.DoesNotContain(released, r => r.Key == GuestHostCredentials.Key(resource.Id) && r.AttemptId != Guid.Parse(plan.AttemptId));
+        // Released to the plan to write, and to the apply to mask; nothing else holds it.
+        Assert.Contains(released, r => r.Key == GuestHostCredentials.Key(resource.Id) && r.AttemptId == Guid.Parse(apply.AttemptId));
+        Assert.DoesNotContain(released, r => r.Key == GuestHostCredentials.Key(resource.Id) && r.AttemptId != Guid.Parse(plan.AttemptId)
+            && r.AttemptId != Guid.Parse(apply.AttemptId));
         Assert.Contains(released, r => r.Key == InstallationSnippetCredentials.Key("home/korriban") && r.AttemptId == Guid.Parse(apply.AttemptId));
         Assert.DoesNotContain(released, r => r.Key == InstallationSnippetCredentials.Key("home/korriban") && r.AttemptId != Guid.Parse(apply.AttemptId));
     }
@@ -402,6 +409,74 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         var preview = await ConfigureRunTests.PreviewAsync(agent);
         Assert.Equal(second.PublicKey, JsonNode.Parse(preview.InputJson)!["host"]!["hostKey"]!.GetValue<string>());
         Assert.DoesNotContain(first.PublicKey.Split(' ')[1], preview.InputJson);
+    }
+
+    [Fact]
+    public async Task An_apply_spends_its_key_before_it_is_handed_out_and_the_pin_waits_for_success()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        // Spent when it went out, before any result: delivered only once it succeeds.
+        var key = Assert.Single(await KeysAsync(server));
+        Assert.NotNull(key.SpentAt);
+        Assert.Equal(run.Id, key.SpentRunId);
+        Assert.Null(key.DeliveredAt);
+        await agent.ReportAsync(apply, Outcome.Failed, error: "the VM did not come up");
+        await server.TickAsync();
+        key = Assert.Single(await KeysAsync(server));
+        Assert.NotNull(key.SpentAt);
+        Assert.Null(key.DeliveredAt);
+        Assert.Null(await server.QueryAsync(db => GuestHostCredentials.PinnedAsync(db, key.ResourceId, CancellationToken.None)));
+    }
+
+    [Fact]
+    public async Task An_approved_apply_whose_key_was_spent_elsewhere_since_is_refused()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await ProvisionAsync(agent, server);
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, Replaces(), artifacts: FakeAgent.PlanArtifact("replace, old key"));
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, Replaces(), artifacts: FakeAgent.PlanArtifact("replace, new key"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+
+        // Whatever spends the new key after the plan, the apply's own check is the last word before a machine gets it.
+        await server.WithDbAsync(db => db.GuestHostKeys.Where(k => k.Version == 2)
+            .ExecuteUpdateAsync(u => u.SetProperty(k => k.SpentAt, DateTimeOffset.UtcNow).SetProperty(k => k.SpentRunId, Guid.NewGuid())));
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", "new machine", CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded,
+            new JsonObject { ["absent"] = false, ["previous"] = true, ["protection"] = false });
+        await server.TickAsync();
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Action == "apply");
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Contains("no longer fits", run.Steps.Single(s => s.Name == StepNames.Apply).Detail);
+    }
+
+    [Fact]
+    public async Task A_plan_after_a_renewal_masks_the_older_key_its_state_holds()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await ProvisionAsync(agent, server);
+        var resource = await server.ResourceAsync(Guest);
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, Replaces(), artifacts: FakeAgent.PlanArtifact("replace, old key"));
+        var plan = await agent.NextAsync("preview");
+        // It writes version 2, and its state still holds the snippet with version 1.
+        Assert.Equal(await PrivateHalfAsync(server, resource.Id, 2), plan.Secrets[SecretNames.GuestHostKey]);
+        Assert.Equal(await PrivateHalfAsync(server, resource.Id, 1), plan.Secrets[SecretNames.HostKeyMask(1)]);
+        Assert.False(plan.Secrets.ContainsKey(SecretNames.HostKeyMask(2)));
+        Assert.DoesNotContain(JsonNode.Parse(plan.InputJson)!["secretEnv"]!.AsObject(),
+            p => p.Value!.GetValue<string>().StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal));
     }
 
     [Fact]

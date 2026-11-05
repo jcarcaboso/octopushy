@@ -128,6 +128,9 @@ public sealed partial class AssignmentBuilder(
         {
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", problems)}.");
         }
+        // The last time the host key rule is asked before a machine may get the key; then the key counts as spent.
+        if (stepName == StepNames.Apply && run is { Operation: Operations.Provision } && context.Snippets is not null)
+            await SpendHostKeyAsync(run, context, cancellationToken);
 
         // State leaves the controller under the gates above, like any other credential.
         var state = action.Executor == "opentofu"
@@ -164,7 +167,9 @@ public sealed partial class AssignmentBuilder(
                 audit.State = EntityState.Detached;
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
-        if (own.Count > 0)
+        if (action.Executor == "opentofu" && run is { Operation: Operations.Provision or Operations.Retire })
+            await AddHostKeyMasksAsync(attempt, run, values, agentId, cancellationToken);
+        if (own.Count > 0 || values.Keys.Any(k => k.StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal)))
             await db.SaveChangesAsync(cancellationToken);
         values.Remove(SecretNames.SnippetsHostKey, out var nodeHostKey);
         var token = TokenFor(stepName, context);
@@ -332,6 +337,44 @@ public sealed partial class AssignmentBuilder(
         }
 
         return variables;
+    }
+
+    /// <summary>
+    /// Refuses an apply whose plan's host key no longer fits the machine it makes, whatever path led here, and otherwise
+    /// marks the key as spent: from the moment this apply is handed out, a machine may hold it. The mark is saved with the
+    /// hand-off, before the assignment is sent. A mark this run made itself, by an earlier hand-off, is its own.
+    /// </summary>
+    private async Task SpendHostKeyAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    {
+        var version = context.SecretVersions.GetValueOrDefault(SecretNames.GuestHostKey);
+        var plan = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == StepNames.Plan && s.Stage == null)
+            .Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
+        var outputs = plan is null ? null : JsonNode.Parse(plan);
+        var keys = await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
+        var makes = GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs);
+        if (GuestHostCredentials.Fit(keys, version, makes, run.Id) != HostKeyFit.Fits)
+            throw new AssignmentException("The host key this plan carries no longer fits: it may be on another machine, or this machine was never given it. Plan again.");
+        await GuestHostCredentials.SpentAsync(db, run.ResourceId, version, run.Id, clock.GetUtcNow(), cancellationToken);
+    }
+
+    /// <summary>
+    /// Every version of the guest's private host key, for the agent and the controller to mask, never for the provider. An
+    /// OpenTofu step of the guest holds them whether or not it was given one: the saved plan holds the snippet the plan wrote,
+    /// and the state the snippet an earlier apply wrote, with an older version. A step that already holds one under its own
+    /// role is not given it twice. Each is recorded as released to the attempt.
+    /// </summary>
+    private async Task AddHostKeyMasksAsync(Attempt attempt, Run run, Dictionary<string, string> values, Guid agentId, CancellationToken cancellationToken)
+    {
+        var key = GuestHostCredentials.Key(run.ResourceId);
+        var versions = await db.StoreVersions.AsNoTracking().Where(v => v.Key == key && v.RevokedAt == null)
+            .Select(v => v.Version).OrderBy(v => v).ToListAsync(cancellationToken);
+        foreach (var version in versions)
+        {
+            if (await store.GetVersionInternalAsync(key, version, cancellationToken) is not { } value || values.ContainsValue(value))
+                continue;
+            values[SecretNames.HostKeyMask(version)] = value;
+            db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
+        }
     }
 
     /// <summary>

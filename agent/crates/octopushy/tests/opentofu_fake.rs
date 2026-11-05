@@ -53,6 +53,8 @@ case "$1" in
     if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
     echo "Plan: 2 to add, 1 to change, 1 to destroy."
     echo "debug: provider token $PROXMOX_VE_API_TOKEN" >&2
+    # What a saved plan or state would let the tool print: a value nothing in the environment holds.
+    if [ -f "$REC/diagnostics.txt" ]; then echo "diagnostics: $(cat "$REC/diagnostics.txt")" >&2; fi
     exit "${FAKE_PLAN_EXIT:-2}" ;;
   show)
     if grep -q 'destroy=1' "$last"; then
@@ -314,6 +316,36 @@ async fn known_hosts_are_written_where_the_provider_reads_them_and_nothing_else_
     .await;
     assert!(r.result.is_err());
     assert_eq!(fx.read("args.log"), "");
+}
+
+#[tokio::test]
+async fn a_secret_given_only_to_mask_is_masked_and_never_in_the_tools_environment() {
+    let fx = Fixture::new();
+    // The controller sends a value the plan and state hold, such as a guest's private host key, under a name no
+    // secretEnv maps: the agent masks it, and OpenTofu never gets it.
+    std::fs::write(fx.rec.join("diagnostics.txt"), EXTRA_SECRET).unwrap();
+    let mut unmapped = input(false, json!({}));
+    unmapped["secretEnv"] = json!({ "PROXMOX_VE_API_TOKEN": "proxmox.token" });
+    let r = run(
+        &fx,
+        "mask-only",
+        "preview",
+        &unmapped,
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    assert!(
+        r.lines.iter().any(|(_, l)| l == "diagnostics: ***"),
+        "{:#?}",
+        r.lines
+    );
+    assert_no_secrets(&fx, &r);
+    assert!(!fx.read("env.log").contains(EXTRA_SECRET));
 }
 
 #[tokio::test]

@@ -5,6 +5,17 @@ namespace Octopushy.Definitions;
 /// <summary>Where a host can receive a guest's cloud-init snippet: its sshd, and the key it is pinned to.</summary>
 public sealed record SnippetHost(string Address, int Port, StoreReference HostKey);
 
+/// <summary>Where the host key a run pins comes from. See <see cref="ManagedHostKey.TrustOf(LabRepository, GuestDefinition)"/>.</summary>
+public enum HostKeyTrust
+{
+    /// <summary>Neither: a run that would log in is refused.</summary>
+    None,
+    /// <summary><c>access.hostKey</c>: a store entry an operator set.</summary>
+    Declared,
+    /// <summary>The key Octopushy generated for a VM it creates, and delivered.</summary>
+    Managed,
+}
+
 /// <summary>An installation's snippet uploads, from its <c>snippets</c> block.</summary>
 public sealed record SnippetSettings(string Datastore, string User, IReadOnlyDictionary<string, SnippetHost> Hosts)
 {
@@ -45,8 +56,23 @@ public static class ManagedHostKey
             hosts);
     }
 
-    /// <summary>Whether the workflow's machine stage installs the key Octopushy gives it: <c>hostKey: managed</c>.</summary>
-    public static bool Delivers(WorkflowDefinition? workflow) => workflow?.Machine?.ManagedHostKey == true;
+    /// <summary>Whether the workflow makes a VM and its machine stage installs the key Octopushy gives it: <c>hostKey: managed</c>.</summary>
+    public static bool Delivers(WorkflowDefinition? workflow) =>
+        workflow?.Manages == WorkflowKinds.Vm && workflow.Machine?.ManagedHostKey == true;
+
+    /// <summary>Whether the guest is a VM: only a VM gets a host key Octopushy generates.</summary>
+    public static bool IsVm(GuestDefinition guest) => guest.Json["type"]?.GetValue<string>() == "vm";
+
+    /// <summary>
+    /// Where a guest's host key pin comes from, chosen explicitly and never from a missing <c>access.hostKey</c> alone:
+    /// <see cref="HostKeyTrust.Declared"/> when the guest names one, <see cref="HostKeyTrust.Managed"/> for a VM whose workflow
+    /// delivers Octopushy's key to a host set up for it, and <see cref="HostKeyTrust.None"/> otherwise, which no run may log
+    /// in with.
+    /// </summary>
+    public static HostKeyTrust TrustOf(LabRepository repository, GuestDefinition guest) =>
+        guest.Json["access"]?["hostKey"] is not null ? HostKeyTrust.Declared
+        : Offered(repository, guest) ? HostKeyTrust.Managed
+        : HostKeyTrust.None;
 
     /// <summary>Whether Octopushy could give this guest a key: its workflow delivers one, to a host set up for it.</summary>
     public static bool Offered(LabRepository repository, GuestDefinition guest) =>
@@ -54,7 +80,7 @@ public static class ManagedHostKey
 
     /// <inheritdoc cref="Offered(LabRepository, GuestDefinition)"/>
     public static bool Offered(InstallationDefinition? installation, GuestDefinition guest) =>
-        Delivers(guest.Workflow) && installation is not null && Settings(installation)?.Hosts.ContainsKey(guest.Host) == true;
+        IsVm(guest) && Delivers(guest.Workflow) && installation is not null && Settings(installation)?.Hosts.ContainsKey(guest.Host) == true;
 
     /// <summary>
     /// A guest whose host key is Octopushy's: one Octopushy provisions and runs Ansible work on, from its workflow's

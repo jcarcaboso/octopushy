@@ -645,6 +645,14 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("public_key");
 
+                    b.Property<DateTimeOffset?>("SpentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("spent_at");
+
+                    b.Property<Guid?>("SpentRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("spent_run_id");
+
                     b.HasKey("ResourceId", "Version")
                         .HasName("pk_guest_host_keys");
 

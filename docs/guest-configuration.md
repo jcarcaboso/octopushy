@@ -430,7 +430,7 @@ snippets:
 
 | | Where it is | Who gets it |
 |---|---|---|
-| Private half | The secret `system/guest-host-key/<resource id>`, one store version per key, which no definition can name | The **plan** of a provision run, as the sensitive variable `TF_VAR_octopushy_host_key`. The apply uses the saved plan, and no configure run, preview, verify step or API response ever holds it |
+| Private half | The secret `system/guest-host-key/<resource id>`, one store version per key, which no definition can name | The **plan** of a provision run, as the sensitive variable `TF_VAR_octopushy_host_key`. The apply uses the saved plan. The OpenTofu steps of the guest's provision and retire runs also get every version, to mask and for nothing else (below). No configure run, preview, verify step or API response ever holds it |
 | Public half | `GuestHostKey`, one row per version, on the guest's page | The plan, in `octopushy_snippets.hostPublicKey`, and every configure, rotation and pipeline run as its pin |
 
 **The one secret an OpenTofu run gets besides the Proxmox token.** A provision run's OpenTofu
@@ -447,18 +447,41 @@ change to that rule:
   and each binds only its own guest's or its own installation's `system/` entry;
 - the agent summarizes the plan as before: the JSON plan itself, which holds the snippet, is never
   logged or returned, and the module marks the variable sensitive. Both keys are released secrets of
-  their attempts, so the agent and the controller mask them like any other.
+  their attempts, so the agent and the controller mask them like any other;
+- a step can print a key it was not given: an apply's saved plan holds the snippet its plan wrote,
+  and the state holds the one an earlier apply wrote, with an older version. So every OpenTofu step of
+  the guest's provision and retire runs also gets every version of the guest's private host key, under
+  names of the form `mask.opentofu.host-key.v<n>` that no environment variable maps. The agent and the
+  controller mask them in logs, errors and outputs, and the provider never sees them. Each is recorded
+  in `SecretResolution` like any release.
 
-**Which key, and when the pin moves.** The store's current version is the key a plan carries; the
-pin is the newest version an apply delivered. When a plan is made, before anyone is asked to approve
-it, Octopushy compares what it does with what it carried:
+**Which key, and when the pin moves.** Each version has three facts:
+
+- **carried:** the store's current version, the key the next plan carries;
+- **spent:** an apply carrying it was handed to an agent. That is recorded before the assignment is
+  sent, and stays whatever the apply does: one that finished, failed, timed out or was lost may all
+  have uploaded the snippet and made or started a machine, which may then hold the key on its disks,
+  its cloud-init drive or a backup;
+- **delivered:** an apply carrying it finished. The newest delivered version is the pin.
+
+Octopushy compares what a plan does with the key it carried:
 
 | The plan | It carried | What happens |
 |---|---|---|
-| Makes the guest's machine: the first one, or a replacement | A key no machine was given | It goes on |
-| Makes the guest's machine | The key an earlier machine was given | Octopushy makes a new key and plans again with it, in the same run. A new machine never starts with a key the old one held: that key may be on its disks, its cloud-init drive or a backup |
-| Keeps the machine | The key it was given | It goes on |
-| Keeps the machine | Another key, such as one a rejected replacement left | Octopushy plans again with the key the machine was given, so the snippet never hands a running machine a key nothing pins |
+| Makes the guest's machine: the first one, or a replacement | A key no other run's apply carried | It goes on |
+| Makes the guest's machine | A key another run's apply carried, delivered or not | Octopushy makes a new key and plans again with it, in the same run. A new machine never starts with a key another machine may hold |
+| Keeps the machine | The pin, or a key an apply already carried | It goes on. A key an apply carried may be what this machine has now, and the next apply that finishes pins it |
+| Keeps the machine | A key that was only ever planned, such as one a rejected replacement left | Octopushy plans again with the pin, so the snippet never hands a running machine a key nothing pins |
+
+**Where it is asked.** The rule is asked when the plan finishes, again before the plan is approved,
+by policy or by a person, and again just before the apply is handed out. A plan whose key no longer
+fits by then is refused at the apply, and the run says to plan again. So no path skips it: a plan
+recorded before a crash, or a key another run spent since, is caught at the next of these.
+
+**Planning again is one change.** The new key, the run's pinned version of it and the plan going back
+to pending are saved together, with the result of the plan that caused them, or not at all. An
+interruption at any point leaves either the plan as it came back, which the next check plans again,
+or the new plan under way.
 
 The plan that is kept says why it was made again, and the approval is of that plan. The pin moves
 when the apply that delivered a new key finishes, in the same save that records the apply, and not
@@ -504,6 +527,20 @@ key there failed with *REMOTE HOST IDENTIFICATION HAS CHANGED* and uploaded noth
 Someone holding it can answer as the guest. Everyone on that list except API users with only
 `VM.Audit` already controls the guest or its hypervisor.
 
+**What a hostile OpenTofu module can do with this, plainly.** The [safety boundary](safety-boundary.md)
+leaves hostile OpenTofu and provider code out of scope: a module runs with the credentials its step
+holds. For a workflow that says `hostKey: managed`, that has two consequences:
+
+- **while planning,** before anyone approves anything, the module can read the guest's private host
+  key, which its plan is given, and send it anywhere it can reach;
+- **during an approved apply,** it can use the installation's upload key, over SFTP, as the snippet
+  account: read, replace or delete any snippet in that datastore, including other guests' snippets,
+  which hold their private host keys. `snippets.sh` confines the account to that directory, and
+  nothing else on the host.
+
+Only review of the workflows repository guards against this, as for any module. Opt in only workflows
+whose modules you review.
+
 **A guest that switches to this is a new machine.** The provider replaces a VM whose
 `user_data_file_id` changes, so dropping `access.hostKey` from a guest that exists plans a
 replacement, which follows `policy.destructive`. There is no migration for a machine that already
@@ -538,11 +575,12 @@ that fails stops the apply before any call for the VM, which octopushy-lab's tes
 left is a start by something else, such as a person, HA or the host booting, during the few
 milliseconds of an upload, or after one that failed and before the next apply.
 
-**An apply that replaces the VM and does not finish** leaves a machine that may hold either key: the
-new machine may exist with the new one, or the old with the old. The pin stays where it was, and the
-next plan follows the rule above from what it finds. Where the machine serves a key the pin does not
-hold, configure runs are refused until an apply delivers the key in its snippet and the machine is
-started from Proxmox. It fails closed, and a person may have to start the VM.
+**An apply that does not finish**, failed or lost, leaves its key spent and the pin where it was.
+A machine may now hold either key: a new one made with the new key, or the old with the old. The next
+plan follows the rule above: a plan that makes a machine again gets a new key, and one that keeps the
+machine keeps the spent key. Where the machine serves a key the pin does not hold, configure runs are
+refused until an apply delivers the key in its snippet and the machine is started from Proxmox. It
+fails closed, and a person may have to start the VM.
 
 **What replaces the VM.** Changing a guest's `vmid` or the installation's `snippets.datastore`
 changes `user_data_file_id`, so the provider replaces the VM, as it does when a guest first gets
@@ -642,7 +680,11 @@ snippets. A password would have to be typed into the host, would need password l
 the account, and could be replayed. The key's line is marked `restrict` as well.
 
 **Containers** do not use this: Proxmox makes a container's host keys itself when it creates it.
-`hostKey: managed` is refused on any stage but the one that makes a VM.
+`hostKey: managed` is refused on any stage but the first stage of a workflow with `manages: vm`, and
+Octopushy's key goes only to a guest of `type: vm`. A run that logs in to a guest chooses its pin
+explicitly: the guest's `access.hostKey`, or Octopushy's key for a VM whose workflow delivers one to a
+host set up for it. A missing `access.hostKey` alone is never taken to mean Octopushy's key: any other
+guest without one is refused.
 
 ## Secrets
 

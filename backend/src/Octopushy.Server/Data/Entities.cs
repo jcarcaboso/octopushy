@@ -602,6 +602,15 @@ public sealed class GuestHostKey
     public DateTimeOffset CreatedAt { get; set; }
 
     /// <summary>
+    /// When an apply carrying this version was first handed to an agent, and by which run. From then on a machine may hold
+    /// it, on its disks, its cloud-init drive or a backup, whatever the apply's outcome, so no other machine is given it.
+    /// It is set before the apply can run, and is not proof of anything; <see cref="DeliveredAt"/> is.
+    /// </summary>
+    public DateTimeOffset? SpentAt { get; set; }
+
+    public Guid? SpentRunId { get; set; }
+
+    /// <summary>
     /// When an apply carrying this version finished, and which run it was. From then on configure runs pin it, until a
     /// newer version is delivered, as when the machine is replaced.
     /// </summary>

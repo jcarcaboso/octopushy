@@ -138,14 +138,17 @@ public sealed class ServerHarness : IAsyncDisposable
     private readonly string _dataDirectory;
     private readonly Dictionary<string, string>? _settings;
     private readonly TimeProvider? _clock;
+    private readonly Action<IServiceCollection>? _services;
     private HttpClient? _trustClient;
 
-    private ServerHarness(string connectionString, TestRepository repository, Dictionary<string, string>? settings, TimeProvider? clock)
+    private ServerHarness(string connectionString, TestRepository repository, Dictionary<string, string>? settings, TimeProvider? clock,
+        Action<IServiceCollection>? services = null)
     {
         Repository = repository;
         _connectionString = connectionString;
         _settings = settings;
         _clock = clock;
+        _services = services;
         _dataDirectory = Path.Combine(Path.GetTempPath(), "octopushy-server-" + Guid.NewGuid().ToString("N"));
         _factory = CreateFactory();
     }
@@ -167,6 +170,9 @@ public sealed class ServerHarness : IAsyncDisposable
             {
                 builder.ConfigureTestServices(services => services.AddSingleton(clock));
             }
+
+            if (_services is { } configure)
+                builder.ConfigureTestServices(configure);
         });
 
     public TestRepository Repository { get; }
@@ -177,9 +183,11 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public string DataDirectory => _dataDirectory;
 
-    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null, TimeProvider? clock = null)
+    /// <param name="services">Replaces or adds services, such as an interceptor that fails a save on purpose.</param>
+    public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null, TimeProvider? clock = null,
+        Action<IServiceCollection>? services = null)
     {
-        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock);
+        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock, services);
         _ = harness._factory.Server;
         harness.Commit("Initial definitions");
         await harness.WithDbAsync(async db =>

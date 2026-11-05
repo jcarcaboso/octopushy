@@ -22,10 +22,16 @@ public static class GuestHostCredentials
     public static Task<bool> IssuedAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken) =>
         db.GuestHostKeys.AnyAsync(k => k.ResourceId == resourceId, cancellationToken);
 
-    /// <summary>The version a plan carries, generating the first the first time a run needs it.</summary>
+    /// <summary>
+    /// The version a plan carries, adding the first the first time a run needs it. Nothing is saved here: the caller's
+    /// save commits it with the run that needs it.
+    /// </summary>
     public static async Task<GuestHostKey> EnsureAsync(
         OctopushyDb db, VariableStore store, Guid resourceId, string guestName, DateTimeOffset now, CancellationToken cancellationToken) =>
-        await CarriedAsync(db, resourceId, cancellationToken) ?? await AddVersionAsync(db, store, resourceId, guestName, now, cancellationToken);
+        db.ChangeTracker.Entries<GuestHostKey>().Where(e => e.State == EntityState.Added && e.Entity.ResourceId == resourceId)
+            .Select(e => e.Entity).MaxBy(k => k.Version)
+        ?? await CarriedAsync(db, resourceId, cancellationToken)
+        ?? await AddVersionAsync(db, store, resourceId, guestName, now, cancellationToken);
 
     /// <summary>The version a plan carries now: the store's current one. Null before the first.</summary>
     public static async Task<GuestHostKey?> CarriedAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
@@ -41,21 +47,33 @@ public static class GuestHostCredentials
             .OrderByDescending(k => k.Version).FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>
-    /// A new version, which plans carry from now on: a new machine must not start with a key an earlier machine held,
-    /// on its disks, in its cloud-init drive, or wherever that machine's data went.
+    /// A new version, which plans carry from now on: a new machine must not start with a key an earlier machine may hold,
+    /// on its disks, in its cloud-init drive, or wherever that machine's data went. Not saved here.
     /// </summary>
     public static Task<GuestHostKey> RenewAsync(
         OctopushyDb db, VariableStore store, Guid resourceId, string guestName, DateTimeOffset now, CancellationToken cancellationToken) =>
         AddVersionAsync(db, store, resourceId, guestName, now, cancellationToken);
 
-    /// <summary>Plans carry <paramref name="version"/> again: a plan that keeps the machine must not change the key it serves.</summary>
+    /// <summary>Plans carry <paramref name="version"/> again: a plan that keeps the machine must not change the key it serves. Not saved here.</summary>
     public static async Task RebaseAsync(OctopushyDb db, Guid resourceId, int version, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var name = Key(resourceId);
         var entry = await db.StoreEntries.SingleAsync(e => e.Key == name, cancellationToken);
         entry.CurrentVersion = version;
         entry.UpdatedAt = now;
-        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// An apply carrying <paramref name="version"/> is about to be handed to an agent: from now on a machine may hold it.
+    /// The first run to do so is kept. Saved with the hand-off, before the assignment is sent.
+    /// </summary>
+    public static async Task SpentAsync(OctopushyDb db, Guid resourceId, int version, Guid runId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var key = await db.GuestHostKeys.FirstOrDefaultAsync(k => k.ResourceId == resourceId && k.Version == version, cancellationToken);
+        if (key is null || key.SpentAt is not null)
+            return;
+        key.SpentAt = now;
+        key.SpentRunId = runId;
     }
 
     /// <summary>An apply carrying <paramref name="version"/> finished: it is the pin from now on, in the same save as the apply's record.</summary>
@@ -66,6 +84,32 @@ public static class GuestHostCredentials
             return;
         key.DeliveredAt = now;
         key.DeliveredRunId = runId;
+        key.SpentAt ??= now;
+        key.SpentRunId ??= runId;
+    }
+
+    /// <summary>
+    /// Whether a machine other than the one <paramref name="runId"/> makes may hold this version: an apply of another run
+    /// carried it, whatever became of that apply. A key marked by the run itself is its own.
+    /// </summary>
+    public static bool SpentElsewhere(GuestHostKey key, Guid runId) =>
+        key.SpentAt is not null && key.SpentRunId != runId || key.DeliveredAt is not null && key.DeliveredRunId != runId;
+
+    /// <summary>
+    /// Whether a plan of <paramref name="runId"/> that carried <paramref name="carried"/> may go on, or has to be made again
+    /// with a new key or with the delivered one. This is the one rule, asked when the plan finishes, again before its
+    /// approval, and again before its apply is handed out, so no path can skip it.
+    /// </summary>
+    public static HostKeyFit Fit(IReadOnlyList<GuestHostKey> keys, int carried, bool makesMachine, Guid runId)
+    {
+        var key = keys.FirstOrDefault(k => k.Version == carried);
+        // A new machine gets a key no other machine may hold.
+        if (makesMachine)
+            return key is null || SpentElsewhere(key, runId) ? HostKeyFit.Renew : HostKeyFit.Fits;
+        // A machine that stays keeps the key it was given. A key only planned is moved back to that one; a key an apply may
+        // already have put on this machine is kept, and the next finished apply pins it.
+        var pinned = keys.Where(k => k.DeliveredAt is not null).MaxBy(k => k.Version);
+        return pinned is not null && pinned.Version != carried && key is not null && !SpentElsewhere(key, runId) ? HostKeyFit.Rebase : HostKeyFit.Fits;
     }
 
     /// <summary>The guest is gone, and so is its identity. What each version was released to stays on record.</summary>
@@ -80,22 +124,31 @@ public static class GuestHostCredentials
     private static async Task<GuestHostKey> AddVersionAsync(
         OctopushyDb db, VariableStore store, Guid resourceId, string guestName, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var name = Key(resourceId);
-        var latest = await db.StoreEntries.Where(e => e.Key == name).Select(e => (int?)e.LatestVersion).FirstOrDefaultAsync(cancellationToken);
         var generated = GuestAccessCredentials.Generate($"root@{guestName}");
+        // The public half and the encrypted private half are added to the same unit of work, as the version the store makes
+        // current, and commit together with whatever the caller saves.
+        var version = await store.AddInternalAsync(Key(resourceId), generated.PrivateKey, Visibilities.Secret, "The guest's SSH host key, Octopushy's", cancellationToken);
         var key = new GuestHostKey
         {
             ResourceId = resourceId,
-            Version = (latest ?? 0) + 1,
+            Version = version,
             PublicKey = generated.PublicKey,
             Fingerprint = generated.Fingerprint,
             CreatedAt = now,
         };
         db.GuestHostKeys.Add(key);
-        // Same DbContext: the public half and the encrypted private half commit in one SaveChanges, as the version the store makes current.
-        await store.SetInternalAsync(name, generated.PrivateKey, Visibilities.Secret, "The guest's SSH host key, Octopushy's", cancellationToken);
         return key;
     }
+}
+
+/// <summary>What <see cref="GuestHostCredentials.Fit"/> says of a plan's host key.</summary>
+public enum HostKeyFit
+{
+    Fits,
+    /// <summary>The plan makes a machine with a key another machine may hold: plan again with a new one.</summary>
+    Renew,
+    /// <summary>The plan keeps the machine with a key it was never given: plan again with the delivered one.</summary>
+    Rebase,
 }
 
 /// <summary>
