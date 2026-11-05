@@ -51,6 +51,7 @@ builder.Services.AddSingleton<RepositorySync>();
 builder.Services.AddSingleton<AgentCertificateAuthority>();
 builder.Services.AddSingleton<AgentConnections>();
 builder.Services.AddSingleton<AttemptLogStore>();
+builder.Services.AddSingleton<AttemptMasks>();
 builder.Services.AddSingleton<ArtifactStore>();
 builder.Services.AddSingleton<OrchestratorSignal>();
 builder.Services.AddSingleton<RunFactory>();

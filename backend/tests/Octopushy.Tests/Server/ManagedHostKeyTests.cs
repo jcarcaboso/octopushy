@@ -480,6 +480,86 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public void The_rule_follows_the_newest_key_an_apply_carried_and_never_guesses()
+    {
+        var run = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        GuestHostKey Key(int version, bool spent = false, bool delivered = false, Guid? by = null) => new()
+        {
+            Version = version, PublicKey = $"k{version}", Fingerprint = $"f{version}",
+            SpentAt = spent || delivered ? DateTimeOffset.UnixEpoch : null, SpentRunId = spent || delivered ? by ?? other : null,
+            DeliveredAt = delivered ? DateTimeOffset.UnixEpoch : null, DeliveredRunId = delivered ? by ?? other : null,
+        };
+        HostKeyVerdict Keep(int carried, params GuestHostKey[] keys) => GuestHostCredentials.Fit(keys, carried, makesMachine: false, run);
+        HostKeyVerdict Make(int carried, params GuestHostKey[] keys) => GuestHostCredentials.Fit(keys, carried, makesMachine: true, run);
+
+        // A new machine: a key no other run's apply carried, or a new one.
+        Assert.Equal(HostKeyFit.Fits, Make(1, Key(1)).Fit);
+        Assert.Equal(HostKeyFit.Fits, Make(2, Key(1, delivered: true), Key(2, spent: true, by: run)).Fit);
+        Assert.Equal(HostKeyFit.Renew, Make(1, Key(1, spent: true)).Fit);
+        Assert.Equal(HostKeyFit.Renew, Make(1, Key(1, delivered: true)).Fit);
+
+        // A machine that stays: the newest key an apply carried, delivered or not.
+        Assert.Equal(HostKeyFit.Fits, Keep(1, Key(1)).Fit);
+        Assert.Equal(HostKeyFit.Fits, Keep(1, Key(1, delivered: true)).Fit);
+        Assert.Equal(HostKeyFit.Fits, Keep(2, Key(1, delivered: true), Key(2, spent: true)).Fit);
+        Assert.Equal(new HostKeyVerdict(HostKeyFit.Rebase, 2), Keep(3, Key(1, delivered: true), Key(2, spent: true), Key(3)));
+        Assert.Equal(new HostKeyVerdict(HostKeyFit.Rebase, 1), Keep(2, Key(1, spent: true), Key(2)));
+        Assert.Equal(new HostKeyVerdict(HostKeyFit.Rebase, 1), Keep(2, Key(1, delivered: true), Key(2)));
+        // An older key an apply carried, while a newer one may be on the machine: a person decides.
+        Assert.Equal(new HostKeyVerdict(HostKeyFit.Reconcile, 2), Keep(1, Key(1, delivered: true), Key(2, spent: true)));
+        Assert.Equal(new HostKeyVerdict(HostKeyFit.Reconcile, 3), Keep(2, Key(1, delivered: true), Key(2, spent: true), Key(3, spent: true)));
+    }
+
+    [Fact]
+    public async Task A_restarted_controller_masks_an_outstanding_attempts_log_lines()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await ProvisionAsync(agent, server);
+        var resource = await server.ResourceAsync(Guest);
+        var line = (await PrivateHalfAsync(server, resource.Id)).Split('\n')[1];
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1, machine: false), artifacts: FakeAgent.PlanArtifact("update"));
+        var apply = await agent.NextAsync("apply");
+        await server.RestartFixtureAsync();
+
+        // What the agent's channel does with a log batch of an attempt this process never sent.
+        var attemptId = Guid.Parse(apply.AttemptId);
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        await server.Services.GetRequiredService<AttemptMasks>().EnsureAsync(attemptId, CancellationToken.None);
+        await logs.AppendAsync(attemptId, 0, [(0, "stderr", $"provider diagnostic {line}")], CancellationToken.None);
+        var stored = Assert.Single(await logs.ReadAsync(attemptId, -1, 10, CancellationToken.None));
+        Assert.Equal("provider diagnostic ***", stored.Text);
+    }
+
+    [Fact]
+    public async Task Diagnostics_are_withheld_when_a_secret_cannot_be_read_back_to_mask_them()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        await ProvisionAsync(agent, server);
+        var resource = await server.ResourceAsync(Guest);
+        var line = (await PrivateHalfAsync(server, resource.Id)).Split('\n')[1];
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1, machine: false), artifacts: FakeAgent.PlanArtifact("update"));
+        var apply = await agent.NextAsync("apply");
+        await server.RestartFixtureAsync();
+        // The version the attempt was given is gone from the store, so it cannot be read back to mask with.
+        await server.WithDbAsync(db => db.StoreVersions.Where(v => v.Key == GuestHostCredentials.Key(resource.Id)).ExecuteDeleteAsync());
+
+        await agent.ReportAsync(apply, Outcome.Failed, error: $"provider diagnostic {line}");
+        await server.TickAsync();
+        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(apply.AttemptId)));
+        Assert.Equal(AttemptLogStore.Withheld, attempt.Error);
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.DoesNotContain(line, run.Steps.Single(s => s.Name == StepNames.Apply).Detail ?? "");
+        Assert.DoesNotContain(line, run.Detail ?? "");
+    }
+
+    [Fact]
     public async Task A_plan_that_keeps_the_machine_after_a_renewal_carries_the_key_it_was_given()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Managed());

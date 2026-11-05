@@ -20,22 +20,30 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
     private readonly string _directory = Path.Combine(options.Value.DataDirectory, "logs");
     private readonly ConcurrentDictionary<Guid, (SemaphoreSlim Gate, long Next)> _state = new();
-    private readonly ConcurrentDictionary<Guid, string[]> _secrets = new();
+    private readonly ConcurrentDictionary<Guid, (string[] Values, bool Complete)> _secrets = new();
+
+    /// <summary>What a diagnostic becomes when an attempt's secrets could not all be recovered to mask it.</summary>
+    public const string Withheld = "[withheld: Octopushy could not recover every secret this attempt holds to mask it, so it does not keep what the attempt reported]";
 
     /// <summary>
     /// Remembers the secret values sent with an attempt, so its logs and errors are masked here
     /// too, not only by the agent: each whole value, and each line of a multi-line one.
+    /// <paramref name="complete"/> is false when they were rebuilt after a restart and some could not be read back.
     /// </summary>
-    public void RegisterSecrets(Guid attemptId, IEnumerable<string> values) =>
-        _secrets[attemptId] = values
+    public void RegisterSecrets(Guid attemptId, IEnumerable<string> values, bool complete = true) =>
+        _secrets[attemptId] = (values
             .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 4).Prepend(v) : [v])
-            .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
+            .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray(), complete);
 
+    /// <summary>Whether this process knows the attempt's secrets: it sent them, or rebuilt them since it started.</summary>
+    public bool Knows(Guid attemptId) => _secrets.ContainsKey(attemptId);
+
+    /// <summary>Masks what an attempt returned as data, such as outputs, with every secret known for it.</summary>
     public string Mask(Guid attemptId, string text)
     {
-        if (_secrets.TryGetValue(attemptId, out var values))
+        if (_secrets.TryGetValue(attemptId, out var known))
         {
-            foreach (var value in values)
+            foreach (var value in known.Values)
             {
                 text = text.Replace(value, "***", StringComparison.Ordinal);
             }
@@ -43,6 +51,13 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
         return text;
     }
+
+    /// <summary>
+    /// Masks a diagnostic, a log line or an error, that is kept and shown. When the attempt's secrets could not all be
+    /// recovered, nothing it printed is kept: a line could hold the one that is missing.
+    /// </summary>
+    public string MaskDiagnostic(Guid attemptId, string text) =>
+        _secrets.TryGetValue(attemptId, out var known) && !known.Complete ? Withheld : Mask(attemptId, text);
 
     /// <summary>Appends the lines not stored yet; returns the number of lines stored in total.</summary>
     public async Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken)
@@ -64,7 +79,7 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
                 }
 
                 var (unixMs, stream, text) = lines[i];
-                await writer.WriteLineAsync(JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, Mask(attemptId, text)), Json));
+                await writer.WriteLineAsync(JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, MaskDiagnostic(attemptId, text)), Json));
                 next++;
             }
 

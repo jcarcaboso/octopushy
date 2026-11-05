@@ -470,8 +470,9 @@ Octopushy compares what a plan does with the key it carried:
 |---|---|---|
 | Makes the guest's machine: the first one, or a replacement | A key no other run's apply carried | It goes on |
 | Makes the guest's machine | A key another run's apply carried, delivered or not | Octopushy makes a new key and plans again with it, in the same run. A new machine never starts with a key another machine may hold |
-| Keeps the machine | The pin, or a key an apply already carried | It goes on. A key an apply carried may be what this machine has now, and the next apply that finishes pins it |
-| Keeps the machine | A key that was only ever planned, such as one a rejected replacement left | Octopushy plans again with the pin, so the snippet never hands a running machine a key nothing pins |
+| Keeps the machine | The newest key any apply carried, delivered or not | It goes on, and the pin moves to it when the apply finishes. Each machine is made with a key no earlier one held, so this is the key the machine may hold, even when the apply that made it failed afterwards |
+| Keeps the machine | A key that was only ever planned, such as one a rejected replacement left | Octopushy plans again with the newest key an apply carried. Not the pin: an apply that failed after making a new machine leaves a newer key on it than the pin |
+| Keeps the machine | An older key an apply carried, while a newer one an apply carried exists | The run stops and says why. Which of the two the machine holds cannot be told, and Octopushy does not guess: check which key the guest serves, or replace the VM, which gives it a new key |
 
 **Where it is asked.** The rule is asked when the plan finishes, again before the plan is approved,
 by policy or by a person, and again just before the apply is handed out. A plan whose key no longer
@@ -578,9 +579,17 @@ milliseconds of an upload, or after one that failed and before the next apply.
 **An apply that does not finish**, failed or lost, leaves its key spent and the pin where it was.
 A machine may now hold either key: a new one made with the new key, or the old with the old. The next
 plan follows the rule above: a plan that makes a machine again gets a new key, and one that keeps the
-machine keeps the spent key. Where the machine serves a key the pin does not hold, configure runs are
-refused until an apply delivers the key in its snippet and the machine is started from Proxmox. It
-fails closed, and a person may have to start the VM.
+machine carries the newest spent key, even past a replacement that was planned and rejected since.
+Where the machine serves a key the pin does not hold, configure runs are refused until an apply
+delivers the key in its snippet and the machine is started from Proxmox. It fails closed, and a person
+may have to start the VM.
+
+**Masks outlive a restart.** The controller remembers in memory what each attempt was sent, to mask
+what it reports. A restart, or an attempt that reports after it was closed, loses that. So before it
+keeps a log line, an error or an output of an attempt it does not know, it reads back every value the
+attempt was given from `SecretResolution` and the encrypted store. If one cannot be read back, because
+its version is gone, it keeps no log line and no error of that attempt, only a note that they were
+withheld.
 
 **What replaces the VM.** Changing a guest's `vmid` or the installation's `snippets.datastore`
 changes `user_data_file_id`, so the provider replaces the VM, as it does when a guest first gets

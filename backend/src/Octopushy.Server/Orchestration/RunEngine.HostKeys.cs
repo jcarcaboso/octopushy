@@ -79,13 +79,23 @@ public sealed partial class RunEngine
             return false;
         var keys = await db.GuestHostKeys.Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
         var makesMachine = GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs);
-        var fit = GuestHostCredentials.Fit(keys, carried, makesMachine, run.Id);
+        var verdict = GuestHostCredentials.Fit(keys, carried, makesMachine, run.Id);
+        var fit = verdict.Fit;
         if (fit == HostKeyFit.Fits)
         {
             // The plan that is kept says why it was made again.
             if (context.HostKeyReplan is { } note)
                 step.Detail = note;
             return false;
+        }
+
+        if (fit == HostKeyFit.Reconcile)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = $"This plan keeps the machine, and Octopushy cannot tell which of its host keys the machine holds: the plan carries "
+                + $"version {carried}, and an apply since carried version {verdict.Target}, which may be on the machine instead. Nothing was planned "
+                + "on a guess. Check which key the guest serves and plan again, or replace the VM, which gives it a new key.";
+            return true;
         }
 
         var later = run.Steps.Where(s => s.Stage is null && s.Ordinal > step.Ordinal).ToList();
@@ -116,10 +126,11 @@ public sealed partial class RunEngine
         }
         else
         {
-            next = keys.Where(k => k.DeliveredAt is not null).MaxBy(k => k.Version)!.Version;
+            next = verdict.Target!.Value;
             await GuestHostCredentials.RebaseAsync(db, run.ResourceId, next, clock.GetUtcNow(), cancellationToken);
-            why = "Planned again: this plan keeps the machine, and the first plan carried a host key the machine was never given. "
-                + "This plan carries the key it has.";
+            why = "Planned again: this plan keeps the machine, and the first plan carried a host key no apply ever carried. This plan "
+                + $"carries version {next}, the newest key an apply carried, which the machine may hold even if that apply did not finish; "
+                + "the pin moves to it once this apply finishes.";
         }
 
         logger.LogInformation("Run {Run} plans again with host key version {Version} of its guest", run.Id, next);

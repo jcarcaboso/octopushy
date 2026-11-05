@@ -100,16 +100,24 @@ public static class GuestHostCredentials
     /// with a new key or with the delivered one. This is the one rule, asked when the plan finishes, again before its
     /// approval, and again before its apply is handed out, so no path can skip it.
     /// </summary>
-    public static HostKeyFit Fit(IReadOnlyList<GuestHostKey> keys, int carried, bool makesMachine, Guid runId)
+    public static HostKeyVerdict Fit(IReadOnlyList<GuestHostKey> keys, int carried, bool makesMachine, Guid runId)
     {
         var key = keys.FirstOrDefault(k => k.Version == carried);
         // A new machine gets a key no other machine may hold.
         if (makesMachine)
-            return key is null || SpentElsewhere(key, runId) ? HostKeyFit.Renew : HostKeyFit.Fits;
-        // A machine that stays keeps the key it was given. A key only planned is moved back to that one; a key an apply may
-        // already have put on this machine is kept, and the next finished apply pins it.
-        var pinned = keys.Where(k => k.DeliveredAt is not null).MaxBy(k => k.Version);
-        return pinned is not null && pinned.Version != carried && key is not null && !SpentElsewhere(key, runId) ? HostKeyFit.Rebase : HostKeyFit.Fits;
+            return new(key is null || SpentElsewhere(key, runId) ? HostKeyFit.Renew : HostKeyFit.Fits, null);
+
+        // A machine that stays keeps the key it has. Every machine is made with a key no earlier one held, so the key it may
+        // have is the newest one any apply carried, delivered or not: the apply that made it may have failed after making
+        // it. An older delivered key is an earlier machine's, and nothing this guest ever planned beyond that is its.
+        var newest = keys.Where(k => k.SpentAt is not null || k.DeliveredAt is not null).MaxBy(k => k.Version);
+        if (newest is null || newest.Version == carried)
+            return new(HostKeyFit.Fits, null);
+        // A key only ever planned, newer than that, such as one a rejected replacement left: carry the newest spent one.
+        if (key is not null && key.Version > newest.Version && key.SpentAt is null && key.DeliveredAt is null)
+            return new(HostKeyFit.Rebase, newest.Version);
+        // Anything else is a key an apply carried that is not the newest: which one this machine holds cannot be told.
+        return new(HostKeyFit.Reconcile, newest.Version);
     }
 
     /// <summary>The guest is gone, and so is its identity. What each version was released to stays on record.</summary>
@@ -141,14 +149,22 @@ public static class GuestHostCredentials
     }
 }
 
+/// <summary>What <see cref="GuestHostCredentials.Fit"/> says of a plan's host key, and for a rebase, which version to carry.</summary>
+public sealed record HostKeyVerdict(HostKeyFit Fit, int? Target);
+
 /// <summary>What <see cref="GuestHostCredentials.Fit"/> says of a plan's host key.</summary>
 public enum HostKeyFit
 {
     Fits,
     /// <summary>The plan makes a machine with a key another machine may hold: plan again with a new one.</summary>
     Renew,
-    /// <summary>The plan keeps the machine with a key it was never given: plan again with the delivered one.</summary>
+    /// <summary>The plan keeps the machine with a key only ever planned: plan again with the newest key an apply carried.</summary>
     Rebase,
+    /// <summary>
+    /// The plan keeps the machine with a key an apply carried that is not the newest one: which key the machine holds
+    /// cannot be told, so nothing is guessed. A person reconciles the guest, or replaces it, which gives it a new key.
+    /// </summary>
+    Reconcile,
 }
 
 /// <summary>

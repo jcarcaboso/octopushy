@@ -253,6 +253,16 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         return version is null ? null : Encoding.UTF8.GetString(envelope.Open(version.Ciphertext, version.WrappedKey, Context(key, number)));
     }
 
+    /// <summary>
+    /// A version's value for masking only, whatever its state: one revoked since it was released still has to be masked
+    /// in what the attempt it went to reports. Null when the version is gone.
+    /// </summary>
+    public async Task<string?> OpenForMaskingAsync(string key, int number, CancellationToken cancellationToken)
+    {
+        var version = await db.StoreVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Key == key && v.Version == number, cancellationToken);
+        return version is null ? null : Encoding.UTF8.GetString(envelope.Open(version.Ciphertext, version.WrappedKey, Context(key, number)));
+    }
+
     /// <summary>The value of a plain entry; secrets are never returned.</summary>
     public async Task<string?> GetPlainAsync(string key, CancellationToken cancellationToken)
     {

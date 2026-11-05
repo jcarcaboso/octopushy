@@ -352,7 +352,7 @@ public sealed partial class AssignmentBuilder(
         var outputs = plan is null ? null : JsonNode.Parse(plan);
         var keys = await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
         var makes = GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs);
-        if (GuestHostCredentials.Fit(keys, version, makes, run.Id) != HostKeyFit.Fits)
+        if (GuestHostCredentials.Fit(keys, version, makes, run.Id).Fit != HostKeyFit.Fits)
             throw new AssignmentException("The host key this plan carries no longer fits: it may be on another machine, or this machine was never given it. Plan again.");
         await GuestHostCredentials.SpentAsync(db, run.ResourceId, version, run.Id, clock.GetUtcNow(), cancellationToken);
     }

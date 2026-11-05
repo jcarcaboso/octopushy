@@ -338,6 +338,8 @@ public sealed partial class RunEngine
                 return true;
             }
 
+            // What the attempt reports is masked with what it was sent, read back if this process does not know it.
+            await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
             JsonNode? outputs = null;
             if (!string.IsNullOrWhiteSpace(result.OutputsJson))
             {
@@ -383,7 +385,7 @@ public sealed partial class RunEngine
                 _ => AttemptStatuses.Failed,
             };
             attempt.LateResult = late;
-            attempt.Error = string.IsNullOrEmpty(result.Error) ? null : logs.Mask(attempt.Id, result.Error);
+            attempt.Error = string.IsNullOrEmpty(result.Error) ? null : logs.MaskDiagnostic(attempt.Id, result.Error);
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
