@@ -185,13 +185,16 @@ public sealed partial class AssignmentBuilder(
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
                 ["protection"] = stepName == StepNames.Reprotect,
             };
-            // A container's host keys, from its create task, for its Ansible work to be pinned to.
-            if (stepName == StepNames.Verify && context.ContainerHostKey)
-                input["hostKeys"] = true;
+            // A container's host keys, from the create task of the apply this run made, for its Ansible work to be pinned to.
+            if (stepName == StepNames.Verify && context.ContainerHostKey && run is not null
+                && await CreationAsync(run, context, cancellationToken) is { } creation)
+                input["hostKeys"] = creation;
         }
 
         if (stepName == StepNames.Apply && run!.Operation == Operations.Provision)
             await ReserveAsync(run, cancellationToken);
+        if (stepName == StepNames.Apply && run!.Operation is Operations.Provision or Operations.Retire)
+            await WithdrawContainerPinAsync(run, context, cancellationToken);
         assignment.InputJson = input.ToJsonString();
         foreach (var (name, value) in values)
         {
@@ -222,6 +225,57 @@ public sealed partial class AssignmentBuilder(
         resource.ReservedInstallation = resource.ParentAddress;
         resource.ReservedNode = context.Proxmox.Node;
         resource.ReservedVmid = context.Proxmox.Vmid;
+    }
+
+    /// <summary>
+    /// Which creation a container's host keys may come from: this run's apply, when its approved plan created the guest's
+    /// machine, as the window it ran in, counted back from now, and the token it ran with. Proxmox logs the create task's
+    /// user as that token's id, and the agent finds the task in the node's own clock, so no clock but the server's is
+    /// compared with anything. Null when the run made no machine, or what it ran with cannot be told: then nothing is
+    /// pinned, and a container that has no pin needs access.hostKey. See docs/guest-configuration.md.
+    /// </summary>
+    private async Task<JsonObject?> CreationAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    {
+        var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && (s.Name == StepNames.Plan || s.Name == StepNames.Apply))
+            .ToListAsync(cancellationToken);
+        var plan = steps.SingleOrDefault(s => s.Name == StepNames.Plan);
+        var apply = steps.SingleOrDefault(s => s.Name == StepNames.Apply);
+        if (plan?.Outputs is null || apply?.Status != StepStatuses.Succeeded
+            || !GuestVmPlan.MakesGuestMachine(JsonNode.Parse(plan.Outputs), context))
+            return null;
+        var attempt = await db.Attempts.AsNoTracking()
+            .Where(a => a.StepId == apply.Id && a.Status == AttemptStatuses.Succeeded)
+            .OrderByDescending(a => a.Number).FirstOrDefaultAsync(cancellationToken);
+        if (attempt?.FinishedAt is not { } finished || (attempt.AssignedAt ?? attempt.StartedAt) is not { } started)
+            return null;
+        var role = TokenFor(StepNames.Apply, context);
+        if (!context.Secrets.TryGetValue(role, out var key) || !context.SecretVersions.TryGetValue(role, out var version)
+            || await store.GetVersionInternalAsync(key, version, cancellationToken) is not { } token || token.IndexOf('=') is not (> 0 and var equals))
+            return null;
+        var now = clock.GetUtcNow();
+        return new JsonObject
+        {
+            ["createdBy"] = token[..equals],
+            ["applyStartedSecondsAgo"] = (long)Math.Ceiling(Math.Max(0, (now - started).TotalSeconds)),
+            ["applyFinishedSecondsAgo"] = (long)Math.Floor(Math.Max(0, (now - finished).TotalSeconds)),
+        };
+    }
+
+    /// <summary>
+    /// Before an apply that creates, replaces or deletes the guest's container is sent, its pin stops being usable: once the
+    /// apply may have run, the machine at the VMID may not be the one the pin was read from, whatever the apply then
+    /// reports. Setup, services and rotations wait until a verify of the new container pins it again. See
+    /// <see cref="ContainerHostKeys.WithdrawAsync"/>.
+    /// </summary>
+    private async Task WithdrawContainerPinAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    {
+        if (context.Proxmox.MachineKind != "lxc")
+            return;
+        var plan = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id && s.Name == StepNames.Plan).Select(s => s.Outputs).FirstOrDefaultAsync(cancellationToken);
+        var outputs = plan is null ? null : JsonNode.Parse(plan);
+        if (GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.RemovesGuestVm(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs))
+            await ContainerHostKeys.WithdrawAsync(db, run.ResourceId, clock.GetUtcNow(),
+                $"Run {run.Id} applies a plan that may replace or remove container {context.Proxmox.Vmid}: this pin was read from the one before.", cancellationToken);
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>

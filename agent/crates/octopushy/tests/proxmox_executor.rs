@@ -474,43 +474,85 @@ async fn a_failed_read_after_no_change_is_a_plain_failure() {
 const ED25519: &str = "SHA256:Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycA0";
 const RSA: &str = "SHA256:cnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnNhcnM";
 
-/// The example installation with a container, 320 on korriban, made by a create task that
-/// generated its host keys, and one more, 321, whose template had no `/etc/ssh`.
+/// The node's clock in the fixtures below.
+const NOW: u64 = 1_800_000_000;
+/// The token that applies, as the controller names it.
+const WRITER: &str = "octopushy@pve!writer";
+
+/// A create task's log, as Proxmox writes it, with the keys it generated.
+fn create_log(name: &str, keys: &[(&str, &str)]) -> Vec<String> {
+    let mut log = vec![
+        "extracting archive '/var/lib/vz/template/cache/debian-13-standard_13.6-1_amd64.tar.zst'"
+            .to_owned(),
+        "Detected container architecture: amd64".to_owned(),
+    ];
+    for (kind, fingerprint) in keys {
+        log.push(format!(
+            "Creating SSH host key 'ssh_host_{kind}_key' - this may take some time ..."
+        ));
+        log.push(format!("done: {fingerprint} root@{name}"));
+    }
+    log.push("TASK OK".to_owned());
+    log
+}
+
+fn task(
+    kind: &str,
+    vmid: u32,
+    user: &str,
+    starttime: u64,
+    log: Vec<String>,
+) -> mock_proxmox::FixtureTask {
+    mock_proxmox::FixtureTask {
+        node: "korriban".into(),
+        kind: kind.into(),
+        id: vmid.to_string(),
+        user: user.into(),
+        starttime,
+        endtime: Some(starttime + 12),
+        status: Some("OK".into()),
+        log,
+    }
+}
+
+/// The example installation with two containers on korriban, each made by the writer 200 seconds
+/// ago: 320 from a template that generated host keys, 321 from one without `/etc/ssh`.
 fn with_containers() -> Fixture {
     let mut fixture = Fixture::example();
-    let container = |vmid: u32, name: &str, ip: &str, log: Vec<String>| {
+    fixture.time = Some(NOW);
+    let container = |vmid: u32, name: &str, ip: &str| {
         serde_json::from_value::<mock_proxmox::FixtureVm>(json!({
             "vmid": vmid, "name": name, "node": "korriban", "status": "running", "kind": "lxc",
             "tags": ["octopushy", "home"], "protection": true, "ipv4": [ip],
             "description": format!("Managed by Octopushy as home/korriban/{name}."),
-            "createLog": log,
         }))
         .unwrap()
     };
-    fixture.vms.push(container(
+    fixture.vms.push(container(320, "krb-ct-01", "10.1.0.40"));
+    fixture.vms.push(container(321, "krb-ct-02", "10.1.0.41"));
+    fixture.tasks.push(task(
+        "vzcreate",
         320,
-        "krb-ct-01",
-        "10.1.0.40",
-        vec![
-            "extracting archive '/var/lib/vz/template/cache/debian-13-standard_13.6-1_amd64.tar.zst'".into(),
-            "Detected container architecture: amd64".into(),
-            "Creating SSH host key 'ssh_host_rsa_key' - this may take some time ...".into(),
-            format!("done: {RSA} root@krb-ct-01"),
-            "Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...".into(),
-            format!("done: {ED25519} root@krb-ct-01"),
-            "TASK OK".into(),
-        ],
-    ));
-    fixture.vms.push(container(
-        321,
-        "krb-ct-02",
-        "10.1.0.41",
-        vec![
-            "Detected container architecture: amd64".into(),
-            "TASK OK".into(),
-        ],
+        WRITER,
+        NOW - 200,
+        create_log("krb-ct-01", &[("rsa", RSA), ("ed25519", ED25519)]),
     ));
     fixture
+        .tasks
+        .push(task("vzstart", 320, WRITER, NOW - 180, vec![]));
+    fixture.tasks.push(task(
+        "vzcreate",
+        321,
+        WRITER,
+        NOW - 200,
+        create_log("krb-ct-02", &[]),
+    ));
+    fixture
+}
+
+/// What the controller sends for an apply that ran from 300 to 60 seconds ago.
+fn host_keys_request() -> Value {
+    json!({ "createdBy": WRITER, "applyStartedSecondsAgo": 300, "applyFinishedSecondsAgo": 60 })
 }
 
 #[tokio::test]
@@ -520,7 +562,8 @@ async fn verify_guest_checks_a_container_through_the_lxc_endpoints() {
     let input = |vmid: u32, kind: &str, ip: Value, host_keys: bool| {
         json!({
             "connection": connection(&m), "node": "korriban", "vmid": vmid, "kind": kind,
-            "expectRunning": true, "expectIpv4": ip, "waitSeconds": 0, "hostKeys": host_keys
+            "expectRunning": true, "expectIpv4": ip, "waitSeconds": 0,
+            "hostKeys": if host_keys { host_keys_request() } else { Value::Null }
         })
     };
 
@@ -589,10 +632,162 @@ async fn verify_guest_checks_a_container_through_the_lxc_endpoints() {
     assert!(message.contains("container 320 is stopped"), "{message}");
 }
 
+/// Verifies container 320 asking for its host keys, after `change` to the fixture.
+async fn host_keys_after(change: impl FnOnce(&mut Fixture)) -> Result<Success, Failure> {
+    let mut fixture = with_containers();
+    change(&mut fixture);
+    let m = mock(fixture).await;
+    let (r, _) = exec(
+        "verify-guest",
+        json!({
+            "connection": connection(&m), "node": "korriban", "vmid": 320, "kind": "lxc",
+            "waitSeconds": 0, "hostKeys": host_keys_request()
+        }),
+        &m.token(),
+    )
+    .await;
+    r
+}
+
 #[tokio::test]
-async fn verify_guest_reads_host_keys_only_with_a_create_task_it_can_see() {
+async fn host_keys_come_only_from_the_create_this_apply_made() {
+    // The create of 320 inside the apply, by the writer, and only start and stop after it.
+    let r = host_keys_after(|f| {
+        f.tasks
+            .push(task("vzshutdown", 320, WRITER, NOW - 30, vec![]))
+    })
+    .await;
+    assert_eq!(
+        r.unwrap().outputs["hostKeys"],
+        json!([format!("rsa {RSA}"), format!("ed25519 {ED25519}")])
+    );
+
+    // Container A at 320 was made long ago, and its keys copied by someone with root in it. A is
+    // destroyed, and B is restored at 320 during this apply: A's create must not vouch for B.
+    let (message, outputs) = failed(
+        host_keys_after(|f| {
+            f.tasks.retain(|t| t.id != "320");
+            f.tasks.push(task(
+                "vzcreate",
+                320,
+                WRITER,
+                NOW - 90 * 86_400,
+                create_log("a", &[("ed25519", ED25519)]),
+            ));
+            f.tasks
+                .push(task("vzdestroy", 320, WRITER, NOW - 86_400, vec![]));
+            f.tasks
+                .push(task("vzrestore", 320, WRITER, NOW - 200, vec![]));
+        })
+        .await,
+    );
+    assert!(
+        message.contains("no successful create task (vzcreate)"),
+        "{message}"
+    );
+    assert!(message.contains("restored or cloned"), "{message}");
+    assert!(outputs.unwrap().get("hostKeys").is_none());
+
+    // A create in the window by anyone but the token that applied is not this apply's.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            f.tasks.retain(|t| t.id != "320");
+            f.tasks.push(task(
+                "vzcreate",
+                320,
+                "root@pam",
+                NOW - 200,
+                create_log("x", &[("ed25519", ED25519)]),
+            ));
+        })
+        .await,
+    );
+    assert!(
+        message.contains("by octopushy@pve!writer during this apply"),
+        "{message}"
+    );
+
+    // The create came before the apply, even by the right token.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            f.tasks.retain(|t| t.id != "320");
+            f.tasks.push(task(
+                "vzcreate",
+                320,
+                WRITER,
+                NOW - 3_600,
+                create_log("x", &[("ed25519", ED25519)]),
+            ));
+        })
+        .await,
+    );
+    assert!(message.contains("during this apply"), "{message}");
+
+    // The VMID changed hands after the create: a destroy and a restore, or a second create.
+    for later in ["vzdestroy", "vzrestore", "vzmigrate", "vzcreate"] {
+        let (message, _) = failed(
+            host_keys_after(|f| {
+                f.tasks
+                    .push(task(later, 320, "root@pam", NOW - 100, vec![]))
+            })
+            .await,
+        );
+        assert!(
+            message.contains(&format!("Proxmox lists {later}")),
+            "{later}: {message}"
+        );
+    }
+    // A destroy still running counts too.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            let mut running = task("vzdestroy", 320, "root@pam", NOW - 10, vec![]);
+            running.endtime = None;
+            running.status = None;
+            f.tasks.push(running);
+        })
+        .await,
+    );
+    assert!(message.contains("Proxmox lists vzdestroy"), "{message}");
+
+    // Two creates by the writer in the window: which made it is not known.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            f.tasks.push(task(
+                "vzcreate",
+                320,
+                WRITER,
+                NOW - 250,
+                create_log("y", &[("rsa", RSA)]),
+            ))
+        })
+        .await,
+    );
+    assert!(message.contains("2 create tasks"), "{message}");
+
+    // A create that failed is no creation.
+    let (message, _) = failed(
+        host_keys_after(|f| {
+            f.tasks
+                .iter_mut()
+                .find(|t| t.id == "320" && t.kind == "vzcreate")
+                .unwrap()
+                .status = Some("unable to create".into());
+        })
+        .await,
+    );
+    assert!(message.contains("no successful create task"), "{message}");
+
+    // No history at all, as for a token that may not see another's tasks.
+    let (message, _) = failed(host_keys_after(|f| f.tasks.clear()).await);
+    assert!(
+        message.contains("Sys.Audit on /nodes/korriban"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn host_keys_need_the_window_of_the_apply() {
     let m = mock(with_containers()).await;
-    m.update(|f| f.vms.iter_mut().find(|v| v.vmid == 320).unwrap().create_log = None);
     let (r, _) = exec(
         "verify-guest",
         json!({
@@ -604,12 +799,8 @@ async fn verify_guest_reads_host_keys_only_with_a_create_task_it_can_see() {
     .await;
     let (message, _) = failed(r);
     assert!(
-        message.contains("no successful create task (vzcreate)"),
-        "{message}"
-    );
-    assert!(
-        message.contains("Sys.Audit on /nodes/korriban"),
-        "{message}"
+        message.contains("expected struct HostKeysRequest"),
+        "a bare flag names no creation: {message}"
     );
 }
 

@@ -32,6 +32,24 @@ public static class ContainerHostKeys
         await store.SetInternalAsync(key, fingerprints, Visibilities.Plain, "The SSH host keys Proxmox logged when it created this container", cancellationToken);
     }
 
+    /// <summary>
+    /// The pin stops being usable for any connection, from now on: every version is revoked, and kept, for the record of
+    /// what was released. Called as an apply that may destroy the container it was read from is sent, whether that apply
+    /// then succeeds, fails or is lost: from then on the machine at the VMID may be another. A run bound to a revoked
+    /// version is blocked, and the next verify that reads the new container's keys records them as a new version.
+    /// </summary>
+    public static async Task WithdrawAsync(OctopushyDb db, Guid resourceId, DateTimeOffset now, string reason, CancellationToken cancellationToken)
+    {
+        var key = Key(resourceId);
+        var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
+        if (entry is null)
+            return;
+        foreach (var version in await db.StoreVersions.Where(v => v.Key == key && v.RevokedAt == null).ToListAsync(cancellationToken))
+        {
+            VariableStore.Revoke(entry, version, now, "octopushy", reason);
+        }
+    }
+
     /// <summary>Retiring the guest removes its pin with its machine.</summary>
     public static async Task RemoveAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
     {

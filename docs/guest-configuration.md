@@ -352,7 +352,11 @@ no key. Containers take keys through the same `sshAuthorizedKeys` variable. Beca
 `user_account` forces a replacement, `octopushy-lab`'s `proxmox-lxc` module also has OpenTofu ignore later
 changes to it (`lifecycle.ignore_changes`). So nothing about keys ever replaces a container: Octopushy's own
 key stays the version it was created with, as for a VM, and a key a person adds to `access.sshAuthorizedKeys`
-reaches a container made after the change, not one that exists. Checked with bpg/proxmox 0.117.0: a plan
+reaches a container made after the change, not one that exists. **That holds for Octopushy's own key too:** a
+container made with no Ansible work got no key of Octopushy's, and gaining a setup stage or a service later
+plans nothing that delivers it. Octopushy records its key as delivered to a container only by the apply that
+created it, so the setup is refused, saying the container has to be rebuilt (or `access.sshKey` named).
+Checked with bpg/proxmox 0.117.0: a plan
 of a changed key without `ignore_changes` replaces the container (`keys = [ # forces replacement`), and with it
 replaces nothing. Should a module without it plan a replacement anyway, the plan is a replacement of the guest's
 own machine: it waits for a person under the [rules for a VM](workflows.md#rules), and is never applied by
@@ -360,8 +364,8 @@ policy alone unless `destructive: automatic` is written down.
 
 **Adding a valid service with an Ansible stage to an existing guest delivers the key the same way.** A
 guest that had no Ansible work had no managed key, so the service changes its provisioning hash: the guest is
-provisioned again first, which for a VM is the in-place update and one reboot above, with new host keys,
-and for a container is a replacement. The service waits for that. The owner's approach is to rebuild
+provisioned again first, which for a VM is the in-place update and one reboot above, with new host keys.
+A container cannot take the key that way: it has to be rebuilt, as above. The service waits for that. The owner's approach is to rebuild
 guests rather than migrate them, so there is no migration path for existing guests. An invalid
 service gives no key, and nothing about a service takes one away, as [workflows.md](workflows.md#services-on-a-guest) says.
 
@@ -472,15 +476,28 @@ pve-container's source). It logs each in the create task as
 `Creating SSH host key 'ssh_host_ed25519_key' - this may take some time ...` followed by
 `done: SHA256:… root@<hostname>`. That log is read through the API the installation is
 [trusted](installation-trust.md) for, so it is a source Proxmox authenticates, like the console of route 1,
-and nothing in the container has run when the keys are made.
+and nothing in the container has run when the keys are made. **But it vouches only for the container that
+task made.** A VMID is used again; a container can be restored from a backup or cloned with keys someone else
+has; and an old create task outlives its container. So a create task counts only as the creation Octopushy's
+own apply performed:
 
-1. **The verify step of a provision run reads them,** for a container that names no `access.hostKey` and
-   has Ansible work: a setup stage, or a service with an Ansible stage. The agent takes the newest successful
-   task of type `vzcreate` of the VMID on the guest's node, and reports each key's type and fingerprint.
+1. **The verify step of the provision run that created the container reads them,** for a container that
+   names no `access.hostKey` and has Ansible work: a setup stage, or a service with an Ansible stage. A run
+   whose plan did not create the guest's container reads none. The server sends the window the apply ran
+   in, as seconds before the assignment, and the token it ran with. The agent turns the window into the
+   node's own clock (`GET /nodes/{node}/time`) and reads every task of the VMID on the node. It accepts
+   exactly one task: a successful `vzcreate` started by that token, inside that window. No task that changes
+   which machine the VMID is may come after it: a destroy, restore, migration or another create, finished or
+   still running. It then reports each key's type and fingerprint. There is no fallback to an older create.
 2. **Octopushy records them as the container's pin** when the guest owns the container (see
-   [ownership](safety-boundary.md#ownership-reservation-and-confirmed-creation)): a plain entry at
-   `system/container-host-key/<guest id>`, one `type SHA256:…` per line, which no definition can name. A
-   replaced container's new keys are a new version; retiring the guest removes it.
+   [ownership](safety-boundary.md#ownership-reservation-and-confirmed-creation)) and that run's plan created
+   it: a plain entry at `system/container-host-key/<guest id>`, one `type SHA256:…` per line, which no
+   definition can name. Keys a verify reports without being asked pin nothing. Retiring the guest removes it.
+3. **A replacement withdraws the pin first.** When the apply of a plan that creates, replaces or deletes the
+   guest's container is sent, every version of its pin is revoked, and kept for the record of what was
+   released. From then on the machine at the VMID may be another, whatever the apply reports, so no setup,
+   service or rotation connects, including a run that bound an older version, until a verify of the new
+   container records its keys as a new version.
 3. **The setup stage, a service's Ansible stage and a key rotation are pinned to it.** Proxmox gives
    fingerprints, not the public keys, and `known_hosts` needs a key. So the agent leaves `known_hosts`
    empty and gives ssh a `KnownHostsCommand`: once the container has presented its host key, ssh asks the
@@ -495,13 +512,17 @@ and nothing in the container has run when the keys are made.
 **It fails closed.** A token that cannot list or read the create task, a create task that logged no key
 (a template without `/etc/ssh`), or none at all, fails the verify step with the reason, and nothing is
 pinned. Without a pin, the setup waits with *the container's host keys have not been read from its create
-task yet*. A key the container presents that is not one Proxmox made, as after someone replaced its keys by
+task*, and after a replacement whose verify did not pin, with *revoked: the container may have been replaced*. A key the container presents that is not one Proxmox made, as after someone replaced its keys by
 hand, is refused. Proxmox lists a task another user or token started only to a token with `Sys.Audit` on
 `/nodes/<node>`: the verify step uses the read-only (or shared) token, and in split mode the create task was
 started by the privileged one, so give the read-only token `Sys.Audit` on `/nodes`.
 
+**A container Octopushy did not create has no key provenance:** one restored from a backup, cloned, or made
+before its guest had Ansible work. It needs `access.hostKey`, set from its console, or rebuilding by Octopushy.
+
 `access.hostKey` stays the override. A container that names it is pinned to it, and its create task is not
-read.
+read. Each run that connects has exactly one source: the key named in `access.hostKey`, or for a container
+that names none, its create task's fingerprints. A VM never takes a container's pin.
 
 ## Secrets
 

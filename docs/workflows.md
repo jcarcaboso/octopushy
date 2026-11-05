@@ -223,8 +223,8 @@ What is different about a container:
 
 - **Its addresses come from Proxmox,** which reads them from the container's network namespace. There is no guest agent.
 - **Its SSH host key needs no person.** Proxmox generates a container's host keys when it creates it, and logs their
-  fingerprints in the create task. The verify step reads them there, and the setup stage is pinned to them, so a container
-  may leave out `access.hostKey`: see [the host key of a container](guest-configuration.md#the-host-key-of-a-container).
+  fingerprints in the create task. The verify step of the run that created the container reads them there, and the setup
+  stage is pinned to them, so a container Octopushy creates may leave out `access.hostKey`: see [the host key of a container](guest-configuration.md#the-host-key-of-a-container).
 - **Its keys are set once.** The provider replaces a container whose `user_account` keys change, so a container module
   ignores later changes to them: see [SSH identity](guest-configuration.md#ssh-identity).
 - **No guest agent exec.** Proxmox has no API to run a command in a container. Octopushy runs nothing through one for a

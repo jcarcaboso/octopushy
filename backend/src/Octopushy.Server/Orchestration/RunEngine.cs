@@ -612,10 +612,13 @@ public sealed partial class RunEngine(
                     }
                 }
 
-                // A container's host keys, as its create task logged them, are the pin of its Ansible work. Only for a
-                // container this guest owns: a machine it is not bound to pins nothing.
+                // A container's host keys, as the create task of this run's apply logged them, are the pin of its Ansible
+                // work. Only for a container this guest owns and this run's plan created: what an agent reports otherwise
+                // pins nothing, since nothing asked it which creation to read.
                 if (RunContext.Parse(run.Context) is { ContainerHostKey: true } pinning
                     && resource.BoundVmid == pinning.Proxmox.Vmid && resource.BoundInstallation == resource.ParentAddress
+                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Plan)?.Outputs is { } madeBy
+                    && GuestVmPlan.MakesGuestMachine(JsonNode.Parse(madeBy), pinning)
                     && ContainerHostKeys.Read(outputs) is { } fingerprints)
                     await ContainerHostKeys.RecordAsync(store, resource.Id, fingerprints, cancellationToken);
 

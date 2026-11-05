@@ -371,7 +371,6 @@ async fn lists_a_guests_tasks_and_reads_a_log() {
     Mock::given(method("GET"))
         .and(path("/api2/json/nodes/korriban/tasks"))
         .and(query_param("vmid", "320"))
-        .and(query_param("typefilter", "vzcreate"))
         .and(query_param("source", "all"))
         .respond_with(data(json!([
             { "upid": "UPID:korriban:1:2:3:vzcreate:320:root@pam:", "type": "vzcreate", "id": "320",
@@ -389,7 +388,7 @@ async fn lists_a_guests_tasks_and_reads_a_log() {
         .mount(&server)
         .await;
     let c = client(&server);
-    let tasks = c.guest_tasks("korriban", 320, "vzcreate").await.unwrap();
+    let tasks = c.guest_tasks("korriban", 320).await.unwrap();
     assert_eq!(
         (tasks[0].kind.as_str(), tasks[0].status.as_deref()),
         ("vzcreate", Some("OK"))
@@ -398,5 +397,21 @@ async fn lists_a_guests_tasks_and_reads_a_log() {
     assert_eq!(
         log.iter().map(|l| l.t.as_str()).collect::<Vec<_>>(),
         ["extracting archive", "TASK OK"]
+    );
+}
+
+#[tokio::test]
+async fn reads_a_nodes_clock() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/korriban/time"))
+        .respond_with(data(
+            json!({ "time": 1800000000, "localtime": 1800003600, "timezone": "Europe/Madrid" }),
+        ))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        client(&server).node_time("korriban").await.unwrap(),
+        1_800_000_000
     );
 }

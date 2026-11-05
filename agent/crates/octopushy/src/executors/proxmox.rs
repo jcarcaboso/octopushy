@@ -258,11 +258,39 @@ struct VerifyGuestInput {
     expect_ipv4: Option<String>,
     #[serde(default = "default_guest_wait")]
     wait_seconds: u64,
-    /// Read the SSH host keys Proxmox generated for a container, from its create task, once every
-    /// other check passes. Only for `lxc`.
+    /// Read the SSH host keys Proxmox generated for a container when the controller's apply created
+    /// it, from that create task, once every other check passes. Only for `lxc`.
     #[serde(default)]
-    host_keys: bool,
+    host_keys: Option<HostKeysRequest>,
 }
+
+/// Which creation the host keys must come from: the apply that ran from `applyStartedSecondsAgo`
+/// to `applyFinishedSecondsAgo` before the controller made this assignment, as `createdBy`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HostKeysRequest {
+    created_by: String,
+    apply_started_seconds_ago: u64,
+    apply_finished_seconds_ago: u64,
+}
+
+/// How far the window of an apply may be off: the time between the controller making the
+/// assignment and the executor starting, and the seconds the two clocks round to.
+const CREATE_WINDOW_TOLERANCE: u64 = 120;
+
+/// Tasks that change which machine a VMID is: a later one means the machine at the VMID may not be
+/// the one a create task made. A clone's task names its source, and a clone onto a VMID that is in
+/// use needs a destroy first, which is listed.
+const IDENTITY_TASKS: &[&str] = &[
+    "vzcreate",
+    "vzrestore",
+    "vzdestroy",
+    "vzmigrate",
+    "qmcreate",
+    "qmrestore",
+    "qmdestroy",
+    "qmigrate",
+];
 
 fn default_guest_wait() -> u64 {
     180
@@ -517,6 +545,7 @@ async fn evaluate_guest(
 }
 
 async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
+    let started = Instant::now();
     let input: VerifyGuestInput = ctx.input()?;
     let kind = expected_kind(&input.kind)?;
     let expect_ip = input.expect_ipv4.as_deref().map(parse_ipv4).transpose()?;
@@ -541,10 +570,17 @@ async fn verify_guest(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                         .agent(format!("{}: ok ({})", check.name, check.detail));
                 }
                 let mut outputs = report.to_json();
-                if input.host_keys {
-                    let keys = created_host_keys(&c, &kind, &input.node, input.vmid)
-                        .await
-                        .map_err(|e| Failure::with_outputs(e, report.to_json()))?;
+                if let Some(request) = &input.host_keys {
+                    let keys = created_host_keys(
+                        &c,
+                        &kind,
+                        &input.node,
+                        input.vmid,
+                        request,
+                        started.elapsed().as_secs(),
+                    )
+                    .await
+                    .map_err(|e| Failure::with_outputs(e, report.to_json()))?;
                     for key in &keys.keys {
                         ctx.log.agent(format!(
                             "host key: {} {} (from {})",
@@ -606,45 +642,91 @@ struct CreatedKeys {
     keys: Vec<octopushy_proxmox::CreatedHostKey>,
 }
 
-/// The SSH host keys Proxmox generated for a container when it created it, read from the log of
-/// the newest successful create task (`vzcreate`) of its VMID on its node. Proxmox writes them
-/// into the container's root file system before it first starts, so what the log shows is the
-/// container's own identity, through the API the installation is trusted for. Anything that keeps
-/// them from being read is a failure: nothing here falls back to asking the container itself.
+/// The SSH host keys Proxmox generated for a container when the controller's apply created it.
+///
+/// Proxmox writes them into the container's root file system before it first starts, and logs their
+/// fingerprints in the create task, so that log is the container's identity, through the API the
+/// installation is trusted for, but only for the container that task made. So the task is the one
+/// creation of this VMID on this node that the apply can have made, in Proxmox's own clock:
+///
+/// - a `vzcreate` that succeeded, started by `createdBy`, and started inside the apply's window;
+/// - exactly one such task;
+/// - and no task that changes which machine the VMID is (a destroy, restore, migration or another
+///   create) after it.
+///
+/// Anything else fails: an older create, a restored or cloned container, or a history that cannot
+/// be read. Nothing falls back to another task, or to asking the container.
 async fn created_host_keys(
     c: &Client,
     kind: &GuestKind,
     node: &str,
     vmid: u32,
+    request: &HostKeysRequest,
+    elapsed: u64,
 ) -> Result<CreatedKeys, String> {
     if kind != &GuestKind::Lxc {
         return Err(
             "host keys are read from a container's create task; this is not a container".to_owned(),
         );
     }
-    let tasks = c.guest_tasks(node, vmid, "vzcreate").await.map_err(|e| {
-        format!(
-            "the create task of container {vmid} could not be listed: {e}. Reading a task another token started needs Sys.Audit on /nodes/{node}"
-        )
-    })?;
+    let audit = format!("Reading a task another token started needs Sys.Audit on /nodes/{node}");
+    let now = c
+        .node_time(node)
+        .await
+        .map_err(|e| format!("the clock of {node} could not be read: {e}"))?;
+    let tasks = c
+        .guest_tasks(node, vmid)
+        .await
+        .map_err(|e| format!("the tasks of container {vmid} could not be listed: {e}. {audit}"))?;
+    // The window in the node's clock: the assignment was made `elapsed` seconds before now.
+    let from = now
+        .saturating_sub(request.apply_started_seconds_ago + elapsed)
+        .saturating_sub(CREATE_WINDOW_TOLERANCE);
+    let to =
+        now.saturating_sub(request.apply_finished_seconds_ago + elapsed) + CREATE_WINDOW_TOLERANCE;
     let id = vmid.to_string();
-    let Some(task) = tasks
+    let of_vmid: Vec<_> = tasks
         .iter()
-        .filter(|t| t.kind == "vzcreate" && t.id.as_deref() == Some(id.as_str()))
-        .filter(|t| t.status.as_deref() == Some("OK"))
-        .max_by_key(|t| (t.starttime.unwrap_or(0), t.upid.clone()))
-    else {
-        return Err(format!(
-            "Proxmox lists no successful create task (vzcreate) of container {vmid} on {node}, so its host keys cannot be read. \
-             A token sees another token's tasks only with Sys.Audit on /nodes/{node}"
-        ));
+        .filter(|t| t.id.as_deref() == Some(id.as_str()))
+        .collect();
+    let created: Vec<_> = of_vmid
+        .iter()
+        .filter(|t| t.kind == "vzcreate" && t.status.as_deref() == Some("OK"))
+        .filter(|t| t.user.as_deref() == Some(request.created_by.as_str()))
+        .filter(|t| t.starttime.is_some_and(|s| (from..=to).contains(&s)))
+        .collect();
+    let task = match created.as_slice() {
+        [task] => *task,
+        [] => {
+            return Err(format!(
+                "Proxmox lists no successful create task (vzcreate) of container {vmid} on {node} by {} during this apply, \
+                 so the container's host keys have no provenance: it may have been restored or cloned, or made by someone else. \
+                 Set access.hostKey, or rebuild it with Octopushy. {audit}",
+                request.created_by
+            ));
+        }
+        many => {
+            return Err(format!(
+                "Proxmox lists {} create tasks of container {vmid} on {node} during this apply; which one made it is not known",
+                many.len()
+            ));
+        }
     };
-    let log = c.task_log(node, &task.upid).await.map_err(|e| {
-        format!(
-            "the log of {} could not be read: {e}. Reading a task another token started needs Sys.Audit on /nodes/{node}",
-            task.upid
-        )
-    })?;
+    let made_at = task.starttime.unwrap_or(0);
+    if let Some(later) = of_vmid.iter().find(|t| {
+        t.upid != task.upid
+            && IDENTITY_TASKS.contains(&t.kind.as_str())
+            && t.starttime.is_none_or(|s| s >= made_at)
+    }) {
+        return Err(format!(
+            "after the create task {}, Proxmox lists {} ({}) for VMID {vmid}: the machine there may not be the one it made",
+            task.upid, later.kind, later.upid
+        ));
+    }
+    let log = c
+        .task_log(node, &task.upid)
+        .await
+        .map_err(|e| format!("the log of {} could not be read: {e}. {audit}", task.upid))?;
     let keys = octopushy_proxmox::created_host_keys(&log);
     if keys.is_empty() {
         return Err(format!(

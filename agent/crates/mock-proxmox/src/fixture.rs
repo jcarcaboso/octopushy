@@ -39,6 +39,46 @@ pub struct Fixture {
     /// What `GET /access/acl` lists; by default one propagating grant on `/`.
     #[serde(default)]
     pub acl: Option<Vec<serde_json::Value>>,
+    /// The task history of every node, as `GET /nodes/{node}/tasks` lists it. It is the
+    /// installation's record, apart from the guests that exist now: a task stays after its
+    /// guest is destroyed, and a VMID that is used again has the tasks of each guest it had.
+    #[serde(default)]
+    pub tasks: Vec<FixtureTask>,
+    /// What `GET /nodes/{node}/time` says it is, in Unix seconds; the mock's clock by default.
+    #[serde(default)]
+    pub time: Option<u64>,
+}
+
+/// One task in a node's history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureTask {
+    pub node: String,
+    /// `vzcreate`, `vzrestore`, `vzdestroy`, `qmcreate`, …
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The VMID it is about, as Proxmox gives it: a string.
+    pub id: String,
+    /// Who started it: `user@realm` or `user@realm!token`.
+    pub user: String,
+    pub starttime: u64,
+    #[serde(default)]
+    pub endtime: Option<u64>,
+    /// `OK`, an error, or null while it runs.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub log: Vec<String>,
+}
+
+impl FixtureTask {
+    /// The task's UPID, made from what it is, as Proxmox's are.
+    pub fn upid(&self) -> String {
+        format!(
+            "UPID:{}:0000A0B1:0012C3D4:{:08X}:{}:{}:{}:",
+            self.node, self.starttime, self.kind, self.id, self.user
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,10 +132,6 @@ pub struct FixtureVm {
     /// `qemu` or `lxc`.
     #[serde(default = "default_kind")]
     pub kind: String,
-    /// For a container, the log of its create task (`vzcreate`), which `GET /nodes/{node}/tasks`
-    /// then lists; null for none.
-    #[serde(default)]
-    pub create_log: Option<Vec<String>>,
     #[serde(default = "default_vm_cpus")]
     pub max_cpu: u64,
     #[serde(default = "default_vm_mem")]

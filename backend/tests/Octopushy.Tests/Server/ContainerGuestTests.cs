@@ -122,8 +122,14 @@ public class ContainerGuestTests(PostgresFixture postgres)
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         var verify = await agent.NextAsync("verify-guest");
         var input = Input(verify);
-        Assert.Equal(("lxc", Vmid, "korriban", true),
-            (input["kind"]!.GetValue<string>(), input["vmid"]!.GetValue<int>(), input["node"]!.GetValue<string>(), input["hostKeys"]!.GetValue<bool>()));
+        Assert.Equal(("lxc", Vmid, "korriban"),
+            (input["kind"]!.GetValue<string>(), input["vmid"]!.GetValue<int>(), input["node"]!.GetValue<string>()));
+        // The creation the keys must come from: this run's apply, by the token it ran with, in the window it ran.
+        var creation = input["hostKeys"]!.AsObject();
+        Assert.Equal("octopushy@pve!writer", creation["createdBy"]!.GetValue<string>());
+        var (startedAgo, finishedAgo) = (creation["applyStartedSecondsAgo"]!.GetValue<long>(), creation["applyFinishedSecondsAgo"]!.GetValue<long>());
+        Assert.True(finishedAgo >= 0 && startedAgo >= finishedAgo && startedAgo < 600, $"{startedAgo} {finishedAgo}");
+        Assert.DoesNotContain("writer-token", verify.InputJson);
         await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Rsa, Ed25519));
         await server.TickAsync();
 
@@ -159,7 +165,22 @@ public class ContainerGuestTests(PostgresFixture postgres)
         await server.TickAsync();
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
         var run = await server.LatestRunAsync(Guest, Operations.Configure);
-        Assert.Contains("have not been read from its create task yet", run.Detail ?? string.Join(" ", run.Steps.Select(s => s.Detail)));
+        Assert.Contains("have not been read from its create task", run.Detail ?? string.Join(" ", run.Steps.Select(s => s.Detail)));
+    }
+
+    [Fact]
+    public async Task A_run_that_did_not_create_the_container_reads_no_host_keys()
+    {
+        // The container exists and was made with no pin to read, as a restored one would be: an update creates nothing.
+        var (server, agent) = await StartAsync(Container());
+        await using var _ = server;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        var verify = await agent.NextAsync("verify-guest");
+        Assert.Null(Input(verify)["hostKeys"]);
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Ed25519));
+        await server.TickAsync();
+        Assert.Null(await PinAsync(server));
     }
 
     [Fact]
@@ -214,6 +235,121 @@ public class ContainerGuestTests(PostgresFixture postgres)
         // The new container has new host keys: a new version of the pin.
         var pin = await PinAsync(server);
         Assert.Equal(($"{Rsa}\n", 2), (pin!.Value.Value, pin.Value.Version));
+    }
+
+    /// <summary>Plans the guest again, and has a person approve the plan, which replaces the container.</summary>
+    private static async Task ReplaceAsync(ServerHarness server, FakeAgent agent)
+    {
+        var resource = await server.ResourceAsync(Guest);
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["delete", "create"], "replace_because_cannot_update"),
+            artifacts: FakeAgent.PlanArtifact("replace"));
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, new JsonObject { ["absent"] = false, ["previous"] = true, ["protection"] = false });
+    }
+
+    private static async Task<List<(int Version, bool Revoked)>> PinVersionsAsync(ServerHarness server)
+    {
+        var key = ContainerHostKeys.Key((await server.ResourceAsync(Guest)).Id);
+        return (await server.QueryAsync(db => db.StoreVersions.AsNoTracking().Where(v => v.Key == key).OrderBy(v => v.Version).ToListAsync()))
+            .Select(v => (v.Version, v.RevokedAt is not null)).ToList();
+    }
+
+    private static string Why(Run run) => run.Detail + " " + string.Join(" ", run.Steps.Select(s => s.Detail));
+
+    [Fact]
+    public async Task Once_a_replacement_is_applied_the_old_pin_reaches_no_connection_until_the_new_container_is_verified()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+        Assert.Equal([(1, false)], await PinVersionsAsync(server));
+
+        // The replacement's apply is sent, so the old pin goes, kept for the record. The apply makes a container with other
+        // keys, and its verify fails, as for a token that cannot read the create task.
+        await ReplaceAsync(server, agent);
+        var apply = await agent.NextAsync("apply");
+        Assert.Equal([(1, true)], await PinVersionsAsync(server));
+        await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Failed, error: "the create task could not be listed");
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+
+        // Neither a rotation nor the setup gets the old pin: each waits, saying why.
+        var resource = await server.ResourceAsync(Guest);
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource.Id, CancellationToken.None);
+        await server.TickAsync();
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
+        Assert.Contains("revoked: the container may have been replaced", Why(await server.LatestRunAsync(Guest, Operations.RotateAccess)));
+        await server.Engine.CancelAsync((await server.LatestRunAsync(Guest, Operations.RotateAccess)).Id, "cancelled by the test", CancellationToken.None);
+        // A setup is refused before it binds anything, since the guest's provisioning has not caught up.
+        await Assert.ThrowsAsync<RunException>(() => server.Services.GetRequiredService<Planner>().ConfigureGuestAsync(resource.Id, "setup", CancellationToken.None));
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
+    }
+
+    [Fact]
+    public async Task A_container_made_without_ansible_work_never_counts_as_having_octopushys_key()
+    {
+        // A plain container first: no Ansible work, so no key of Octopushy's goes into it when it is made.
+        var test = Container();
+        test.Write("workflows/test-vm/workflow.yaml", File.ReadAllText(Path.Combine(test.Root, "workflows/test-vm/workflow.yaml")).Replace("manages: vm", "manages: container"));
+        var withSetup = File.ReadAllText(Path.Combine(test.Root, GuestFile));
+        test.Write(GuestFile, """
+            schemaVersion: 1
+            type: container
+            host: korriban
+            vmid: 310
+            hardware: { cores: 2, memory: 2048 }
+            network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }
+            workflow: test-vm@1
+            """);
+        var (server, agent) = await StartAsync(test);
+        await using var _ = server;
+        await ProvisionAsync(agent);
+        await server.TickAsync();
+        Assert.False(await server.QueryAsync(db => db.GuestAccessKeys.AnyAsync()));
+
+        // It moves to a workflow with a setup: Octopushy issues its key and plans, and the module, which ignores keys on a
+        // container that exists, changes nothing that delivers it. An apply of that plan must not count as delivering it.
+        server.Repository.Write(GuestFile, withSetup);
+        server.Commit("Set the container up");
+        await server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact("update"));
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, Verified());
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        var key = await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().SingleAsync());
+        Assert.Null(key.ProvisionedAt);
+
+        var refused = await Assert.ThrowsAsync<RunException>(() =>
+            server.Services.GetRequiredService<Planner>().ConfigureGuestAsync(key.ResourceId, "setup", CancellationToken.None));
+        Assert.Contains("A container takes the key only when it is created", refused.Message);
+        Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "ansible");
+    }
+
+    [Fact]
+    public async Task Host_keys_a_verify_reports_unasked_pin_nothing()
+    {
+        var (server, agent) = await StartAsync(Container());
+        await using var _ = server;
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+
+        // An update creates nothing: the verify is asked for no keys, and keys it reports anyway are not this guest's pin.
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact("update"));
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        var verify = await agent.NextAsync("verify-guest");
+        Assert.Null(Input(verify)["hostKeys"]);
+        await agent.ReportAsync(verify, Outcome.Succeeded, Verified(Rsa));
+        await server.TickAsync();
+        Assert.Equal(($"{Ed25519}\n", 1), (await PinAsync(server))!.Value);
+        Assert.Equal([(1, false)], await PinVersionsAsync(server));
     }
 
     [Fact]

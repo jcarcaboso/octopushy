@@ -91,7 +91,7 @@ Input:
 ```json
 {
   "connection": { … }, "node": "korriban", "vmid": 210, "kind": "qemu", "name": "krb-crt-01",
-  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180, "hostKeys": false
+  "expectRunning": true, "expectIpv4": "10.1.0.21", "waitSeconds": 180, "hostKeys": null
 }
 ```
 
@@ -137,23 +137,33 @@ Succeeds when every check passes, fails otherwise (with the outputs still set). 
 `expectRunning: false` and the VM stopped, the address check is reported as passed
 with "not checked".
 
-`hostKeys: true`, for a container only, also reads the SSH host keys Proxmox generated
-when it created it, once every check has passed. Proxmox (`PVE::LXC::Setup`,
-`rewrite_ssh_host_keys`, run by `post_create_hook`) generates them on the host and writes
-them into the container's root file system before it first starts, whenever the template
-has `/etc/ssh`, and logs each one in the create task as
+`hostKeys`, for a container only, also reads the SSH host keys Proxmox generated when the
+controller's apply created it, once every other check has passed:
+
+```json
+"hostKeys": { "createdBy": "octopushy@pve!writer", "applyStartedSecondsAgo": 240, "applyFinishedSecondsAgo": 30 }
+```
+
+Proxmox (`PVE::LXC::Setup`, `rewrite_ssh_host_keys`, run by `post_create_hook`) generates them
+on the host and writes them into the container's root file system before it first starts,
+whenever the template has `/etc/ssh`, and logs each one in the create task as
 `Creating SSH host key 'ssh_host_<type>_key' - …` followed by `done: SHA256:<43> <comment>`.
-The executor takes the newest task of type `vzcreate` for the VMID on `node` whose status
-is `OK` (`GET /nodes/{node}/tasks?vmid=…&typefilter=vzcreate&source=all`), reads its log
+The executor reads the node's clock (`GET /nodes/{node}/time`) and every task of the VMID on
+`node` (`GET /nodes/{node}/tasks?vmid=…&source=all`), and turns the window, counted back from
+when the controller made the assignment, into the node's clock, with two minutes either side. It
+takes exactly one task: a `vzcreate` whose status is `OK`, started by `createdBy`, inside the
+window, with no `vzcreate`, `vzrestore`, `vzdestroy`, `vzmigrate`, `qmcreate`, `qmrestore`,
+`qmdestroy` or `qmigrate` of the VMID starting after it. It reads that task's log
 (`GET /nodes/{node}/tasks/{upid}/log`), and adds:
 
 ```json
-{ "hostKeys": ["rsa SHA256:…", "ed25519 SHA256:…"], "hostKeysTask": "UPID:korriban:…:vzcreate:320:root@pam:" }
+{ "hostKeys": ["rsa SHA256:…", "ed25519 SHA256:…"], "hostKeysTask": "UPID:korriban:…:vzcreate:320:octopushy@pve!writer:" }
 ```
 
-It fails, with the other outputs still set, when the task cannot be listed or read, when
-there is none, or when its log shows no key. Proxmox lists a task another user or token
-started only to a token with `Sys.Audit` on `/nodes/{node}`.
+It fails, with the other outputs still set, when the history or the log cannot be read, when no
+task or more than one qualifies, when a later task changed the VMID, or when the log shows no
+key. A `hostKeys` that is not this object fails the input. Proxmox lists a task another user or
+token started only to a token with `Sys.Audit` on `/nodes/{node}`.
 
 ### `verify-absent`
 

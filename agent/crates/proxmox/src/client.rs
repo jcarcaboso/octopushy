@@ -324,21 +324,30 @@ impl Client {
         }
     }
 
-    /// `GET /nodes/{node}/tasks`: the finished and running tasks of one guest, of one type
-    /// (`vzcreate` for a container's creation). Proxmox lists the tasks of another user or token
-    /// only to a token with `Sys.Audit` on `/nodes/{node}`.
-    pub async fn guest_tasks(&self, node: &str, vmid: u32, kind: &str) -> Result<Vec<Task>> {
+    /// `GET /nodes/{node}/tasks`: the finished and running tasks of one VMID, of every type.
+    /// Proxmox lists the tasks of another user or token only to a token with `Sys.Audit` on
+    /// `/nodes/{node}`.
+    pub async fn guest_tasks(&self, node: &str, vmid: u32) -> Result<Vec<Task>> {
         let id = vmid.to_string();
         self.get(
             &["nodes", node, "tasks"],
-            &[
-                ("vmid", &id),
-                ("typefilter", kind),
-                ("source", "all"),
-                ("limit", "500"),
-            ],
+            &[("vmid", &id), ("source", "all"), ("limit", "1000")],
         )
         .await
+    }
+
+    /// `GET /nodes/{node}/time`: the node's clock, in Unix seconds, which its tasks' times are in.
+    pub async fn node_time(&self, node: &str) -> Result<u64> {
+        #[derive(serde::Deserialize)]
+        struct Time {
+            #[serde(deserialize_with = "crate::de::opt_u64")]
+            time: Option<u64>,
+        }
+        let time: Time = self.get(&["nodes", node, "time"], &[]).await?;
+        time.time.ok_or_else(|| Error::Decode {
+            path: format!("/nodes/{node}/time"),
+            message: "no time".into(),
+        })
     }
 
     /// `GET /nodes/{node}/tasks/{upid}/log`: every line of a task's log, in order.

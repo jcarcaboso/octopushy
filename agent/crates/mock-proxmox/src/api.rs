@@ -45,6 +45,7 @@ pub fn router(state: SharedFixture) -> Router {
         .route("/nodes/{node}/lxc/{vmid}/interfaces", get(ct_interfaces))
         .route("/nodes/{node}/tasks", get(tasks))
         .route("/nodes/{node}/tasks/{upid}/log", get(task_log))
+        .route("/nodes/{node}/time", get(node_time))
         .route("/access/permissions", get(permissions))
         .route("/access/acl", get(acl))
         .fallback(|| async { pve_error(StatusCode::NOT_IMPLEMENTED, "Method not implemented") })
@@ -476,41 +477,34 @@ async fn ct_interfaces(
     data(Value::Array(interfaces))
 }
 
-/// The UPID of a container's create task in the mock: one per container that has a create log.
-fn create_upid(ct: &FixtureVm) -> String {
-    format!(
-        "UPID:{}:0000A0B1:0012C3D4:6720A000:vzcreate:{}:root@pam:",
-        ct.node, ct.vmid
-    )
-}
-
-/// `GET /nodes/{node}/tasks`: the create task of each container with a create log, filtered by
-/// `vmid` and `typefilter` as Proxmox filters them.
+/// `GET /nodes/{node}/tasks`: the node's history, newest first, filtered by `vmid` and
+/// `typefilter` as Proxmox filters them.
 async fn tasks(
     State(state): State<SharedFixture>,
     Path(node): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let f = state.lock().unwrap();
-    let listed: Vec<Value> = f
-        .vms
+    let mut listed: Vec<&crate::fixture::FixtureTask> = f
+        .tasks
         .iter()
-        .filter(|vm| vm.node == node && vm.kind == "lxc" && vm.create_log.is_some())
-        .filter(|vm| {
-            query
-                .get("vmid")
-                .is_none_or(|id| *id == vm.vmid.to_string())
-        })
-        .filter(|_| query.get("typefilter").is_none_or(|t| t == "vzcreate"))
-        .map(|ct| {
-            json!({
-                "upid": create_upid(ct), "node": ct.node, "pid": 41137, "pstart": 1230804,
-                "starttime": 1_730_191_360u64, "endtime": 1_730_191_372u64, "type": "vzcreate",
-                "id": ct.vmid.to_string(), "user": "root@pam", "status": "OK",
-            })
-        })
+        .filter(|t| t.node == node)
+        .filter(|t| query.get("vmid").is_none_or(|id| *id == t.id))
+        .filter(|t| query.get("typefilter").is_none_or(|k| *k == t.kind))
         .collect();
-    data(Value::Array(listed))
+    listed.sort_by_key(|t| std::cmp::Reverse(t.starttime));
+    data(Value::Array(
+        listed
+            .iter()
+            .map(|t| {
+                json!({
+                    "upid": t.upid(), "node": t.node, "pid": 41137, "pstart": 1230804,
+                    "starttime": t.starttime, "endtime": t.endtime, "type": t.kind,
+                    "id": t.id, "user": t.user, "status": t.status,
+                })
+            })
+            .collect(),
+    ))
 }
 
 async fn task_log(
@@ -518,21 +512,31 @@ async fn task_log(
     Path((node, upid)): Path<(String, String)>,
 ) -> Response {
     let f = state.lock().unwrap();
-    let Some(ct) = f
-        .vms
-        .iter()
-        .find(|vm| vm.node == node && vm.create_log.is_some() && create_upid(vm) == upid)
-    else {
+    let Some(task) = f.tasks.iter().find(|t| t.node == node && t.upid() == upid) else {
         return pve_error(StatusCode::INTERNAL_SERVER_ERROR, "no such task");
     };
-    let lines: Vec<Value> = ct
-        .create_log
+    let lines: Vec<Value> = task
+        .log
         .iter()
-        .flatten()
         .enumerate()
         .map(|(i, t)| json!({ "n": i + 1, "t": t }))
         .collect();
     data(Value::Array(lines))
+}
+
+/// `GET /nodes/{node}/time`: the node's clock, in Unix seconds.
+async fn node_time(State(state): State<SharedFixture>, Path(node): Path<String>) -> Response {
+    let f = state.lock().unwrap();
+    if !node_online(&f, &node) {
+        return pve_error(StatusCode::from_u16(595).unwrap(), "Connection refused");
+    }
+    let now = f.time.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    });
+    data(json!({ "time": now, "localtime": now, "timezone": "UTC" }))
 }
 
 async fn permissions(
