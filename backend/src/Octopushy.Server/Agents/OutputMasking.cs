@@ -12,7 +12,7 @@ namespace Octopushy.Server.Agents;
 /// output is withheld instead: in a property name, as the text of a number or a literal, as a whole JSON value, or across
 /// tokens in a text the output is kept or shown as.
 /// </summary>
-public static class OutputMasking
+public static partial class OutputMasking
 {
     /// <summary>Why outputs were withheld because of where a secret is in them.</summary>
     public const string SecretOutsideStrings =
@@ -44,36 +44,25 @@ public static class OutputMasking
         }
     }
 
+    /// <summary>Why outputs were withheld because a number in them is not written as the database keeps it.</summary>
+    public const string NumberForm =
+        "[withheld: a number in what this attempt returned is not written as the database keeps it, with an exponent or as negative zero, so Octopushy cannot check it for secrets and does not keep it]";
+
     /// <summary>
     /// The output with its strings masked, or false with the reason it is withheld whole. The work is linear in the size of
-    /// the output for each secret.
+    /// the output for each secret, apart from ordering each object's keys as jsonb does.
     /// </summary>
     public static bool TryMask(string json, Secrets secrets, out JsonNode? masked, out string? withheld)
     {
         masked = null;
-        withheld = null;
         try
         {
             var root = JsonNode.Parse(json);
             if (root is JsonValue { } value && value.GetValueKind() == JsonValueKind.String)
                 root = JsonValue.Create(Replace(secrets.Values, value.GetValue<string>()));
-            else if (!Walk(root, secrets))
-            {
-                withheld = SecretOutsideStrings;
+            withheld = Walk(root, secrets, mask: true) ?? AcrossTokens(root, secrets);
+            if (withheld is not null)
                 return false;
-            }
-
-            // Across tokens: a secret that spans a name and its value, two values, or a value and the punctuation between, in
-            // any text this output is kept or shown as.
-            foreach (var text in Texts(root))
-            {
-                if (secrets.Values.Any(s => text.Contains(s, StringComparison.Ordinal)))
-                {
-                    withheld = SecretOutsideStrings;
-                    return false;
-                }
-            }
-
             masked = root;
             return true;
         }
@@ -85,52 +74,104 @@ public static class OutputMasking
         }
     }
 
-    /// <summary>Masks every string below <paramref name="node"/> in place; false when a secret is anywhere else.</summary>
-    private static bool Walk(JsonNode? node, Secrets secrets)
+    /// <summary>
+    /// Why a document assembled from masked outputs may not be kept or shown, or null when it may: the same rules as for
+    /// outputs, and a secret in a string is a reason too, since what was added after masking is not masked. Nothing is
+    /// rewritten, so a digest or an identity in it is never changed: the document is kept as it is, or not at all.
+    /// </summary>
+    public static string? Check(JsonNode? document, Secrets secrets)
+    {
+        try
+        {
+            return Walk(document, secrets, mask: false) ?? AcrossTokens(document, secrets);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            return NotJson;
+        }
+    }
+
+    /// <summary>A secret that spans a name and its value, two values, or punctuation, in any text the document is kept or shown as.</summary>
+    private static string? AcrossTokens(JsonNode? root, Secrets secrets) =>
+        secrets.Values.Length > 0 && Texts(root).Any(text => secrets.Values.Any(s => text.Contains(s, StringComparison.Ordinal)))
+            ? SecretOutsideStrings
+            : null;
+
+    /// <summary>
+    /// Masks every string below <paramref name="node"/> in place, or with <paramref name="mask"/> false refuses one that holds
+    /// a secret; returns why the document is withheld when a secret is anywhere else.
+    /// </summary>
+    private static string? Walk(JsonNode? node, Secrets secrets, bool mask)
     {
         switch (node)
         {
             case null:
-                return !IsSecretLiteral("null", secrets);
+                return IsSecretLiteral("null", secrets) ? SecretOutsideStrings : null;
             case JsonObject o:
                 if (IsSecretDocument(o, secrets))
-                    return false;
+                    return SecretOutsideStrings;
                 foreach (var (name, child) in o.ToList())
                 {
-                    if (secrets.Values.Any(s => name.Contains(s, StringComparison.Ordinal)))
-                        return false;
+                    if (Holds(name, secrets))
+                        return SecretOutsideStrings;
                     if (child is JsonValue v && v.GetValueKind() == JsonValueKind.String)
-                        o[name] = JsonValue.Create(Replace(secrets.Values, v.GetValue<string>()));
-                    else if (!Walk(child, secrets))
-                        return false;
+                    {
+                        if (!mask && Holds(v.GetValue<string>(), secrets))
+                            return SecretOutsideStrings;
+                        if (mask)
+                            o[name] = JsonValue.Create(Replace(secrets.Values, v.GetValue<string>()));
+                    }
+                    else if (Walk(child, secrets, mask) is { } why)
+                        return why;
                 }
 
-                return true;
+                return null;
             case JsonArray a:
                 if (IsSecretDocument(a, secrets))
-                    return false;
+                    return SecretOutsideStrings;
                 for (var i = 0; i < a.Count; i++)
                 {
                     if (a[i] is JsonValue v && v.GetValueKind() == JsonValueKind.String)
-                        a[i] = JsonValue.Create(Replace(secrets.Values, v.GetValue<string>()));
-                    else if (!Walk(a[i], secrets))
-                        return false;
+                    {
+                        if (!mask && Holds(v.GetValue<string>(), secrets))
+                            return SecretOutsideStrings;
+                        if (mask)
+                            a[i] = JsonValue.Create(Replace(secrets.Values, v.GetValue<string>()));
+                    }
+                    else if (Walk(a[i], secrets, mask) is { } why)
+                        return why;
                 }
 
-                return true;
+                return null;
+            case JsonValue v when v.GetValueKind() == JsonValueKind.String:
+                return !mask && Holds(v.GetValue<string>(), secrets) ? SecretOutsideStrings : null;
             default:
-                // A number, true or false: as it was written, and as a database normalizes a number.
+                // A number, true or false. A number is checked as the database prints it, which is as it is written only
+                // in the plain form: anything else is not kept, rather than predicted.
                 var text = node.ToJsonString();
-                return !IsSecretLiteral(text, secrets) && !(Normalized(text) is { } number && IsSecretLiteral(number, secrets));
+                if (node.GetValueKind() == JsonValueKind.Number && secrets.Values.Length > 0 && !IsPlainNumber(text))
+                    return NumberForm;
+                return IsSecretLiteral(text, secrets) ? SecretOutsideStrings : null;
         }
     }
+
+    private static bool Holds(string text, Secrets secrets) => secrets.Values.Any(s => text.Contains(s, StringComparison.Ordinal));
 
     private static bool IsSecretLiteral(string text, Secrets secrets) => secrets.Values.Contains(text, StringComparer.Ordinal);
 
     private static bool IsSecretDocument(JsonNode node, Secrets secrets) => secrets.Documents.Any(d => JsonNode.DeepEquals(node, d));
 
-    private static string? Normalized(string number) =>
-        decimal.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value.ToString(CultureInfo.InvariantCulture) : null;
+    /// <summary>
+    /// Whether PostgreSQL prints a JSON number exactly as written: digits with an optional fraction, no exponent, and not a
+    /// negative zero, which it prints without its sign.
+    /// </summary>
+    private static bool IsPlainNumber(string text) => PlainNumber().IsMatch(text) && !NegativeZero().IsMatch(text);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$")]
+    private static partial System.Text.RegularExpressions.Regex PlainNumber();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^-0(\.0+)?$")]
+    private static partial System.Text.RegularExpressions.Regex NegativeZero();
 
     /// <summary>The texts an output is kept or shown as: compact as this server writes it, with and without escaping, and jsonb.</summary>
     private static IEnumerable<string> Texts(JsonNode? root)
@@ -181,8 +222,8 @@ public static class OutputMasking
                 Quote(v.GetValue<string>(), text);
                 break;
             default:
-                var raw = node.ToJsonString();
-                text.Append(Normalized(raw) ?? raw);
+                // Only plain numbers are kept, and jsonb prints those as written.
+                text.Append(node.ToJsonString());
                 break;
         }
     }

@@ -15,8 +15,9 @@ public sealed class AttemptMasks(IServiceScopeFactory scopes, AttemptLogStore lo
 {
     /// <summary>
     /// Makes sure the attempt's masks are known, and holds them until the result is disposed: the caller masks under it. Masks
-    /// read back for an attempt that has finished, or is gone, are for this caller and any that hold it at the same time,
-    /// and are forgotten with the gate when the last of them lets go; an attempt that still runs keeps them until its close.
+    /// read back from the store are for this caller and any that hold it at the same time, and are forgotten with the gate
+    /// when the last of them lets go, whether the attempt still runs or not: what it was is not read, so a close that comes
+    /// while they are read cannot leave them behind. Only masks registered when the attempt was handed out last until its close.
     /// </summary>
     public async Task<IDisposable> EnsureAsync(Guid attemptId, CancellationToken cancellationToken)
     {
@@ -28,7 +29,6 @@ public sealed class AttemptMasks(IServiceScopeFactory scopes, AttemptLogStore lo
             await using var scope = scopes.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
-            var status = await db.Attempts.AsNoTracking().Where(a => a.Id == attemptId).Select(a => a.Status).FirstOrDefaultAsync(cancellationToken);
             var released = await db.SecretResolutions.AsNoTracking().Where(r => r.AttemptId == attemptId)
                 .Select(r => new { r.Key, r.Version }).Distinct().ToListAsync(cancellationToken);
             var values = new List<string>();
@@ -43,7 +43,7 @@ public sealed class AttemptMasks(IServiceScopeFactory scopes, AttemptLogStore lo
 
             if (!complete)
                 logger.LogWarning("Attempt {Attempt} reported after its secrets were forgotten, and some could not be read back; its diagnostics are withheld.", attemptId);
-            logs.RegisterSecrets(attemptId, values, complete, scoped: status is null || AttemptStatuses.IsTerminal(status));
+            logs.RegisterRecovered(attemptId, values, complete);
             return held;
         }
         catch

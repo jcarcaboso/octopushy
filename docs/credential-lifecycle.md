@@ -135,12 +135,27 @@ rewritten: if a secret is in a property name, is the text of a number, `true`,
 `false` or `null`, is a whole JSON object or array in the output, or runs across
 tokens in the text the output is kept or shown as, compact or as PostgreSQL's
 jsonb prints it, the whole output is withheld. Outputs that are not JSON are
-withheld too. An attempt whose outputs are withheld is settled without them:
+withheld too, and so are outputs, of an attempt that holds secrets, with a number
+written with an exponent or as negative zero: PostgreSQL would store such a
+number in another form, so only plain numbers, kept exactly as written, are
+checked and kept.
+
+What is stored is checked as it is stored, not only as the attempt reported it:
+the outputs with what the server adds to them, such as a plan's digest; an
+observation's data, with the connection it went through; and a pipeline's
+approval document, against the secrets of every attempt it is built from. Each
+is checked whole and kept as it is or not at all, so a digest or an identity in
+it is never rewritten. An attempt whose outputs are withheld is settled without them:
 failed, or uncertain if its work may have changed something, with the reason as
 its error. What reads outputs treats them as unknown, never as empty: a withheld
 observation leaves the installation's previous observation as the evidence the
 VMID collision check uses, and a VMID an observation shows but that cannot be
-read counts as possibly colliding.
+read, null included, counts as possibly colliding.
+
+A very short secret, such as `true`, `null` or `name`, matches ordinary output:
+every observation of an installation whose read-only token is such a value is
+withheld, and its observation error says so. Do not use short or common words as
+credential values.
 
 A key that was ever released to Proxmox or OpenTofu work stays refused to
 playbooks, set again or not. The key's last version number is kept, in

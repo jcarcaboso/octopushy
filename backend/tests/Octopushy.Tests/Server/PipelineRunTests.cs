@@ -154,6 +154,43 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_approval_document_that_holds_a_secret_of_an_attempt_it_is_built_from_is_not_kept()
+    {
+        var test = Repository.Repository();
+        test.Write(PipelineFile, Repository.Service.Replace("workflow:", "policy: { approval: manual }\nworkflow:"));
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+
+        // The document joins what each stage reported with fields of its own. Here what the plan's attempt was given
+        // appears only across those fields, never in what it reported.
+        const string Secret = "kind\":\"opentofu\",\"root";
+        await server.SetSecretAsync("test/pipeline-secret", Secret);
+        var planned = await agent.NextAsync("preview");
+        await server.WithDbAsync(async db =>
+        {
+            db.SecretResolutions.Add(new SecretResolution
+            {
+                Key = "test/pipeline-secret", Version = 1, AttemptId = Guid.Parse(planned.AttemptId), AgentId = agent.Id, ResolvedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        });
+        await agent.ReportAsync(planned, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var (outputs, artifact) = Preview();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, outputs, artifacts: artifact);
+        await server.TickAsync();
+
+        var approval = await ApprovalOfAsync(server);
+        Assert.Equal(StepStatuses.Failed, approval.Status);
+        Assert.Equal(OutputMasking.SecretOutsideStrings, approval.Detail);
+        Assert.Null(approval.Document);
+        Assert.Null(approval.PlanSha256);
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
+        Assert.False(server.Services.GetRequiredService<AttemptLogStore>().Holds(Guid.Parse(planned.AttemptId)));
+    }
+
+    [Fact]
     public async Task Every_stage_is_planned_approved_once_then_applied_in_order()
     {
         var test = Repository.Repository();

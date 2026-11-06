@@ -65,7 +65,6 @@ public class AttemptMaskingTests(PostgresFixture postgres)
         { "first-secret", """{"first-secret": 1}""", "a property name" },
         { "first-secret", """{"a": {"x-first-secret-y": 1}}""", "part of a nested property name" },
         { "123456789", """{"port": 123456789}""", "a number" },
-        { "1234", """{"vmid": 1.234e3}""", "a number as a database prints it" },
         { "true", """{"a": [1, {"hasChanges": true}]}""", "true, nested" },
         { "false", """[false]""", "false, in an array" },
         { "null", """{"v": null, "s": "null"}""", "null, nested" },
@@ -90,6 +89,155 @@ public class AttemptMaskingTests(PostgresFixture postgres)
         Assert.False(logs.TryMaskOutputs(attempt, outputs, out var masked, out var withheld), why);
         Assert.Null(masked);
         Assert.Equal(OutputMasking.SecretOutsideStrings, withheld);
+    }
+
+    [Theory]
+    [InlineData("""{"v": 1.234e30}""")]
+    [InlineData("""{"v": 1e30}""")]
+    [InlineData("""{"v": 1e-30}""")]
+    [InlineData("""{"v": 1E5}""")]
+    [InlineData("""{"a": [{"v": 2.5e+3}]}""")]
+    [InlineData("""{"v": -0}""")]
+    [InlineData("""{"v": -0.00}""")]
+    [InlineData("""[1, 1e2]""")]
+    public async Task Outputs_with_a_number_not_written_as_the_database_keeps_it_are_withheld(string outputs)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        var attempt = Guid.CreateVersion7();
+        logs.RegisterSecrets(attempt, ["1234"]);
+        Assert.False(logs.TryMaskOutputs(attempt, outputs, out _, out var withheld));
+        Assert.Equal(OutputMasking.NumberForm, withheld);
+
+        // Plain numbers are kept as they are written, and an attempt that holds no secret keeps any number.
+        Assert.True(logs.TryMaskOutputs(attempt, """{"cpu": 0.0123, "n": 1.50, "neg": -0.5, "zero": 0, "big": 98765098765098765098765}""", out var plain, out _));
+        Assert.Equal("""{"cpu":0.0123,"n":1.50,"neg":-0.5,"zero":0,"big":98765098765098765098765}""", plain!.ToJsonString());
+        var none = Guid.CreateVersion7();
+        logs.RegisterSecrets(none, []);
+        Assert.True(logs.TryMaskOutputs(none, outputs, out _, out _));
+    }
+
+    [Fact]
+    public async Task A_number_postgres_would_expand_never_reaches_the_database_and_plain_ones_are_stored_as_written()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        using var client = await SignInAsync(server);
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "an ordinary writer credential");
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "1234");
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        var installation = await server.ResourceAsync("home/korriban");
+
+        var plain = await agent.NextAsync("observe");
+        Assert.True(await agent.ReportAsync(plain, Outcome.Succeeded, JsonNode.Parse("""{"cpu": 0.0123, "n": 1.50}""")!.AsObject()));
+        var stored = await server.QueryAsync(db => db.Observations.AsNoTracking().SingleAsync(o => o.AttemptId == Guid.Parse(plain.AttemptId)));
+        Assert.Contains("\"n\": 1.50", stored.Data);
+        Assert.Contains("\"cpu\": 0.0123", stored.Data);
+
+        await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
+        var expanded = await agent.NextAsync("observe");
+        Assert.True(await agent.ReportAsync(expanded, Outcome.Succeeded, JsonNode.Parse("""{"v": 1.234e30, "nested": [1e30]}""")!.AsObject()));
+        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(expanded.AttemptId)));
+        Assert.Equal((AttemptStatuses.Failed, OutputMasking.NumberForm), (attempt.Status, attempt.Error));
+        Assert.Null(attempt.Outputs);
+        Assert.False(await server.QueryAsync(db => db.Observations.AnyAsync(o => o.AttemptId == attempt.Id)));
+        Assert.DoesNotContain(await server.QueryAsync(db => db.Observations.AsNoTracking().Select(o => o.Data).ToListAsync()), d => d.Contains("1234"));
+    }
+
+    [Fact]
+    public async Task What_is_added_to_outputs_after_masking_is_checked_with_them()
+    {
+        // A plan's digest is added to its outputs once they are masked; here a secret is part of it.
+        var digest = ArtifactStore.Sha256(FakeAgent.PlanArtifact().Content.Span);
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        using var client = await SignInAsync(server);
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "an ordinary writer credential");
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", digest[..12]);
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        var plan = await agent.NextAsync("preview");
+        Assert.True(await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact()));
+        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(plan.AttemptId)));
+        Assert.Equal((AttemptStatuses.Failed, OutputMasking.SecretOutsideStrings), (attempt.Status, attempt.Error));
+        Assert.Null(attempt.Outputs);
+        var run = await server.LatestRunAsync("home/korriban/krb-app-01", Operations.Provision);
+        Assert.Null(run.Steps.Single(s => s.Name == StepNames.Plan).Outputs);
+        Assert.DoesNotContain(digest[..12], await client.GetStringAsync($"/api/runs/{run.Id}"));
+        // The digest itself is kept as it was: the artifact's record is not rewritten.
+        Assert.Equal(digest, await server.QueryAsync(db => db.Artifacts.Where(a => a.AttemptId == attempt.Id).Select(a => a.Sha256).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task An_observation_whose_assembled_data_holds_a_secret_is_withheld()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        using var client = await SignInAsync(server);
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "an ordinary writer credential");
+        // The observation reports nothing; the data kept is given a property of this name.
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "connection");
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        var observation = await agent.NextAsync("observe");
+        Assert.True(await agent.ReportAsync(observation, Outcome.Succeeded, new JsonObject()));
+        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(observation.AttemptId)));
+        Assert.Equal((AttemptStatuses.Failed, OutputMasking.SecretOutsideStrings), (attempt.Status, attempt.Error));
+        Assert.False(await server.QueryAsync(db => db.Observations.AnyAsync(o => o.AttemptId == attempt.Id)));
+        Assert.Equal(OutputMasking.SecretOutsideStrings, (await server.ResourceAsync("home/korriban")).ObserveError);
+    }
+
+    [Fact]
+    public async Task Masks_read_back_while_a_result_closes_the_attempt_are_not_left_behind()
+    {
+        var pause = new PauseOnce("secret_resolutions");
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: services => services.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(pause)));
+        await server.SyncAndTrustAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        var observation = await agent.NextAsync("observe");
+        var id = Guid.Parse(observation.AttemptId);
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        var masks = server.Services.GetRequiredService<AttemptMasks>();
+        // As after a restart: the masks the attempt was handed out with are forgotten while it still runs.
+        await logs.CloseAsync(id, CancellationToken.None);
+        Assert.False(logs.Holds(id));
+
+        // A late log starts reading them back, from an attempt that still runs, and waits before its query.
+        pause.Arm();
+        var reading = Task.Run(() => masks.EnsureAsync(id, CancellationToken.None));
+        Assert.True(await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        // The result arrives meanwhile, settles the attempt and closes it.
+        Assert.True(await agent.ReportAsync(observation, Outcome.Succeeded, new JsonObject()));
+        Assert.Equal(AttemptStatuses.Succeeded, await server.QueryAsync(db => db.Attempts.Where(a => a.Id == id).Select(a => a.Status).SingleAsync()));
+
+        // The read finishes from its stale snapshot: what it registers is only for its holder.
+        pause.Release();
+        var held = await reading.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(logs.Knows(id));
+        held.Dispose();
+        Assert.False(logs.Knows(id));
+        Assert.False(logs.Holds(id));
+    }
+
+    [Fact]
+    public async Task A_replay_of_a_result_whose_outputs_were_withheld_changes_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        using var client = await SignInAsync(server);
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "an ordinary reader credential");
+        await server.SetSecretAsync("proxmox/korriban/privileged-token", "true");
+        await server.SyncAndTrustAsync(client);
+        var agent = await server.ConnectAgentAsync("home");
+        Assert.True(await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact()));
+        var apply = await agent.NextAsync("apply");
+        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
+        var id = Guid.Parse(apply.AttemptId);
+        var first = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
+        Assert.Equal(AttemptStatuses.Uncertain, first.Status);
+        Assert.False(first.LateResult);
+
+        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
+        var replayed = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
+        Assert.Equal((first.Status, first.FinishedAt, first.LateResult, first.Error), (replayed.Status, replayed.FinishedAt, replayed.LateResult, replayed.Error));
     }
 
     [Fact]
@@ -293,6 +441,18 @@ public class AttemptMaskingTests(PostgresFixture postgres)
             await db.SaveChangesAsync();
         });
         Assert.NotNull(await server.QueryAsync(db => SafetyBoundary.VmidCollisionAsync(db, guest, "home/korriban", 311, CancellationToken.None)));
+
+        // Nor is one that is there as null.
+        await server.WithDbAsync(async db =>
+        {
+            db.Observations.Add(new Observation
+            {
+                Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow.AddMinutes(2),
+                Data = """{"guests": [{"vmid": null, "host": "korriban"}]}""",
+            });
+            await db.SaveChangesAsync();
+        });
+        Assert.NotNull(await server.QueryAsync(db => SafetyBoundary.VmidCollisionAsync(db, guest, "home/korriban", 312, CancellationToken.None)));
     }
 
     /// <summary>Every string in a JSON value, decoded: property names and values alike.</summary>
@@ -311,6 +471,32 @@ public class AttemptMaskingTests(PostgresFixture postgres)
         var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
         (await client.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long fixture password" })).EnsureSuccessStatusCode();
         return client;
+    }
+
+    /// <summary>Holds the first command that reads <paramref name="table"/> after <see cref="Arm"/> until <see cref="Release"/>.</summary>
+    private sealed class PauseOnce(string table) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        public TaskCompletionSource<bool> Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public void Release() => _release.TrySetResult();
+
+        public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader>> ReaderExecutingAsync(
+            System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains(table, StringComparison.Ordinal) && Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                Entered.TrySetResult(true);
+                await _release.Task;
+            }
+
+            return result;
+        }
     }
 
     /// <summary>One line, handed over only once the test lets the writer go: it holds the gate meanwhile.</summary>

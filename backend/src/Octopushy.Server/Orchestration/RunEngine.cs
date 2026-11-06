@@ -42,6 +42,7 @@ public sealed partial class RunEngine(
     IServiceScopeFactory scopes,
     AgentConnections connections,
     AttemptLogStore logs,
+    AttemptMasks masks,
     ArtifactStore artifacts,
     OrchestratorSignal signal,
     RevisionCache revisions,

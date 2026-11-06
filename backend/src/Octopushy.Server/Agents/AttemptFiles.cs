@@ -31,17 +31,22 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     /// <summary>
     /// Remembers the secret values sent with an attempt, so its logs and errors are masked here
     /// too, not only by the agent: each whole value, and each line of a multi-line one.
-    /// <paramref name="complete"/> is false when they were rebuilt after a restart and some could not be read back.
-    /// <paramref name="scoped"/> registers them only for those who hold the attempt now (<see cref="Hold"/>): they are
-    /// forgotten when the last of them lets go, as for an attempt that has finished and reports late.
+    /// <paramref name="complete"/> is false when some could not be read back.
     /// </summary>
-    public void RegisterSecrets(Guid attemptId, IEnumerable<string> values, bool complete = true, bool scoped = false)
-    {
-        var masks = values
-            .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 4).Prepend(v) : [v])
-            .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
-        _secrets[attemptId] = new Registration(OutputMasking.Secrets.Of(masks), complete, scoped);
-    }
+    public void RegisterSecrets(Guid attemptId, IEnumerable<string> values, bool complete = true) =>
+        _secrets[attemptId] = new Registration(OutputMasking.Secrets.Of(Masks(values)), complete, Scoped: false);
+
+    /// <summary>
+    /// Registers masks read back from the store, for those who hold the attempt now (<see cref="Hold"/>) only: they are
+    /// forgotten when the last of them lets go. Read back from a snapshot that may be stale by the time it is registered, they
+    /// never outlive their holders, and never replace a registration made meanwhile.
+    /// </summary>
+    public void RegisterRecovered(Guid attemptId, IEnumerable<string> values, bool complete) =>
+        _secrets.TryAdd(attemptId, new Registration(OutputMasking.Secrets.Of(Masks(values)), complete, Scoped: true));
+
+    private static string[] Masks(IEnumerable<string> values) => values
+        .SelectMany(v => v.Contains('\n') ? v.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length >= 4).Prepend(v) : [v])
+        .Where(v => v.Length >= 4).Distinct().OrderByDescending(v => v.Length).ToArray();
 
     /// <summary>Whether this process knows the attempt's secrets: it sent them, or rebuilt them since it started.</summary>
     public bool Knows(Guid attemptId) => _secrets.ContainsKey(attemptId);
@@ -94,6 +99,13 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
         return OutputMasking.TryMask(json, secrets, out masked, out withheld);
     }
+
+    /// <summary>
+    /// Why a document assembled from this attempt's outputs, after they were masked, may not be kept or shown, or null when it
+    /// may: see <see cref="OutputMasking.Check"/>. Unless every secret the attempt holds is known, it may not.
+    /// </summary>
+    public string? Withholds(Guid attemptId, JsonNode? document) =>
+        Known(attemptId) is { } secrets ? OutputMasking.Check(document, secrets) : Withheld;
 
     /// <summary>Appends the lines not stored yet; returns the number of lines stored in total.</summary>
     public Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken) =>

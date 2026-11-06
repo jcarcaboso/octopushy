@@ -15,6 +15,41 @@ public sealed partial class RunEngine
     /// what it means elsewhere: a workflow that declares a stage destructive, and a plan that deletes.
     /// A plan's replace counts too: a provision run holds a replaced VM by another rule, and a stage has none.
     /// </summary>
+    /// <summary>Why the pipeline's approval document may not be kept, or null: see <see cref="OutputMasking.Check"/>.</summary>
+    private async Task<string?> PipelineDocumentWithheldAsync(OctopushyDb db, Run run, RunContext context, PipelineDocument document,
+        CancellationToken cancellationToken)
+    {
+        var steps = context.Stages!
+            .Select(stage => run.Steps.Single(s => s.Stage == stage.Name && s.Name is StepNames.Plan or StepNames.Preview)).ToList();
+        var stepIds = steps.Select(s => s.Id).ToList();
+        var succeeded = await db.Attempts.AsNoTracking()
+            .Where(a => a.StepId != null && stepIds.Contains(a.StepId.Value) && a.Status == AttemptStatuses.Succeeded)
+            .Select(a => new { StepId = a.StepId!.Value, a.Id, a.Number }).ToListAsync(cancellationToken);
+        var sources = new List<Guid>();
+        foreach (var step in steps)
+        {
+            // Outputs with no attempt they came from could hold anything: nothing says what to check them with.
+            if (succeeded.Where(a => a.StepId == step.Id).OrderByDescending(a => a.Number).FirstOrDefault() is { } source)
+                sources.Add(source.Id);
+            else if (step.Outputs is not null)
+                return Agents.AttemptLogStore.Withheld;
+        }
+
+        var held = new List<IDisposable>();
+        try
+        {
+            foreach (var source in sources)
+                held.Add(await masks.EnsureAsync(source, cancellationToken));
+            var node = JsonNode.Parse(document.Text);
+            return sources.Select(source => logs.Withholds(source, node)).FirstOrDefault(reason => reason is not null);
+        }
+        finally
+        {
+            foreach (var hold in held)
+                hold.Dispose();
+        }
+    }
+
     private async Task<bool> DecidePipelineApprovalAsync(OctopushyDb db, Run run, Step step, RunContext context, CancellationToken cancellationToken)
     {
         step.StartedAt ??= clock.GetUtcNow();
@@ -40,6 +75,16 @@ public sealed partial class RunEngine
             step.Status = StepStatuses.Failed;
             step.Detail = e.Message;
             Finish(run, RunStatuses.Failed, e.Message);
+            return false;
+        }
+
+        // Assembled from each stage's outputs, which were masked one by one: checked whole, with the masks of every attempt
+        // it is built from, and kept as it is or not at all, so its digest stays the digest of what is approved.
+        if (await PipelineDocumentWithheldAsync(db, run, context, document, cancellationToken) is { } withheld)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = withheld;
+            Finish(run, RunStatuses.Failed, withheld);
             return false;
         }
 

@@ -332,7 +332,9 @@ public sealed partial class RunEngine
                 return true;
             }
 
-            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult;
+            // Only an attempt whose lease ran out still waits for its result. One that is uncertain because of a result it
+            // reported, or what that result held, has had it: a replay of it changes nothing.
+            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && attempt.Error == LeaseExpired;
             if (AttemptStatuses.IsTerminal(attempt.Status) && !late)
             {
                 return true;
@@ -340,7 +342,7 @@ public sealed partial class RunEngine
 
             // What the attempt reports is masked with what it was sent, read back if this process does not know it, and held
             // until this result is handled.
-            using var masks = await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
+            using var held = await masks.EnsureAsync(attempt.Id, cancellationToken);
             JsonNode? outputs = null;
             string? outputsWithheld = null;
             if (!string.IsNullOrWhiteSpace(result.OutputsJson))
@@ -379,6 +381,15 @@ public sealed partial class RunEngine
                 }
             }
 
+            // What is kept is the outputs with what was added to them since they were masked, such as a plan's digest:
+            // checked whole, and withheld whole rather than changed.
+            if (outputs is not null && logs.Withholds(attempt.Id, outputs) is { } assembled)
+            {
+                outputs = null;
+                outputsWithheld = assembled;
+                logger.LogWarning("Attempt {Attempt} returned outputs that are not kept once assembled: {Reason}", attemptId, assembled);
+            }
+
             attempt.Status = result.Outcome switch
             {
                 Outcome.Succeeded => AttemptStatuses.Succeeded,
@@ -397,7 +408,6 @@ public sealed partial class RunEngine
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
-            await logs.CloseAsync(attempt.Id, cancellationToken);
 
             if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
                 && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu is not null
@@ -412,12 +422,15 @@ public sealed partial class RunEngine
 
             if (attempt.Step is null)
             {
+                // The observation's data is assembled from its outputs, and checked with its masks before they are forgotten.
                 await FinishObservationAsync(db, attempt, outputs, cancellationToken);
+                await logs.CloseAsync(attempt.Id, cancellationToken);
                 await db.SaveChangesAsync(cancellationToken);
                 signal.Wake();
                 return true;
             }
 
+            await logs.CloseAsync(attempt.Id, cancellationToken);
             var step = attempt.Step;
             var run = step.Run!;
             // A late result of an attempt that was already retried is recorded, but the retry decides the step.
@@ -495,6 +508,9 @@ public sealed partial class RunEngine
             return true;
         }, cancellationToken);
 
+    /// <summary>The error of an attempt whose lease ran out: the one kind of uncertain attempt that still takes a late result.</summary>
+    public const string LeaseExpired = "The agent stopped reporting before the attempt finished.";
+
     private async Task ExpireLeasesAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
@@ -504,7 +520,7 @@ public sealed partial class RunEngine
         foreach (var attempt in expired)
         {
             attempt.Status = AttemptStatuses.Uncertain;
-            attempt.Error = "The agent stopped reporting before the attempt finished.";
+            attempt.Error = LeaseExpired;
             attempt.FinishedAt = now;
             attempt.LeaseExpiresAt = null;
             logger.LogWarning("The lease of attempt {Attempt} expired.", attempt.Id);
