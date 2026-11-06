@@ -92,20 +92,17 @@ public class AttemptMaskingTests(PostgresFixture postgres)
     }
 
     [Theory]
-    [InlineData("""{"v": 1.234e30}""")]
-    [InlineData("""{"v": 1e30}""")]
-    [InlineData("""{"v": 1e-30}""")]
-    [InlineData("""{"v": 1E5}""")]
-    [InlineData("""{"a": [{"v": 2.5e+3}]}""")]
-    [InlineData("""{"v": -0}""")]
-    [InlineData("""{"v": -0.00}""")]
-    [InlineData("""[1, 1e2]""")]
-    public async Task Outputs_with_a_number_not_written_as_the_database_keeps_it_are_withheld(string outputs)
+    [InlineData("""{"v": 1e41}""")]
+    [InlineData("""{"v": 1e-41}""")]
+    [InlineData("""{"v": 1.23456789012345678901234567890123456789012e2}""")]
+    [InlineData("""{"a": [{"v": 2.5e+100}]}""")]
+    [InlineData("""[1, 1e999999]""")]
+    public async Task Outputs_with_a_number_too_long_to_write_as_the_database_keeps_it_are_withheld(string outputs)
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         var logs = server.Services.GetRequiredService<AttemptLogStore>();
         var attempt = Guid.CreateVersion7();
-        logs.RegisterSecrets(attempt, ["1234"]);
+        logs.RegisterSecrets(attempt, ["unrelated-secret"]);
         Assert.False(logs.TryMaskOutputs(attempt, outputs, out _, out var withheld));
         Assert.Equal(OutputMasking.NumberForm, withheld);
 
@@ -118,7 +115,29 @@ public class AttemptMaskingTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_number_postgres_would_expand_never_reaches_the_database_and_plain_ones_are_stored_as_written()
+    public async Task A_number_is_rewritten_exactly_as_postgres_stores_it_and_then_checked()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        string[] numbers = ["4.2e-7", "1.50e1", "1e30", "1.234e30", "1e-30", "2.5e+3", "-0", "-0.00", "-0e5", "0e5", "1.250e-2", "0.5e1",
+            "-1.5E-3", "123.456e-1", "9.99e40", "1e-40", "1.234567890123456789012345678901234567890e0"];
+        foreach (var number in numbers)
+        {
+            var stored = await server.QueryAsync(db => db.Database.SqlQuery<string>($"SELECT ('[' || {number} || ']')::jsonb::text AS \"Value\"").SingleAsync());
+            Assert.Equal(stored, $"[{OutputMasking.PlainForm(number)}]");
+        }
+
+        // Rewritten before it is checked: the secret is found in what would be stored.
+        var logs = server.Services.GetRequiredService<AttemptLogStore>();
+        var attempt = Guid.CreateVersion7();
+        logs.RegisterSecrets(attempt, ["1234"]);
+        Assert.False(logs.TryMaskOutputs(attempt, """{"v": 1.234e30}""", out _, out var withheld));
+        Assert.Equal(OutputMasking.SecretOutsideStrings, withheld);
+        Assert.True(logs.TryMaskOutputs(attempt, """{"cpu": 4.2e-7, "s": 1.50e1, "z": -0.0}""", out var masked, out _));
+        Assert.Equal("""{"cpu":0.00000042,"s":15.0,"z":0.0}""", masked!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task An_older_agents_small_float_is_kept_as_postgres_stores_it_and_an_unbounded_number_is_withheld()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
         using var client = await SignInAsync(server);
@@ -128,19 +147,29 @@ public class AttemptMaskingTests(PostgresFixture postgres)
         var agent = await server.ConnectAgentAsync("home");
         var installation = await server.ResourceAsync("home/korriban");
 
-        var plain = await agent.NextAsync("observe");
-        Assert.True(await agent.ReportAsync(plain, Outcome.Succeeded, JsonNode.Parse("""{"cpu": 0.0123, "n": 1.50}""")!.AsObject()));
-        var stored = await server.QueryAsync(db => db.Observations.AsNoTracking().SingleAsync(o => o.AttemptId == Guid.Parse(plain.AttemptId)));
+        // As an agent before 0.6.2 writes a nearly idle host's load.
+        var older = await agent.NextAsync("observe");
+        Assert.True(await agent.ReportAsync(older, Outcome.Succeeded,
+            JsonNode.Parse("""{"hosts": [{"name": "korriban", "online": true, "cpu": 4.2e-7}], "ratio": 1.50e1, "n": 1.50}""")!.AsObject()));
+        var kept = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(older.AttemptId)));
+        Assert.Equal(AttemptStatuses.Succeeded, kept.Status);
+        var stored = await server.QueryAsync(db => db.Observations.AsNoTracking().SingleAsync(o => o.AttemptId == kept.Id));
+        Assert.Contains("\"cpu\": 0.00000042", stored.Data);
+        Assert.Contains("\"ratio\": 15.0", stored.Data);
         Assert.Contains("\"n\": 1.50", stored.Data);
-        Assert.Contains("\"cpu\": 0.0123", stored.Data);
+        Assert.Null((await server.ResourceAsync("home/korriban")).ObserveError);
 
-        await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
-        var expanded = await agent.NextAsync("observe");
-        Assert.True(await agent.ReportAsync(expanded, Outcome.Succeeded, JsonNode.Parse("""{"v": 1.234e30, "nested": [1e30]}""")!.AsObject()));
-        var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(expanded.AttemptId)));
-        Assert.Equal((AttemptStatuses.Failed, OutputMasking.NumberForm), (attempt.Status, attempt.Error));
-        Assert.Null(attempt.Outputs);
-        Assert.False(await server.QueryAsync(db => db.Observations.AnyAsync(o => o.AttemptId == attempt.Id)));
+        // One that cannot be written out briefly is withheld, as is one that would store the secret.
+        foreach (var (outputs, reason) in new[] { ("""{"v": 1e50}""", OutputMasking.NumberForm), ("""{"v": 1.234e30}""", OutputMasking.SecretOutsideStrings) })
+        {
+            await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
+            var observation = await agent.NextAsync("observe");
+            Assert.True(await agent.ReportAsync(observation, Outcome.Succeeded, JsonNode.Parse(outputs)!.AsObject()));
+            var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(observation.AttemptId)));
+            Assert.Equal((AttemptStatuses.Failed, reason), (attempt.Status, attempt.Error));
+            Assert.False(await server.QueryAsync(db => db.Observations.AnyAsync(o => o.AttemptId == attempt.Id)));
+        }
+
         Assert.DoesNotContain(await server.QueryAsync(db => db.Observations.AsNoTracking().Select(o => o.Data).ToListAsync()), d => d.Contains("1234"));
     }
 

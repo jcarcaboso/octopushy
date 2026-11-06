@@ -135,10 +135,13 @@ rewritten: if a secret is in a property name, is the text of a number, `true`,
 `false` or `null`, is a whole JSON object or array in the output, or runs across
 tokens in the text the output is kept or shown as, compact or as PostgreSQL's
 jsonb prints it, the whole output is withheld. Outputs that are not JSON are
-withheld too, and so are outputs, of an attempt that holds secrets, with a number
-written with an exponent or as negative zero: PostgreSQL would store such a
-number in another form, so only plain numbers, kept exactly as written, are
-checked and kept.
+withheld too. Numbers are checked as PostgreSQL stores them. The agent writes
+every number in plain decimal form, as jsonb prints it, including those it passes
+through from Proxmox. A number written otherwise, by an agent before 0.6.2 or
+inside a tool's output, is rewritten first into the exact form PostgreSQL would
+store, when that is short: an exponent within ±40 and at most 40 significant
+digits, so `4.2e-7` is kept as `0.00000042` and `1.50e1` as `15.0`. Any other
+number, in the outputs of an attempt that holds secrets, has its outputs withheld.
 
 What is stored is checked as it is stored, not only as the attempt reported it:
 the outputs with what the server adds to them, such as a plan's digest; an

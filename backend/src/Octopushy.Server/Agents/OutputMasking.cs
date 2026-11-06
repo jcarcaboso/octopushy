@@ -44,9 +44,9 @@ public static partial class OutputMasking
         }
     }
 
-    /// <summary>Why outputs were withheld because a number in them is not written as the database keeps it.</summary>
+    /// <summary>Why outputs were withheld because a number in them is written in a form the server does not rewrite.</summary>
     public const string NumberForm =
-        "[withheld: a number in what this attempt returned is not written as the database keeps it, with an exponent or as negative zero, so Octopushy cannot check it for secrets and does not keep it]";
+        "[withheld: a number in what this attempt returned has an exponent too large or too many digits for Octopushy to write it as the database keeps it, so it cannot check it for secrets and does not keep it]";
 
     /// <summary>
     /// The output with its strings masked, or false with the reason it is withheld whole. The work is linear in the size of
@@ -57,7 +57,8 @@ public static partial class OutputMasking
         masked = null;
         try
         {
-            var root = JsonNode.Parse(json);
+            // Numbers first, so every check below sees the text the database will store.
+            var root = PlainNumbers(JsonNode.Parse(json));
             if (root is JsonValue { } value && value.GetValueKind() == JsonValueKind.String)
                 root = JsonValue.Create(Replace(secrets.Values, value.GetValue<string>()));
             withheld = Walk(root, secrets, mask: true) ?? AcrossTokens(root, secrets);
@@ -166,6 +167,66 @@ public static partial class OutputMasking
     /// negative zero, which it prints without its sign.
     /// </summary>
     private static bool IsPlainNumber(string text) => PlainNumber().IsMatch(text) && !NegativeZero().IsMatch(text);
+
+    /// <summary>
+    /// Rewrites each number below <paramref name="node"/> that PostgreSQL would store in another form into that form, where it
+    /// can be worked out exactly and is not long: an exponent within ±40 and at most 40 significant digits, as an agent before
+    /// 0.6.2 writes a small float, or a negative zero. Any other number stays as it is, and its output is withheld.
+    /// </summary>
+    private static JsonNode? PlainNumbers(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject o:
+                foreach (var (name, child) in o.ToList())
+                {
+                    if (PlainNumbers(child) is var plain && !ReferenceEquals(plain, child))
+                        o[name] = plain;
+                }
+
+                return o;
+            case JsonArray a:
+                for (var i = 0; i < a.Count; i++)
+                {
+                    if (PlainNumbers(a[i]) is var plain && !ReferenceEquals(plain, a[i]))
+                        a[i] = plain;
+                }
+
+                return a;
+            case JsonValue v when v.GetValueKind() == JsonValueKind.Number:
+                var text = v.ToJsonString();
+                return !IsPlainNumber(text) && PlainForm(text) is { } form ? JsonNode.Parse(form) : node;
+            default:
+                return node;
+        }
+    }
+
+    /// <summary>
+    /// How PostgreSQL's numeric prints a JSON number: the digits moved by the exponent, the scale what the fraction leaves
+    /// after it (<c>1.50e1</c> is <c>15.0</c>), no leading zeros, and zero without a sign. Null when that is not short.
+    /// </summary>
+    internal static string? PlainForm(string number)
+    {
+        if (ExponentNumber().Match(number) is not { Success: true } m)
+            return NegativeZero().IsMatch(number) ? number[1..] : null;
+        var (integer, fraction) = (m.Groups[2].Value, m.Groups[3].Value);
+        var exponent = int.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
+        var digits = integer + fraction;
+        if (Math.Abs(exponent) > 40 || digits.Trim('0').Length > 40 || digits.Length > 80)
+            return null;
+        var point = integer.Length + exponent;
+        var plain = point <= 0 ? "0." + new string('0', -point) + digits
+            : point >= digits.Length ? digits + new string('0', point - digits.Length)
+            : digits[..point] + "." + digits[point..];
+        var dot = plain.IndexOf('.');
+        var whole = (dot < 0 ? plain : plain[..dot]).TrimStart('0');
+        plain = (whole.Length == 0 ? "0" : whole) + (dot < 0 ? "" : plain[dot..]);
+        var zero = plain.All(c => c is '0' or '.');
+        return (m.Groups[1].Value == "-" && !zero ? "-" : "") + plain;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(-?)([0-9]+)(?:\.([0-9]+))?[eE]([+-]?[0-9]{1,6})$")]
+    private static partial System.Text.RegularExpressions.Regex ExponentNumber();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$")]
     private static partial System.Text.RegularExpressions.Regex PlainNumber();
