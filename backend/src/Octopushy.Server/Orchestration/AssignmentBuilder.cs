@@ -24,6 +24,8 @@ public sealed class ExecutionUntrustedException(string message) : Exception(mess
 public sealed partial class AssignmentBuilder(
     OctopushyDb db,
     VariableStore store,
+    Agents.AttemptMasks masks,
+    Agents.AttemptLogStore logs,
     RunBundles bundles,
     ArtifactStore artifacts,
     TofuStateStore states,
@@ -396,7 +398,7 @@ public sealed partial class AssignmentBuilder(
         }
         var runContext = RunContext.Parse(run.Context);
         if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext) is { } foreign)
-            throw new AssignmentException(foreign);
+            throw new AssignmentException(await OutputDiagnostics.MaskAsync(db, masks, logs, plan, foreign, cancellationToken));
         if (stepName == StepNames.Unprotect && run.Operation is Operations.Provision or Operations.Retire
             && !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
             throw new AssignmentException($"Protection is lifted only for an approved plan that replaces or deletes this guest's {runContext.Proxmox.Machine}.");

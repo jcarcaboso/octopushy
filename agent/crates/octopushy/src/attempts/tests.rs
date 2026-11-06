@@ -295,6 +295,73 @@ async fn a_lost_stored_result_of_a_recovered_attempt_is_uncertain_not_failed() {
     assert_eq!(result.outcome(), Outcome::Uncertain);
 }
 
+/// Writes a successful result of `id` to the outbox and makes it unreadable; returns whether a read now fails, which it
+/// does not for root.
+fn unreadable_success(h: &Harness, id: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let done = AttemptResult {
+        attempt_id: id.into(),
+        outcome: Outcome::Succeeded as i32,
+        outputs_json: r#"{"done":true}"#.into(),
+        ..Default::default()
+    };
+    Outbox::open(&h.outbox_dir)
+        .unwrap()
+        .put(&OutboxRecord::from_result(&done, 1))
+        .unwrap();
+    let path = h.outbox_dir.join(format!("{id}.json"));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::read(&path).is_err()
+}
+
+#[tokio::test]
+async fn a_stored_result_that_cannot_be_read_for_a_moment_is_read_again_not_replaced() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = harness();
+    let ws = workspace::create(&h.work, "run-1", "ansible", "run").unwrap();
+    workspace::mark_running(&ws).unwrap();
+    assert_eq!(h.manager.recover().unwrap(), 1);
+    unreadable_success(&h, "run-1");
+
+    // Readable again well within the retries, as after a passing I/O failure.
+    let path = h.outbox_dir.join("run-1.json");
+    let restore = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    });
+    let mut c = Collector::default();
+    c.poll(&h.manager);
+    restore.join().unwrap();
+    let result = c.find("run-1").expect("a result is reported");
+    assert_eq!(result.outcome(), Outcome::Succeeded, "{}", result.error);
+    assert_eq!(result.outputs_json, r#"{"done":true}"#);
+}
+
+#[tokio::test]
+async fn a_stored_result_that_stays_unreadable_is_reported_uncertain_after_the_retries() {
+    let h = harness();
+    let ws = workspace::create(&h.work, "run-2", "ansible", "run").unwrap();
+    workspace::mark_running(&ws).unwrap();
+    assert_eq!(h.manager.recover().unwrap(), 1);
+    if !unreadable_success(&h, "run-2") {
+        // Root reads it whatever its mode: there is no failure to test.
+        return;
+    }
+    let started = std::time::Instant::now();
+    let mut c = Collector::default();
+    c.poll(&h.manager);
+    let result = c.find("run-2").expect("a result is still reported");
+    assert_eq!(result.outcome(), Outcome::Uncertain);
+    assert_eq!(result.error, "the agent lost the attempt's stored result");
+    // It waited for the retries, and not much longer.
+    assert!(
+        started.elapsed() >= READ_BACKOFF * 15,
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
 #[tokio::test]
 async fn an_apply_reports_its_state_even_when_it_fails() {
     use crate::executors::opentofu::{archive, state};

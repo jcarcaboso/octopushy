@@ -17,7 +17,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use futures::FutureExt;
@@ -325,7 +325,7 @@ impl AttemptManager {
             Ok(Ok(success)) => AttemptResult {
                 attempt_id: id.clone(),
                 outcome: Outcome::Succeeded as i32,
-                outputs_json: success.outputs.to_string(),
+                outputs_json: crate::plain_json::to_string(&success.outputs),
                 error: String::new(),
                 artifacts: success.artifacts,
             },
@@ -340,7 +340,7 @@ impl AttemptManager {
                 attempt_id: id.clone(),
                 outcome: Outcome::Failed as i32,
                 outputs_json: outputs
-                    .map(|o| o.to_string())
+                    .map(|o| crate::plain_json::to_string(&o))
                     .unwrap_or_else(|| "{}".into()),
                 error: message,
                 artifacts: Vec::new(),
@@ -560,7 +560,7 @@ impl AttemptManager {
     }
 
     fn load_result(&self, id: &str, mutating: bool) -> Option<AttemptResult> {
-        match self.outbox.get(id).map(|r| r.map(|r| r.to_result())) {
+        match self.read_stored(id).map(|r| r.map(|r| r.to_result())) {
             Ok(Some(Ok(r))) => Some(r),
             other => {
                 tracing::error!(attempt = %id, "the stored result is unreadable ({other:?})");
@@ -576,6 +576,31 @@ impl AttemptManager {
                 ))
             }
         }
+    }
+}
+
+/// How often a stored result whose read failed is read again, and the wait before the first retry, doubled each time.
+const READ_RETRIES: u32 = 4;
+const READ_BACKOFF: Duration = Duration::from_millis(50);
+
+impl AttemptManager {
+    /// Reads a stored result, again after a short wait while the read fails on I/O, for at most about three quarters of a
+    /// second. A file that is gone or corrupt is not read again: that is no passing failure. The fallback a failed read
+    /// leads to is acknowledged and the stored result then deleted, so a read that would work a moment later must not
+    /// lose the result it holds.
+    fn read_stored(&self, id: &str) -> Result<Option<OutboxRecord>> {
+        let mut wait = READ_BACKOFF;
+        for _ in 0..READ_RETRIES {
+            match self.outbox.get(id) {
+                Err(e) if e.downcast_ref::<std::io::Error>().is_some() => {
+                    tracing::warn!(attempt = %id, "reading the stored result failed ({e:#}); trying again");
+                    std::thread::sleep(wait);
+                    wait *= 2;
+                }
+                other => return other,
+            }
+        }
+        self.outbox.get(id)
     }
 }
 

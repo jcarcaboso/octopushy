@@ -23,8 +23,11 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 async fn mock() -> RunningMock {
+    let mut fixture = Fixture::example();
+    // A nearly idle host: Proxmox, as serde_json, gives its load with an exponent.
+    fixture.nodes[0].cpu = 4.2e-7;
     mock_proxmox::start(
-        Fixture::example(),
+        fixture,
         MockOptions {
             listen: "127.0.0.1:0".parse().unwrap(),
             tls: true,
@@ -32,6 +35,33 @@ async fn mock() -> RunningMock {
     )
     .await
     .unwrap()
+}
+
+/// Whether a number in this JSON is written with an exponent. Outside strings, letters are only those of `true`, `false` and
+/// `null`, so an `e` straight after a digit or a point is an exponent.
+fn has_exponent(json: &str) -> bool {
+    let (mut in_string, mut escaped, mut after_number) = (false, false, false);
+    for c in json.chars() {
+        if in_string {
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                after_number = false;
+            }
+            'e' | 'E' if after_number => return true,
+            '0'..='9' | '.' => after_number = true,
+            _ => after_number = false,
+        }
+    }
+    false
 }
 
 async fn enroll_into(server: &FakeServer, dir: &Path) {
@@ -233,6 +263,18 @@ async fn enroll_connect_observe_ack() {
     assert_eq!(out["hosts"].as_array().unwrap().len(), 2);
     assert_eq!(out["hosts"][0]["name"], "korriban");
     assert_eq!(out["hosts"][0]["maxCpu"], 16);
+    // Written as the controller stores it, so it is not withheld: no number has an exponent.
+    assert_eq!(out["hosts"][0]["cpu"], json!(4.2e-7));
+    assert!(
+        result.outputs_json.contains(r#""cpu":0.00000042"#),
+        "{}",
+        result.outputs_json
+    );
+    assert!(
+        !has_exponent(&result.outputs_json),
+        "{}",
+        result.outputs_json
+    );
     let guests = out["guests"].as_array().unwrap();
     assert_eq!(guests.len(), 5);
     let crt = guests.iter().find(|g| g["vmid"] == 210).unwrap();

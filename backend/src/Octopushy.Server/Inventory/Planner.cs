@@ -395,8 +395,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
     public Task ScheduleObservesAsync(CancellationToken cancellationToken) =>
         engine.ExecuteAsync(async (db, _) =>
         {
-            var eligible = RepositoryTrust.EligibleRevisions(db);
-            var revision = await eligible.AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+            var revision = await ScheduledObservationRevisionAsync(db, cancellationToken);
             if (revision is null) return 0;
 
             var cutoff = clock.GetUtcNow().AddMinutes(-options.Value.Scheduling.ObserveMinutes);
@@ -408,18 +407,32 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
 
             var repository = await revisions.GetAsync(revision, cancellationToken);
             var observed = 0;
-            foreach (var resource in due)
+            foreach (var (resource, context) in ScheduledObservations(repository, revision, due))
             {
-                // The head may be invalid; scheduled work uses the latest valid snapshot only.
-                if (repository.Resource(resource.Address)?.Valid == true && repository.Installation(resource.Address) is { } installation)
-                {
-                    await engine.ObserveAsync(db, resource, revision, RunFactory.Observation(repository, installation, revision), cancellationToken);
-                    observed++;
-                }
+                await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
+                observed++;
             }
 
             return observed;
         }, cancellationToken);
+
+    /// <summary>
+    /// The revision scheduled observations are built from: the latest valid revision of the current source. The head may be
+    /// invalid; scheduled work uses the latest valid snapshot only.
+    /// </summary>
+    public static Task<DefinitionRevision?> ScheduledObservationRevisionAsync(OctopushyDb db, CancellationToken cancellationToken) =>
+        RepositoryTrust.EligibleRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+
+    /// <summary>What the scheduler sends each of these installations to observe it, at <paramref name="revision"/>.</summary>
+    public static IEnumerable<(Resource Resource, RunContext Context)> ScheduledObservations(
+        Definitions.LabRepository repository, DefinitionRevision revision, IEnumerable<Resource> installations)
+    {
+        foreach (var resource in installations)
+        {
+            if (repository.Resource(resource.Address)?.Valid == true && repository.Installation(resource.Address) is { } installation)
+                yield return (resource, RunFactory.Observation(repository, installation, revision));
+        }
+    }
 
     private async Task<(Resource Resource, DefinitionRevision Revision, Definitions.LabRepository Repository)> LoadAsync(
         OctopushyDb db,

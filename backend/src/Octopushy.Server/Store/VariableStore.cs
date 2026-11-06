@@ -66,7 +66,8 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             ?? await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
         if (entry is null)
         {
-            entry = new StoreEntry { Key = key, Visibility = visibility, CreatedAt = now };
+            // A key deleted before continues its numbering: an old version number never names a new value.
+            entry = new StoreEntry { Key = key, Visibility = visibility, CreatedAt = now, LatestVersion = await DeletedLatestVersionAsync(key, cancellationToken) };
             db.StoreEntries.Add(entry);
         }
         else if (entry.Visibility == Visibilities.Secret && visibility == Visibilities.Plain)
@@ -282,31 +283,104 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         return value is null ? null : Encoding.UTF8.GetString(envelope.Open(value.Ciphertext, value.WrappedKey, Context(key, value.Version)));
     }
 
-    /// <summary>Deletes an entry and its versions unless something still references it.</summary>
-    public async Task DeleteAsync(string key, IReadOnlyCollection<string> referencedBy, CancellationToken cancellationToken)
+    /// <summary>
+    /// The version the next write of <paramref name="key"/> creates: one after its latest, or, for a key not in the store, one
+    /// after the last it had before it was deleted.
+    /// </summary>
+    public async Task<int> NextVersionAsync(string key, CancellationToken cancellationToken)
+    {
+        var latest = await db.StoreEntries.AsNoTracking().Where(e => e.Key == key).Select(e => (int?)e.LatestVersion).FirstOrDefaultAsync(cancellationToken);
+        return (latest ?? await DeletedLatestVersionAsync(key, cancellationToken)) + 1;
+    }
+
+    private Task<int> DeletedLatestVersionAsync(string key, CancellationToken cancellationToken) =>
+        db.DeletedStoreKeys.AsNoTracking().Where(d => d.Key == key).Select(d => d.LatestVersion).FirstOrDefaultAsync(cancellationToken);
+
+    /// <summary>
+    /// Deletes an entry once nothing needs it: every version's encrypted value goes, and the key leaves the list. Who received
+    /// which version stays on record in <see cref="SecretResolution"/>, and the key's last version number is kept, so a key
+    /// written again continues after it. Refused while a definition, an open change, a run that has not finished, or an attempt
+    /// that may still receive it or report uses it.
+    /// </summary>
+    /// <param name="referencedBy">What else holds the key, as the caller knows it: see <see cref="Api.VariableUses.HoldingAsync"/>.</param>
+    public async Task DeleteAsync(string key, IReadOnlyCollection<string> referencedBy, string actor, CancellationToken cancellationToken)
     {
         CheckUserKey(key);
-
-        if (referencedBy.Count > 0)
+        var users = referencedBy.Concat(await UnfinishedUsesAsync(key, cancellationToken)).Distinct(StringComparer.Ordinal).ToList();
+        if (users.Count > 0)
         {
-            throw new StoreException($"'{key}' is still used by {string.Join(", ", referencedBy)}.");
+            throw new StoreException($"'{key}' is still used by {string.Join(", ", users)}. Delete it once nothing uses it.");
         }
 
-        if (await db.SecretResolutions.AnyAsync(r => r.Key == key, cancellationToken))
+        var entry = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
+        if (entry is null)
         {
-            throw new StoreException("This key has execution history. Revoke versions instead of deleting their evidence.");
-        }
-
-        var contexts = await db.Runs.AsNoTracking().Select(r => r.Context).ToListAsync(cancellationToken);
-        if (contexts.Select(Orchestration.RunContext.Parse).Any(c => c.SecretBindingsPinned && c.Secrets.ContainsValue(key)))
-        {
-            throw new StoreException("A run pins this key. Revoke versions instead of deleting pinned history.");
+            return;
         }
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        // Only the entry as it was checked: a version staged or written since makes this a conflict, and nothing is deleted.
+        var deleted = await db.StoreEntries.Where(e => e.Key == key && e.LatestVersion == entry.LatestVersion).ExecuteDeleteAsync(cancellationToken);
+        if (deleted == 0)
+        {
+            throw new StoreConflictException("The entry changed concurrently. Refresh and try again.");
+        }
+
         await db.StoreVersions.Where(v => v.Key == key).ExecuteDeleteAsync(cancellationToken);
-        await db.StoreEntries.Where(e => e.Key == key).ExecuteDeleteAsync(cancellationToken);
+        await RecordDeletionAsync(db, key, entry.LatestVersion, actor, clock.GetUtcNow(), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        // What this unit of work tracked of the key is gone too: a write after this one starts a new entry.
+        var stale = db.ChangeTracker.Entries<StoreEntry>().Where(e => e.Entity.Key == key).Cast<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry>()
+            .Concat(db.ChangeTracker.Entries<StoreVersion>().Where(e => e.Entity.Key == key)).ToList();
+        foreach (var tracked in stale)
+        {
+            tracked.State = EntityState.Detached;
+        }
+    }
+
+    /// <summary>
+    /// Records the last version of a key whose entry is being deleted, in the caller's transaction, so that a key written again
+    /// continues after it. Never lowers what an earlier deletion recorded.
+    /// </summary>
+    internal static Task RecordDeletionAsync(OctopushyDb db, string key, int latestVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO deleted_store_keys (key, latest_version, deleted_at, deleted_by) VALUES ({key}, {latestVersion}, {now}, {actor})
+            ON CONFLICT (key) DO UPDATE SET latest_version = GREATEST(deleted_store_keys.latest_version, EXCLUDED.latest_version),
+                deleted_at = EXCLUDED.deleted_at, deleted_by = EXCLUDED.deleted_by
+            """, cancellationToken);
+
+    /// <summary>
+    /// What may still need the key's value: a run that has not finished and binds it, pinned or not, since one waiting for
+    /// approval or not yet dispatched takes it later; and an attempt that has not finished, which may still be given it, or
+    /// was given it and still reports, so its logs and outputs are masked with it. A finished attempt needs nothing: what it
+    /// reported was masked when it was kept, and a late result is withheld when its values cannot be read back.
+    /// </summary>
+    private async Task<List<string>> UnfinishedUsesAsync(string key, CancellationToken cancellationToken)
+    {
+        var uses = new List<string>();
+        var runs = await db.Runs.AsNoTracking()
+            .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+            .Select(r => new { r.Number, r.Context })
+            .ToListAsync(cancellationToken);
+        uses.AddRange(runs.Where(r => Orchestration.RunContext.Parse(r.Context).Secrets.ContainsValue(key)).OrderBy(r => r.Number).Select(r => $"run #{r.Number}"));
+
+        var attempts = await db.Attempts.AsNoTracking()
+            .Where(a => a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running)
+            .Select(a => new
+            {
+                a.Context,
+                Released = db.SecretResolutions.Any(r => r.AttemptId == a.Id && r.Key == key),
+                Run = db.Runs.Where(r => r.Id == a.RunId).Select(r => (long?)r.Number).FirstOrDefault(),
+                Installation = db.Resources.Where(r => r.Id == a.ResourceId).Select(r => r.Address).FirstOrDefault(),
+            })
+            .ToListAsync(cancellationToken);
+        foreach (var attempt in attempts.Where(a => a.Released || (a.Context is { } context && Orchestration.RunContext.Parse(context).Secrets.ContainsValue(key))))
+        {
+            uses.Add(attempt.Run is { } number ? $"run #{number}"
+                : $"an observation of {attempt.Installation ?? "a removed installation"}");
+        }
+
+        return uses;
     }
 
     /// <summary>Resolves the keys an attempt needs and records each release; null names a missing key.</summary>

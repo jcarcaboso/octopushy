@@ -14,7 +14,7 @@ public sealed partial class RunEngine
     /// what a playbook will change, so every run is treated as a change, and the workflow's
     /// declaration stands in for the plan's count of deletes.
     /// </summary>
-    private bool DecideConfigureApproval(Run run, Step step, RunContext context)
+    private async Task<bool> DecideConfigureApprovalAsync(OctopushyDb db, Run run, Step step, RunContext context, CancellationToken cancellationToken)
     {
         var preview = run.Steps.Single(s => s.Name == StepNames.Preview);
         var digest = preview.Outputs is null ? null : JsonNode.Parse(preview.Outputs)?["planSha256"]?.GetValue<string>();
@@ -36,10 +36,11 @@ public sealed partial class RunEngine
             step.ApprovalRequired = true;
             step.Status = StepStatuses.AwaitingApproval;
             var vars = string.Join(", ", reported?.Declared.ApproveVars?.Select(p => p.Key) ?? []);
-            step.Detail = $"The playbook reported {reported?.Name}"
-                + (reported?.Detail is { } detail ? $": {detail}." : ".")
+            var detail = $"The playbook reported {reported?.Name}"
+                + (reported?.Detail is { } said ? $": {said}." : ".")
                 + (reported?.Declared.Description is { } description ? $" {description}" : "")
                 + $" Approving runs {ansible.Action} once more with {vars}.";
+            step.Detail = reported is null ? detail : await ReportedAsync(db, reported.Source, detail, cancellationToken);
             return false;
         }
 
@@ -84,14 +85,21 @@ public sealed partial class RunEngine
             .MaxBy(s => s.Ordinal);
         var outputs = step?.Outputs is null ? null : JsonNode.Parse(step.Outputs);
         return outputs?["outcome"]?.GetValue<string>() is { } name && context.Outcomes.TryGetValue(name, out var declared)
-            ? new ReportedOutcome(name, outputs["detail"]?.GetValue<string>(), declared)
+            ? new ReportedOutcome(name, outputs["detail"]?.GetValue<string>(), declared, step!)
             : null;
     }
 
-    internal sealed record ReportedOutcome(string Name, string? Detail, AnsibleOutcome Declared);
+    /// <summary>What a playbook reported, and the step whose outputs say so.</summary>
+    internal sealed record ReportedOutcome(string Name, string? Detail, AnsibleOutcome Declared, Step Source);
 
-    private string? ConfiguredDetail(Run run) =>
-        OutcomeOf(run) is { } reported ? $"The playbook reported {reported.Name}{(reported.Detail is { } detail ? $": {detail}" : "")}." : null;
+    /// <summary>Text built from what a step's attempt reported, masked whole: see <see cref="OutputDiagnostics"/>.</summary>
+    private Task<string> ReportedAsync(OctopushyDb db, Step source, string text, CancellationToken cancellationToken) =>
+        OutputDiagnostics.MaskAsync(db, masks, logs, source, text, cancellationToken);
+
+    private async Task<string?> ConfiguredDetailAsync(OctopushyDb db, Run run, CancellationToken cancellationToken) =>
+        OutcomeOf(run) is { } reported
+            ? await ReportedAsync(db, reported.Source, $"The playbook reported {reported.Name}{(reported.Detail is { } detail ? $": {detail}" : "")}.", cancellationToken)
+            : null;
 
     /// <summary>
     /// Whether a scheduled run has lost the right to start changing its guest. It has that right
@@ -149,7 +157,8 @@ public sealed partial class RunEngine
         {
             if (scheduled)
             {
-                step.Detail = $"It reported {reported.Name}. A scheduled run does not wait for a person, so the next time tries again.";
+                step.Detail = await ReportedAsync(db, reported.Source,
+                    $"It reported {reported.Name}. A scheduled run does not wait for a person, so the next time tries again.", cancellationToken);
                 return;
             }
 
@@ -157,8 +166,8 @@ public sealed partial class RunEngine
             if (approvedOnce || !waits && reported.Declared.Result == "failed")
             {
                 step.Status = StepStatuses.Failed;
-                step.Detail = $"It reported {reported.Name}{(reported.Detail is { } detail ? $": {detail}" : "")}"
-                    + (approvedOnce ? ", after the one approved attempt." : ".");
+                step.Detail = await ReportedAsync(db, reported.Source, $"It reported {reported.Name}{(reported.Detail is { } detail ? $": {detail}" : "")}"
+                    + (approvedOnce ? ", after the one approved attempt." : "."), cancellationToken);
                 return;
             }
 

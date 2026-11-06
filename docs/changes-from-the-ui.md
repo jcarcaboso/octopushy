@@ -351,9 +351,11 @@ or branch is merged.
 
 What goes is only what the value owns: the store version it wrote, identified by the value's id that the version was created
 with, while that version is still the one present. A key someone wrote since, a person or a later deploy of the same name, is
-never touched, even at version 1 with the same description. Its
+never touched, even with the same description: a key deleted and set again continues after the version it had, and its new
+version was not created with the value's id. Its
 enrollment token is revoked unless it was used: a used token stays, and removing it would not affect the agent it enrolled. A
-key a run was given keeps its history; revoke it under **Variables**. Each removal is its own transaction, with a short lock
+key a run was given is left as it is: delete it under **Variables** once nothing uses it, and the record of what each run
+was given stays. A person who deletes a generated key before cleanup does leaves it nothing to remove. Each removal is its own transaction, with a short lock
 timeout. One that fails stays pending with its error, each sync tries it again, and the change page says *"2 generated
 values still to remove"* until it is done.
 

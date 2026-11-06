@@ -42,6 +42,7 @@ public sealed partial class RunEngine(
     IServiceScopeFactory scopes,
     AgentConnections connections,
     AttemptLogStore logs,
+    AttemptMasks masks,
     ArtifactStore artifacts,
     OrchestratorSignal signal,
     RevisionCache revisions,
@@ -299,7 +300,7 @@ public sealed partial class RunEngine(
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
                     if (context.Stages is not null ? await DecidePipelineApprovalAsync(db, run, step, context, cancellationToken)
-                        : context.Ansible is not null ? DecideConfigureApproval(run, step, context)
+                        : context.Ansible is not null ? await DecideConfigureApprovalAsync(db, run, step, context, cancellationToken)
                         : await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
                         continue;
@@ -381,7 +382,7 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, context.Ansible is not null ? ConfiguredDetail(run)
+        Finish(run, RunStatuses.Succeeded, context.Ansible is not null ? await ConfiguredDetailAsync(db, run, cancellationToken)
             : noChanges ? "The plan has no changes." : null);
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -392,8 +393,9 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         // The plan's effects refuse this already; asked again so no path offers it for approval.
-        if (GuestVmPlan.ForeignChange(outputs, context) is { } foreign)
+        if (GuestVmPlan.ForeignChange(outputs, context) is { } refusal)
         {
+            var foreign = await ReportedAsync(db, plan, refusal, cancellationToken);
             step.Status = StepStatuses.Failed;
             step.Detail = foreign;
             Finish(run, RunStatuses.Failed, foreign);
@@ -528,7 +530,7 @@ public sealed partial class RunEngine(
         if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context)) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
-            step.Detail = foreign;
+            step.Detail = await ReportedAsync(db, step, foreign, cancellationToken);
             return;
         }
 

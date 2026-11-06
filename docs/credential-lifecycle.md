@@ -86,13 +86,100 @@ All endpoints require the existing authenticated administrator session:
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
 | `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote}`. |
 | `POST /api/variables/revoke` | `{key, version, reason}`. |
+| `DELETE /api/variables?key=…` | Deletes the key once nothing needs it; see below. |
 
 Promotion compares the expected active version; stale or concurrent changes
 return `409`, requiring a refresh and review. Candidate allocation also uses
 optimistic concurrency so simultaneous writes cannot overwrite a version.
 All `system/` keys remain unavailable to these user lifecycle endpoints.
-Keys with pinned run history or resolution records cannot be deleted; revoke
-instead. Plain values remain API-readable, so do not put credentials in them.
+Plain values remain API-readable, so do not put credentials in them.
+
+**Deleting a key.** A key is deleted once nothing needs its value. Deleting is
+refused, naming what holds it, while any of these uses the key:
+
+- a definition at the branch head: the revision the last sync loaded as the head,
+  which after a rollback is the earlier revision again, not the newest one on
+  record. Every definition file at that commit, and at the branch as last fetched,
+  is also read as plain YAML whether it validates or not, so a definition with a
+  schema error still keeps the keys it names. If one of those files is not YAML,
+  or the commit cannot be read, nothing is deleted;
+- the observations the scheduler sends. While the head is invalid it keeps
+  observing each installation from the latest valid revision, with that
+  revision's credentials, so those are kept too;
+- a change that is not final and may still bring it to the branch, by the same
+  rule as [generated-value cleanup](changes-from-the-ui.md#the-workflow-wizard).
+  If a commit of such a change cannot be read, deleting is refused until it settles;
+- a run that has not finished, pinned or not: one waiting for approval, or not
+  dispatched yet, takes its value later;
+- an attempt that has not finished, such as a queued observation, which may still
+  be given it, or one that was given it and still reports, whose logs and outputs
+  are masked with it.
+
+**Used by** on the Variables page reads the same head revision.
+
+Otherwise every version's encrypted value goes, and the key leaves the list. What
+stays is the evidence: the resolution records of which attempt and agent received
+which version, and the runs that pinned it. A finished attempt needs nothing more:
+what it reported was masked when it was kept. A late result from an uncertain
+attempt is masked with the values the controller still holds in memory for it,
+if it holds them, as when the result arrives before a restart. Otherwise the
+controller reads them back from the store, and if one of them was deleted, the
+attempt's log lines, error and outputs are withheld rather than kept unmasked.
+Masking never passes text through for an attempt whose values it does not hold:
+an attempt with no secrets is registered with none, and one closed or unknown has
+what it reports withheld.
+
+Outputs are parsed before they are masked. Strings are masked as they read once
+decoded, whatever JSON escaped in them, and stay strings. Nothing else is
+rewritten: if a secret is in a property name, is the text of a number, `true`,
+`false` or `null`, is a whole JSON object or array in the output, or runs across
+tokens in the text the output is kept or shown as, compact or as PostgreSQL's
+jsonb prints it, the whole output is withheld. Outputs that are not JSON are
+withheld too. Numbers are checked as PostgreSQL stores them. The agent writes
+every number in plain decimal form, as jsonb prints it, including those it passes
+through from Proxmox. A number written otherwise, by an agent before 0.6.2 or
+inside a tool's output, is rewritten first into the exact form PostgreSQL would
+store, when that is short: an exponent within ±40 and at most 40 significant
+digits, so `4.2e-7` is kept as `0.00000042` and `1.50e1` as `15.0`. Any other
+number, in the outputs of an attempt that holds secrets, has its outputs withheld.
+
+What is stored is checked as it is stored, not only as the attempt reported it:
+the outputs with what the server adds to them, such as a plan's digest; an
+observation's data, with the connection it went through; and a pipeline's
+approval document, against the secrets of every attempt it is built from. Each
+is checked whole and kept as it is or not at all, so a digest or an identity in
+it is never rewritten. Text the server writes from what an attempt reported, such
+as "It reported pending-reboot: A reboot is due." as a step's or a run's detail,
+or a refused plan's description, is masked whole with that attempt's masks before
+it is kept.
+
+The guarantee covers what an attempt reported and the documents and text built
+from it. It does not cover names and fields the server generates itself: the
+property names of what the API returns, such as `toolVersion`, and its own fixed
+words are not checked against secrets, so a secret that is such a word can
+appear there.
+
+An uncertain attempt takes one later result: its lease ran out, or the agent
+could only say it was uncertain, as when its stored result could not be read for
+a moment, and sends the result it stored once it can. The same result sent again
+changes nothing. An attempt the server settled itself, because the outputs of
+the result it had could not be kept, takes no other. An attempt whose outputs are withheld is settled without them:
+failed, or uncertain if its work may have changed something, with the reason as
+its error. What reads outputs treats them as unknown, never as empty: a withheld
+observation leaves the installation's previous observation as the evidence the
+VMID collision check uses, and a VMID an observation shows but that cannot be
+read, null included, counts as possibly colliding.
+
+A very short secret, such as `true`, `null` or `name`, matches ordinary output:
+every observation of an installation whose read-only token is such a value is
+withheld, and its observation error says so. Do not use short or common words as
+credential values.
+
+A key that was ever released to Proxmox or OpenTofu work stays refused to
+playbooks, set again or not. The key's last version number is kept, in
+`deleted_store_keys` (migration `DeletedStoreKeys`), so a key set again continues
+after it and an old version number never names a new value. `system/` keys
+cannot be deleted here.
 
 ## Encryption-key custody
 

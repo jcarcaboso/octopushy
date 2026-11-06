@@ -322,11 +322,11 @@ public class ManagedHostKeyTests(PostgresFixture postgres)
         var plan = await agent.NextAsync("preview");
         var logs = server.Services.GetRequiredService<AttemptLogStore>();
         var line = plan.Secrets[SecretNames.GuestHostKey].Split('\n')[1];
-        Assert.Equal("data: ***", logs.Mask(Guid.Parse(plan.AttemptId), $"data: {line}"));
+        Assert.Equal("data: ***", logs.MaskDiagnostic(Guid.Parse(plan.AttemptId), $"data: {line}"));
         await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
         var apply = await agent.NextAsync("apply");
         var upload = apply.Secrets[SecretNames.SnippetsKey].Split('\n')[1];
-        Assert.Equal("key ***", logs.Mask(Guid.Parse(apply.AttemptId), $"key {upload}"));
+        Assert.Equal("key ***", logs.MaskDiagnostic(Guid.Parse(apply.AttemptId), $"key {upload}"));
     }
 
     [Fact]

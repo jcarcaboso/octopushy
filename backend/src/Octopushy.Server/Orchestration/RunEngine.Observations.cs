@@ -87,26 +87,39 @@ public sealed partial class RunEngine
         }
 
         var now = clock.GetUtcNow();
+        JsonObject? data = null;
+        if (attempt.Status == AttemptStatuses.Succeeded)
+        {
+            // With the connection it went through, so it is evidence only while the installation still connects that way.
+            data = outputs?.DeepClone() as JsonObject ?? new JsonObject();
+            if (attempt.Context is { } observed)
+            {
+                var proxmox = RunContext.Parse(observed).Proxmox;
+                data["connection"] = ObservedConnection.Of(proxmox.Endpoint, proxmox.VerifyTls, proxmox.CaCertificateKey);
+            }
+
+            // Checked as it is kept, with what was added: withheld whole, as outputs are, and then it is no evidence.
+            if (logs.Withholds(attempt.Id, data) is { } withheld)
+            {
+                attempt.Status = AttemptStatuses.Failed;
+                attempt.Error = withheld;
+                attempt.Outputs = null;
+                attempt.OutputsWithheld = true;
+            }
+        }
+
         switch (attempt.Status)
         {
             case AttemptStatuses.Succeeded:
                 installation.ObserveError = null;
                 installation.ObserveErrorAt = null;
-                // With the connection it went through, so it is evidence only while the installation still connects that way.
-                var data = outputs?.DeepClone() as JsonObject ?? new JsonObject();
-                if (attempt.Context is { } observed)
-                {
-                    var proxmox = RunContext.Parse(observed).Proxmox;
-                    data["connection"] = ObservedConnection.Of(proxmox.Endpoint, proxmox.VerifyTls, proxmox.CaCertificateKey);
-                }
-
                 db.Observations.Add(new Observation
                 {
                     Id = Guid.CreateVersion7(),
                     ResourceId = installation.Id,
                     AttemptId = attempt.Id,
                     ObservedAt = now,
-                    Data = data.ToJsonString(),
+                    Data = data!.ToJsonString(),
                 });
                 var oldObservations = await db.Observations
                     .Where(o => o.ResourceId == installation.Id)
@@ -136,7 +149,7 @@ public sealed partial class RunEngine
             await db.Attempts.Where(a => oldAttempts.Contains(a.Id)).ExecuteDeleteAsync(cancellationToken);
             foreach (var id in oldAttempts)
             {
-                logs.Delete(id);
+                await logs.DeleteAsync(id, cancellationToken);
             }
         }
     }

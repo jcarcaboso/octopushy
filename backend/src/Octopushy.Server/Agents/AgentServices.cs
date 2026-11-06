@@ -166,8 +166,8 @@ public sealed class AgentChannelService(
                             ownAttempts.Add(attemptId);
                             var lines = message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList();
                             // A restarted controller reads the attempt's secrets back before it keeps a line.
-                            await masks.EnsureAsync(attemptId, call.Token);
-                            await logs.AppendAsync(attemptId, (long)message.Log.FirstSequence, lines, call.Token);
+                            using (await masks.EnsureAsync(attemptId, call.Token))
+                                await logs.AppendAsync(attemptId, (long)message.Log.FirstSequence, lines, call.Token);
                         }
 
                         break;

@@ -199,7 +199,18 @@ export function VariablesPage() {
         }}
         onConfirm={() => deleting && remove.mutate(deleting.key, { onSuccess: () => setDeleting(null) })}
       >
-        <p>Every version of the value is removed. A key that definitions or runs still use cannot be deleted.</p>
+        <p>
+          Every version of its value is removed, and the key leaves this list. What each run was given stays on record, and if
+          the key is set again, its versions continue after the last one.
+        </p>
+        {deleting && deleting.usedBy.length > 0 ? (
+          <>
+            <p>It is still used by these, so it can be deleted only once they no longer use it:</p>
+            <UsedBy usedBy={deleting.usedBy} />
+          </>
+        ) : (
+          <p className="muted small">It is refused while a definition, an open change or a run that has not finished still uses it.</p>
+        )}
       </ConfirmDialog>
     </>
   );

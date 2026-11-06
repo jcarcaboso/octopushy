@@ -4,6 +4,7 @@ using Octopushy.Definitions.Yaml;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Server.Changes;
 
@@ -32,11 +33,27 @@ public static class GeneratedValues
     /// <c>octopushy.yaml</c> and the YAML under <c>labs/</c> and <c>templates/</c>, read as plain YAML whether the file validates
     /// or not. Null, so that nothing is removed, when the snapshot or any of those files cannot be read.
     /// </summary>
-    public static IReadOnlySet<string>? ReferencedKeys(string root)
+    public static IReadOnlySet<string>? ReferencedKeys(string root) =>
+        KeysByFile(root).Files is { } files ? files.Values.SelectMany(k => k).ToHashSet(StringComparer.Ordinal) : null;
+
+    /// <summary>
+    /// The definition files in the snapshot at <paramref name="root"/> that reference <paramref name="key"/>, by path from the
+    /// root, read as <see cref="ReferencedKeys"/> reads them. Null when the snapshot or one of those files cannot be read, with
+    /// <paramref name="unreadable"/> naming that file, or the snapshot itself when it is the snapshot.
+    /// </summary>
+    public static List<string>? FilesReferencing(string root, string key, out string? unreadable)
+    {
+        var (files, failed) = KeysByFile(root);
+        unreadable = failed;
+        return files?.Where(f => f.Value.Contains(key)).Select(f => f.Key).Order(StringComparer.Ordinal).ToList();
+    }
+
+    private static (Dictionary<string, HashSet<string>>? Files, string? Unreadable) KeysByFile(string root)
     {
         if (!Directory.Exists(root))
-            return null;
-        var keys = new HashSet<string>(StringComparer.Ordinal);
+            return (null, null);
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        string? current = null;
         try
         {
             var files = DefinitionFolders.Select(f => Path.Combine(root, f)).Where(Directory.Exists)
@@ -45,16 +62,19 @@ public static class GeneratedValues
                 .Append(Path.Combine(root, "octopushy.yaml")).Where(File.Exists);
             foreach (var file in files)
             {
+                current = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
+                var keys = new HashSet<string>(StringComparer.Ordinal);
                 if (!Collect(File.ReadAllText(file), keys))
-                    return null;
+                    return (null, current);
+                result[current] = keys;
             }
         }
         catch (IOException)
         {
-            return null;
+            return (null, current);
         }
 
-        return keys;
+        return (result, null);
     }
 
     /// <summary>Every store key the files a change writes reference: what any of its candidate commits would bring to the branch.</summary>
@@ -199,7 +219,7 @@ public static class GeneratedValues
             else if (await db.SecretResolutions.AnyAsync(r => r.Key == key, CancellationToken.None))
             {
                 kept = true;
-                notes.Add($"{key} was given to a run, so its history is kept: revoke it under Variables if it must go.");
+                notes.Add($"{key} was given to a run, so it is left as it is: delete it under Variables once nothing uses it.");
             }
             else
             {
@@ -214,6 +234,9 @@ public static class GeneratedValues
                     await transaction.RollbackAsync(CancellationToken.None);
                     throw new InvalidOperationException($"{key} changed while it was being removed.");
                 }
+
+                // A key written again, by a person or a later deploy, continues after this version.
+                await VariableStore.RecordDeletionAsync(db, key, version, "cleanup", now, CancellationToken.None);
 
                 notes.Add($"{key} version {version} deleted.");
             }
@@ -249,14 +272,27 @@ public static class GeneratedValues
     /// landed, as far as the mirror holds them. A dismissed change is among them: a dismissal proves nothing. Null, so nothing is
     /// removed, when a file is not YAML, or a commit is not in the mirror and the change predates its recorded keys.
     /// </summary>
-    private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror)
+    private static async Task<HashSet<string>?> KeysOfOpenChangesAsync(OctopushyDb db, RepositoryMirror mirror) =>
+        await KeysByOpenChangeAsync(db, mirror) is { } open ? open.SelectMany(c => c.Keys).ToHashSet(StringComparer.Ordinal) : null;
+
+    /// <summary>
+    /// The changes that are not final and may still bring <paramref name="key"/> to the branch, as a person reads them, by the
+    /// same rule as cleanup. Null when one of them cannot be read, so nothing can be said.
+    /// </summary>
+    public static async Task<List<string>?> OpenChangesUsingAsync(OctopushyDb db, RepositoryMirror mirror, string key) =>
+        await KeysByOpenChangeAsync(db, mirror) is { } open
+            ? open.Where(c => c.Keys.Contains(key)).Select(c => $"the {c.Change.Kind} change of {c.Change.Address} ({c.Change.Status})").ToList()
+            : null;
+
+    private static async Task<List<(ResourceChange Change, HashSet<string> Keys)>?> KeysByOpenChangeAsync(OctopushyDb db, RepositoryMirror mirror)
     {
         var finals = ChangeStatuses.Final;
-        var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status))
-            .Select(c => new { c.Commit, c.CandidateCommits, c.Files, c.Edited, c.StoreKeys }).ToListAsync(CancellationToken.None);
-        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var open = await db.Changes.AsNoTracking().Where(c => !finals.Contains(c.Status)).OrderBy(c => c.CreatedAt).ToListAsync(CancellationToken.None);
+        var result = new List<(ResourceChange, HashSet<string>)>();
         foreach (var change in open)
         {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            result.Add((change, keys));
             if (change.StoreKeys is { } recorded)
                 keys.UnionWith(recorded);
             if (change.Edited is { } edited && !Collect(edited, keys))
@@ -285,7 +321,7 @@ public static class GeneratedValues
             }
         }
 
-        return keys;
+        return result;
     }
 
     /// <summary>Every store key a run that has not finished was built with.</summary>

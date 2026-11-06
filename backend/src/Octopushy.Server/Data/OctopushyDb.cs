@@ -50,6 +50,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<SecretResolution> SecretResolutions => Set<SecretResolution>();
 
+    public DbSet<DeletedStoreKey> DeletedStoreKeys => Set<DeletedStoreKey>();
+
     public DbSet<TofuState> TofuStates => Set<TofuState>();
 
     public DbSet<TofuStateVersion> TofuStateVersions => Set<TofuStateVersion>();
@@ -219,6 +221,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         {
             e.HasIndex(x => x.AttemptId);
         });
+
+        model.Entity<DeletedStoreKey>(e => e.HasKey(x => x.Key));
 
         model.Entity<TofuState>(e =>
         {

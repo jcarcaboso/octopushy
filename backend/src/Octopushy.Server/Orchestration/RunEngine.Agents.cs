@@ -1,3 +1,4 @@
+using Google.Protobuf;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
@@ -307,6 +308,9 @@ public sealed partial class RunEngine
             return true;
         }
 
+        // What the agent sent, before anything below is changed in it.
+        var received = ArtifactStore.Sha256(result.ToByteArray());
+
         // A corrupted artifact fails the attempt; it is never stored or used.
         if (result.Artifacts.FirstOrDefault(a => ArtifactStore.Sha256(a.Content.Span) != a.Sha256.ToLowerInvariant()) is { } corrupted)
         {
@@ -332,32 +336,35 @@ public sealed partial class RunEngine
                 return true;
             }
 
-            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult;
+            // The result this attempt was settled with, sent again: nothing to do.
+            if (attempt.ResultSha256 == received)
+            {
+                return true;
+            }
+
+            // An uncertain attempt takes one later result: its lease ran out, or the agent could only say it was uncertain
+            // and knows better now, as when its stored result could not be read for a moment. Not one the server settled
+            // itself because the outputs it had could not be kept: that result stands.
+            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && !attempt.OutputsWithheld;
             if (AttemptStatuses.IsTerminal(attempt.Status) && !late)
             {
                 return true;
             }
 
-            // What the attempt reports is masked with what it was sent, read back if this process does not know it.
-            await services.GetRequiredService<AttemptMasks>().EnsureAsync(attempt.Id, cancellationToken);
+            // What the attempt reports is masked with what it was sent, read back if this process does not know it, and held
+            // until this result is handled.
+            using var held = await masks.EnsureAsync(attempt.Id, cancellationToken);
             JsonNode? outputs = null;
-            var outputsWithheld = false;
+            string? outputsWithheld = null;
             if (!string.IsNullOrWhiteSpace(result.OutputsJson))
             {
-                try
+                if (logs.TryMaskOutputs(attempt.Id, result.OutputsJson, out var masked, out var withheld))
+                    outputs = masked;
+                else
                 {
-                    if (logs.MaskOutputs(attempt.Id, result.OutputsJson) is { } masked)
-                        outputs = JsonNode.Parse(masked);
-                    else
-                    {
-                        // Fails closed: no outputs are kept, so a step that needs them, such as a plan's approval, refuses.
-                        outputsWithheld = true;
-                        logger.LogWarning("Attempt {Attempt} returned outputs that cannot be fully masked; they are not kept.", attemptId);
-                    }
-                }
-                catch (JsonException)
-                {
-                    logger.LogWarning("Attempt {Attempt} returned outputs that are not JSON.", attemptId);
+                    // Fails closed: no outputs are kept, and what they would have said is unknown, not absent.
+                    outputsWithheld = withheld;
+                    logger.LogWarning("Attempt {Attempt} returned outputs that are not kept: {Reason}", attemptId, withheld);
                 }
             }
 
@@ -385,6 +392,15 @@ public sealed partial class RunEngine
                 }
             }
 
+            // What is kept is the outputs with what was added to them since they were masked, such as a plan's digest:
+            // checked whole, and withheld whole rather than changed.
+            if (outputs is not null && logs.Withholds(attempt.Id, outputs) is { } assembled)
+            {
+                outputs = null;
+                outputsWithheld = assembled;
+                logger.LogWarning("Attempt {Attempt} returned outputs that are not kept once assembled: {Reason}", attemptId, assembled);
+            }
+
             attempt.Status = result.Outcome switch
             {
                 Outcome.Succeeded => AttemptStatuses.Succeeded,
@@ -392,12 +408,22 @@ public sealed partial class RunEngine
                 Outcome.Uncertain => AttemptStatuses.Uncertain,
                 _ => AttemptStatuses.Failed,
             };
+            // Withheld outputs settle the attempt without them: what reads its outputs, such as a plan's approval, the
+            // inventory or the VMID collision check, never takes their absence for evidence. Work that may have changed
+            // something is uncertain; anything else failed.
+            if (outputsWithheld is not null && attempt.Status == AttemptStatuses.Succeeded)
+                attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
             attempt.LateResult = late;
-            attempt.Error = string.IsNullOrEmpty(result.Error) ? (outputsWithheld ? AttemptLogStore.Withheld : null) : logs.MaskDiagnostic(attempt.Id, result.Error);
+            attempt.OutputsWithheld = outputsWithheld is not null;
+            attempt.ResultSha256 = received;
+            var error = string.IsNullOrEmpty(result.Error) ? null : logs.MaskDiagnostic(attempt.Id, result.Error);
+            // Joined with the server's words, the reported error is masked whole again.
+            attempt.Error = outputsWithheld is null ? error
+                : error is null || error == outputsWithheld ? outputsWithheld
+                : logs.MaskDiagnostic(attempt.Id, $"{outputsWithheld} {error}");
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
-            logs.Close(attempt.Id);
 
             if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
                 && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu is not null
@@ -412,12 +438,15 @@ public sealed partial class RunEngine
 
             if (attempt.Step is null)
             {
+                // The observation's data is assembled from its outputs, and checked with its masks before they are forgotten.
                 await FinishObservationAsync(db, attempt, outputs, cancellationToken);
+                await logs.CloseAsync(attempt.Id, cancellationToken);
                 await db.SaveChangesAsync(cancellationToken);
                 signal.Wake();
                 return true;
             }
 
+            await logs.CloseAsync(attempt.Id, cancellationToken);
             var step = attempt.Step;
             var run = step.Run!;
             // A late result of an attempt that was already retried is recorded, but the retry decides the step.
@@ -495,6 +524,9 @@ public sealed partial class RunEngine
             return true;
         }, cancellationToken);
 
+    /// <summary>The error of an attempt whose lease ran out: the one kind of uncertain attempt that still takes a late result.</summary>
+    public const string LeaseExpired = "The agent stopped reporting before the attempt finished.";
+
     private async Task ExpireLeasesAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
@@ -504,7 +536,7 @@ public sealed partial class RunEngine
         foreach (var attempt in expired)
         {
             attempt.Status = AttemptStatuses.Uncertain;
-            attempt.Error = "The agent stopped reporting before the attempt finished.";
+            attempt.Error = LeaseExpired;
             attempt.FinishedAt = now;
             attempt.LeaseExpiresAt = null;
             logger.LogWarning("The lease of attempt {Attempt} expired.", attempt.Id);

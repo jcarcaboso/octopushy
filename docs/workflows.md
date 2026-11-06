@@ -519,7 +519,9 @@ needs a new token from **Agents**, stored at a key of its own. Earlier versions 
 recorded. Each value records what it wrote: the store version, tagged
 with the value's id, and its token. Once its change is final, and nothing at the branch head, no open change and no unfinished
 run references the key, cleanup removes exactly that version, while it is still the one present, and revokes the token unless
-it was used. A removal that fails is retried at every sync
+it was used. A person may delete the key under **Variables** first, once nothing holds it
+([deleting a key](credential-lifecycle.md)); cleanup then finds it gone and leaves anything set under that key since alone,
+since a key set again continues after the version it had. A removal that fails is retried at every sync
 ([how generated values are removed](changes-from-the-ui.md#the-workflow-wizard)).
 
 The server generates a value only where the workflow's `ui.secrets` asks for that generator for that secret; any other secret
@@ -582,13 +584,16 @@ same as renaming it. The reference is in Git, the stored value is encrypted unde
 it, so the change is a replacement made in this order:
 
 1. Set the new key. A secret's value cannot be read back, so enter it from its source.
-2. Commit the changed references. A new key starts at version 1, so change any `version` too.
+2. Commit the changed references. A new key starts at version 1, and a key deleted before continues after its last
+   version, so change any `version` too.
 3. Review the plans this causes. A reference in a guest, or in an installation's `connection`, is part of what a guest's
    plan is built from, so renaming a Proxmox token plans every guest of that installation again, and a run waiting on the
    old definition is no longer current.
 4. Wait until **Used by** no longer lists the old key, which includes runs in progress.
-5. Delete the old key. If it has execution history, deleting is refused: revoke its versions instead. The key then stays
-   listed.
+5. Delete the old key. Its values go; which runs and attempts received which version stays on record. Deleting is refused,
+   naming what holds it, while a definition file at the branch head names the key, valid or not, while scheduled
+   observations of an invalid head's last valid revision use it, or while an open change, a run that has not finished or an
+   attempt that may still receive it uses it ([deleting a key](credential-lifecycle.md)).
 
 A reference to a key that is not set is listed under **Referenced but not set** and blocks its run until the key is set, so
 a step taken out of order stops the work rather than delivering nothing.

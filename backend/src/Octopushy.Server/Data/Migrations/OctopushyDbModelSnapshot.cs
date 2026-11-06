@@ -212,6 +212,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("outputs");
 
+                    b.Property<bool>("OutputsWithheld")
+                        .HasColumnType("boolean")
+                        .HasColumnName("outputs_withheld");
+
                     b.Property<Guid?>("PreferredAgentId")
                         .HasColumnType("uuid")
                         .HasColumnName("preferred_agent_id");
@@ -224,6 +228,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<Guid?>("ResourceId")
                         .HasColumnType("uuid")
                         .HasColumnName("resource_id");
+
+                    b.Property<string>("ResultSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("result_sha256");
 
                     b.Property<Guid?>("RevisionId")
                         .HasColumnType("uuid")
@@ -358,6 +366,31 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_revisions_commit_workflows_digest");
 
                     b.ToTable("revisions", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.DeletedStoreKey", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<DateTimeOffset>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("DeletedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<int>("LatestVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("latest_version");
+
+                    b.HasKey("Key")
+                        .HasName("pk_deleted_store_keys");
+
+                    b.ToTable("deleted_store_keys", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.EnrollmentToken", b =>

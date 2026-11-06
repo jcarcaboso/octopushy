@@ -362,6 +362,73 @@ public class ConfigureRunTests(PostgresFixture postgres)
         Assert.Contains("A reboot is due.", run.Detail);
     }
 
+    [Theory]
+    [InlineData("failed", RunStatuses.Failed)]
+    [InlineData("succeeded", RunStatuses.Succeeded)]
+    public async Task What_the_server_writes_from_a_reported_outcome_is_masked_whole(string result, string status)
+    {
+        var outcomes = $$"""
+            outcomes:
+              pending-reboot: { result: {{result}} }
+            """;
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: outcomes));
+        // A secret that neither reported value holds, but the text joining them does.
+        const string Secret = "pending-reboot: A reboot is due";
+        await server.SetSecretAsync("access/app/ssh-key", SshKey);
+        await server.SetPlainAsync("access/app/host-key", HostKey);
+        await server.SetSecretAsync("app/tailscale", Secret);
+        await server.SetSecretAsync("app/git-key", "git-key-value");
+        var (_, agent, http) = await ProvisionedAsync(server, setKeys: false);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        var playbook = await agent.NextAsync("run");
+        Assert.Contains(Secret, playbook.Secrets.Values);
+        await agent.ReportAsync(playbook, Outcome.Succeeded, Recap("pending-reboot", "A reboot is due"));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(status, run.Status);
+        var attempt = run.Steps.SelectMany(s => s.Attempts).Single(a => a.Id == Guid.Parse(playbook.AttemptId));
+        Assert.DoesNotContain(Secret, attempt.Outputs);
+        Assert.DoesNotContain(Secret, run.Detail ?? "");
+        Assert.All(run.Steps, s => Assert.DoesNotContain(Secret, s.Detail ?? ""));
+        Assert.Contains("***", (run.Detail ?? "") + string.Concat(run.Steps.Select(s => s.Detail)));
+        Assert.DoesNotContain(Secret, await http.GetStringAsync($"/api/runs/{run.Id}"));
+    }
+
+    [Fact]
+    public async Task A_result_after_the_agent_could_only_say_uncertain_is_taken_once_and_its_replay_changes_nothing()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        var playbook = await agent.NextAsync("run");
+        var id = Guid.Parse(playbook.AttemptId);
+        Task<Attempt> AttemptAsync() => server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
+
+        // As an agent sends when its stored result could not be read, and then, once it can, the result it stored.
+        const string Lost = "the agent lost the attempt's stored result";
+        Assert.True(await agent.ReportAsync(playbook, Outcome.Uncertain, new JsonObject(), Lost));
+        var uncertain = await AttemptAsync();
+        Assert.Equal((AttemptStatuses.Uncertain, Lost, false), (uncertain.Status, uncertain.Error, uncertain.OutputsWithheld));
+        Assert.True(await agent.ReportAsync(playbook, Outcome.Uncertain, new JsonObject(), Lost));
+        Assert.Equal(uncertain.FinishedAt, (await AttemptAsync()).FinishedAt);
+
+        Assert.True(await agent.ReportAsync(playbook, Outcome.Succeeded, Recap()));
+        var taken = await AttemptAsync();
+        Assert.Equal((AttemptStatuses.Succeeded, (string?)null, true), (taken.Status, taken.Error, taken.LateResult));
+        Assert.NotNull(taken.Outputs);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+
+        // And the success, sent again, changes nothing either.
+        Assert.True(await agent.ReportAsync(playbook, Outcome.Succeeded, Recap()));
+        Assert.Equal(taken.FinishedAt, (await AttemptAsync()).FinishedAt);
+    }
+
     [Fact]
     public async Task A_lost_playbook_is_uncertain_keeps_the_guest_and_is_not_retried()
     {
@@ -649,9 +716,9 @@ public class ConfigureRunTests(PostgresFixture postgres)
         var playbook = await agent.NextAsync("run");
         var logs = server.Services.GetRequiredService<AttemptLogStore>();
         var attempt = Guid.Parse(playbook.AttemptId);
-        Assert.Equal("line *** printed alone", logs.Mask(attempt, "line b3BlbnNzaC1rZXk printed alone"));
+        Assert.Equal("line *** printed alone", logs.MaskDiagnostic(attempt, "line b3BlbnNzaC1rZXk printed alone"));
         logs.RegisterSecrets(attempt, ["ab12\ncd34"]);
-        Assert.Equal("*** and ***", logs.Mask(attempt, "ab12 and cd34"));
+        Assert.Equal("*** and ***", logs.MaskDiagnostic(attempt, "ab12 and cd34"));
     }
 
     [Fact]

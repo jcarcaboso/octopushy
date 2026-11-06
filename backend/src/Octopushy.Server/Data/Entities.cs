@@ -961,6 +961,18 @@ public sealed class Attempt
 
     /// <summary>The result arrived after the lease had expired.</summary>
     public bool LateResult { get; set; }
+
+    /// <summary>
+    /// The server settled the attempt without its outputs, because they could not be kept: it had the attempt's result, and
+    /// what it did with it stands. No other result is taken for it.
+    /// </summary>
+    public bool OutputsWithheld { get; set; }
+
+    /// <summary>
+    /// The SHA-256 of the result the server took, as the agent sent it. The same result sent again, as an agent does until it
+    /// is acknowledged, changes nothing.
+    /// </summary>
+    public string? ResultSha256 { get; set; }
 }
 
 public sealed class ArtifactRecord
@@ -1149,6 +1161,23 @@ public sealed class StoreVersion
     public string? RevokedBy { get; set; }
 
     public string? RevocationNote { get; set; }
+}
+
+/// <summary>
+/// The last version a store key had when it was deleted. A key written again continues after it, so a version number names one
+/// value only: what <see cref="SecretResolution"/>, a run's pinned versions and a guest's followed versions recorded never comes
+/// to point at a later value. It holds no secret material.
+/// </summary>
+public sealed class DeletedStoreKey
+{
+    public required string Key { get; set; }
+
+    public int LatestVersion { get; set; }
+
+    public DateTimeOffset DeletedAt { get; set; }
+
+    /// <summary>The person who deleted it, or <c>cleanup</c> for a generated value removed by its cleanup.</summary>
+    public required string DeletedBy { get; set; }
 }
 
 /// <summary>Audit record of a secret released to an attempt; never holds the value.</summary>
