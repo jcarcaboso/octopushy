@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.6.1:
+Milestone 1 has shipped, up to release 0.6.2:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -33,7 +33,7 @@ Milestone 1 has shipped, up to release 0.6.1:
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
 
-Unreleased, coming after 0.6.1:
+New in 0.6.2:
 
 - [Store keys](docs/workflows.md#store-keys) follow the lab repository's hierarchy. The deploy wizard generates a guest's
   secrets at `proxmox/<installation>/<guest>/<secret>` and a service's at `proxmox/<installation>/<guest>/<service>/<secret>`,
