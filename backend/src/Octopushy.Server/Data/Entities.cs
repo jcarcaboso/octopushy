@@ -961,6 +961,18 @@ public sealed class Attempt
 
     /// <summary>The result arrived after the lease had expired.</summary>
     public bool LateResult { get; set; }
+
+    /// <summary>
+    /// The server settled the attempt without its outputs, because they could not be kept: it had the attempt's result, and
+    /// what it did with it stands. No other result is taken for it.
+    /// </summary>
+    public bool OutputsWithheld { get; set; }
+
+    /// <summary>
+    /// The SHA-256 of the result the server took, as the agent sent it. The same result sent again, as an agent does until it
+    /// is acknowledged, changes nothing.
+    /// </summary>
+    public string? ResultSha256 { get; set; }
 }
 
 public sealed class ArtifactRecord

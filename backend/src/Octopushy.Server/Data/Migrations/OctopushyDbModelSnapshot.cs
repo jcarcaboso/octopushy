@@ -212,6 +212,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("outputs");
 
+                    b.Property<bool>("OutputsWithheld")
+                        .HasColumnType("boolean")
+                        .HasColumnName("outputs_withheld");
+
                     b.Property<Guid?>("PreferredAgentId")
                         .HasColumnType("uuid")
                         .HasColumnName("preferred_agent_id");
@@ -224,6 +228,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<Guid?>("ResourceId")
                         .HasColumnType("uuid")
                         .HasColumnName("resource_id");
+
+                    b.Property<string>("ResultSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("result_sha256");
 
                     b.Property<Guid?>("RevisionId")
                         .HasColumnType("uuid")

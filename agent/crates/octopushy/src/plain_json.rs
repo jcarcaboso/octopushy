@@ -110,6 +110,37 @@ mod tests {
     }
 
     #[test]
+    fn every_finite_float_reads_back_through_serde_as_the_same_value() {
+        let mut edges = vec![
+            f64::MAX,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            5e-324,
+            1.3532280674609456e124,
+            0.1,
+        ];
+        // A deterministic sweep of bit patterns, every exponent among them.
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            edges.push(f64::from_bits(x));
+        }
+        for value in edges.into_iter().filter(|v| v.is_finite()) {
+            let text = to_string(&json!(value));
+            assert!(!has_exponent(&text), "{text}");
+            let back: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            let expected = if value == 0.0 { 0.0 } else { value };
+            assert_eq!(
+                back.as_f64().map(f64::to_bits),
+                Some(expected.to_bits()),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
     fn what_serde_json_writes_with_an_exponent_is_written_plain() {
         // A nearly idle host's cpu, as serde_json itself writes it.
         assert_eq!(serde_json::to_string(&json!(4.2e-7)).unwrap(), "4.2e-7");

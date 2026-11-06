@@ -104,6 +104,7 @@ public sealed partial class RunEngine
                 attempt.Status = AttemptStatuses.Failed;
                 attempt.Error = withheld;
                 attempt.Outputs = null;
+                attempt.OutputsWithheld = true;
             }
         }
 

@@ -40,8 +40,9 @@ Unreleased, coming after 0.6.1:
   in place of `guests/<lab>/…` and `services/<lab>/…`, and suggests `proxmox/<installation>/<guest>/host-key` for a host key.
   Keys generated before keep working, since definitions name them.
 - A key under **Variables** can be deleted once nothing needs it, even after runs used it. Its values go, the record of
-  which attempt received which version stays, and a key set again continues its version numbers. It adds the
-  `DeletedStoreKeys` migration ([deleting a key](docs/credential-lifecycle.md)).
+  which attempt received which version stays, and a key set again continues its version numbers. What attempts report
+  is checked for secrets as it is stored. It adds the `DeletedStoreKeys` and `AttemptResultReceipts` migrations
+  ([deleting a key](docs/credential-lifecycle.md)).
 
 ## Direction
 

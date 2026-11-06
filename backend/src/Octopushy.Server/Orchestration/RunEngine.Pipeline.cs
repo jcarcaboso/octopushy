@@ -56,8 +56,9 @@ public sealed partial class RunEngine
         // Each plan's effects refuse this already; asked again so no path offers it for approval.
         foreach (var plan in run.Steps.Where(s => s.Stage is not null && s.Name == StepNames.Plan))
         {
-            if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), context.ForStep(plan)) is { } foreign)
+            if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), context.ForStep(plan)) is { } refusal)
             {
+                var foreign = await ReportedAsync(db, plan, refusal, cancellationToken);
                 step.Status = StepStatuses.Failed;
                 step.Detail = foreign;
                 Finish(run, RunStatuses.Failed, foreign);
@@ -132,7 +133,7 @@ public sealed partial class RunEngine
         if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context).ForStep(step)) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
-            step.Detail = foreign;
+            step.Detail = await ReportedAsync(db, step, foreign, cancellationToken);
             return;
         }
 
@@ -148,7 +149,7 @@ public sealed partial class RunEngine
             if (outputs?["outcome"]?.GetValue<string>() is { } name && ansible.Outcomes.TryGetValue(name, out var declared) && declared.Result == "failed")
             {
                 step.Status = StepStatuses.Failed;
-                step.Detail = $"It reported {name}{(outputs["detail"]?.GetValue<string>() is { } detail ? $": {detail}" : "")}.";
+                step.Detail = await ReportedAsync(db, step, $"It reported {name}{(outputs["detail"]?.GetValue<string>() is { } detail ? $": {detail}" : "")}.", cancellationToken);
                 return;
             }
 

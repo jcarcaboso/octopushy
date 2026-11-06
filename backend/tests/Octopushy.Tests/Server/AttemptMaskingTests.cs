@@ -267,6 +267,12 @@ public class AttemptMaskingTests(PostgresFixture postgres)
         Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
         var replayed = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
         Assert.Equal((first.Status, first.FinishedAt, first.LateResult, first.Error), (replayed.Status, replayed.FinishedAt, replayed.LateResult, replayed.Error));
+        Assert.True(replayed.OutputsWithheld);
+
+        // Nor does another result: the server settled this one itself, from the result it had.
+        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = "fine" }));
+        var other = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
+        Assert.Equal((first.Status, first.FinishedAt, first.LateResult, (string?)null), (other.Status, other.FinishedAt, other.LateResult, other.Outputs));
     }
 
     [Fact]

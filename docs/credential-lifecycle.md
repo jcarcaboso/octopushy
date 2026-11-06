@@ -148,7 +148,22 @@ the outputs with what the server adds to them, such as a plan's digest; an
 observation's data, with the connection it went through; and a pipeline's
 approval document, against the secrets of every attempt it is built from. Each
 is checked whole and kept as it is or not at all, so a digest or an identity in
-it is never rewritten. An attempt whose outputs are withheld is settled without them:
+it is never rewritten. Text the server writes from what an attempt reported, such
+as "It reported pending-reboot: A reboot is due." as a step's or a run's detail,
+or a refused plan's description, is masked whole with that attempt's masks before
+it is kept.
+
+The guarantee covers what an attempt reported and the documents and text built
+from it. It does not cover names and fields the server generates itself: the
+property names of what the API returns, such as `toolVersion`, and its own fixed
+words are not checked against secrets, so a secret that is such a word can
+appear there.
+
+An uncertain attempt takes one later result: its lease ran out, or the agent
+could only say it was uncertain, as when its stored result could not be read for
+a moment, and sends the result it stored once it can. The same result sent again
+changes nothing. An attempt the server settled itself, because the outputs of
+the result it had could not be kept, takes no other. An attempt whose outputs are withheld is settled without them:
 failed, or uncertain if its work may have changed something, with the reason as
 its error. What reads outputs treats them as unknown, never as empty: a withheld
 observation leaves the installation's previous observation as the evidence the

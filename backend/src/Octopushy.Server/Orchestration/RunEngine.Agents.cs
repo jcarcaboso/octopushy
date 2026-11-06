@@ -1,3 +1,4 @@
+using Google.Protobuf;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
@@ -307,6 +308,9 @@ public sealed partial class RunEngine
             return true;
         }
 
+        // What the agent sent, before anything below is changed in it.
+        var received = ArtifactStore.Sha256(result.ToByteArray());
+
         // A corrupted artifact fails the attempt; it is never stored or used.
         if (result.Artifacts.FirstOrDefault(a => ArtifactStore.Sha256(a.Content.Span) != a.Sha256.ToLowerInvariant()) is { } corrupted)
         {
@@ -332,9 +336,16 @@ public sealed partial class RunEngine
                 return true;
             }
 
-            // Only an attempt whose lease ran out still waits for its result. One that is uncertain because of a result it
-            // reported, or what that result held, has had it: a replay of it changes nothing.
-            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && attempt.Error == LeaseExpired;
+            // The result this attempt was settled with, sent again: nothing to do.
+            if (attempt.ResultSha256 == received)
+            {
+                return true;
+            }
+
+            // An uncertain attempt takes one later result: its lease ran out, or the agent could only say it was uncertain
+            // and knows better now, as when its stored result could not be read for a moment. Not one the server settled
+            // itself because the outputs it had could not be kept: that result stands.
+            var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && !attempt.OutputsWithheld;
             if (AttemptStatuses.IsTerminal(attempt.Status) && !late)
             {
                 return true;
@@ -403,8 +414,13 @@ public sealed partial class RunEngine
             if (outputsWithheld is not null && attempt.Status == AttemptStatuses.Succeeded)
                 attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
             attempt.LateResult = late;
+            attempt.OutputsWithheld = outputsWithheld is not null;
+            attempt.ResultSha256 = received;
             var error = string.IsNullOrEmpty(result.Error) ? null : logs.MaskDiagnostic(attempt.Id, result.Error);
-            attempt.Error = outputsWithheld is null ? error : error is null || error == outputsWithheld ? outputsWithheld : $"{outputsWithheld} {error}";
+            // Joined with the server's words, the reported error is masked whole again.
+            attempt.Error = outputsWithheld is null ? error
+                : error is null || error == outputsWithheld ? outputsWithheld
+                : logs.MaskDiagnostic(attempt.Id, $"{outputsWithheld} {error}");
             attempt.Outputs = outputs?.ToJsonString();
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
