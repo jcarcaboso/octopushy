@@ -39,6 +39,7 @@ describe("buildOverview: VM attributes", () => {
       ["Disk", "32 → 64 GiB", "scsi0 · grow", "neutral"],
       ["Memory", "4 → 8 GiB", "dedicated", "neutral"],
       ["CPU", "2 → 4", "cores", "neutral"],
+      ["Resources", "~1", "update in place", "neutral"],
     ]);
     expect(result[0].rows).toEqual([{ mark: "~", name: "scsi0 size", before: "32 GiB", after: "64 GiB", note: "grow" }]);
     expect(result[0].heading).toBe(`${vm} · update in place`);
@@ -89,7 +90,7 @@ describe("buildOverview: VM attributes", () => {
 });
 
 describe("buildOverview: resources", () => {
-  it("counts changes without attributes by action, and ignores no-ops", () => {
+  it("counts every change by action, a VM's too, and ignores no-ops", () => {
     const result = tiles([plan(
       change("terraform_data.a", ["create"]),
       change("terraform_data.b", ["update"]),
@@ -99,12 +100,13 @@ describe("buildOverview: resources", () => {
       change(vm, ["update"], [attr("cpu.cores", 2, 4)]),
     )]);
     const resources = result.find((t) => t.key === "resources")!;
-    expect(resources).toMatchObject({ label: "Resources", value: "+1 ~1 −1 ±1", tone: "danger" });
+    expect(resources).toMatchObject({ label: "Resources", value: "+1 ~2 −1 ±1", tone: "danger" });
     expect(resources.rows.map((r) => [r.mark, r.name, r.note])).toEqual([
       ["+", "terraform_data.a", "create"],
       ["~", "terraform_data.b", "update in place"],
       ["−", "terraform_data.c", "delete"],
       ["±", "terraform_data.d", "replace"],
+      ["~", vm, "update in place"],
     ]);
   });
 

@@ -605,9 +605,7 @@
 .overview-tile__sub {
   font-size: var(--text-xs);
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .overview--add {
@@ -631,7 +629,7 @@
 }
 
 .overview__rows {
-  width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -659,6 +657,10 @@
   overflow-wrap: anywhere;
 }
 
+.overview-row__old {
+  text-align: right;
+}
+
 .overview-row__arrow {
   width: 1.75rem;
   text-align: center;
@@ -679,8 +681,7 @@
 }
 
 .overview-row__note {
-  width: 1%;
-  text-align: right;
+  padding-left: var(--space-3);
   white-space: nowrap;
   font-family: var(--font-sans);
   color: var(--text-muted);
@@ -718,11 +719,6 @@
 @media (max-width: 560px) {
   .overview__tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .overview-row__old,
-  .overview-row__arrow {
-    display: none;
   }
 }
 

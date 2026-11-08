@@ -277,14 +277,12 @@ function fileRow(line: string): Row {
 /** Tiles for one stage's plans and previews, in a fixed order: VM settings, resources, prepared values, files, secrets. */
 export function buildOverview({ plans, previews }: OverviewInput): Tile[] {
   const tiles: Tile[] = [];
-  const plain: PlanChange[] = [];
-  for (const plan of plans) {
-    for (const change of plan.changes) {
-      if (change.attributes.length === 0) plain.push(change);
-      else for (const attribute of change.attributes) tiles.push(attributeTile(change, attribute));
-    }
+  const changes = plans.flatMap((plan) => plan.changes);
+  for (const change of changes) {
+    for (const attribute of change.attributes) tiles.push(attributeTile(change, attribute));
   }
-  const resources = resourcesTile(plain);
+  // Every change, also a VM's, so the counts match the plan's and nothing an attribute leaves out goes unlisted.
+  const resources = resourcesTile(changes);
   if (resources) tiles.push(resources);
   previews.forEach((preview, i) => {
     const prepared = preparedTile(preview, i);
