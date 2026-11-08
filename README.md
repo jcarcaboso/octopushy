@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.6.2:
+Milestone 1 has shipped, up to release 0.7.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,24 @@ Milestone 1 has shipped, up to release 0.6.2:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.7.0:
+
+- [Per-action approval](docs/workflows.md#guest), from #52. A workflow action can set `approval`, and a
+  guest can override it with `policy.actions.<action>.approval`. The guest override wins, then the workflow action,
+  then the guest's usual approval. This applies to actions started by a commit, a schedule or a person. Destructive
+  approval still follows the guest unless separately set. These additions change the workflow and guest schemas:
+  upgrade the server and offline validator to 0.7.0 before using them. Older servers and validators reject the new
+  fields, so workflows that use `approval` need this release.
+- [Worker routing by reachability](docs/worker-routing.md), from #53. The controller probes agents for access to a
+  step's Proxmox API, snippet host or guest SSH endpoint, from the agent process or the step's tool runtime as needed.
+  It assigns network-dependent work only with fresh positive evidence. **Upgrade the server first, then agents to
+  0.7.0 at each site.** Network-dependent work waits on older agents with `update the agent to report reachability`.
+  Check **Agents** and the step's waiting reason after upgrading. Container tool runtimes need a network that reaches
+  their targets, plus `/bin/sh` and `python3` or `nc` in the tool image. Probes do not support proxies; proxy variables
+  in the step's environment or tool container make that context unsupported and its work waits. Location-only labels
+  can be removed after agents report reachability; keep labels that restrict access to credentials. See
+  [upgrading](docs/worker-routing.md#upgrading) and [how an agent probes](docs/worker-routing.md#how-a-probe-connects).
 
 New in 0.6.2:
 
