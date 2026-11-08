@@ -196,20 +196,26 @@ function leafText(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** A leaf as shown, and as JSON so that `false` and `"false"` still differ. */
+export interface Leaf {
+  text: string;
+  json: string;
+}
+
 /** Leaf paths of prepared JSON. A list of plain values stays one leaf, so a new item is not a shifted index. */
-export function flatten(value: unknown, path = ""): Map<string, string> {
-  const leaves = new Map<string, string>();
+export function flatten(value: unknown, path = ""): Map<string, Leaf> {
+  const leaves = new Map<string, Leaf>();
   const walk = (node: unknown, at: string) => {
     if (Array.isArray(node)) {
       if (node.every((item) => !isObject(item) && !Array.isArray(item))) {
-        leaves.set(at, node.map(leafText).join(", "));
+        leaves.set(at, { text: node.map(leafText).join(", "), json: JSON.stringify(node) });
       } else {
         node.forEach((item, i) => walk(item, `${at}[${i}]`));
       }
     } else if (isObject(node) && Object.keys(node).length > 0) {
       for (const [key, child] of Object.entries(node)) walk(child, at ? `${at}.${key}` : key);
     } else {
-      leaves.set(at, isObject(node) ? "{}" : leafText(node));
+      leaves.set(at, { text: isObject(node) ? "{}" : leafText(node), json: JSON.stringify(node ?? null) });
     }
   };
   walk(value, path);
@@ -228,7 +234,7 @@ function preparedTile(preview: ConfigurePreview, index: number): Tile | null {
       key, label: "Prepared", heading, tone: "neutral",
       value: String(now.size),
       sub: "first run · nothing to compare",
-      rows: [...now].map(([path, value]) => ({ mark: "", name: name(path), after: value })),
+      rows: [...now].map(([path, value]) => ({ mark: "", name: name(path), after: value.text })),
       unchanged: [],
     };
   }
@@ -238,12 +244,12 @@ function preparedTile(preview: ConfigurePreview, index: number): Tile | null {
   const unchanged: Row[] = [];
   for (const [path, value] of now) {
     const old = baseline.get(path);
-    if (old === undefined) added.push({ mark: "+", name: name(path), after: value });
-    else if (old !== value) changed.push({ mark: "~", name: name(path), before: old, after: value });
-    else unchanged.push({ mark: "", name: name(path), before: value });
+    if (old === undefined) added.push({ mark: "+", name: name(path), after: value.text });
+    else if (old.json !== value.json) changed.push({ mark: "~", name: name(path), before: old.text, after: value.text });
+    else unchanged.push({ mark: "", name: name(path), before: value.text });
   }
   for (const [path, value] of baseline) {
-    if (!now.has(path)) removed.push({ mark: "−", name: name(path), before: value });
+    if (!now.has(path)) removed.push({ mark: "−", name: name(path), before: value.text });
   }
   const parts = [
     changed.length > 0 ? [String(changed.length), "changed"] : null,

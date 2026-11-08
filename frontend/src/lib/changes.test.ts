@@ -176,9 +176,17 @@ describe("buildRunOverview", () => {
 
 describe("flatten", () => {
   it("keeps lists of plain values as one leaf and indexes lists of objects", () => {
-    expect([...flatten({ a: [1, "b"], c: [{ d: 1 }], e: {}, f: null })]).toEqual([
+    expect([...flatten({ a: [1, "b"], c: [{ d: 1 }], e: {}, f: null })].map(([path, leaf]) => [path, leaf.text])).toEqual([
       ["a", "1, b"], ["c[0].d", "1"], ["e", "{}"], ["f", "null"],
     ]);
+  });
+
+  it("tells values apart that only look the same", () => {
+    for (const [before, after] of [[{ on: false }, { on: "false" }], [{ args: ["a, b"] }, { args: ["a", "b"] }]]) {
+      const tile = buildOverview({ plans: [], previews: [preview({ prepared: after, previousPrepared: before })] }).find((t) => t.label === "Prepared");
+      expect(tile?.value).toBe("1");
+      expect(tile?.unchanged).toEqual([]);
+    }
   });
 });
 
