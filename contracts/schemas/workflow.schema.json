@@ -51,7 +51,8 @@
           "prepare": { "description": "A playbook run on the agent before approval, with no secrets and no access to the guest. What it writes to OCTOPUSHY_PREPARED_FILE becomes extra vars. Relative to the stage's root.", "type": "string", "minLength": 1 },
           "snapshot": { "description": "applied reuses what the guest's last successful run prepared.", "enum": ["applied"] },
           "destructive": { "description": "Whether this action can delete data or a service. Octopushy cannot tell from a playbook, so this is required, and true waits under policy.destructive: manual.", "type": "boolean" },
-          "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+          "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "approval": { "description": "The approval this action takes on every guest, whatever the guest's own approval says. A guest's policy.actions overrides it. Destructive still applies.", "enum": ["automatic", "manual"] }
         },
         "required": ["stage", "playbook", "destructive"],
         "not": { "required": ["prepare", "snapshot"] },

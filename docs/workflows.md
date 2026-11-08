@@ -171,6 +171,7 @@ actions:                          # what else can be run from the Ansible stage
     playbook: update-tools.yml
     prepare: prepare.yml
     destructive: false            # required: only the workflow can say
+    approval: automatic           # optional: on every guest, whatever the guest's approval; see below
   update-system:
     stage: setup
     playbook: update-system.yml
@@ -194,6 +195,14 @@ For `manages: vm`, and `manages: container` alike:
   `setup`, which runs whenever the guest's inputs, secrets, access, the workflow, or the guest's files change. It is
   `destructive: false` unless the stage says otherwise. No declared action may be called `setup`.
 - **`actions`** are the other playbooks of that stage, run by hand or on the guest's schedules. Each names its `stage`.
+- **An action can set its own `approval`,** `automatic` or `manual`, for every guest that uses the workflow. It wins
+  over the guest's approval settings, from `octopushy.yaml` down to the guest, and a guest's own
+  [`policy.actions`](#guest) wins over it. It changes approval only: `destructive` applies as before. Unlike a guest's
+  `policy.actions`, changing it is a change to the workflow like any other, so its guests run setup again when they move
+  to the release that has it ([hashes](#hashes)). The setup stage's own action has none; a guest can still set one for
+  `setup`. **Decided by the owner on November 8, 2026,** knowing what
+  it means: a new release of a workflow, which a guest picks up within its major, can make an action run without a
+  person on a guest under manual approval, and nothing in the lab repository shows it except the guest's page.
 - **`secrets` and `outcomes`** need the Ansible stage. A workflow without one has neither.
 
 ### A workflow that manages a container
@@ -731,6 +740,8 @@ access:
 policy:
   approval: automatic             # changes, including recreating the VM, run on their own
   destructive: manual             # deleting this VM or its disks waits for approval
+  actions:                        # one action's approval, whatever starts it; see below
+    update-system: { approval: manual }
 ```
 
 Octopushy itself reads the placement and identity. `hardware`, `network` and `inputs` are validated against the workflow's
@@ -738,7 +749,16 @@ schema, so Octopushy does not need a VM model of its own. The machine stage also
 installation's connection and the template, so one shared OpenTofu module provisions every guest. Each guest has its own
 state, so guests are planned, locked, and applied independently.
 
-`secrets`, `secretFiles` and `schedules` need a workflow with a setup stage, and so does `access.user` for it to log in.
+**One action can have its own approval.** An action's approval comes from the first of these that sets one: the guest's
+`policy.actions.<action>.approval`, then the workflow's `approval` on that action, then the guest's approval as usual. It
+applies whatever starts the action: a commit, a schedule or a person. The usual case is a frequent schedule, such as a
+check every hour, that should not wait for a person each time on a guest under manual approval, or a system update that
+should wait on an automatic one. It changes approval only: `destructive`, when unset, still follows the guest's approval,
+so a destructive action on a manual guest keeps waiting. A guest's `policy.actions` names its workflow's actions,
+`setup` included, and an action the workflow lacks is a validation error. Like the rest of `policy`, changing it starts no
+run. The guest's page lists each action that takes its own approval, and where it was set.
+
+`secrets`, `secretFiles`, `schedules` and `policy.actions` need a workflow with a setup stage, and so does `access.user` for it to log in.
 So does `access.hostKey`, unless the guest's host key is Octopushy's: a container's is pinned from its create task
 ([the host key of a container](guest-configuration.md#the-host-key-of-a-container)), and a VM's is Octopushy's when the
 workflow's machine stage has `hostKey: managed` and the installation lists the guest's host under `snippets.hosts`

@@ -292,7 +292,11 @@ public sealed record LabDto(
 
 public sealed record InventoryDto(RevisionDto? Revision, IReadOnlyList<LabDto> Labs);
 
-public sealed record PolicyDto(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy);
+/// <param name="Actions">For a guest, the actions of its setup stage that take their own approval, from its policy.actions or the workflow.</param>
+public sealed record PolicyDto(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy, IReadOnlyList<ActionApprovalDto>? Actions = null);
+
+/// <summary>The approval one action of a guest's setup stage takes, whatever starts it, and where it was set.</summary>
+public sealed record ActionApprovalDto(string Action, string Approval, string SetBy);
 
 public sealed record BindingDto(string Installation, int Vmid, DateTimeOffset? BoundAt);
 

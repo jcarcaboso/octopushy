@@ -179,7 +179,14 @@ public sealed record WorkflowAction(
     bool UsesAppliedSnapshot,
     bool Destructive,
     bool OnChange,
-    int? TimeoutMinutes);
+    int? TimeoutMinutes)
+{
+    /// <summary>
+    /// The approval the workflow gives this action on every guest, if it sets one. It wins over the guest's approval
+    /// settings, and the guest's <c>policy.actions</c> wins over it. The setup stage's own action has none.
+    /// </summary>
+    public string? Approval { get; init; }
+}
 
 /// <summary>A result a playbook may report that is neither success nor failure.</summary>
 public sealed record WorkflowOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result);

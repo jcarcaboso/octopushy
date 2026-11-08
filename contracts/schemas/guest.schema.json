@@ -59,7 +59,7 @@
       "additionalProperties": false
     },
     "execution": { "$ref": "common.schema.json#/$defs/execution" },
-    "policy": { "$ref": "common.schema.json#/$defs/policy" }
+    "policy": { "$ref": "common.schema.json#/$defs/guestPolicy" }
   },
   "required": ["schemaVersion", "type", "host", "vmid", "workflow"],
   "additionalProperties": false

@@ -644,7 +644,15 @@ public sealed class LabRepositoryLoader
                 Invalid($"/{field}", $"{field} are for a workflow's Ansible stage, and {workflow.Label} has none.");
             }
 
+            if (guest.Json["policy"]?["actions"] is not null)
+                Invalid("/policy/actions", $"policy.actions are for a workflow's Ansible stage, and {workflow.Label} has none.");
             return;
+        }
+
+        // A misspelt action would leave the one it meant under the guest's approval, silently.
+        foreach (var action in PolicyResolver.GuestActionApprovals(guest).Keys.Where(a => !configure.Actions.ContainsKey(a)))
+        {
+            Invalid($"/policy/actions/{action}", $"policy.actions names '{action}', and the workflow {workflow.Label} has no such action.");
         }
 
         if (ConfigureInputs.AddressOf(guest) is null)

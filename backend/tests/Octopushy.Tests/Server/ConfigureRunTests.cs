@@ -46,6 +46,16 @@ public class ConfigureRunTests(PostgresFixture postgres)
         await server.SetSecretAsync("app/git-key", "git-key-value");
     }
 
+    /// <summary>Sets the guest's policy once it is provisioned: a manual guest would hold its provision run too.</summary>
+    private static async Task SetPolicyAsync(ServerHarness server, string policy)
+    {
+        const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(file, File.ReadAllText(Path.Combine(server.Repository.Root, file)) + policy);
+        server.Commit("Set the policy");
+        await server.SyncAsync();
+        await server.TickAsync();
+    }
+
     private static Task ScheduleAsync(ServerHarness server) =>
         server.Services.GetRequiredService<Planner>().ScheduleConfigurationsAsync(CancellationToken.None);
 
@@ -192,6 +202,43 @@ public class ConfigureRunTests(PostgresFixture postgres)
         await ScheduleAsync(server);
         await PreviewAsync(agent);
         await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+    }
+
+    [Fact]
+    public async Task An_action_with_its_own_automatic_approval_runs_unattended_on_a_manual_guest()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await SetPolicyAsync(server, "policy:\n  approval: manual\n  actions:\n    setup: { approval: automatic }\n");
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Equal("policy", approval.DecidedBy);
+        Assert.Contains($"set by {Guest}, action setup", approval.DecisionNote);
+    }
+
+    [Theory]
+    // The override is of approval only: a destructive action still follows destructive, which follows the guest.
+    [InlineData("policy:\n  approval: manual\n  actions:\n    setup: { approval: automatic }\n", "true", "destructive is manual")]
+    [InlineData("policy:\n  actions:\n    setup: { approval: manual }\n", "false", $"Approval is manual (set by {Guest}, action setup)")]
+    public async Task An_action_waits_when_its_own_approval_or_destructive_says_so(string policy, string destructive, string detail)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(destructive: destructive));
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await SetPolicyAsync(server, policy);
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        Assert.Contains(detail, run.Steps.Single(s => s.Name == StepNames.Approval).Detail);
+        Assert.Empty(agent.TakeAssignments());
     }
 
     [Fact]
@@ -530,6 +577,29 @@ public class ConfigureRunTests(PostgresFixture postgres)
         Assert.Equal("update-system", input["action"]!.GetValue<string>());
         var run = await server.LatestRunAsync(Guest, Operations.Configure);
         Assert.Equal("manual", run.Reason);
+    }
+
+    [Fact]
+    public async Task A_workflows_automatic_action_runs_unattended_on_a_manual_guest()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.WithWorkflowApproval("", "automatic"));
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent, new JsonObject { ["version"] = "1.2.3" });
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        await SetPolicyAsync(server, "policy: { approval: manual }\n");
+
+        var resource = await server.ResourceAsync(Guest);
+        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "update-system" })).EnsureSuccessStatusCode();
+        await server.TickAsync();
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        Assert.Contains("set by workflow app@1.0, action update-system", run.Steps.Single(s => s.Name == StepNames.Approval).DecisionNote);
     }
 
     [Fact]

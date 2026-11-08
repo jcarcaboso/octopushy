@@ -264,6 +264,117 @@ public class GuestConfigurationTests
     }
 
     [Fact]
+    public void An_action_can_have_its_own_approval_and_destructive_still_follows_the_guest()
+    {
+        using var test = Repository("policy:\n  approval: manual\n  actions:\n    update-system: { approval: automatic }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        var guest = repository.Guest(Address)!;
+
+        var update = PolicyResolver.ForAction(repository, guest, "update-system");
+        Assert.Equal(("automatic", $"{Address}, action update-system"), (update.Approval.Value, update.Approval.SetBy));
+        Assert.Equal(("manual", $"{Address}, following approval"), (update.Destructive.Value, update.Destructive.SetBy));
+
+        var setup = PolicyResolver.ForAction(repository, guest, "setup");
+        Assert.Equal(("manual", Address), (setup.Approval.Value, setup.Approval.SetBy));
+    }
+
+    [Fact]
+    public void An_action_can_be_held_on_a_guest_that_is_otherwise_automatic()
+    {
+        using var test = Repository("policy:\n  actions:\n    update-system: { approval: manual }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var guest = repository.Guest(Address)!;
+        Assert.Equal("manual", PolicyResolver.ForAction(repository, guest, "update-system").Approval.Value);
+        Assert.Equal("automatic", PolicyResolver.ForAction(repository, guest, "setup").Approval.Value);
+    }
+
+    /// <summary>The fixture's workflow with update-system given an approval of its own.</summary>
+    internal static TestRepository WithWorkflowApproval(string policy, string approval)
+    {
+        var test = Repository(policy);
+        Edit(test, WorkflowFile, "    snapshot: applied\n", $"    snapshot: applied\n    approval: {approval}\n");
+        return test;
+    }
+
+    [Fact]
+    public void A_workflow_gives_an_action_its_approval_on_every_guest_whatever_the_guest_says()
+    {
+        using var test = WithWorkflowApproval("policy: { approval: manual }\n", "automatic");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(repository.Issues);
+        var guest = repository.Guest(Address)!;
+
+        var update = PolicyResolver.ForAction(repository, guest, "update-system");
+        Assert.Equal(("automatic", "workflow app@1.0, action update-system"), (update.Approval.Value, update.Approval.SetBy));
+        Assert.Equal("manual", update.Destructive.Value);
+        Assert.Equal("manual", PolicyResolver.ForAction(repository, guest, "setup").Approval.Value);
+        var listed = Assert.Single(PolicyResolver.ActionApprovals(guest));
+        Assert.Equal(("update-system", "automatic"), (listed.Action, listed.Approval.Value));
+    }
+
+    [Fact]
+    public void A_guest_overrides_the_workflows_approval_for_an_action()
+    {
+        using var test = WithWorkflowApproval("policy:\n  actions:\n    update-system: { approval: manual }\n", "automatic");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var update = PolicyResolver.ForAction(repository, repository.Guest(Address)!, "update-system");
+        Assert.Equal(("manual", $"{Address}, action update-system"), (update.Approval.Value, update.Approval.SetBy));
+    }
+
+    [Fact]
+    public void A_workflow_approval_is_automatic_or_manual()
+    {
+        using var test = WithWorkflowApproval("", "sometimes");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.Issues, i => i.File.EndsWith("workflow.yaml"));
+    }
+
+    [Theory]
+    [InlineData("    reinstall: { approval: automatic }\n","policy.actions names 'reinstall', and the workflow app@1.0 has no such action")]
+    [InlineData("    setup: { approval: sometimes }\n", "")]
+    [InlineData("    setup: {}\n", "")]
+    [InlineData("    setup: { approval: automatic, destructive: automatic }\n", "")]
+    public void An_action_approval_that_cannot_apply_is_refused(string actions, string message)
+    {
+        using var test = Repository($"policy:\n  actions:\n{actions}");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains(message));
+        Assert.False(repository.IsValid(Address));
+        Assert.True(repository.RepositoryValid);
+    }
+
+    [Fact]
+    public void An_action_approval_needs_a_setup_stage()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write(GuestFile, File.ReadAllText(Path.Combine(test.Root, GuestFile)) + "policy:\n  actions:\n    setup: { approval: automatic }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.IssuesFor(Address), i => i.Message.Contains("policy.actions are for a workflow's Ansible stage, and test-vm@1.0 has none"));
+    }
+
+    [Fact]
+    public void Only_a_guest_names_actions_in_its_policy()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write("labs/home/lab.yaml", File.ReadAllText(Path.Combine(test.Root, "labs/home/lab.yaml")) + "policy:\n  actions:\n    setup: { approval: automatic }\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Contains(repository.Issues, i => i.File.EndsWith("lab.yaml"));
+    }
+
+    [Fact]
+    public void Changing_an_action_approval_configures_nothing()
+    {
+        using var without = Repository();
+        using var with = Repository("policy:\n  actions:\n    setup: { approval: manual }\n");
+        var before = LabRepositoryLoader.Load(without.Root);
+        var after = LabRepositoryLoader.Load(with.Root);
+        Assert.Equal(
+            ConfigureInputs.Build(before, before.Guest(Address)!).Hash,
+            ConfigureInputs.Build(after, after.Guest(Address)!).Hash);
+    }
+
+    [Fact]
     public void A_schedule_needs_a_real_time_zone()
     {
         using var test = WithSchedules("    - { action: setup, cron: \"0 6 * * *\" }\n");
