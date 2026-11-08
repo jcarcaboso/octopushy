@@ -2,7 +2,7 @@ name: Images
 
 # Publishes the backend, frontend, agent and validate images to one Docker Hub repository, as
 # `<component>-main` and `<component>-sha-<commit>` for every push to main, and
-# `<component>-<version>` and `<component>-latest` for every v<version> tag. The Proxmox
+# only `<component>-<version>` for every v<version> tag. The Proxmox
 # installer (deploy/proxmox) runs the first three; `validate` is the offline validator,
 # `octopushy-validate`, for the CI of lab and workflows repositories. Needs the DOCKERHUB_USERNAME and
 # DOCKERHUB_TOKEN repository secrets; the token only has to write to this repository.
@@ -48,10 +48,11 @@ jobs:
         with:
           images: docker.io/skorcius/octopushy
           flavor: |
-            prefix=${{ matrix.component }}-,onlatest=true
+            latest=false
+            prefix=${{ matrix.component }}-
           tags: |
             type=ref,event=branch
-            type=sha,format=long,prefix=${{ matrix.component }}-sha-
+            type=sha,format=long,prefix=${{ matrix.component }}-sha-,enable=${{ github.ref_type != 'tag' }}
             type=semver,pattern={{version}}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

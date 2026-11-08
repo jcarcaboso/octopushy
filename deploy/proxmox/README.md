@@ -17,8 +17,8 @@ and has `nesting` and `keyctl` turned on, which Docker needs.
 - **Published images.** The workflow publishes the three images to the public repository
   `docker.io/skorcius/octopushy`, told apart by tag: `backend-…`, `frontend-…`, and
   `agent-…`, followed by `main` or `sha-<commit>` on every push to `main`, and by
-  `<version>` or `latest` for every `v<version>` tag. It needs the GitHub repository
-  secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The container pulls without
+  only `<version>` for every `v<version>` tag, without SHA or `latest` aliases.
+  It needs the GitHub repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The container pulls without
   credentials. Docker Hub limits anonymous pulls per address; if a pull stops with
   `toomanyrequests`, run `docker login` in the container.
 - **Snapshot-capable storage** for the container: ZFS (`local-zfs`), LVM-thin
