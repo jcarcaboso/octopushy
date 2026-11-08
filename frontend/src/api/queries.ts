@@ -337,6 +337,15 @@ export function useRetryStage() {
   });
 }
 
+/** Starts a new run of a failed run's work; it plans again and takes its own approval. */
+export function useRunAgain() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/run-again", { params: { path: { id } } })),
+    onSuccess: () => refresh(),
+  });
+}
+
 export function useUpdateAgent() {
   const client = useQueryClient();
   return useMutation({

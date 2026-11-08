@@ -877,6 +877,13 @@ nothing about an earlier one, and a workflow may not be safely reversible.
 
 Deploy on the service's page, or `POST /api/services/{id}/deploy`, starts a new run whatever the last one did.
 
+**Run again** on any failed run's page, or `POST /api/runs/{id}/run-again`, does the same for the work that run did, of any
+operation: a guest's provision or retire plans the guest again, a configure run runs its action again, a rotation starts
+again, and a pipeline deploys again. It is a new run at the latest revision. It plans again, takes its own approval, and is
+refused for the same reasons starting it from the guest's or service's page would be. It is offered only on the latest run of
+that work: once a newer one exists, that one is where to look. An uncertain run is closed first, and then it is a failed run
+like any other.
+
 ### Later stages cannot use results of earlier ones
 
 Every plan is made before anything applies, so a stage uses repository inputs only. There are no stage outputs. A value one

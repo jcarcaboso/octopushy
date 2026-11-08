@@ -1,8 +1,8 @@
-import { Ban, CircleX } from "lucide-react";
+import { Ban, CircleX, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { isNotFound } from "../api/client";
-import { Link, useParams } from "react-router";
-import { isRunFinished, useCancelRun, useCloseRun, useRun } from "../api/queries";
+import { Link, useNavigate, useParams } from "react-router";
+import { isRunFinished, useCancelRun, useCloseRun, useRun, useRunAgain } from "../api/queries";
 import type { RunDetail } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { WaitingNote } from "../components/WaitingNote";
@@ -112,7 +112,9 @@ export function RunPage() {
   const { data, error, isPending } = useRun(id);
   const cancel = useCancelRun();
   const close = useCloseRun();
-  const [confirm, setConfirm] = useState<"cancel" | "close" | null>(null);
+  const again = useRunAgain();
+  const navigate = useNavigate();
+  const [confirm, setConfirm] = useState<"cancel" | "close" | "again" | null>(null);
 
   if (isPending) return <PageSkeleton rows={3} />;
   if (!data) return isNotFound(error) ? <NotFound what="run" /> : <ErrorMessage error={error} title="The run could not be loaded" />;
@@ -163,6 +165,12 @@ export function RunPage() {
               <button type="button" className="button" onClick={() => setConfirm("close")}>
                 <CircleX size={15} aria-hidden="true" />
                 Close run
+              </button>
+            ) : null}
+            {data.canRunAgain ? (
+              <button type="button" className="button" onClick={() => setConfirm("again")}>
+                <RotateCcw size={15} aria-hidden="true" />
+                Run again
               </button>
             ) : null}
           </>
@@ -221,6 +229,30 @@ export function RunPage() {
         onConfirm={() => close.mutate(run.id, { onSuccess: () => setConfirm(null) })}
       >
         <p>{closeExplanation}</p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirm === "again"}
+        title={`Run #${number} again?`}
+        confirmLabel="Start a new run"
+        pending={again.isPending}
+        error={again.error}
+        onClose={() => {
+          setConfirm(null);
+          again.reset();
+        }}
+        onConfirm={() =>
+          again.mutate(run.id, {
+            onSuccess: (started) => {
+              setConfirm(null);
+              navigate(`/runs/${started.runId}`);
+            },
+          })
+        }
+      >
+        <p>
+          A new run of the same work starts from the latest revision. It plans again and asks for approval as its
+          policy says. Nothing of this run is reused.
+        </p>
       </ConfirmDialog>
     </>
   );
