@@ -21,6 +21,15 @@ backend:
 frontend:
     cd frontend && pnpm run dev
 
+# The frontend on http://127.0.0.1:5176 against a mock API with realistic data: no backend, database or agent (frontend/mock).
+mock:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd frontend
+    port="${MOCK_PORT:-18280}"
+    MOCK_PORT="$port" node mock/server.ts & trap 'kill $!' EXIT
+    OCTOPUSHY_API="http://127.0.0.1:$port" pnpm run dev --port 5176
+
 # Build the agent and run it against the local backend; enroll first with `just agent-enroll <token>`.
 agent:
     cd agent && cargo run --bin octopushy -- agent run --state-dir ../.dev/agent

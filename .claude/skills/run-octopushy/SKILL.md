@@ -17,8 +17,13 @@ S=.claude/skills/run-octopushy/scripts
 |---|---|
 | Any page, the API, the variable store, the editor, lab sync | `$S/stack.sh up`: about 15 seconds once built, no Rust build, and its data goes with `down` |
 | An agent, real plans or applies, OpenTofu, a mock Proxmox | `just demo`, see [With an agent](#with-an-agent) |
+| UI-only work or screenshots: runs at every stage, approvals with change tiles, no backend at all | `just mock`, see [Mock API](#mock-api) |
 
-Default to `stack.sh`. Without an agent, runs are created but wait for a worker, so anything past the plan needs the demo.
+Default to `stack.sh` when the check involves the server. Without an agent, runs are created but wait for a worker, so anything past the plan needs the demo or the mock.
+
+## Mock API
+
+`just mock` serves the app on http://127.0.0.1:5176 against `frontend/mock`, a Node server with fixed, realistic data: runs waiting for approval (provision, configure, outcome, pipeline), running, succeeded and failed. It starts in about a second, needs no podman or dotnet, and is already signed in. Approving and rejecting work, in memory. It is not the backend, so it proves nothing about the server; use it for layout and copy. `frontend/mock/README.md` lists the scenario URLs. Run it in the background and stop it like the demo, by its process group. `open({ base: "http://127.0.0.1:5176" })` works as is, since `open()` skips sign-in when the app is already signed in.
 
 ## Launch and drive
 

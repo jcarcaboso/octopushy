@@ -26,10 +26,15 @@ export async function open({ width = 1400, height = 800, base = defaultBase, use
   page.on("response", (r) => r.status() >= 400 && problems.push(`http ${r.status()} ${r.request().method()} ${r.url()}`));
 
   await page.goto(`${base}/login`);
-  await page.getByLabel("User name").fill(user);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  // An app that is already signed in, such as `just mock`, leaves the sign-in page by itself.
+  const signedIn = page.waitForURL((url) => !url.pathname.startsWith("/login")).then(() => true);
+  const form = page.getByLabel("User name").waitFor().then(() => false, () => true);
+  if (!(await Promise.race([signedIn, form]))) {
+    await page.getByLabel("User name").fill(user);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await signedIn;
+  }
 
   let failed = 0;
   return {
