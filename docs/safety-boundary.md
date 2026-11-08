@@ -102,6 +102,10 @@ explicitly automatic, then unprotect, apply, and reprotect if the apply does not
 **Unprotect** is sent only when the plan deletes or replaces that VM *and* the guest owns
 it (see [ownership](#ownership-reservation-and-confirmed-creation)), for a provision and a
 retire alike. Otherwise the VM keeps its protection, and Proxmox refuses the removal.
+One more plan lifts it: a provision plan that updates the guest's own **container** in place,
+since Proxmox refuses any change to a protected container's disks, growing the root disk
+included. That run reprotects the container whether the apply finishes or not. The apply is
+still exactly the approved plan, which removes no machine.
 A **pipeline stage** owns no machine, so it may change no Proxmox resource that names a
 VM at all, and nothing of a Proxmox provider outside the allowlist. A plan that counts
 changes without listing them is refused too.

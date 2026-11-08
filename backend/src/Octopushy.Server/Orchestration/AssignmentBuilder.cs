@@ -400,8 +400,8 @@ public sealed partial class AssignmentBuilder(
         if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext) is { } foreign)
             throw new AssignmentException(await OutputDiagnostics.MaskAsync(db, masks, logs, plan, foreign, cancellationToken));
         if (stepName == StepNames.Unprotect && run.Operation is Operations.Provision or Operations.Retire
-            && !GuestVmPlan.RemovesGuestVm(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
-            throw new AssignmentException($"Protection is lifted only for an approved plan that replaces or deletes this guest's {runContext.Proxmox.Machine}.");
+            && !GuestVmPlan.LiftsProtection(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))
+            throw new AssignmentException($"Protection is lifted only for an approved plan that replaces or deletes this guest's {runContext.Proxmox.Machine}, or changes its container in place.");
         if (stepName == StepNames.Unprotect
             && (await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken) is not { ParentAddress: { } installation } guest
                 || runContext.Proxmox.Vmid is not { } vmid

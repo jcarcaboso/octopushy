@@ -156,6 +156,19 @@ public static class GuestVmPlan
         Removals(outputs).Any(c => IsGuests(c, context));
 
     /// <summary>
+    /// The plan changes the container this guest owns in place. Proxmox refuses any change to a protected container's
+    /// disks, a root disk that only grows included, so such a plan needs its protection lifted as well, and put back after.
+    /// A VM's disks grow while it is protected, so an update to a VM never counts.
+    /// </summary>
+    public static bool UpdatesGuestContainer(JsonNode? outputs, RunContext context) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>().Any(c =>
+            c["type"]?.ToString() == ContainerResourceType && Actions(c) is ["update"] && IsGuests(c, context));
+
+    /// <summary>The plan removes the machine this guest owns, or changes its container in place: the only reasons to lift its protection.</summary>
+    public static bool LiftsProtection(JsonNode? outputs, RunContext context) =>
+        RemovesGuestVm(outputs, context) || UpdatesGuestContainer(outputs, context);
+
+    /// <summary>
     /// The only machine the plan removes is this guest's, and OpenTofu replaces it because creating it did not finish.
     /// A replacement for any other reason, such as an edit, does not count.
     /// </summary>

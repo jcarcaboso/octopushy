@@ -50,11 +50,11 @@ function describe(step: Step, operation: string): string | null {
     case "playbook-approved":
       return "Runs the same commit and preview once more, with what the workflow says approving adds.";
     case "unprotect":
-      return "Removes the machine's protection so it can be deleted.";
+      return "Removes the machine's protection so it can be deleted, or so a container's disks can change.";
     case "apply":
       return "OpenTofu applies exactly the approved plan.";
     case "reprotect":
-      return "Puts the machine's protection back, because the plan was not applied in full.";
+      return "Puts the machine's protection back, after a change in place or a plan that was not applied in full.";
     case "verify":
       return "Checks the VM or container through the Proxmox API.";
     case "verify-absent":

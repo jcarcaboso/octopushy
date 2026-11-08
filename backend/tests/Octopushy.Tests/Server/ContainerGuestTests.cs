@@ -237,6 +237,94 @@ public class ContainerGuestTests(PostgresFixture postgres)
         Assert.Equal(($"{Rsa}\n", 2), (pin!.Value.Value, pin.Value.Version));
     }
 
+    private static JsonObject Lifted => new() { ["absent"] = false, ["previous"] = true, ["protection"] = false };
+
+    private static JsonObject Restored => new() { ["absent"] = false, ["previous"] = false, ["protection"] = true };
+
+    /// <summary>Provisions and binds the guest's container, then plans it again to an update in place.</summary>
+    private static async Task PlanUpdateAsync(ServerHarness server, FakeAgent agent)
+    {
+        await ProvisionAsync(agent, Ed25519);
+        await server.TickAsync();
+        var resource = await server.ResourceAsync(Guest);
+        Assert.Equal(Vmid, resource.BoundVmid);
+        await server.Services.GetRequiredService<Planner>().PlanGuestAsync(resource.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact("grow"));
+    }
+
+    [Fact]
+    public async Task Growing_the_guests_container_lifts_its_protection_and_puts_it_back_after_the_apply()
+    {
+        // Proxmox: "can't update CT 500 drive 'rootfs' - protection mode enabled", for a root disk that only grows.
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await PlanUpdateAsync(server, agent);
+
+        var unprotect = await agent.NextAsync("set-protection");
+        Assert.Equal(("lxc", Vmid, false),
+            (Input(unprotect)["kind"]!.GetValue<string>(), Input(unprotect)["vmid"]!.GetValue<int>(), Input(unprotect)["protection"]!.GetValue<bool>()));
+        await agent.ReportAsync(unprotect, Outcome.Succeeded, Lifted);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, Verified(Ed25519));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Running, run.Status);
+        var reprotect = await agent.NextAsync("set-protection");
+        Assert.Equal(("lxc", Vmid, true),
+            (Input(reprotect)["kind"]!.GetValue<string>(), Input(reprotect)["vmid"]!.GetValue<int>(), Input(reprotect)["protection"]!.GetValue<bool>()));
+        await agent.ReportAsync(reprotect, Outcome.Succeeded, Restored);
+        await server.TickAsync();
+
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        Assert.Equal(StepStatuses.Succeeded, run.Steps.Single(s => s.Name == StepNames.Reprotect).Status);
+    }
+
+    [Fact]
+    public async Task A_failed_update_of_the_guests_container_puts_its_protection_back()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await PlanUpdateAsync(server, agent);
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Lifted);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: "boom");
+        await server.TickAsync();
+
+        var reprotect = await agent.NextAsync("set-protection");
+        Assert.True(Input(reprotect)["protection"]!.GetValue<bool>());
+        await agent.ReportAsync(reprotect, Outcome.Succeeded, Restored);
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("Protection of container 310 is back on", run.Detail);
+    }
+
+    [Fact]
+    public async Task Cancelling_an_update_after_its_apply_still_puts_protection_back()
+    {
+        var (server, agent) = await StartAsync(Container("policy: { approval: automatic, destructive: manual }"));
+        await using var _ = server;
+        await PlanUpdateAsync(server, agent);
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Lifted);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.NextAsync("verify-guest");
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        await server.Engine.CancelAsync(run.Id, "Cancelled by ops.", CancellationToken.None);
+        await server.TickAsync();
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(StepStatuses.Succeeded, run.Steps.Single(s => s.Name == StepNames.Apply).Status);
+        Assert.Equal(StepStatuses.Cancelled, run.Steps.Single(s => s.Name == StepNames.Verify).Status);
+
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Restored);
+        await server.TickAsync();
+        run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Cancelled, run.Status);
+        Assert.Contains("is back on", run.Detail);
+    }
+
     /// <summary>Plans the guest again, and has a person approve the plan, which replaces the container.</summary>
     private static async Task ReplaceAsync(ServerHarness server, FakeAgent agent)
     {
@@ -319,8 +407,11 @@ public class ContainerGuestTests(PostgresFixture postgres)
         server.Commit("Set the container up");
         await server.SyncAsync();
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact("update"));
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Lifted);
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, Verified());
+        await server.TickAsync();
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Restored);
         await server.TickAsync();
         Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
         var key = await server.QueryAsync(db => db.GuestAccessKeys.AsNoTracking().SingleAsync());
@@ -343,6 +434,7 @@ public class ContainerGuestTests(PostgresFixture postgres)
         // An update creates nothing: the verify is asked for no keys, and keys it reports anyway are not this guest's pin.
         await server.Services.GetRequiredService<Planner>().PlanGuestAsync((await server.ResourceAsync(Guest)).Id, CancellationToken.None);
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, ContainerPlan(["update"]), artifacts: FakeAgent.PlanArtifact("update"));
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, Lifted);
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
         var verify = await agent.NextAsync("verify-guest");
         Assert.Null(Input(verify)["hostKeys"]);
