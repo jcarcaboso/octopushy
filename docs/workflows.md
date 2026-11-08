@@ -197,8 +197,10 @@ For `manages: vm`, and `manages: container` alike:
 - **`actions`** are the other playbooks of that stage, run by hand or on the guest's schedules. Each names its `stage`.
 - **An action can set its own `approval`,** `automatic` or `manual`, for every guest that uses the workflow. It wins
   over the guest's approval settings, from `octopushy.yaml` down to the guest, and a guest's own
-  [`policy.actions`](#guest) wins over it. It changes approval only: `destructive` applies as before. The setup stage's
-  own action has none; a guest can still set one for `setup`. **Decided by the owner on November 8, 2026,** knowing what
+  [`policy.actions`](#guest) wins over it. It changes approval only: `destructive` applies as before. Unlike a guest's
+  `policy.actions`, changing it is a change to the workflow like any other, so its guests run setup again when they move
+  to the release that has it ([hashes](#hashes)). The setup stage's own action has none; a guest can still set one for
+  `setup`. **Decided by the owner on November 8, 2026,** knowing what
   it means: a new release of a workflow, which a guest picks up within its major, can make an action run without a
   person on a guest under manual approval, and nothing in the lab repository shows it except the guest's page.
 - **`secrets` and `outcomes`** need the Ansible stage. A workflow without one has neither.
