@@ -240,6 +240,10 @@ What is different about a container:
   stage is pinned to them, so a container Octopushy creates may leave out `access.hostKey`: see [the host key of a container](guest-configuration.md#the-host-key-of-a-container).
 - **Its keys are set once.** The provider replaces a container whose `user_account` keys change, so a container module
   ignores later changes to them: see [SSH identity](guest-configuration.md#ssh-identity).
+- **Protection is lifted for a change in place too.** Proxmox refuses to change a protected container's disks, even to
+  grow its root disk, though it lets a VM's grow. So an approved plan that updates the guest's own container lifts its
+  protection right before the apply, as a replacement does, and puts it back once the run is done, whether the apply
+  finished or not. An update to a VM still never touches protection.
 - **No guest agent exec.** Proxmox has no API to run a command in a container. Octopushy runs nothing through one for a
   VM either; anything on the machine is the setup stage's, over SSH.
 

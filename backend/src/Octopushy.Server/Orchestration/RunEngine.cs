@@ -200,11 +200,11 @@ public sealed partial class RunEngine(
             attempt.LeaseExpiresAt = null;
         }
 
-        // A run that lifted protection and will not apply must not leave the VM unprotected.
+        // A run that lifted protection must not leave the VM unprotected, whether it has applied yet or not.
         var context = RunContext.Parse(run.Context);
         if (run.Steps.All(s => s.Name != StepNames.Reprotect) && LiftedProtection(run))
         {
-            var waiting = run.Steps.Single(s => s.Name == StepNames.Apply);
+            var waiting = run.Steps.Where(s => !StepStatuses.IsDone(s.Status)).OrderBy(s => s.Ordinal).First();
             waiting.Status = StepStatuses.Cancelled;
             waiting.Detail = reason;
             RestoringProtection(db, run, context);
@@ -378,6 +378,13 @@ public sealed partial class RunEngine(
         if (context.Stages is not null)
         {
             await FinishPipelineAsync(db, run, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        // A container changed in place keeps the protection lifted for it until it is put back.
+        if (RestoringProtection(db, run, context))
+        {
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
@@ -564,10 +571,11 @@ public sealed partial class RunEngine(
                     && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect)
                 {
                     var planned = RunContext.Parse(run.Context);
-                    if (!GuestVmPlan.RemovesGuestVm(outputs, planned))
+                    if (!GuestVmPlan.LiftsProtection(outputs, planned))
                     {
                         unprotect.Status = StepStatuses.Skipped;
-                        unprotect.Detail = $"The plan does not replace or delete this guest's {planned.Proxmox.Machine}, so its protection stays as it is.";
+                        unprotect.Detail = $"The plan does not replace or delete this guest's {planned.Proxmox.Machine}"
+                            + (planned.Proxmox.MachineKind == "lxc" ? ", or change it in place" : "") + ", so its protection stays as it is.";
                     }
                     else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
                              || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
@@ -663,19 +671,27 @@ public sealed partial class RunEngine(
     }
 
     /// <summary>
-    /// Whether this provision run took protection off a VM and did not apply. A successful apply needs
-    /// no help: the module recreates the VM with protection on. A lift that left no answer counts.
+    /// Whether this provision run took protection off a VM and has to put it back: it did not apply, or it applied a
+    /// plan that kept the machine, a container changed in place. A successful apply of a removal needs no help: the
+    /// module recreates the VM with protection on. A lift that left no answer counts.
     /// </summary>
     private static bool LiftedProtection(Run run) =>
         run.Operation == Operations.Provision
-        && run.Steps.All(s => s.Name != StepNames.Apply || s.Status != StepStatuses.Succeeded)
+        && (!Applied(run) || KeptMachine(run))
         && run.Steps.Where(s => s.Name == StepNames.Unprotect).SelectMany(s => s.Attempts).Any(a =>
             a.Status == AttemptStatuses.Uncertain
             || a.Status == AttemptStatuses.Succeeded && a.Outputs is { } outputs
                 && JsonNode.Parse(outputs)?["previous"] is JsonValue previous && previous.TryGetValue<bool>(out var wasOn) && wasOn);
 
+    /// <summary>The run's plan keeps the guest's machine: what lifted its protection was a change in place.</summary>
+    private static bool KeptMachine(Run run) =>
+        run.Steps.SingleOrDefault(s => s.Name == StepNames.Plan)?.Outputs is { } plan
+        && !GuestVmPlan.RemovesGuestVm(JsonNode.Parse(plan), RunContext.Parse(run.Context));
+
+    private static bool Applied(Run run) => run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Succeeded);
+
     /// <summary>
-    /// Keeps a run that lifted protection and did not apply open until protection is back, on whatever
+    /// Keeps a run that lifted protection and did not apply, or changed a container in place, open until protection is back, on whatever
     /// VM holds the guest's VMID by then. Returns false once there is nothing left to wait for. The
     /// run stays unfinished meanwhile, so a rerun waits and cannot race this step.
     /// </summary>
@@ -710,7 +726,8 @@ public sealed partial class RunEngine(
         if (restore.Status is not (StepStatuses.Queued or StepStatuses.Running))
             return false;
         run.Status = RunStatuses.Running;
-        run.Detail = $"Restoring the protection of {context.Proxmox.Machine} {context.Proxmox.Vmid}: the plan was not applied in full.";
+        run.Detail = $"Restoring the protection of {context.Proxmox.Machine} {context.Proxmox.Vmid}: "
+            + (Applied(run) ? "it was lifted to change it in place." : "the plan was not applied in full.");
         return true;
     }
 
