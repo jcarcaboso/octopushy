@@ -50,6 +50,7 @@ builder.Services.AddSingleton<RevisionCache>();
 builder.Services.AddSingleton<RepositorySync>();
 builder.Services.AddSingleton<AgentCertificateAuthority>();
 builder.Services.AddSingleton<AgentConnections>();
+builder.Services.AddSingleton<WorkerReachability>();
 builder.Services.AddSingleton<AttemptLogStore>();
 builder.Services.AddSingleton<AttemptMasks>();
 builder.Services.AddSingleton<ArtifactStore>();
@@ -66,6 +67,7 @@ if (!generatingDocument && settings.RunBackgroundServices)
 {
     builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySync>());
     builder.Services.AddHostedService<Orchestrator>();
+    builder.Services.AddHostedService<ReachabilityRefresher>();
 }
 
 builder.Services.AddScoped<Views>();

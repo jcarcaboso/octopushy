@@ -1254,6 +1254,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tonic",
@@ -1280,6 +1281,7 @@ name = "octopushy-proxmox"
 version = "0.6.2"
 dependencies = [
  "hyper",
+ "hyper-util",
  "mock-proxmox",
  "reqwest",
  "rustls",

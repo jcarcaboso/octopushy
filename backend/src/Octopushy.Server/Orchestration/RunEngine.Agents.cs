@@ -121,6 +121,10 @@ public sealed partial class RunEngine
                                 && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability)))
                     .ToList();
                 string? waiting = null;
+                // Only agents with fresh evidence of every connection the step makes; the rest are asked, never waited for.
+                // Labels, executors and capabilities above, and capacity, preference and every check of the assignment
+                // below, still apply to those that remain.
+                var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
                 if (candidates.Count == 0)
                 {
                     var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
@@ -131,6 +135,10 @@ public sealed partial class RunEngine
                         : attempt.RequiredLabels.Length == 0
                             ? "Waiting for a connected agent."
                             : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
+                }
+                else if ((candidates = reachable.Agents).Count == 0)
+                {
+                    waiting = reachable.Waiting;
                 }
                 else if (attempt.HostKey is { } hostKey && attempt.HostLimit is { } limit && perHost.GetValueOrDefault(hostKey) >= limit)
                 {
@@ -151,7 +159,9 @@ public sealed partial class RunEngine
 
                 var agent = free.FirstOrDefault(a => a.Id == attempt.PreferredAgentId)
                             ?? free.MinBy(a => perAgent.GetValueOrDefault(a.Id))!;
-                var session = connections.Get(agent.Id);
+                // Only through the connection whose evidence was checked: one that replaced it since has none. A replaced
+                // connection is closed, so the hand-off below requeues the attempt.
+                var session = reachable.Sessions is { } checkedOn ? checkedOn[agent.Id] : connections.Get(agent.Id);
                 if (session is null)
                 {
                     attempt.WaitingReason = "The agent disconnected before assignment.";
@@ -240,6 +250,38 @@ public sealed partial class RunEngine
             await db.SaveChangesAsync(cancellationToken);
             return result.Count;
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// The candidates that may get the attempt as far as its connections go, and what the rest wait for. A step whose
+    /// connections are not modeled, or that makes none, keeps them all.
+    /// </summary>
+    private async Task<(List<AgentRecord> Agents, IReadOnlyDictionary<Guid, AgentSession>? Sessions, string Waiting)> ReachableAsync(
+        OctopushyDb db, Step? step, RunContext context, List<AgentRecord> candidates, CancellationToken cancellationToken)
+    {
+        var needs = await NetworkRequirements.ForAsync(db, step?.Name ?? StepNames.Observe, context.ForStep(step), cancellationToken);
+        if (needs.Targets.Count == 0)
+            return (candidates, null, "");
+        var able = new List<AgentRecord>();
+        var sessions = new Dictionary<Guid, AgentSession>();
+        var reasons = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            if (connections.Get(candidate.Id) is not { } session)
+                continue;
+            var verdict = await reachability.CheckAsync(session, needs.Targets, cancellationToken);
+            if (verdict.Ready)
+            {
+                able.Add(candidate);
+                sessions[candidate.Id] = session;
+            }
+            else
+                reasons.Add($"{candidate.Name}: {verdict.Reason}");
+        }
+
+        var waiting = $"Waiting for an agent with fresh evidence that it reaches {string.Join(" and ", needs.Targets.Select(t => t.Label))}. "
+                      + string.Join("; ", reasons) + ".";
+        return (able, sessions, waiting.Length <= 2000 ? waiting : waiting[..1999] + "…");
     }
 
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>

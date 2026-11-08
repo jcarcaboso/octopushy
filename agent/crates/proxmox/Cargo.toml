@@ -13,6 +13,8 @@ rustls.workspace = true
 rustls-pki-types.workspace = true
 rustls-platform-verifier.workspace = true
 hyper = { workspace = true, features = ["http1", "client"] }
+# The proxy matcher reqwest itself uses, so `proxied` answers exactly as a request would.
+hyper-util = { workspace = true, features = ["client-proxy"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

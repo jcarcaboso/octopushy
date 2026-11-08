@@ -93,6 +93,13 @@ What the agent does on the channel:
 - Runs assignments concurrently up to `max_concurrency` (extra ones wait), sends
   `AttemptStarted` (again on each new connection while the attempt runs), log
   batches every 500 ms or 100 lines, and one `AttemptResult` per attempt.
+- Answers `ReachabilityProbe`s (capability `reachability-v1`): a TLS handshake or an SSH
+  identification line, with no credential, from the agent process or from where tools
+  connect (directly for `local`; a relay container of the step's image, with the tool
+  containers' flags and network and nothing mounted, for `podman` and `docker`). Up to 4
+  at once, each bounded by its timeout and stopped when the connection ends. A proxy in
+  the relevant environment, or an image without `python3`/`nc`, is reported
+  `unsupported`. See [worker routing](../docs/worker-routing.md).
 - Reconnects with exponential backoff (1 s doubling to 60 s, jittered). Attempts keep
   running across reconnects; retained log lines (up to 20 000 lines / 8 MiB per
   attempt) and unacknowledged results are resent, and the server drops lines it has

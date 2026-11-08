@@ -23,6 +23,7 @@ prost.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
+tokio-rustls.workspace = true
 rcgen.workspace = true
 x509-parser.workspace = true
 serde.workspace = true

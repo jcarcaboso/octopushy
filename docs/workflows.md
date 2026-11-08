@@ -650,11 +650,12 @@ schemaVersion: 1
 name: Home
 timezone: Europe/Madrid           # for guest schedules and maintenance windows
 execution:
-  agentLabels: [home]             # agents that may act on this lab's resources
+  agentLabels: [home]             # optional: agents that may act on this lab's resources
 ```
 
 A lab groups installations. It carries no state or lock of its own. Agents get their labels on the server when they enroll,
-so an agent cannot grant them to itself. `integrations` and `dns` are accepted and do nothing. **Later,**
+so an agent cannot grant them to itself. Labels are not needed to send work to the site that can reach it: the controller
+routes by [reachability](worker-routing.md), and labels only narrow it further. `integrations` and `dns` are accepted and do nothing. **Later,**
 [interfaces](#interfaces) replace them.
 
 ### Proxmox installation and its hosts

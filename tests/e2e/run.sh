@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End to end: the backend, a real agent running OpenTofu, its state kept by the backend, and a
 # mock Proxmox API. Provisions the fixture guest, then retires it. OpenTofu runs in rootless
-# podman on the runtime's default network unless E2E_TOOL_RUNTIME says docker or local.
+# podman unless E2E_TOOL_RUNTIME says docker or local, on the host network so that it reaches
+# the mock on 127.0.0.1, as work is only routed to an agent whose tools reach the Proxmox API.
 # Needs the development PostgreSQL (`just dev-db`), in E2E_DB_CONTAINER_ENGINE (podman by
 # default). Leaves logs in .dev/e2e.
 set -euo pipefail
@@ -72,8 +73,11 @@ log "Agent"
 token=$(call -X POST "$api/api/agents/tokens" -d '{"name":"e2e-agent","labels":["e2e"]}' | jq -r .token)
 OCTOPUSHY_ENROLLMENT_TOKEN=$token "$root/agent/target/debug/octopushy" agent enroll \
   --server https://127.0.0.1:18443 --name e2e-agent --state-dir "$work/agent" >"$work/enroll.log" 2>&1
-# No host networking: the state reaches OpenTofu through the workspace, not over a network.
-"$root/agent/target/debug/octopushy" agent run --state-dir "$work/agent" --tool-runtime "${E2E_TOOL_RUNTIME:-podman}" \
+# The state still reaches OpenTofu through the workspace, never over a network.
+runtime=${E2E_TOOL_RUNTIME:-podman}
+agent_args=(--tool-runtime "$runtime")
+[[ $runtime == local ]] || agent_args+=(--container-network host)
+"$root/agent/target/debug/octopushy" agent run --state-dir "$work/agent" "${agent_args[@]}" \
   >"$work/agent.log" 2>&1 &
 pids+=($!)
 

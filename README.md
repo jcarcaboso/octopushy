@@ -20,6 +20,8 @@ Milestone 1 has shipped, up to release 0.6.2:
   [services](docs/workflows.md#services-and-their-runs) of OpenTofu and Ansible stages.
 - Actions on a schedule declared in Git, and SSH access keys that Octopushy manages and rotates.
 - A [repository editor](docs/repository-editor.md) that publishes drafts as commits.
+- [Worker routing](docs/worker-routing.md): work goes to an agent that was just shown to reach what the step
+  connects to, from where the step connects, without location labels.
 - [Changes from the UI](docs/changes-from-the-ui.md): a guest or service is edited from its workflow's inputs schema, upgraded
   to a newer major, or a guest removed, and each change is one commit to the lab repository, compare-and-swap against the
   commit its form was loaded from and authored by the operator. Octopushy syncs it at once, and its change page follows it

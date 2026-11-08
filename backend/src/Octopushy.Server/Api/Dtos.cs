@@ -129,6 +129,7 @@ public sealed record AttemptDto(
     long LogLines,
     bool Mutating);
 
+/// <param name="NetworkAccess">Which connections an agent must be shown to reach for this step, or that they are not modeled.</param>
 public sealed record StepDto(
     Guid Id,
     int Ordinal,
@@ -143,7 +144,8 @@ public sealed record StepDto(
     ApprovalDto? Approval,
     IReadOnlyList<AttemptDto> Attempts,
     ConfigurePreviewDto? ConfigurePreview = null,
-    string? Stage = null);
+    string? Stage = null,
+    string? NetworkAccess = null);
 
 /// <summary>What a plan step found: the resource changes OpenTofu proposes.</summary>
 public sealed record PlanDto(bool HasChanges, IReadOnlyList<PlanChangeDto> Changes, PlanCountsDto Counts, string? PlanSha256, string? ToolVersion);
@@ -490,7 +492,9 @@ public sealed record AgentDto(
     string? ToolRuntime,
     DateTimeOffset CertificateExpiresAt,
     int RunningAttempts,
-    bool Draining = false);
+    bool Draining = false,
+    bool ReportsReachability = false,
+    IReadOnlyList<Agents.ReachabilityEntry>? Reachability = null);
 
 public sealed record AgentUpdate(IReadOnlyList<string>? Labels, int? MaxConcurrency, bool? Disabled, bool? Draining = null);
 

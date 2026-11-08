@@ -7,6 +7,7 @@
 //! - [`executors`]: `proxmox` and `opentofu`.
 //! - [`tools`]: running OpenTofu with podman, docker, or locally.
 //! - [`masking`]: secret masking for logs and errors.
+//! - [`reachability`]: credential-free probes the server routes work by.
 //! - [`plain_json`]: outputs as JSON with every number in plain form, as the controller stores them.
 //! - [`renewal`], [`identity`], [`tls`], [`paths`]: credentials and state.
 
@@ -21,6 +22,7 @@ pub mod masking;
 pub mod outbox;
 pub mod paths;
 pub mod plain_json;
+pub mod reachability;
 pub mod renewal;
 pub mod run;
 pub mod status;

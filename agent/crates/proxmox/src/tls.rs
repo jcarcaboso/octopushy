@@ -31,12 +31,13 @@ impl std::fmt::Debug for Tls {
     }
 }
 
-pub(crate) fn provider() -> Arc<CryptoProvider> {
+/// The rustls crypto provider every connection here uses.
+pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
 
-/// Builds the rustls configuration for `tls`.
-pub(crate) fn client_config(tls: &Tls) -> Result<ClientConfig, Error> {
+/// Builds the rustls configuration for `tls`, as [`crate::Client`] uses it.
+pub fn client_config(tls: &Tls) -> Result<ClientConfig, Error> {
     let provider = provider();
     let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()

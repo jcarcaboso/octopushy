@@ -58,6 +58,9 @@ message AgentMessage {
     AttemptLog log = 4;
     AttemptResult result = 5;
     AttemptStateSnapshot state_snapshot = 6;
+    // Added in reachability-v1. Never in the result outbox: a report lost with a connection is
+    // simply not evidence, and the server asks again.
+    ReachabilityReport reachability = 7;
   }
 }
 
@@ -70,7 +73,7 @@ message Hello {
   // How the agent runs tools: "podman", "docker", or "local".
   string tool_runtime = 4;
   // Features of this binary that are not executors, such as
-  // "opentofu-builtin-state". Older agents send none.
+  // "opentofu-builtin-state" or "reachability-v1". Older agents send none.
   repeated string capabilities = 5;
 }
 
@@ -145,6 +148,8 @@ message ServerMessage {
     Assignment assignment = 2;
     CancelAttempt cancel = 3;
     ResultAck result_ack = 4;
+    // Sent only to an agent whose Hello lists the capability "reachability-v1".
+    ReachabilityProbe probe = 5;
   }
 }
 
@@ -177,4 +182,48 @@ message CancelAttempt {
 
 message ResultAck {
   string attempt_id = 1;
+}
+
+// Asks whether this agent can open a connection to one endpoint, from the context a step
+// would connect from. Credential-free: the agent sends no token, key or CA, and a positive
+// answer is recent route and protocol evidence, not proof that a step will succeed.
+// See docs/worker-routing.md.
+message ReachabilityProbe {
+  // Chosen by the server; a report is accepted only for an outstanding ID of the same
+  // session. Letters, digits and '-', at most 64.
+  string probe_id = 1;
+  // "tls": a TLS handshake. "ssh": the server's SSH identification line. Nothing is
+  // authenticated and nothing is sent after the handshake or the banner.
+  string protocol = 2;
+  // A DNS name or an IP address, without brackets.
+  string host = 3;
+  uint32 port = 4;
+  // TLS only: the name presented and verified. Empty: host.
+  string server_name = 5;
+  // TLS only. "system": verified with the agent's trust store, as the proxmox executor
+  // does with verifyTls and no CA. "collect": any certificate, but the handshake
+  // signature is still verified; the presented chain goes back for the server to judge.
+  string tls_trust = 6;
+  // "agent": the agent process itself, as the proxmox executor connects.
+  // "tool": as the tool runtime starts OpenTofu or Ansible.
+  string context = 7;
+  // "tool" context with a container runtime: the image the step runs, whose container
+  // makes the connection. Ignored by the local runtime.
+  string image = 8;
+  // The whole probe, including starting a container. The agent caps it.
+  uint32 timeout_seconds = 9;
+}
+
+message ReachabilityReport {
+  string probe_id = 1;
+  // "reachable", "refused", "timeout", "dns", "unreachable", "protocol" (something else
+  // answered), "tls-untrusted", "unsupported" (this context cannot be probed faithfully,
+  // such as through a proxy), or "error".
+  string status = 2;
+  // For people, written by the agent, at most 300 characters. Never peer data beyond an
+  // SSH protocol version, never a credential.
+  string detail = 3;
+  // "collect" only: the presented chain, leaf first, DER. At most 8, each at most 16 KiB.
+  repeated bytes certificates = 4;
+  uint32 elapsed_ms = 5;
 }
