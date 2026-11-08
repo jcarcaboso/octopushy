@@ -108,7 +108,10 @@ public sealed class WorkflowReader
                 p.Value!["snapshot"] is not null,
                 p.Value!["destructive"]!.GetValue<bool>(),
                 false,
-                p.Value!["timeoutMinutes"]?.GetValue<int>())),
+                p.Value!["timeoutMinutes"]?.GetValue<int>())
+            {
+                Approval = p.Value!["approval"]?.GetValue<string>(),
+            }),
             StringComparer.Ordinal) ?? [];
 
         // The inputs schema is part of the workflow, so it lives in the workflow's folder.

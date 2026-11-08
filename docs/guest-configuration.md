@@ -171,7 +171,7 @@ page shows its next time and what the last firing did.
 | **Missed.** No agent took the run | A step that can change the guest may go out until an hour after the run's time, not an hour after a catch-up started it. That is checked at each moment one would go out, so a preview that reports late or an agent that connects late cannot release it, and the run is cancelled with that reason. A finished preview does not change that, because nothing has reached the guest. Once such a step has gone out, it ends the usual way. The limit is on going out: an agent starts the step moments later, and one that has not started it within its 60-second lease leaves the run uncertain |
 | **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
 | **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
-| **Approval.** `policy.approval: manual`, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run. The hour does not apply to a run waiting for a person or approved by one: the time is then theirs, however late, and an approved run waits for an agent as any other does |
+| **Approval.** `policy.approval: manual`, or the action's own `policy.actions` approval, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run. The hour does not apply to a run waiting for a person or approved by one: the time is then theirs, however late, and an approved run waits for an agent as any other does |
 | **Declared outcome**, such as `deferred`, on a workflow that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval. This rule is about outcomes with `approve`: one without it has nobody to wait for, so it ends as its `result` declares, as on any run. `failed` fails the run and promotes nothing, and `succeeded` ends it as succeeded and promotes what was prepared |
 | **Failure** | Each time comes up once, whatever happens to it, so a failed run is not repeated until the next time. It stays on the guest's page and in **Runs**, with a link from the schedule |
 
@@ -213,6 +213,11 @@ All of this goes into one document, `preview.json`, whose SHA-256 the approval n
 another plan.
 
 - **`policy.approval: manual`** waits for approval on every run, automatic, scheduled or manual.
+- **An action's own approval** overrides that for one action, in either direction, whatever starts it: the guest's
+  `policy.actions.<action>.approval`, or else the workflow's `approval` on the action, which reaches every guest using
+  it ([workflow format](workflows.md#a-workflow-that-manages-a-vm)). A guest under manual approval can let its hourly
+  `verify` run on its own, and an automatic one can hold `update-system` for a person. It sets approval only: destructive is decided as below, and when it is unset it follows the guest's
+  approval, not the action's. The run's approval step names the action as where its setting came from.
 - **`policy.destructive: manual`** waits only for an action declared `destructive: true`.
   Rule 11 says Octopushy decides from the preview, but a playbook has no preview that shows
   deletes. So the workflow states it: `destructive` is required on every action, and the setup stage's own playbook is `false` unless the stage says so: a

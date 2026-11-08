@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace Octopushy.Definitions;
 
 /// <summary>A resolved setting and the place it was set, shown so the user can find it.</summary>
@@ -26,6 +28,44 @@ public static class PolicyResolver
     public static EffectivePolicy For(LabRepository repository, GuestDefinition guest) =>
         Resolve(Chain(repository, guest.Lab, repository.Installation(guest.InstallationAddress))
             .Append((guest.Address, guest.Policy)));
+
+    /// <summary>
+    /// The policy for one action of the guest's setup stage. An action's own approval wins over every other approval
+    /// setting, whatever starts the action: the guest's <c>policy.actions</c> first, then the workflow's default for the
+    /// action. Destructive is not touched: unset, it still follows the guest's own approval, so a destructive action does
+    /// not run unattended because of this.
+    /// </summary>
+    public static EffectivePolicy ForAction(LabRepository repository, GuestDefinition guest, string action)
+    {
+        var policy = For(repository, guest);
+        return ActionApproval(guest, action) is { } approval ? policy with { Approval = approval } : policy;
+    }
+
+    /// <summary>The approval one action takes in place of the guest's, and who set it, if anyone did.</summary>
+    public static ResolvedSetting<string>? ActionApproval(GuestDefinition guest, string action) =>
+        GuestActionApprovals(guest).TryGetValue(action, out var own)
+            ? new ResolvedSetting<string>(own, $"{guest.Address}, action {action}")
+            : guest.Setup?.Configure?.Actions.GetValueOrDefault(action)?.Approval is { } given
+                ? new ResolvedSetting<string>(given, $"workflow {guest.Workflow!.Label}, action {action}")
+                : null;
+
+    /// <summary>The actions of the guest's setup stage that take their own approval, in the workflow's order.</summary>
+    public static IReadOnlyList<(string Action, ResolvedSetting<string> Approval)> ActionApprovals(GuestDefinition guest) =>
+        (guest.Setup?.Configure?.Actions.Keys ?? [])
+            .Select(action => (action, ActionApproval(guest, action)))
+            .Where(a => a.Item2 is not null)
+            .Select(a => (a.action, a.Item2!))
+            .ToList();
+
+    /// <summary>
+    /// Every action the guest itself sets an approval for, as written. This also reads definitions that failed their
+    /// schema, which report their own error, so what is malformed is left out.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GuestActionApprovals(GuestDefinition guest) =>
+        ((guest.Json["policy"] as JsonObject)?["actions"] as JsonObject)?
+            .Where(p => (p.Value as JsonObject)?["approval"] is JsonValue value && value.TryGetValue<string>(out _))
+            .ToDictionary(p => p.Key, p => p.Value!["approval"]!.GetValue<string>(), StringComparer.Ordinal)
+        ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>A service adds only its own override to what its guest resolves to.</summary>
     public static EffectivePolicy For(LabRepository repository, GuestDefinition guest, ServiceDefinition service) =>

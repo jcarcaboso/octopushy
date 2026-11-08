@@ -185,7 +185,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         }
 
         var installation = repository.Installation(guest.InstallationAddress)!;
-        var policy = PolicyResolver.For(repository, guest);
+        var policy = PolicyResolver.ForAction(repository, guest, action.Id);
         var labels = PolicyResolver.AgentLabels(repository, guest);
         var context = new RunContext
         {

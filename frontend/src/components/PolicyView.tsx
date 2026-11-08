@@ -23,6 +23,14 @@ export function PolicyView({ policy }: { policy: Policy | null }) {
             </span>
           ),
         },
+        ...("actions" in policy && policy.actions ? policy.actions : []).map((action) => ({
+          term: `Approval of ${action.action}`,
+          value: (
+            <span className="inline-group">
+              <Mode value={action.approval} /> <SetBy value={action.setBy} />
+            </span>
+          ),
+        })),
         {
           term: "Destructive",
           value: (

@@ -957,6 +957,11 @@ export interface components {
             candidate: string;
             remove: string[];
         };
+        ActionApprovalDto: {
+            action: string;
+            approval: string;
+            setBy: string;
+        };
         AgentDto: {
             /** Format: uuid */
             id: string;
@@ -1692,6 +1697,7 @@ export interface components {
             approvalSetBy: string;
             destructive: string;
             destructiveSetBy: string;
+            actions?: null | components["schemas"]["ActionApprovalDto"][];
         };
         ProblemDetails: {
             type?: null | string;

@@ -4034,6 +4034,25 @@
           }
         }
       },
+      "ActionApprovalDto": {
+        "required": [
+          "action",
+          "approval",
+          "setBy"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "approval": {
+            "type": "string"
+          },
+          "setBy": {
+            "type": "string"
+          }
+        }
+      },
       "AgentDto": {
         "required": [
           "id",
@@ -7320,6 +7339,15 @@
           },
           "destructiveSetBy": {
             "type": "string"
+          },
+          "actions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ActionApprovalDto"
+            }
           }
         }
       },

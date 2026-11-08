@@ -335,7 +335,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             if (repository.Guest(resource.Address) is { } guest && repository.RepositoryValid)
             {
                 var effective = PolicyResolver.For(repository, guest);
-                policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy);
+                policy = new PolicyDto(effective.Approval.Value, effective.Approval.SetBy, effective.Destructive.Value, effective.Destructive.SetBy,
+                    PolicyResolver.ActionApprovals(guest).Select(a => new ActionApprovalDto(a.Action, a.Approval.Value, a.Approval.SetBy)).ToList());
                 labels = PolicyResolver.AgentLabels(repository, guest);
                 if (guest.Setup?.Configure is { } offered)
                 {

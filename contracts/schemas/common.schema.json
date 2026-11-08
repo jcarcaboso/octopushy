@@ -50,6 +50,28 @@
       },
       "additionalProperties": false
     },
+    "guestPolicy": {
+      "type": "object",
+      "properties": {
+        "approval": { "$ref": "#/$defs/policy/properties/approval" },
+        "destructive": { "$ref": "#/$defs/policy/properties/destructive" },
+        "windows": { "$ref": "#/$defs/policy/properties/windows" },
+        "actions": {
+          "type": "object",
+          "description": "Approval for one action of the workflow's Ansible stage, setup included, whatever starts it: a commit, a schedule or a person. It replaces approval for that action only; destructive still applies.",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "approval": { "enum": ["automatic", "manual"] }
+            },
+            "required": ["approval"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "execution": {
       "type": "object",
       "properties": {
