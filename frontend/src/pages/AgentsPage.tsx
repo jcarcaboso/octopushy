@@ -7,6 +7,7 @@ import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
 import { Table } from "../components/Table";
 import { AgentRow } from "./agents/AgentRow";
 import { EnrollDialog } from "./agents/EnrollDialog";
+import { ReachabilityTable } from "./agents/ReachabilityTable";
 import { TokenTable } from "./agents/TokenTable";
 
 export function AgentsPage() {
@@ -65,6 +66,11 @@ export function AgentsPage() {
             </Table>
           </Card>
         )}
+        {data && data.length > 0 ? (
+          <Card title="Reachability">
+            <ReachabilityTable agents={data} />
+          </Card>
+        ) : null}
         <Card title="Enrollment tokens" flush>
           <TokenTable agents={data ?? []} />
         </Card>

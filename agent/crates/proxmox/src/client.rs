@@ -585,6 +585,20 @@ impl Client {
     }
 }
 
+/// Whether a [`Client`] for `endpoint`, built now, would send its requests through a proxy from
+/// the process environment (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and the rest reqwest reads).
+/// It asks the matcher reqwest builds its own from, so the answer cannot drift from a request's.
+pub fn proxied(endpoint: &str) -> Result<bool> {
+    let url = base_url(endpoint)?;
+    let uri: hyper::Uri = url
+        .as_str()
+        .parse()
+        .map_err(|e| Error::Config(format!("invalid endpoint {endpoint:?}: {e}")))?;
+    Ok(hyper_util::client::proxy::matcher::Matcher::from_system()
+        .intercept(&uri)
+        .is_some())
+}
+
 fn base_url(endpoint: &str) -> Result<Url> {
     let mut url = Url::parse(endpoint.trim())
         .map_err(|e| Error::Config(format!("invalid endpoint {endpoint:?}: {e}")))?;

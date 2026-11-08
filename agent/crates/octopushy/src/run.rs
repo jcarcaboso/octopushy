@@ -16,6 +16,7 @@ use crate::fsutil::ensure_private_dir;
 use crate::identity;
 use crate::outbox::Outbox;
 use crate::paths::StatePaths;
+use crate::reachability::{self, Prober};
 use crate::tools::{RuntimeKind, ToolRuntime};
 
 /// Options of `octopushy agent run`.
@@ -96,9 +97,12 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         })
         .map(|&name| name.to_owned())
         .collect();
+    // Probes need no tool: an agent-process probe is the executor's own connection, and a tool
+    // context that cannot be probed says so in its report.
     let capabilities = tools_available
         .then(|| state::CAPABILITY.to_owned())
         .into_iter()
+        .chain([reachability::CAPABILITY.to_owned()])
         .collect();
     let exec = Arc::new(ExecutorConfig {
         runtime,
@@ -107,6 +111,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         proxmox_timeout: Duration::from_secs(30),
     });
 
+    let prober = Arc::new(Prober::new(exec.clone()));
     let manager = AttemptManager::new(work_dir, outbox, exec);
     let pending = manager.recover()?;
     if pending > 0 {
@@ -119,6 +124,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         tool_runtime: opts.tool_runtime,
         executors,
         capabilities,
+        prober,
     });
     connection::run(agent, shutdown).await
 }

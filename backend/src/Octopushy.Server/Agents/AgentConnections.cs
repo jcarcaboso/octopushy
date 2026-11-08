@@ -5,9 +5,14 @@ using Octopushy.Agent.V1;
 namespace Octopushy.Server.Agents;
 
 /// <summary>One connected agent's stream: messages to it go through a bounded queue.</summary>
-public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors, IReadOnlyList<string>? capabilities = null)
+/// <param name="toolRuntime">How the agent runs tools, as its Hello said: <c>local</c>, <c>podman</c> or <c>docker</c>.</param>
+public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors, IReadOnlyList<string>? capabilities = null,
+    string? toolRuntime = null)
 {
-    private readonly Channel<ServerMessage> _outbound = Channel.CreateBounded<ServerMessage>(new BoundedChannelOptions(256)
+    /// <summary>The outbound capacity, shared by assignments, cancels, acknowledgements and probes.</summary>
+    public const int OutboundCapacity = 256;
+
+    private readonly Channel<ServerMessage> _outbound = Channel.CreateBounded<ServerMessage>(new BoundedChannelOptions(OutboundCapacity)
     {
         SingleReader = true,
         FullMode = BoundedChannelFullMode.Wait,
@@ -24,6 +29,26 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
     public IReadOnlyList<string> Capabilities { get; } = capabilities ?? [];
 
     public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UtcNow;
+
+    public string? ToolRuntime { get; } = toolRuntime;
+
+    /// <summary>Whether the agent answers reachability probes (<see cref="WorkerReachability.Capability"/>).</summary>
+    public bool ReportsReachability => Capabilities.Contains(WorkerReachability.Capability);
+
+    /// <summary>
+    /// What this session's agent was found to reach, kept only as long as the session: a reconnect starts with none.
+    /// See <see cref="WorkerReachability"/>.
+    /// </summary>
+    public SessionReachability Reachability { get; } = new();
+
+    /// <summary>
+    /// An agent in this process, as in tests: answers a probe at once instead of over the stream. Never set for a
+    /// connected agent.
+    /// </summary>
+    public Func<ReachabilityProbe, ReachabilityReport>? Responder { get; init; }
+
+    /// <summary>Messages waiting to go out.</summary>
+    public int Queued => _outbound.Reader.Count;
 
     public ChannelReader<ServerMessage> Outbound => _outbound.Reader;
 

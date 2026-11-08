@@ -984,6 +984,9 @@ export interface components {
             runningAttempts: number;
             /** @default false */
             draining: boolean;
+            /** @default false */
+            reportsReachability: boolean;
+            reachability?: null | components["schemas"]["ReachabilityEntry"][];
         };
         AgentUpdate: {
             labels: null | string[];
@@ -1707,6 +1710,21 @@ export interface components {
             detail?: null | string;
             instance?: null | string;
         };
+        ReachabilityEntry: {
+            kind: string;
+            endpoint: string;
+            context: string;
+            image: null | string;
+            state: string;
+            detail: null | string;
+            /** Format: date-time */
+            checkedAt: null | string;
+            /** Format: date-time */
+            expiresAt: null | string;
+            usable: boolean;
+            probing: boolean;
+            leafSha256: null | string;
+        };
         RepositoryDto: {
             url: null | string;
             branch: string;
@@ -1891,6 +1909,7 @@ export interface components {
             attempts: components["schemas"]["AttemptDto"][];
             configurePreview?: null | components["schemas"]["ConfigurePreviewDto"];
             stage?: null | string;
+            networkAccess?: null | string;
         };
         SystemVariableDto: {
             key: string;

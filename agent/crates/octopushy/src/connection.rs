@@ -21,6 +21,7 @@ use url::Url;
 use crate::attempts::{AttemptManager, SessionCursor};
 use crate::identity::{self, Identity};
 use crate::paths::StatePaths;
+use crate::reachability::Prober;
 use crate::tools::RuntimeKind;
 use crate::{renewal, tls};
 
@@ -42,6 +43,8 @@ pub struct Agent {
     pub executors: Vec<String>,
     /// Features usable with the runtime probed at startup.
     pub capabilities: Vec<String>,
+    /// Answers the server's reachability probes.
+    pub prober: Arc<Prober>,
 }
 
 enum End {
@@ -231,6 +234,9 @@ async fn session(
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     }
     let mut idle_since: Option<Instant> = None;
+    // Probes of this connection end with it: their reports would have nowhere to go.
+    let probes = CancellationToken::new();
+    let _probes_end = probes.clone().drop_guard();
 
     loop {
         if *draining && agent.manager.is_idle() {
@@ -248,7 +254,7 @@ async fn session(
         }
         tokio::select! {
             msg = inbound.message() => match msg {
-                Ok(Some(m)) => handle(agent, m),
+                Ok(Some(m)) => handle(agent, m, &tx, &probes),
                 Ok(None) => return Ok(End::Closed),
                 Err(s) => bail!("stream error: {} ({:?})", s.message(), s.code()),
             },
@@ -283,8 +289,17 @@ async fn session(
     }
 }
 
-fn handle(agent: &Agent, message: ServerMessage) {
+fn handle(
+    agent: &Agent,
+    message: ServerMessage,
+    tx: &mpsc::Sender<AgentMessage>,
+    probes: &CancellationToken,
+) {
     match message.kind {
+        Some(In::Probe(p)) => {
+            tracing::debug!(probe = %p.probe_id, protocol = %p.protocol, context = %p.context, "reachability probe");
+            agent.prober.spawn(p, tx.clone(), probes.clone());
+        }
         Some(In::Assignment(a)) => agent.manager.accept(a),
         Some(In::Cancel(c)) => {
             tracing::info!(attempt = %c.attempt_id, "cancel requested");

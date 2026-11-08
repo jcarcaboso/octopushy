@@ -41,6 +41,7 @@ public sealed class OrchestratorSignal
 public sealed partial class RunEngine(
     IServiceScopeFactory scopes,
     AgentConnections connections,
+    WorkerReachability reachability,
     AttemptLogStore logs,
     AttemptMasks masks,
     ArtifactStore artifacts,

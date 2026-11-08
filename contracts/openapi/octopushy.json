@@ -4134,6 +4134,19 @@
           "draining": {
             "type": "boolean",
             "default": false
+          },
+          "reportsReachability": {
+            "type": "boolean",
+            "default": false
+          },
+          "reachability": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ReachabilityEntry"
+            }
           }
         }
       },
@@ -7387,6 +7400,74 @@
           }
         }
       },
+      "ReachabilityEntry": {
+        "required": [
+          "kind",
+          "endpoint",
+          "context",
+          "image",
+          "state",
+          "detail",
+          "checkedAt",
+          "expiresAt",
+          "usable",
+          "probing",
+          "leafSha256"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checkedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "usable": {
+            "type": "boolean"
+          },
+          "probing": {
+            "type": "boolean"
+          },
+          "leafSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "RepositoryDto": {
         "required": [
           "url",
@@ -8256,6 +8337,12 @@
             ]
           },
           "stage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "networkAccess": {
             "type": [
               "null",
               "string"

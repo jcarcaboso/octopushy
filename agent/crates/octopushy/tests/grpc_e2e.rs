@@ -16,8 +16,8 @@ use octopushy::outbox::{Outbox, OutboxRecord};
 use octopushy::run::{RunOptions, run};
 use octopushy::tools::RuntimeKind;
 use octopushy_proto::v1::{
-    Assignment, AttemptResult, CancelAttempt, Outcome, ResultAck, agent_message::Kind as AgentKind,
-    server_message::Kind as ServerKind,
+    Assignment, AttemptResult, CancelAttempt, Outcome, ReachabilityProbe, ResultAck,
+    agent_message::Kind as AgentKind, server_message::Kind as ServerKind,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -164,10 +164,11 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             vec!["proxmox"]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
+        // Probes need no tool: an unusable runtime is the probe's own answer.
         let capabilities: &[&str] = if available {
-            &["opentofu-builtin-state"]
+            &["opentofu-builtin-state", "reachability-v1"]
         } else {
-            &[]
+            &["reachability-v1"]
         };
         assert_eq!(hello.capabilities, capabilities, "{kind:?}: {binary}");
         shutdown.cancel();
@@ -602,4 +603,61 @@ async fn attempts_survive_reconnects_and_can_be_cancelled() {
         dir_is_empty(&state.path().join("outbox"))
     })
     .await;
+}
+
+/// A probe over the real channel: the agent answers it with a report that echoes its ID, and
+/// keeps no record of it (nothing goes to the result outbox).
+#[tokio::test]
+async fn a_probe_over_the_channel_is_answered_with_a_report() {
+    let mock = mock().await;
+    let mut server = FakeServer::start(Options::default()).await;
+    let state = tempfile::tempdir().unwrap();
+    enroll_into(&server, state.path()).await;
+    let mut opts = RunOptions::new(state.path().to_path_buf());
+    opts.tool_runtime = RuntimeKind::Local;
+    opts.tofu_binary = "/bin/true".into();
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(run(opts, shutdown.clone()));
+    server
+        .wait_for(|e| match e {
+            Event::Message(m) if matches!(m.kind, Some(AgentKind::Hello(_))) => Some(()),
+            _ => None,
+        })
+        .await;
+    let url = url::Url::parse(&mock.endpoint()).unwrap();
+    server
+        .send(ServerKind::Probe(ReachabilityProbe {
+            probe_id: "probe-1".into(),
+            protocol: "tls".into(),
+            host: url.host_str().unwrap().into(),
+            port: u32::from(url.port().unwrap()),
+            server_name: String::new(),
+            tls_trust: "collect".into(),
+            context: "agent".into(),
+            image: String::new(),
+            timeout_seconds: 10,
+        }))
+        .await;
+    let report = server
+        .wait_for(|e| match e {
+            Event::Message(m) => match &m.kind {
+                Some(AgentKind::Reachability(r)) => Some(r.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+    assert_eq!(report.probe_id, "probe-1");
+    assert_eq!(report.status, "reachable", "{report:?}");
+    assert_eq!(report.certificates.len(), 1);
+    let paths = octopushy::paths::StatePaths::new(state.path().canonicalize().unwrap());
+    assert!(
+        Outbox::open(paths.outbox())
+            .unwrap()
+            .list()
+            .unwrap()
+            .is_empty()
+    );
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
 }

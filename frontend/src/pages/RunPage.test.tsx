@@ -22,6 +22,16 @@ it("retries a failed stage of a pipeline and names its stage", async () => {
   expect(screen.getByText("deploy")).toBeInTheDocument();
 });
 
+it("says when a step's network access is not modeled, and never calls it reachable", async () => {
+  const detail = runDetail({ operation: "pipeline", status: "running", currentStep: null });
+  detail.steps = [{ ...detail.steps[0], name: "apply", stage: "infra", kind: "agent", status: "running", plan: null, approval: null,
+    networkAccess: "Network access not modeled: this step goes to any agent, and its reachability is not checked." }];
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  expect(await screen.findByText(/Network access not modeled/)).toBeInTheDocument();
+  expect(screen.queryByText(/reachable/i)).not.toBeInTheDocument();
+});
+
 it("names the workflow a run executed, its version and the commit its files came from", async () => {
   const detail = runDetail({});
   detail.workflow = {

@@ -302,17 +302,28 @@ public sealed class ServerHarness : IAsyncDisposable
             return RunContext.Parse(attempt.Context!);
         });
 
-    public Task<FakeAgent> ConnectAgentAsync(params string[] labels) => ConnectAsync(labels, [TofuStateStore.AgentCapability]);
+    /// <summary>An agent that reaches everything it is asked about, at once: tests of anything but routing need no more.</summary>
+    public Task<FakeAgent> ConnectAgentAsync(params string[] labels) =>
+        ConnectAsync("fake", labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], "podman", FakeAgent.ReachEverything);
 
-    /// <summary>An agent from before built-in state.</summary>
-    public Task<FakeAgent> ConnectOlderAgentAsync(params string[] labels) => ConnectAsync(labels, []);
+    /// <summary>An agent from before built-in state and reachability reports.</summary>
+    public Task<FakeAgent> ConnectOlderAgentAsync(params string[] labels) => ConnectAsync("fake", labels, [], null, null);
 
-    private async Task<FakeAgent> ConnectAsync(string[] labels, string[] capabilities)
+    /// <summary>An agent from before reachability reports, with built-in state.</summary>
+    public Task<FakeAgent> ConnectLegacyAgentAsync(string name, params string[] labels) =>
+        ConnectAsync(name, labels, [TofuStateStore.AgentCapability], "local", null);
+
+    /// <summary>An agent whose probes the test answers, from <see cref="FakeAgent.TakeProbes"/>.</summary>
+    public Task<FakeAgent> ConnectProbedAgentAsync(string name, string runtime = "local", params string[] labels) =>
+        ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], runtime, null);
+
+    private async Task<FakeAgent> ConnectAsync(string name, string[] labels, string[] capabilities, string? runtime,
+        Func<ReachabilityProbe, ReachabilityReport>? responder)
     {
         var agent = new AgentRecord
         {
             Id = Guid.CreateVersion7(),
-            Name = "fake",
+            Name = name,
             Labels = labels,
             MaxConcurrency = 4,
             EnrolledAt = DateTimeOffset.UtcNow,
@@ -325,7 +336,7 @@ public sealed class ServerHarness : IAsyncDisposable
             db.Agents.Add(agent);
             await db.SaveChangesAsync();
         });
-        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities);
+        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime) { Responder = responder };
         Services.GetRequiredService<AgentConnections>().Add(session);
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         return new FakeAgent(this, agent.Id, session);
@@ -363,20 +374,74 @@ public sealed class ServerHarness : IAsyncDisposable
 /// <summary>An agent without a process: the test reads its assignments and reports results.</summary>
 public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession session)
 {
+    private readonly List<ReachabilityProbe> _probes = [];
+    private readonly List<Assignment> _assignments = [];
+
     public Guid Id { get; } = id;
 
-    public List<Assignment> TakeAssignments()
+    public AgentSession Session => session;
+
+    private void Drain()
     {
-        var result = new List<Assignment>();
         while (session.Outbound.TryRead(out var message))
         {
             if (message.KindCase == ServerMessage.KindOneofCase.Assignment)
-            {
-                result.Add(message.Assignment);
-            }
+                _assignments.Add(message.Assignment);
+            else if (message.KindCase == ServerMessage.KindOneofCase.Probe)
+                _probes.Add(message.Probe);
         }
+    }
 
+    public List<Assignment> TakeAssignments()
+    {
+        Drain();
+        var result = _assignments.ToList();
+        _assignments.Clear();
         return result;
+    }
+
+    /// <summary>The probes sent to this agent since the last call.</summary>
+    public List<ReachabilityProbe> TakeProbes()
+    {
+        Drain();
+        var result = _probes.ToList();
+        _probes.Clear();
+        return result;
+    }
+
+    /// <summary>Answers a probe as the agent would; returns whether the server took the answer.</summary>
+    public Task<bool> AnswerAsync(ReachabilityProbe probe, string status, string detail = "", params byte[][] certificates)
+    {
+        var report = new ReachabilityReport { ProbeId = probe.ProbeId, Status = status, Detail = detail };
+        report.Certificates.AddRange(certificates.Select(ByteString.CopyFrom));
+        return harness.Services.GetRequiredService<WorkerReachability>().AcceptAsync(session, report, CancellationToken.None);
+    }
+
+    /// <summary>Answers every pending probe with <paramref name="status"/>.</summary>
+    public async Task AnswerAllAsync(string status, params byte[][] certificates)
+    {
+        foreach (var probe in TakeProbes())
+            await AnswerAsync(probe, status, "", certificates);
+    }
+
+    /// <summary>A self-signed certificate, for answers to probes that collect one.</summary>
+    public static byte[] Certificate(string name = "pve.test")
+    {
+        using var key = System.Security.Cryptography.ECDsa.Create();
+        var request = new System.Security.Cryptography.X509Certificates.CertificateRequest($"CN={name}", key, System.Security.Cryptography.HashAlgorithmName.SHA256);
+        using var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
+        return cert.RawData;
+    }
+
+    private static readonly Lazy<byte[]> Presented = new(() => Certificate());
+
+    /// <summary>Reaches everything, presenting one certificate wherever one is collected.</summary>
+    public static ReachabilityReport ReachEverything(ReachabilityProbe probe)
+    {
+        var report = new ReachabilityReport { ProbeId = probe.ProbeId, Status = WorkerReachability.Reachable };
+        if (probe.TlsTrust == "collect")
+            report.Certificates.Add(ByteString.CopyFrom(Presented.Value));
+        return report;
     }
 
     /// <summary>Ticks the engine until this agent receives an assignment for the action.</summary>

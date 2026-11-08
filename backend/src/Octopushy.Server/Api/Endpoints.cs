@@ -274,6 +274,9 @@ public static partial class Endpoints
             var agentIds = run.Steps.SelectMany(s => s.Attempts).Select(a => a.AgentId).OfType<Guid>().Distinct().ToList();
             var agents = await db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, a => a.Name, ct);
             var context = RunContext.Parse(run.Context);
+            var access = new Dictionary<Guid, string?>();
+            foreach (var step in run.Steps)
+                access[step.Id] = await NetworkRequirements.CoverageAsync(db, step, context, ct);
             var steps = run.Steps.OrderBy(s => s.Ordinal).Select(s => new StepDto(
                 s.Id,
                 s.Ordinal,
@@ -294,7 +297,8 @@ public static partial class Endpoints
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
                     a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList(),
                 Views.ConfigurePreview(s),
-                s.Stage))
+                s.Stage,
+                access[s.Id]))
                 .ToList();
             var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
             var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain
@@ -363,7 +367,7 @@ public static partial class Endpoints
 
     private static void MapAgents(RouteGroupBuilder group)
     {
-        group.MapGet("", async (OctopushyDb db, AgentConnections connections, CancellationToken ct) =>
+        group.MapGet("", async (OctopushyDb db, AgentConnections connections, WorkerReachability reachability, CancellationToken ct) =>
         {
             var agents = await db.Agents.AsNoTracking().OrderBy(a => a.Name).ToListAsync(ct);
             var running = await db.Attempts.AsNoTracking()
@@ -373,7 +377,9 @@ public static partial class Endpoints
                 .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
             return TypedResults.Ok(agents.Select(a => new AgentDto(
                 a.Id, a.Name, a.Labels, a.MaxConcurrency, a.Disabled, connections.IsConnected(a.Id), a.EnrolledAt, a.LastSeenAt,
-                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id), a.Draining)).ToList());
+                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id), a.Draining,
+                connections.Get(a.Id)?.ReportsReachability ?? false,
+                connections.Get(a.Id) is { } session ? reachability.Snapshot(session) : [])).ToList());
         })
         .WithName("listAgents");
 

@@ -272,6 +272,8 @@ impl ToolRuntime {
                 let out = Command::new(&self.container_binary)
                     .args(["info", "--format", "{{json .SecurityOptions}}"])
                     .stdin(Stdio::null())
+                    // A probe that gives up waiting stops it too.
+                    .kill_on_drop(true)
                     .output()
                     .await;
                 let rootless = matches!(&out, Ok(o) if o.status.success()
@@ -285,6 +287,44 @@ impl ToolRuntime {
                 rootless
             })
             .await
+    }
+
+    /// `<runtime> run` with everything a tool's container and a reachability probe's share: the
+    /// same least privilege, user mapping and network, so a probe connects as the tool would.
+    /// What follows is the caller's: mounts, working directory, environment, image.
+    pub(crate) async fn container_run(
+        &self,
+        name: &str,
+        label: &str,
+        interactive: bool,
+    ) -> Command {
+        let mut cmd = Command::new(&self.container_binary);
+        cmd.args(["run", "--rm"]);
+        if interactive {
+            cmd.arg("-i");
+        }
+        cmd.args(["--name", name]);
+        cmd.args(["--label", label]);
+        // The tool's output may contain secrets; keep it out of the
+        // runtime's log store (journald by default on Fedora).
+        cmd.arg("--log-driver=none");
+        cmd.arg("--pull=missing");
+        // Least privilege: no capabilities, no privilege escalation, a
+        // read-only image with a private /tmp.
+        cmd.args(["--cap-drop=all", "--security-opt=no-new-privileges"]);
+        cmd.args(["--read-only", "--tmpfs", "/tmp:rw,mode=1777"]);
+        if self.kind == RuntimeKind::Podman {
+            // Run as the agent's own UID so written files stay its own.
+            cmd.arg("--userns=keep-id");
+        } else if !self.docker_is_rootless().await {
+            // SAFETY: getuid/getgid have no preconditions.
+            let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+            cmd.args(["--user".to_owned(), format!("{uid}:{gid}")]);
+        }
+        if let Some(net) = &self.network {
+            cmd.args(["--network", net]);
+        }
+        cmd
     }
 
     /// The command line (without the tool's own arguments' secrets: there are
@@ -313,21 +353,9 @@ impl ToolRuntime {
                         bail!("{s} cannot be mounted: it contains ':' or ','");
                     }
                 }
-                cmd = Command::new(&self.container_binary);
-                cmd.args(["run", "--rm"]);
-                if inv.stdin.is_some() {
-                    cmd.arg("-i");
-                }
-                cmd.args(["--name", &inv.name]);
-                cmd.args(["--label", "io.octopushy.attempt=true"]);
-                // The tool's output may contain secrets; keep it out of the
-                // runtime's log store (journald by default on Fedora).
-                cmd.arg("--log-driver=none");
-                cmd.arg("--pull=missing");
-                // Least privilege: no capabilities, no privilege escalation, a
-                // read-only image with a private /tmp.
-                cmd.args(["--cap-drop=all", "--security-opt=no-new-privileges"]);
-                cmd.args(["--read-only", "--tmpfs", "/tmp:rw,mode=1777"]);
+                cmd = self
+                    .container_run(&inv.name, "io.octopushy.attempt=true", inv.stdin.is_some())
+                    .await;
                 // The workspace is private to this container (`Z`); the cache is
                 // shared by concurrent attempts (`z`), so it gets the shared label.
                 cmd.args([
@@ -341,17 +369,6 @@ impl ToolRuntime {
                     ]);
                 }
                 cmd.args(["-w".to_owned(), self.path(inv.workspace, inv.workdir)?]);
-                if self.kind == RuntimeKind::Podman {
-                    // Run as the agent's own UID so written files stay its own.
-                    cmd.arg("--userns=keep-id");
-                } else if !self.docker_is_rootless().await {
-                    // SAFETY: getuid/getgid have no preconditions.
-                    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-                    cmd.args(["--user".to_owned(), format!("{uid}:{gid}")]);
-                }
-                if let Some(net) = &self.network {
-                    cmd.args(["--network", net]);
-                }
                 for (k, v) in &inv.settings {
                     cmd.args(["-e".to_owned(), format!("{k}={v}")]);
                 }
@@ -513,7 +530,7 @@ impl ToolRuntime {
     }
 
     /// A hard kill of the container and the process group.
-    async fn kill_group(&self, container: &str, pgid: Option<libc::pid_t>) {
+    pub(crate) async fn kill_group(&self, container: &str, pgid: Option<libc::pid_t>) {
         if self.is_container() {
             // A runtime that stops answering must not keep the run from ending.
             let kill = Command::new(&self.container_binary)

@@ -40,7 +40,9 @@ Do not run it against a production controller, retained service fixture, or VM.
    must cover that channel hostname. Set an **exclusive label** on this worker
    through the controller UI; no other registered worker may have that label.
    Copy its worker UUID from the controller. It must be connected, enabled, idle,
-   and advertise `opentofu` and `proxmox`.
+   and advertise `opentofu` and `proxmox`, and be a version that reports reachability: the controller
+   sends Proxmox work only to a worker with fresh evidence that it reaches the endpoint
+   ([worker routing](../../docs/worker-routing.md)). The exclusive label still decides which worker runs it.
 4. The worker's actual execution environment must reach:
    - the controller's HTTPS/mTLS agent channel;
    - Proxmox HTTPS using both independently reviewed token identities and TLS policy;

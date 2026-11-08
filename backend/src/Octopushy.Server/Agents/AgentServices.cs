@@ -83,6 +83,7 @@ public sealed class AgentChannelService(
     IServiceScopeFactory scopes,
     AgentCertificateAuthority ca,
     AgentConnections connections,
+    WorkerReachability reachability,
     RunEngine engine,
     AttemptLogStore logs,
     AttemptMasks masks,
@@ -112,8 +113,9 @@ public sealed class AgentChannelService(
             }
         }, call.Token);
 
-        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList());
+        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList(), hello.ToolRuntime);
         connections.Add(session);
+        reachability.OnConnected(session);
         logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
         var writer = Task.CompletedTask;
         try
@@ -173,6 +175,10 @@ public sealed class AgentChannelService(
                         break;
                     case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
                         await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
+                        break;
+                    case AgentMessage.KindOneofCase.Reachability:
+                        // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
+                        await reachability.AcceptAsync(session, message.Reachability, call.Token);
                         break;
                     case AgentMessage.KindOneofCase.Result:
                         if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))

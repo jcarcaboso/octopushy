@@ -94,6 +94,7 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
         </details>
       ) : null}
       <AttemptList attempts={step.attempts} />
+      {step.networkAccess ? <p className="muted small">{step.networkAccess}</p> : null}
       {canRetryStage ? (
         <div className="stack stack--small">
           <p className="muted small">Continue from this stage under the same approval. The stages before it are not repeated, and nothing is rolled back. It is refused if the inputs changed.</p>
