@@ -731,6 +731,7 @@
   .overview__rows tr {
     display: grid;
     grid-template-columns: 1rem auto auto auto 1fr;
+    padding-bottom: var(--space-2);
   }
 
   .overview-row__name {
