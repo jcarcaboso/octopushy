@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.7.0:
+Milestone 1 has shipped, up to release 0.7.1:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,21 @@ Milestone 1 has shipped, up to release 0.7.0:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.7.1:
+
+- [A container's protection is lifted to change it in place](docs/safety-boundary.md), from #57. Proxmox refuses any
+  change to a protected container's disks, even growing its root disk, so an approved provision plan that updated a
+  container in place failed at apply with `protection mode enabled`. Such a plan now lifts the protection of the guest's
+  own container right before the apply and puts it back once the run is done, whether the apply finished or not. VMs
+  and plans that replace or delete a machine are unchanged.
+- [Run again](docs/workflows.md), from #56. A failed run's page offers **Run again**, which starts a new run of the
+  same work at the latest revision, under its own approval.
+- Release images are published only as `<component>-<version>`, from #55, without `-latest` or `-sha-<commit>` aliases.
+  Builds of `main` keep their `-main` and `-sha-<commit>` tags.
+
+Only the backend and frontend changed: upgrade them to 0.7.1. Agents and the offline validator at 0.7.0 keep working, and
+no workflow or guest schema changed.
 
 New in 0.7.0:
 
