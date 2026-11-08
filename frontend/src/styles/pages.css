@@ -616,6 +616,7 @@
 }
 
 .overview__panel {
+  overflow-x: auto;
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border);
@@ -636,7 +637,7 @@
 }
 
 .overview__rows td {
-  padding: 3px 0;
+  padding-block: 3px;
   vertical-align: baseline;
 }
 
@@ -654,7 +655,7 @@
 .overview-row__arrow,
 .overview-row__new {
   color: var(--text-muted);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .overview-row__old {
