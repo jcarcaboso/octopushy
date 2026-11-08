@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunDetail } from "../api/types";
@@ -130,6 +130,39 @@ it("shows what a configure run will do, and approves that preview", async () => 
   expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/steps/step-approval/approve");
 });
 
+it("opens an approval with tiles of what changes, one detail at a time", async () => {
+  const detail = runDetail({ operation: "provision" });
+  detail.steps[0].plan!.changes[0] = {
+    ...detail.steps[0].plan!.changes[0],
+    actions: ["update"],
+    attributes: [
+      { name: "disk.scsi0.size", before: 32, after: 64, unknown: false, sensitive: false },
+      { name: "memory.dedicated", before: 4096, after: 8192, unknown: false, sensitive: false },
+    ],
+  };
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  const tiles = within(await screen.findByRole("group", { name: "What changes" }));
+  const disk = tiles.getByRole("button", { name: /Disk/ });
+  const resources = tiles.getByRole("button", { name: /Resources/ });
+  expect(tiles.getByRole("button", { name: /Memory/ })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByText("What this run will apply, not read from the guest.")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Disk" })).toBeNull();
+
+  await userEvent.click(disk);
+  expect(disk).toHaveAttribute("aria-expanded", "true");
+  const panel = screen.getByRole("region", { name: "Disk" });
+  expect(within(panel).getByText("scsi0 size")).toBeInTheDocument();
+  expect(within(panel).getByText("32 GiB")).toBeInTheDocument();
+
+  await userEvent.click(resources);
+  expect(disk).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("region", { name: "Resources" })).toHaveTextContent("terraform_data.marker");
+
+  await userEvent.keyboard("{Escape}");
+  expect(resources).toHaveAttribute("aria-expanded", "false");
+});
+
 function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
   return {
     run: {
@@ -166,8 +199,8 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
           planSha256: sha,
           toolVersion: "1.10.6",
           changes: [
-            { address: "proxmox_virtual_environment_vm.this", type: "proxmox_virtual_environment_vm", name: "this", actions: ["create", "delete"] },
-            { address: "terraform_data.marker", type: "terraform_data", name: "marker", actions: ["create"] },
+            { address: "proxmox_virtual_environment_vm.this", type: "proxmox_virtual_environment_vm", name: "this", actions: ["create", "delete"], attributes: [] },
+            { address: "terraform_data.marker", type: "terraform_data", name: "marker", actions: ["create"], attributes: [] },
           ],
           counts: { create: 1, update: 0, delete: 0, replace: 1 },
         },

@@ -28,10 +28,10 @@ describe("summarizePlan", () => {
     planSha256: "ab".repeat(32),
     toolVersion: "1.10.6",
     changes: [
-      { address: "proxmox_virtual_environment_vm.this", type: "proxmox_virtual_environment_vm", name: "this", actions: ["delete", "create"] },
-      { address: "terraform_data.a", type: "terraform_data", name: "a", actions: ["create"] },
-      { address: "terraform_data.b", type: "terraform_data", name: "b", actions: ["update"] },
-      { address: "terraform_data.c", type: "terraform_data", name: "c", actions: ["create", "delete"] },
+      { address: "proxmox_virtual_environment_vm.this", type: "proxmox_virtual_environment_vm", name: "this", actions: ["delete", "create"], attributes: [] },
+      { address: "terraform_data.a", type: "terraform_data", name: "a", actions: ["create"], attributes: [] },
+      { address: "terraform_data.b", type: "terraform_data", name: "b", actions: ["update"], attributes: [] },
+      { address: "terraform_data.c", type: "terraform_data", name: "c", actions: ["create", "delete"], attributes: [] },
     ],
     counts: { create: 1, update: 1, delete: 0, replace: 2 },
   };
