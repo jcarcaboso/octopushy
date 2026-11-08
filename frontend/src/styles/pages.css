@@ -655,7 +655,7 @@
 .overview-row__arrow,
 .overview-row__new {
   color: var(--text-muted);
-  overflow-wrap: break-word;
+  white-space: nowrap;
 }
 
 .overview-row__old {
@@ -720,6 +720,26 @@
 @media (max-width: 560px) {
   .overview__tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* The name on its own line, old → new under it. */
+  .overview__rows,
+  .overview__rows tbody {
+    display: block;
+  }
+
+  .overview__rows tr {
+    display: grid;
+    grid-template-columns: 1rem auto auto auto 1fr;
+  }
+
+  .overview-row__name {
+    grid-column: 2 / -1;
+  }
+
+  .overview-row__old {
+    grid-column: 2;
+    text-align: left;
   }
 }
 
