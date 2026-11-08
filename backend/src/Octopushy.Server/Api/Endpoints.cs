@@ -311,7 +311,8 @@ public static partial class Endpoints
                 context.Policy is { } p ? new RunPolicyDto(p.Approval, p.ApprovalSetBy, p.Destructive, p.DestructiveSetBy) : null,
                 canCancel,
                 run.Status == RunStatuses.Uncertain,
-                context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null));
+                context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null,
+                await Planner.CanRunAgainAsync(db, run, ct)));
         })
         .WithName("getRun");
 
@@ -342,6 +343,10 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("retryStage");
+
+        group.MapPost("/{id:guid}/run-again", async (Guid id, Planner planner, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.RunAgainAsync(id, ct))))
+        .WithName("runAgain");
 
         group.MapPost("/{id:guid}/close", async (Guid id, HttpContext http, RunEngine engine, CancellationToken ct) =>
         {

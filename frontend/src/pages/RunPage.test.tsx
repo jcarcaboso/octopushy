@@ -22,6 +22,28 @@ it("retries a failed stage of a pipeline and names its stage", async () => {
   expect(screen.getByText("deploy")).toBeInTheDocument();
 });
 
+it("runs a failed run again as a new run and opens it", async () => {
+  const detail = runDetail({ status: "failed", currentStep: null });
+  detail.canRunAgain = true;
+  const { requests } = mockApi({
+    "GET /api/runs/run-1": () => detail,
+    "POST /api/runs/run-1/run-again": () => ({ runId: "run-2" }),
+    "GET /api/runs/run-2": () => runDetail({ id: "run-2", number: 13, status: "queued" }),
+  });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await userEvent.click(await screen.findByRole("button", { name: "Run again" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Start a new run" }));
+  expect(await screen.findByText(/Run #13/)).toBeInTheDocument();
+  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/run-again"]);
+});
+
+it("offers no run again when the server says a run cannot be", async () => {
+  mockApi({ "GET /api/runs/run-1": () => runDetail({ status: "failed", currentStep: null }) });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  await screen.findByText(/Run #12/);
+  expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+});
+
 it("says when a step's network access is not modeled, and never calls it reachable", async () => {
   const detail = runDetail({ operation: "pipeline", status: "running", currentStep: null });
   detail.steps = [{ ...detail.steps[0], name: "apply", stage: "infra", kind: "agent", status: "running", plan: null, approval: null,
@@ -210,6 +232,7 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
     },
     canCancel: true,
     canClose: false,
+    canRunAgain: false,
   };
 }
 

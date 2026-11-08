@@ -2030,6 +2030,67 @@
         }
       }
     },
+    "/api/runs/{id}/run-again": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "operationId": "runAgain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}/close": {
       "post": {
         "tags": [
@@ -7736,6 +7797,10 @@
                 "$ref": "#/components/schemas/RunWorkflowDto"
               }
             ]
+          },
+          "canRunAgain": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
