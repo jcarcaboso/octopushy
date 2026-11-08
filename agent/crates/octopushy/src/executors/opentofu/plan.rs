@@ -1,7 +1,9 @@
 //! Reading `tofu show -json`, `tofu output -json`, and `tofu version -json`.
 //!
 //! Only the parts the contract needs are kept; the JSON plan itself can hold
-//! configuration values and is never logged or returned.
+//! configuration values and is never logged or returned. The only values a change
+//! carries out of it are the few VM attributes in [`VM_ATTRIBUTES`], and never one
+//! the plan marks sensitive.
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -21,6 +23,18 @@ const VM_FIELDS: &[&str] = &["vm_id", "vmid", "container_id"];
 const NODE_FIELDS: &[&str] = &["node_name", "node", "target_node"];
 /// Top-level attributes that name a guest inside a string: `vm:100`, `ct:100`, `/vms/100`.
 const REFERENCE_FIELDS: &[&str] = &["resource_id", "path"];
+
+/// The attributes of a Proxmox VM whose old and new values a change carries, by name and
+/// where `tofu show -json` holds them. bpg/proxmox holds each block as a list: `*` is a
+/// `disk` entry, named by its `interface`, or a `network_device` entry, named by its index.
+const VM_ATTRIBUTES: &[(&str, &str)] = &[
+    ("cpu.cores", "/cpu/0/cores"),
+    ("cpu.sockets", "/cpu/0/sockets"),
+    ("memory.dedicated", "/memory/0/dedicated"),
+    ("disk.*.size", "/disk/*/size"),
+    ("tags", "/tags"),
+    ("network_device.*.bridge", "/network_device/*/bridge"),
+];
 
 /// One entry of `changes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,6 +65,25 @@ pub struct Change {
     /// One of the attributes that name a VM or node is not known until apply.
     #[serde(rename = "targetUnknown", skip_serializing_if = "std::ops::Not::not")]
     pub target_unknown: bool,
+    /// The [`VM_ATTRIBUTES`] of a Proxmox VM that the change sets to something else.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<Attribute>,
+}
+
+/// An attribute of a Proxmox VM, before and after a change. A side that does not exist is
+/// absent; a sensitive attribute carries neither side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Attribute {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<Value>,
+    /// The new value is not known until apply.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unknown: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
 }
 
 /// A VM or container, or a node, that a Proxmox resource names.
@@ -122,6 +155,112 @@ fn targets_of(values: &Value, out: &mut Vec<Target>) {
             node: node.clone(),
         });
     }
+}
+
+/// The value at `pointer` on one side of a change, `before` or `after`, and whether
+/// `<side>_sensitive` and `<side>_unknown` mark it, a parent of it, or anything inside it.
+fn read<'a>(change: &'a Value, side: &str, pointer: &str) -> (Option<&'a Value>, bool, bool) {
+    fn holds_true(marks: &Value) -> bool {
+        match marks {
+            Value::Bool(b) => *b,
+            Value::Array(a) => a.iter().any(holds_true),
+            Value::Object(o) => o.values().any(holds_true),
+            _ => false,
+        }
+    }
+    let marked = |marks: Option<&Value>| {
+        marks.is_some_and(|marks| {
+            pointer
+                .match_indices('/')
+                .any(|(i, _)| marks.pointer(&pointer[..i]) == Some(&Value::Bool(true)))
+                || marks.pointer(pointer).is_some_and(holds_true)
+        })
+    };
+    (
+        change
+            .get(side)
+            .and_then(|v| v.pointer(pointer))
+            .filter(|v| !v.is_null()),
+        marked(change.get(format!("{side}_sensitive"))),
+        marked(change.get(format!("{side}_unknown"))),
+    )
+}
+
+/// The [`VM_ATTRIBUTES`] whose value differs between `before` and `after` of `change`.
+fn vm_attributes(change: &Value) -> Vec<Attribute> {
+    let mut out = Vec::new();
+    for (name, pointer) in VM_ATTRIBUTES {
+        // Each entry of a block, by its name, and its index on each side. `-` names no
+        // entry, so a missing side reads as absent and only the block's own marks count.
+        let mut entries = std::collections::BTreeMap::<String, [String; 2]>::new();
+        if let Some((block, _)) = pointer.split_once("/*") {
+            for (s, side) in ["before", "after"].into_iter().enumerate() {
+                let Some(list) = change.get(side).and_then(|v| v.pointer(block)) else {
+                    continue;
+                };
+                for i in 0..list.as_array().map_or(0, Vec::len) {
+                    let key = if block == "/disk" {
+                        // Only a plain interface such as `scsi0` names a disk.
+                        let (Some(Value::String(k)), false, _) =
+                            read(change, side, &format!("{block}/{i}/interface"))
+                        else {
+                            continue;
+                        };
+                        let letters = k.trim_end_matches(|c: char| c.is_ascii_digit());
+                        if letters.is_empty()
+                            || letters.len() == k.len()
+                            || !letters.chars().all(|c| c.is_ascii_lowercase())
+                        {
+                            continue;
+                        }
+                        k.clone()
+                    } else {
+                        i.to_string()
+                    };
+                    entries
+                        .entry(key)
+                        .or_insert_with(|| ["-".into(), "-".into()])[s] = i.to_string();
+                }
+            }
+        } else {
+            entries.insert(String::new(), [String::new(), String::new()]);
+        }
+        for (key, [b, a]) in entries {
+            let (before, before_sensitive, _) = read(change, "before", &pointer.replace('*', &b));
+            let (after, after_sensitive, unknown) =
+                read(change, "after", &pointer.replace('*', &a));
+            let after = after.filter(|_| !unknown);
+            let tags = *name == "tags";
+            let plain = |v: &Value| match v {
+                Value::Number(_) | Value::String(_) | Value::Bool(_) => true,
+                Value::Array(a) => tags && a.iter().all(Value::is_string),
+                _ => false,
+            };
+            if before.into_iter().chain(after).any(|v| !plain(v)) {
+                continue;
+            }
+            let sorted = |v: &Value| {
+                let mut v = v.clone();
+                if let Value::Array(a) = &mut v {
+                    a.sort_by(|x, y| x.as_str().cmp(&y.as_str()));
+                }
+                v
+            };
+            let (before, after) = (before.map(sorted), after.map(sorted));
+            if !unknown && before == after {
+                continue;
+            }
+            let sensitive = before_sensitive || after_sensitive;
+            out.push(Attribute {
+                name: name.replace('*', &key),
+                before: before.filter(|_| !sensitive),
+                after: after.filter(|_| !sensitive),
+                unknown,
+                sensitive,
+            });
+        }
+    }
+    out
 }
 
 /// Summarizes `resource_changes`, leaving out `no-op` and `read` unless the change
@@ -213,6 +352,10 @@ pub fn summarize(show_json: &[u8]) -> Result<PlanSummary> {
             proxmox,
             targets,
             target_unknown,
+            attributes: match rc.get("change") {
+                Some(change) if kind == VM_RESOURCE_TYPE => vm_attributes(change),
+                _ => Vec::new(),
+            },
             kind,
         });
     }
@@ -424,6 +567,119 @@ mod tests {
             serde_json::to_string(&s.changes[0])
                 .unwrap()
                 .contains(r#""importing":true"#)
+        );
+    }
+
+    #[test]
+    fn reports_the_vm_attributes_an_update_changes() {
+        // How bpg/proxmox shows a VM in `tofu show -json`, trimmed: every block is a list.
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "change":{"actions":["update"],
+                       "before":{"vm_id":210,"node_name":"pve01","tags":["octopushy","old"],"description":"secret note",
+                                 "cpu":[{"cores":2,"sockets":1,"type":"x86-64-v2-AES"}],"memory":[{"dedicated":4096}],
+                                 "disk":[{"interface":"scsi0","size":32,"datastore_id":"local-lvm"}],
+                                 "network_device":[{"bridge":"vmbr0","mac_address":"BC:24:11:00:00:01"}],
+                                 "initialization":[{"user_account":[{"password":"hunter2"}]}]},
+                       "after":{"vm_id":210,"node_name":"pve01","tags":["agents","octopushy"],"description":"secret note",
+                                "cpu":[{"cores":2,"sockets":1,"type":"x86-64-v2-AES"}],"memory":[{"dedicated":8192}],
+                                "disk":[{"interface":"scsi1","size":100,"datastore_id":"local-lvm"},
+                                        {"interface":"scsi0","size":64,"datastore_id":"local-lvm"}],
+                                "network_device":[{"bridge":"vmbr0","mac_address":"BC:24:11:00:00:02"}],
+                                "initialization":[{"user_account":[{"password":"hunter3"}]}]}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let wire = serde_json::to_value(&s.changes[0].attributes).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!([
+                { "name": "memory.dedicated", "before": 4096, "after": 8192 },
+                { "name": "disk.scsi0.size", "before": 32, "after": 64 },
+                { "name": "disk.scsi1.size", "after": 100 },
+                { "name": "tags", "before": ["octopushy", "old"], "after": ["agents", "octopushy"] }
+            ])
+        );
+        let all = serde_json::to_string(&s.changes).unwrap();
+        for withheld in ["secret note", "hunter", "BC:24", "local-lvm", "x86-64"] {
+            assert!(!all.contains(withheld), "{withheld} left the agent");
+        }
+    }
+
+    #[test]
+    fn withholds_sensitive_vm_attributes() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "change":{"actions":["update"],
+                       "before":{"tags":["hidden-a"],"memory":[{"dedicated":4096}],"cpu":[{"cores":2}]},
+                       "after":{"tags":["hidden-b"],"memory":[{"dedicated":8192}],"cpu":[{"cores":2}]},
+                       "before_sensitive":{"tags":[true]},
+                       "after_sensitive":{"memory":true,"cpu":[{"cores":true}]}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let wire = serde_json::to_value(&s.changes[0].attributes).unwrap();
+        // An unchanged sensitive value is not reported at all.
+        assert_eq!(
+            wire,
+            serde_json::json!([
+                { "name": "memory.dedicated", "sensitive": true },
+                { "name": "tags", "sensitive": true }
+            ])
+        );
+        let all = serde_json::to_string(&s.changes).unwrap();
+        assert!(!all.contains("hidden") && !all.contains("4096") && !all.contains("8192"));
+    }
+
+    #[test]
+    fn marks_vm_attributes_not_known_until_apply() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "change":{"actions":["create"],"before":null,
+                       "after":{"vm_id":211,"cpu":[{"cores":4}],"disk":[{"interface":"scsi0"}],"network_device":[{}]},
+                       "after_unknown":{"disk":[{"size":true}],"network_device":true}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let wire = serde_json::to_value(&s.changes[0].attributes).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!([
+                { "name": "cpu.cores", "after": 4 },
+                { "name": "disk.scsi0.size", "unknown": true },
+                { "name": "network_device.0.bridge", "unknown": true }
+            ])
+        );
+    }
+
+    #[test]
+    fn reports_no_attributes_for_other_resources() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_container.ct","type":"proxmox_virtual_environment_container","name":"ct",
+             "change":{"actions":["update"],"before":{"tags":["a"],"memory":[{"dedicated":512}]},
+                       "after":{"tags":["b"],"memory":[{"dedicated":1024}]}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        assert!(s.changes[0].attributes.is_empty());
+        assert!(
+            !serde_json::to_string(&s.changes)
+                .unwrap()
+                .contains("attributes")
+        );
+    }
+
+    #[test]
+    fn drops_a_vm_attribute_that_is_not_a_plain_value() {
+        let json = br#"{"resource_changes":[
+            {"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest",
+             "change":{"actions":["update"],
+                       "before":{"cpu":[{"cores":{"inner":"a"},"sockets":1}],"tags":[{"t":1}],
+                                 "disk":[{"interface":"../x","size":1}]},
+                       "after":{"cpu":[{"cores":{"inner":"b"},"sockets":2}],"tags":[{"t":2}],
+                                "disk":[{"interface":"../x","size":2}]}}}
+        ]}"#;
+        let s = summarize(json).unwrap();
+        let wire = serde_json::to_value(&s.changes[0].attributes).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!([{ "name": "cpu.sockets", "before": 1, "after": 2 }])
         );
     }
 

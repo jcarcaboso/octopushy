@@ -115,6 +115,13 @@ public sealed record RunContext
     /// <summary>The time a scheduled run was for, which its limit is counted from.</summary>
     public DateTimeOffset? ScheduledFor { get; init; }
 
+    /// <summary>
+    /// What the guest's last successful configure run prepared, as it was when this run was made, so the run's
+    /// preview can be compared with it later. Shown only: it is never sent to an agent, and no manifest or approval
+    /// document names it. Null when the guest had none, and in a run made before it was kept.
+    /// </summary>
+    public JsonNode? PreviousPrepared { get; init; }
+
     /// <summary>A role as a pipeline run records it.</summary>
     public static string StageRole(string stage, string role) => $"{stage}/{role}";
 

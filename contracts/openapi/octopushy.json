@@ -5110,7 +5110,8 @@
                 "$ref": "#/components/schemas/AccessRotationDto"
               }
             ]
-          }
+          },
+          "previousPrepared": { }
         }
       },
       "ConfigureSecretDto": {
@@ -7298,12 +7299,54 @@
           }
         }
       },
+      "PlanAttributeDto": {
+        "required": [
+          "name",
+          "before",
+          "after",
+          "unknown",
+          "sensitive"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "before": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "after": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "unknown": {
+            "type": "boolean"
+          },
+          "sensitive": {
+            "type": "boolean"
+          }
+        }
+      },
       "PlanChangeDto": {
         "required": [
           "address",
           "type",
           "name",
-          "actions"
+          "actions",
+          "attributes"
         ],
         "type": "object",
         "properties": {
@@ -7326,6 +7369,12 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanAttributeDto"
             }
           }
         }

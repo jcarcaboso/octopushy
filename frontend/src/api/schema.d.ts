@@ -1192,6 +1192,7 @@ export interface components {
             hostKeyFingerprints: string[];
             previewSha256: null | string;
             accessRotation?: null | components["schemas"]["AccessRotationDto"];
+            previousPrepared?: unknown;
         };
         ConfigureSecretDto: {
             name: string;
@@ -1688,11 +1689,19 @@ export interface components {
             observeErrors: components["schemas"]["ObserveErrorDto"][];
             recent: components["schemas"]["RunSummaryDto"][];
         };
+        PlanAttributeDto: {
+            name: string;
+            before: null | components["schemas"]["JsonNode"];
+            after: null | components["schemas"]["JsonNode"];
+            unknown: boolean;
+            sensitive: boolean;
+        };
         PlanChangeDto: {
             address: string;
             type: null | string;
             name: null | string;
             actions: string[];
+            attributes: components["schemas"]["PlanAttributeDto"][];
         };
         PlanCountsDto: {
             /** Format: int32 */

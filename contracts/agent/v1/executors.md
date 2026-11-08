@@ -289,7 +289,9 @@ Output:
 `changes` comes from `tofu show -json` of the saved plan and leaves out `no-op` and
 `read` actions. A replace has the actions `["delete", "create"]` or
 `["create", "delete"]` and counts as `replace`, not as `delete`. The JSON plan itself
-is not logged or returned, because it can hold configuration values.
+is not logged, because it can hold configuration values, and nothing of it is returned
+but what this section names; the only configuration values among that are a VM's
+`attributes`, and never a sensitive one.
 
 A change also carries `actionReason`, OpenTofu's `action_reason`, when the plan gives
 one, such as `replace_because_tainted`. A change to a
@@ -317,6 +319,41 @@ fields stay off the wire.
   "type": "proxmox_virtual_environment_firewall_options", "name": "vm",
   "actions": ["create"], "importing": false, "proxmox": true,
   "targets": [{ "vmId": 310, "node": "korriban" }]
+}
+```
+
+A change to a `proxmox_virtual_environment_vm` carries, in `attributes`, each of a few
+of its attributes that the change sets to something else, so a person can see what the
+plan does before approving it. Only these are read, from bpg/proxmox's blocks, which
+`tofu show -json` holds as lists:
+
+| `name`                     | read from                                        |
+|----------------------------|--------------------------------------------------|
+| `cpu.cores`, `cpu.sockets` | `cpu[0].cores`, `cpu[0].sockets`                 |
+| `memory.dedicated`         | `memory[0].dedicated` (MiB)                      |
+| `disk.<interface>.size`    | the `disk` entry with that `interface` (GiB)     |
+| `tags`                     | `tags`, sorted                                   |
+| `network_device.<i>.bridge`| `network_device[i].bridge`                       |
+
+An attribute has `name`, `before` and `after`. A side that does not exist, such as
+`before` of a create, is absent. A value is a number, a string, a bool, or for `tags` a
+list of strings; an attribute with any other value is left out. When `before_sensitive`
+or `after_sensitive` marks the value, a parent of it or anything inside it, the
+attribute carries `sensitive: true` and neither value. When `after_unknown` marks it,
+`after` is absent and the attribute carries `unknown: true`. A change to any other type
+carries no `attributes`.
+
+```json
+{
+  "address": "proxmox_virtual_environment_vm.guest",
+  "type": "proxmox_virtual_environment_vm", "name": "guest",
+  "actions": ["update"], "vmId": 210, "node": "korriban", "importing": false, "proxmox": true,
+  "targets": [{ "vmId": 210, "node": "korriban" }],
+  "attributes": [
+    { "name": "memory.dedicated", "before": 4096, "after": 8192 },
+    { "name": "disk.scsi0.size", "before": 32, "after": 64 },
+    { "name": "tags", "before": ["octopushy"], "after": ["agents", "octopushy"] }
+  ]
 }
 ```
 

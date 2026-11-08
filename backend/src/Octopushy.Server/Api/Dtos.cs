@@ -151,6 +151,10 @@ public sealed record StepDto(
 public sealed record PlanDto(bool HasChanges, IReadOnlyList<PlanChangeDto> Changes, PlanCountsDto Counts, string? PlanSha256, string? ToolVersion);
 
 /// <summary>What a configure run will do. It says what will run, not what will change: no tool can show that.</summary>
+/// <param name="PreviousPrepared">
+/// What the guest's last successful configure run prepared, as it was when this run was made, to compare
+/// <paramref name="Prepared"/> with. Null when there was none.
+/// </param>
 public sealed record ConfigurePreviewDto(
     string Action,
     string Playbook,
@@ -166,14 +170,22 @@ public sealed record ConfigurePreviewDto(
     JsonNode? Prepared,
     IReadOnlyList<string> HostKeyFingerprints,
     string? PreviewSha256,
-    AccessRotationDto? AccessRotation = null);
+    AccessRotationDto? AccessRotation = null,
+    JsonNode? PreviousPrepared = null);
 
 /// <summary>Which key goes on and which come off, by fingerprint. An approval names this with the rest.</summary>
 public sealed record AccessRotationDto(string Current, string Candidate, IReadOnlyList<string> Remove);
 
 public sealed record ConfigureSecretDto(string Name, string Reference);
 
-public sealed record PlanChangeDto(string Address, string? Type, string? Name, IReadOnlyList<string> Actions);
+public sealed record PlanChangeDto(string Address, string? Type, string? Name, IReadOnlyList<string> Actions, IReadOnlyList<PlanAttributeDto> Attributes);
+
+/// <summary>
+/// One allowlisted VM attribute a change sets, as the plan says it: the run's input, not a reading of the guest. A side
+/// that does not exist is null; <paramref name="Unknown"/> when it is known only after apply, and a
+/// <paramref name="Sensitive"/> one carries no values.
+/// </summary>
+public sealed record PlanAttributeDto(string Name, JsonNode? Before, JsonNode? After, bool Unknown, bool Sensitive);
 
 public sealed record PlanCountsDto(int Create, int Update, int Delete, int Replace);
 

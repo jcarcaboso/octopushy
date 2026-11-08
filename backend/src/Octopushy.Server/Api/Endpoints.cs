@@ -296,7 +296,7 @@ public static partial class Endpoints
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
                     a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList(),
-                Views.ConfigurePreview(s),
+                Views.ConfigurePreview(s, context.PreviousPrepared),
                 s.Stage,
                 access[s.Id]))
                 .ToList();
