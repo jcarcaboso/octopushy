@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.7.1:
+Milestone 1 has shipped, up to release 0.7.2:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,20 @@ Milestone 1 has shipped, up to release 0.7.1:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.7.2:
+
+- An approval shows what it changes, from #59. The approval step opens with a row of tiles, one per kind of change
+  (Disk scsi0 32 → 64 GiB, Memory 4 → 8 GiB, Tags +agents, Resources +1 ~1, Prepared 2 changed), each opening its
+  old → new values under the tiles. For a Proxmox VM, the agent reports the old and new values of a short
+  [allowlist](contracts/agent/v1/executors.md) of plan attributes (CPU cores and sockets, memory, disk sizes, tags,
+  network bridges). A value the plan marks sensitive is shown only as "sensitive", and nothing else from the plan
+  leaves the agent. A configure run compares its prepared values with what the guest's last successful run
+  prepared, taken when the run is created.
+
+Upgrade the backend, frontend and agents to 0.7.2. A 0.7.1 agent keeps working with a 0.7.2 backend, but its plans
+carry no VM values, so the approval shows only the Resources tile for them. The offline validator at 0.7.1 keeps
+working, and no workflow or guest schema changed.
 
 New in 0.7.1:
 
