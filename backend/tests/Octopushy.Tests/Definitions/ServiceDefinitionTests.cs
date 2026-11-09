@@ -202,6 +202,14 @@ public class ServiceDefinitionTests
         Assert.False(LabRepositoryLoader.Load(test.Root).IsValid(Address));
     }
 
+    [Fact]
+    public void A_service_promotes_when_every_stage_passes_so_an_outcome_that_does_not_is_refused()
+    {
+        using var test = Repository(webWorkflow: "outcomes:\n  idle: { result: succeeded, promote: false }");
+        Assert.Contains("leave promote out", Errors(test));
+        Assert.False(LabRepositoryLoader.Load(test.Root).IsValid(Address));
+    }
+
     [Theory]
     [InlineData("  user: ops\n", "needs access.user")]
     [InlineData("  hostKey: { store: access/app/host-key }\n", "needs access.hostKey")]

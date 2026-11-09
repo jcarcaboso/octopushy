@@ -131,7 +131,8 @@ public sealed partial class RunEngine
     /// <summary>
     /// Settles a finished playbook. Success promotes what was prepared. A declared outcome waits
     /// for a person if the workflow lets one approve it, once, and otherwise ends as it declares:
-    /// a declared success promotes like any other, and a declared failure promotes nothing.
+    /// a declared success promotes like any other, unless it says <c>promote: false</c>, and a
+    /// declared failure promotes nothing.
     /// A scheduled run never waits on an approvable one: holding the guest for a person would
     /// block every later run, so it ends as succeeded, promotes nothing, and the next time tries
     /// again. An outcome no person can approve has nothing to wait for, so it ends as declared
@@ -176,6 +177,9 @@ public sealed partial class RunEngine
         }
 
         await RecordKeyUseAsync(db, run, step, cancellationToken);
+        // Declared as changing nothing: what was applied before stays the last word, and a change still pending stays pending.
+        if (reported is { Declared.Promote: false })
+            return;
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is null)
             return;

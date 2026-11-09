@@ -189,4 +189,5 @@ public sealed record WorkflowAction(
 }
 
 /// <summary>A result a playbook may report that is neither success nor failure.</summary>
-public sealed record WorkflowOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result);
+/// <param name="Promote">False when a run that ends with it succeeds without marking anything applied.</param>
+public sealed record WorkflowOutcome(string Id, string? Description, JsonObject? ApproveVars, string Result, bool Promote = true);

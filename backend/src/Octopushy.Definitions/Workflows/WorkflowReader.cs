@@ -96,7 +96,8 @@ public sealed class WorkflowReader
                 p.Key,
                 p.Value!["description"]?.GetValue<string>(),
                 p.Value!["approve"]?["vars"]?.DeepClone().AsObject(),
-                p.Value!["result"]?.GetValue<string>() ?? "failed"),
+                p.Value!["result"]?.GetValue<string>() ?? "failed",
+                p.Value!["promote"]?.GetValue<bool>() ?? true),
             StringComparer.Ordinal) ?? [];
         var declared = (json["actions"] as JsonObject)?.ToDictionary(
             p => p.Key,
@@ -254,6 +255,12 @@ public sealed class WorkflowReader
             {
                 Invalid($"/outcomes/{outcome.Id}/approve",
                     $"Outcome {outcome.Id} is approved by a person, and a service has one approval, before anything runs: declare a result instead.");
+            }
+
+            foreach (var outcome in outcomes.Values.Where(o => !o.Promote))
+            {
+                Invalid($"/outcomes/{outcome.Id}/promote",
+                    $"Outcome {outcome.Id} says promote: false, and a service is at its inputs once every stage passes: leave promote out.");
             }
 
             if (ansible.Count == 0)

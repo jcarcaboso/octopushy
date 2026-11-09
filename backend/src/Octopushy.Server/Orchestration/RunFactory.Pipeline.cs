@@ -80,7 +80,7 @@ public sealed partial class RunFactory
                 stage.Inputs.DeepClone().AsObject(),
                 stage.Secrets.Keys.ToList(),
                 stage.SecretFiles.Keys.ToList(),
-                configure.Outcomes.ToDictionary(o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result), StringComparer.Ordinal),
+                configure.Outcomes.ToDictionary(o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result, o.Value.Promote), StringComparer.Ordinal),
                 null)));
         }
 

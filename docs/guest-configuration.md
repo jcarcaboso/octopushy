@@ -172,7 +172,7 @@ page shows its next time and what the last firing did.
 | **Overlap.** Any run is active on the guest | The firing is skipped and says which run is in the way. It is not queued |
 | **Overlap.** An uncertain run holds the guest | The same. Every firing is skipped, visibly, until a person closes that run |
 | **Approval.** `policy.approval: manual`, or the action's own `policy.actions` approval, or a destructive action under `policy.destructive: manual` | The run waits for approval as any other does. While it waits, later firings are skipped, so at most one is ever waiting. What a person approves is that preview: it does not move forward by itself, and a person who wants newer versions rejects it and lets the next time run. The hour does not apply to a run waiting for a person or approved by one: the time is then theirs, however late, and an approved run waits for an agent as any other does |
-| **Declared outcome**, such as `deferred`, on a workflow that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval. This rule is about outcomes with `approve`: one without it has nobody to wait for, so it ends as its `result` declares, as on any run. `failed` fails the run and promotes nothing, and `succeeded` ends it as succeeded and promotes what was prepared |
+| **Declared outcome**, such as `deferred`, on a workflow that lets a person approve it | **A scheduled run does not wait.** It ends as succeeded, naming the outcome and its detail, promotes nothing, and frees the guest. The next time tries again. A person who wants it now starts the action by hand, and that run does wait for approval. This rule is about outcomes with `approve`: one without it has nobody to wait for, so it ends as its `result` declares, as on any run. `failed` fails the run and promotes nothing, and `succeeded` ends it as succeeded and promotes what was prepared, unless it says `promote: false` |
 | **Failure** | Each time comes up once, whatever happens to it, so a failed run is not repeated until the next time. It stays on the guest's page and in **Runs**, with a link from the schedule |
 
 **A schedule is not a window.** A schedule says when an action starts. `policy.windows`, which
@@ -239,7 +239,7 @@ installs the same ones, not whatever is newest by then.
 prepared to the guest's applied snapshot. An action with `snapshot: applied` uses that
 instead of preparing, and fails its preview if there is none yet. A failed or deferred run
 promotes nothing. An outcome declared `succeeded`, with no `approve`, counts as a success and
-promotes.
+promotes, unless it also says `promote: false`.
 
 ### Outcomes and failure
 
@@ -281,6 +281,23 @@ Without `approve`, an outcome's `result` (`succeeded` or `failed`, default `fail
 the run, with the outcome's name in its detail, so it never reads as a plain failure. A
 scheduled run follows the same rule for those; only an outcome with `approve` is [treated
 differently](#schedules).
+
+**An outcome that says nothing happened.** `result: succeeded` with `promote: false` ends
+the run as succeeded and marks nothing applied: the snapshot, the applied revision and the
+inputs it ran with stay as the last promoting run left them. It is for a playbook that found
+nothing to do and stopped before the rest of it ran, such as an update that finds every
+version already in place while threads are busy. Ending cleanly would claim the whole setup
+applied, so a change to the guest or the workflow that the setup has not run yet would read
+as done. With `promote: false` it stays pending, and the setup action still runs it. A
+service refuses it: a service is at its inputs once every stage passes.
+
+```yaml
+outcomes:
+  up-to-date:
+    description: Every tool is at the approved version, so nothing ran.
+    result: succeeded
+    promote: false
+```
 
 Exit 75 from the `nodes` wrapper does not carry over: that wrapper invents the code by
 searching the log. A port replaces it with the `set_stats` task above.

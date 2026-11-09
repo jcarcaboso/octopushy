@@ -409,6 +409,33 @@ public class ConfigureRunTests(PostgresFixture postgres)
         Assert.Contains("A reboot is due.", run.Detail);
     }
 
+    [Fact]
+    public async Task An_outcome_that_does_not_promote_succeeds_and_leaves_the_setup_pending()
+    {
+        const string Outcomes = """
+            outcomes:
+              up-to-date: { description: Nothing would move., result: succeeded, promote: false }
+            """;
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository(extraWorkflow: Outcomes));
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent, new JsonObject { ["version"] = "2" });
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap("up-to-date", "Every tool is at the approved version."));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Succeeded, run.Status);
+        Assert.Contains("up-to-date", run.Detail);
+        var resource = await server.ResourceAsync(Guest);
+        var configuration = await server.QueryAsync(db => db.GuestConfigurations.AsNoTracking().SingleAsync(c => c.ResourceId == resource.Id));
+        Assert.Null(configuration.AppliedHash);
+        Assert.Null(configuration.AppliedRevisionId);
+        Assert.Null(configuration.Snapshot);
+        var guest = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{resource.Id}"))!;
+        Assert.False(guest["configuration"]!["inSync"]!.GetValue<bool>());
+    }
+
     [Theory]
     [InlineData("failed", RunStatuses.Failed)]
     [InlineData("succeeded", RunStatuses.Succeeded)]
