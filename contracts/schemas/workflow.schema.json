@@ -74,9 +74,14 @@
             "required": ["vars"],
             "additionalProperties": false
           },
-          "result": { "description": "How the run ends without an approval.", "enum": ["succeeded", "failed"] }
+          "result": { "description": "How the run ends without an approval.", "enum": ["succeeded", "failed"] },
+          "promote": {
+            "description": "false: the run ends as succeeded and marks nothing applied, as if it had not run, so a change the setup has not applied yet stays pending. Only with result: succeeded. Not in manages: service.",
+            "const": false
+          }
         },
         "not": { "required": ["approve", "result"] },
+        "dependentSchemas": { "promote": { "required": ["result"], "properties": { "result": { "const": "succeeded" } } } },
         "additionalProperties": false
       }
     }

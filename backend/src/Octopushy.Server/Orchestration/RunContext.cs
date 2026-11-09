@@ -234,8 +234,8 @@ public sealed record AnsibleContext(
 /// </summary>
 public sealed record HostKeysRequestContext(Guid AttemptId, Guid CreatedBy, bool Optional);
 
-/// <summary>A declared outcome, as the run was built with it.</summary>
-public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result);
+/// <summary>A declared outcome, as the run was built with it. Runs built before <paramref name="Promote"/> existed promote.</summary>
+public sealed record AnsibleOutcome(string? Description, JsonObject? ApproveVars, string Result, bool Promote = true);
 
 /// <param name="Kind">
 /// How Proxmox lists the guest's machine, <c>qemu</c> or <c>lxc</c>, for the steps that check it or change its protection

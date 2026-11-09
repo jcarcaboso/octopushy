@@ -206,6 +206,27 @@ public class WorkflowTests
         Assert.False(setup.Configure.Actions["update-system"].OnChange);
         Assert.Equal(["tailscale_key"], setup.Configure.Secrets);
         Assert.Equal("succeeded", setup.Configure.Outcomes["busy"].Result);
+        Assert.True(setup.Configure.Outcomes["busy"].Promote);
+    }
+
+    [Theory]
+    [InlineData("{ result: succeeded, promote: false }", true)]
+    [InlineData("{ result: failed, promote: false }", false)]
+    [InlineData("{ promote: false }", false)]
+    [InlineData("{ result: succeeded, promote: true }", false)]
+    public void Only_a_declared_success_can_leave_the_setup_pending(string outcome, bool valid)
+    {
+        using var test = GuestConfigurationTests.Repository(extraWorkflow: $"outcomes:\n  busy: {outcome}");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        if (valid)
+        {
+            Assert.Empty(repository.Issues);
+            Assert.False(repository.Guest(Guest)!.Setup!.Configure!.Outcomes["busy"].Promote);
+        }
+        else
+        {
+            Assert.Contains(Errors(repository), i => i.Address == "workflows/app");
+        }
     }
 
     [Fact]

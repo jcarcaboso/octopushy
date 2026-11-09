@@ -221,7 +221,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 inputs.SecretVars.Keys.ToList(),
                 inputs.SecretFiles.Keys.ToList(),
                 inputs.Configure.Outcomes.ToDictionary(
-                    o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result), StringComparer.Ordinal),
+                    o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result, o.Value.Promote), StringComparer.Ordinal),
                 changedFiles),
         };
 

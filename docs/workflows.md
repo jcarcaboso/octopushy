@@ -182,6 +182,10 @@ outcomes:
     description: Work is active on the machine. Approving interrupts it.
     approve:
       vars: { machine_tools_allow_busy: true }
+  up-to-date:                     # ends as succeeded, marking nothing applied
+    description: Every tool is at the approved version, so nothing ran.
+    result: succeeded
+    promote: false
 ```
 
 For `manages: vm`, and `manages: container` alike:
@@ -267,7 +271,8 @@ A service workflow has one stage or more, planned and previewed, approved once, 
 [services and their runs](#services-and-their-runs). An Ansible stage runs on the guest's connection, and its action is
 named after the stage. An OpenTofu stage has a state of its own, its inputs as variables, and no credentials of any kind.
 A service offers Deploy only, so a service workflow has no `actions`, and an outcome a person approves is refused: that
-would be a second approval, after something has changed.
+would be a second approval, after something has changed. So is `promote: false`: a service is at its inputs once every
+stage passes.
 
 ### Versions and references
 
