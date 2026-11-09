@@ -7,6 +7,7 @@ import { JsonBlock } from "../../components/CodeBlock";
 import { RelativeTime } from "../../components/RelativeTime";
 import { useNow } from "../../components/useNow";
 import { statusStyle } from "../../components/status";
+import { buildRunOverview } from "../../lib/changes";
 import { humanize } from "../../lib/format";
 import { summarizePlan } from "../../lib/plan";
 import { elapsed, formatDuration } from "../../lib/time";
@@ -77,6 +78,7 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
         runId={detail.run.id}
         step={step}
         plan={planStep?.plan && detail.run.operation !== "pipeline" ? summarizePlan(planStep.plan) : null}
+        overview={step.status === "awaiting-approval" ? buildRunOverview(detail.steps) : []}
         configure={detail.run.operation === "configure" || detail.run.operation === "rotate-access"}
         pipeline={detail.run.operation === "pipeline"}
         rotation={detail.run.operation === "rotate-access"}

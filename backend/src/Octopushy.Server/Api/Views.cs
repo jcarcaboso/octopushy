@@ -30,7 +30,7 @@ public static class GuestStatuses
 }
 
 /// <summary>Builds the read models the API returns.</summary>
-public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors, AgentConnections connections,
+public sealed partial class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors, AgentConnections connections,
     TimeProvider clock)
 {
     private const int DefinitionTextLimit = 256 * 1024;
@@ -98,7 +98,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
                 c["address"]?.GetValue<string>() ?? "?",
                 c["type"]?.GetValue<string>(),
                 c["name"]?.GetValue<string>(),
-                (c["actions"] as JsonArray)?.Select(a => a?.GetValue<string>() ?? "").ToList() ?? []))
+                (c["actions"] as JsonArray)?.Select(a => a?.GetValue<string>() ?? "").ToList() ?? [],
+                (c["attributes"] as JsonArray)?.OfType<JsonObject>().Select(PlanAttribute).OfType<PlanAttributeDto>().ToList() ?? []))
             .ToList() ?? [];
         return new PlanDto(
             outputs["hasChanges"]?.GetValue<bool>() ?? changes.Count > 0,
@@ -108,8 +109,37 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             outputs["toolVersion"]?.GetValue<string>());
     }
 
-    /// <summary>The typed view of a preview step's outputs.</summary>
-    public static ConfigurePreviewDto? ConfigurePreview(Step step)
+    /// <summary>
+    /// One VM attribute of a plan change, or null for one the agent should not have sent: only the names it
+    /// allowlists, with scalar values, or a list of strings for tags. A sensitive one keeps its name and no value.
+    /// </summary>
+    private static PlanAttributeDto? PlanAttribute(JsonObject attribute)
+    {
+        if (attribute["name"] is not JsonValue named || !named.TryGetValue<string>(out var name) || !ShownAttribute().IsMatch(name))
+        {
+            return null;
+        }
+
+        bool Flag(string key) => attribute[key] is JsonValue flag && flag.TryGetValue<bool>(out var set) && set;
+        if (Flag("sensitive"))
+        {
+            return new PlanAttributeDto(name, null, null, Flag("unknown"), true);
+        }
+
+        bool Shown(JsonNode? value) => value is null or JsonValue
+            || (name == "tags" && value is JsonArray tags && tags.All(t => t is JsonValue tag && tag.GetValueKind() == JsonValueKind.String));
+        var (before, after) = (attribute["before"], attribute["after"]);
+        return Shown(before) && Shown(after) ? new PlanAttributeDto(name, before?.DeepClone(), after?.DeepClone(), Flag("unknown"), false) : null;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(cpu\.(cores|sockets)|memory\.dedicated|disk\.[a-z]+[0-9]+\.size|tags|network_device\.[0-9]+\.bridge)\z")]
+    private static partial System.Text.RegularExpressions.Regex ShownAttribute();
+
+    /// <summary>
+    /// The typed view of a preview step's outputs. <paramref name="previousPrepared"/> is the run's baseline from its
+    /// context: it is shown beside the preview, and is not part of what the agent saw or the approval names.
+    /// </summary>
+    public static ConfigurePreviewDto? ConfigurePreview(Step step, JsonNode? previousPrepared = null)
     {
         if (step.Name != StepNames.Preview || step.Outputs is null || JsonNode.Parse(step.Outputs) is not JsonObject outputs)
         {
@@ -135,7 +165,8 @@ public sealed class Views(OctopushyDb db, RevisionCache revisions, RepositoryMir
             outputs["planSha256"]?.GetValue<string>(),
             manifest?["accessRotation"] is JsonObject rotation
                 ? new AccessRotationDto(rotation["current"]?.GetValue<string>() ?? "?", rotation["candidate"]?.GetValue<string>() ?? "?", Strings(rotation["remove"]))
-                : null);
+                : null,
+            previousPrepared?.DeepClone());
     }
 
     public static (string Status, string? Detail) GuestStatus(Resource resource, Run? active, Run? last)

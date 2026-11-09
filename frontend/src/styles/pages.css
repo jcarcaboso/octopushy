@@ -511,6 +511,239 @@
   color: var(--attention-fg);
 }
 
+/* Change overview on an approval: flat tiles, one detail at a time */
+.overview__tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.overview-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0.6rem var(--space-3) 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+}
+
+.overview-tile:hover {
+  border-color: var(--border-strong);
+}
+
+.overview-tile[aria-expanded="true"] {
+  border-color: var(--text-muted);
+}
+
+.overview-tile__label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overview-tile__chevron {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px);
+  opacity: 0.6;
+}
+
+.overview-tile[aria-expanded="true"] .overview-tile__chevron {
+  transform: rotate(225deg) translate(-1px, -1px);
+  opacity: 1;
+}
+
+.overview-tile__value {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  line-height: 1.5rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overview-tile--add .overview-tile__value {
+  color: var(--success-fg);
+}
+.overview-tile--remove .overview-tile__value,
+.overview-tile--danger .overview-tile__value {
+  color: var(--danger-fg);
+}
+.overview-tile--warn .overview-tile__value {
+  color: var(--warning-fg);
+}
+
+.overview-tile__old,
+.overview-tile__arrow,
+.overview-tile__unit {
+  color: var(--text-muted);
+}
+
+.overview-tile__arrow {
+  margin: 0 2px;
+}
+
+.overview-tile__unit {
+  margin-left: 3px;
+  font-size: var(--text-xs);
+}
+
+.overview-tile__sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.overview--add {
+  color: var(--success-fg);
+}
+.overview--remove {
+  color: var(--danger-fg);
+}
+
+.overview__panel {
+  overflow-x: auto;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.overview__heading {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.overview__rows {
+  max-width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.overview__rows td {
+  padding-block: 3px;
+  vertical-align: baseline;
+}
+
+.overview-row__mark {
+  width: 1rem;
+  color: var(--text-muted);
+}
+
+.overview-row__name {
+  padding-right: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.overview-row__old,
+.overview-row__arrow,
+.overview-row__new {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.overview-row__old {
+  text-align: right;
+}
+
+.overview-row__arrow {
+  width: 1.75rem;
+  text-align: center;
+}
+
+.overview-row__new {
+  padding-right: var(--space-3);
+}
+
+.overview-row__new b {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.overview-row__new.overview--add,
+.overview-row__new.overview--add b {
+  color: var(--success-fg);
+}
+
+.overview-row__note {
+  padding-left: var(--space-3);
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+}
+
+.overview-row--gone .overview-row__name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-fg);
+}
+
+.overview-row--unchanged td {
+  color: var(--text-muted);
+}
+
+.overview__more {
+  margin-top: var(--space-1);
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.overview__more:hover {
+  color: var(--text);
+}
+
+.overview__honest {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+@media (max-width: 560px) {
+  .overview__tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* The name on its own line, old → new under it. */
+  .overview__rows,
+  .overview__rows tbody {
+    display: block;
+  }
+
+  .overview__rows tr {
+    display: grid;
+    grid-template-columns: 1rem auto auto auto 1fr;
+    padding-bottom: var(--space-2);
+  }
+
+  .overview-row__name {
+    grid-column: 2 / -1;
+  }
+
+  .overview-row__old {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
 .decision {
   display: flex;
   flex-direction: column;

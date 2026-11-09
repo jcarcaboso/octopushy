@@ -580,6 +580,45 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_run_shows_what_the_last_successful_run_prepared_as_it_was_when_the_run_was_made()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        var resource = await server.ResourceAsync(Guest);
+        async Task<JsonNode> PreviewViewAsync(Guid runId) =>
+            (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{runId}"))!["steps"]!.AsArray()
+            .Single(s => s!["name"]!.GetValue<string>() == "preview")!["configurePreview"]!;
+
+        await ScheduleAsync(server);
+        await PreviewAsync(agent, new JsonObject { ["version"] = "1.2.3" });
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var first = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Succeeded, first.Status);
+        Assert.Null((await PreviewViewAsync(first.Id))["previousPrepared"]);
+
+        (await http.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
+        await server.TickAsync();
+        var second = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.NotEqual(first.Id, second.Id);
+        var previewed = await PreviewAsync(agent, new JsonObject { ["version"] = "2.0.0" });
+        // The baseline is for people to compare with: the agent and the manifest an approval names never see it.
+        Assert.DoesNotContain("1.2.3", previewed.InputJson);
+        Assert.DoesNotContain("previousPrepared", previewed.InputJson);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        Assert.Contains("2.0.0", await server.QueryAsync(db => db.GuestConfigurations.AsNoTracking().Select(c => c.Snapshot).SingleAsync()));
+
+        // A later success changes the guest's snapshot, not what an older run shows.
+        var preview = await PreviewViewAsync(second.Id);
+        Assert.Equal("1.2.3", preview["previousPrepared"]!["version"]!.GetValue<string>());
+        Assert.Equal("2.0.0", preview["prepared"]!["version"]!.GetValue<string>());
+        Assert.Null((await PreviewViewAsync(first.Id))["previousPrepared"]);
+    }
+
+    [Fact]
     public async Task A_workflows_automatic_action_runs_unattended_on_a_manual_guest()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.WithWorkflowApproval("", "automatic"));

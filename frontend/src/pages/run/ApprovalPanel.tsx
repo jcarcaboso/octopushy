@@ -6,13 +6,17 @@ import { Callout } from "../../components/Callout";
 import { Hash } from "../../components/Mono";
 import { RelativeTime } from "../../components/RelativeTime";
 import { ErrorMessage } from "../../components/States";
+import type { Tile } from "../../lib/changes";
 import type { PlanSummary } from "../../lib/plan";
+import { ChangeOverview } from "./ChangeOverview";
 import { PlanCountsLine } from "./PlanChanges";
 
 interface Props {
   runId: string;
   step: Step;
   plan: PlanSummary | null;
+  /** The run's changes as overview tiles, shown while the step waits for a decision. */
+  overview?: Tile[];
   /** The run configures a guest, so this names a preview rather than a plan. */
   configure?: boolean;
   /** The run is a service's pipeline, so this names one document covering every stage. */
@@ -51,7 +55,7 @@ function Decided({ step, configure, pipeline }: { step: Step; configure: boolean
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, configure = false, pipeline = false, rotation = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, overview = [], configure = false, pipeline = false, rotation = false }: Props) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");
@@ -76,6 +80,7 @@ export function ApprovalPanel({ runId, step, plan, configure = false, pipeline =
 
   return (
     <div className="approval">
+      <ChangeOverview tiles={overview} />
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
         {pipeline

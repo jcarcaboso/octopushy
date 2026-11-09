@@ -49,7 +49,7 @@ function run(status: string): RunDetail {
     run: { ...summary, status },
     steps: [
       { id: "step-plan", ordinal: 0, name: "plan", kind: "agent", status: "succeeded", detail: null, startedAt: at, finishedAt: at, outputs: null,
-        plan: { hasChanges: true, planSha256: sha, toolVersion: "1.10.6", changes: [{ address: "terraform_data.guest", type: "terraform_data", name: "guest", actions: ["update"] }],
+        plan: { hasChanges: true, planSha256: sha, toolVersion: "1.10.6", changes: [{ address: "terraform_data.guest", type: "terraform_data", name: "guest", actions: ["update"], attributes: [] }],
           counts: { create: 0, update: 1, delete: 0, replace: 0 } },
         approval: null, attempts: [] },
       { id: "step-approval", ordinal: 1, name: "approval", kind: "approval", status: status === "awaiting-approval" ? "awaiting-approval" : "succeeded",

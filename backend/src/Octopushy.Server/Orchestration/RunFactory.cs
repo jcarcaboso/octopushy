@@ -201,6 +201,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             RequestedSecretVersions = requestedVersions,
             ScheduledFor = scheduledFor,
             ManagedHostKey = managedHostKey,
+            PreviousPrepared = configuration?.Snapshot is { } snapshot ? JsonNode.Parse(snapshot) : null,
             Ansible = new AnsibleContext(
                 inputs.Workflow.Label,
                 action.Id,
