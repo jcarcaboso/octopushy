@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.7.2:
+Milestone 1 has shipped, up to release 0.7.3:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,21 @@ Milestone 1 has shipped, up to release 0.7.2:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.7.3:
+
+- [Secret values can be revealed](docs/credential-lifecycle.md) under Variables, from #63. Each secret row has a
+  Reveal button, with Hide and Copy once shown, and Reveal all / Hide all reveal or conceal every secret listed: the
+  folder, the search results or all keys. A revealed value stays on the page until you leave it or the key gets a new
+  version. `POST /api/variables/reveal` returns each key's active value, or none for a revoked or never-promoted
+  version, refuses `system/` keys, and the server logs who revealed which keys.
+- A declared outcome can say [`promote: false`](docs/workflows.md), from #62, only with `result: succeeded`. The run
+  succeeds and leaves what was applied as it was, so a pending recipe change stays pending and `setup` still runs it.
+- `just mock` serves the web app against a [mock API](frontend/mock/README.md), from #60, with no backend, database or
+  agent.
+
+Upgrade the backend and frontend to 0.7.3. The agent did not change, so 0.7.2 agents keep working. The workflow schema
+gained `promote`, so validate a lab that uses it with the 0.7.3 validator; the 0.7.2 validator refuses it.
 
 New in 0.7.2:
 
