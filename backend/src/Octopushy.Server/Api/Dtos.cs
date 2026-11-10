@@ -543,6 +543,13 @@ public sealed record VariablesDto(IReadOnlyList<VariableDto> Entries, IReadOnlyL
 
 public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description);
 
+public sealed record VariableRevealRequest(IReadOnlyList<string> Keys);
+
+/// <summary>A key's active value; null when it has none that may be used (revoked, or never promoted).</summary>
+public sealed record RevealedVariableDto(string Key, string? Value);
+
+public sealed record VariableRevealDto(IReadOnlyList<RevealedVariableDto> Values);
+
 public sealed record VariableCandidateRequest(string Key, string Value, string? Description);
 
 public sealed record VariableCandidateDto(int Version);

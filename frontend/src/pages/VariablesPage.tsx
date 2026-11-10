@@ -1,8 +1,9 @@
-import { FolderTree, KeyRound, List, Plus } from "lucide-react";
+import { Eye, EyeOff, FolderTree, KeyRound, List, Plus } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useDeleteVariable, useVariables } from "../api/queries";
+import { useDeleteVariable, useRevealVariables, useVariables } from "../api/queries";
 import type { Variable } from "../api/types";
+import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
@@ -15,6 +16,8 @@ import { VariableVersionsDialog } from "./variables/VariableVersionsDialog";
 
 type Editing = { existing: Variable | null; presetKey?: string } | null;
 type View = "folders" | "all";
+/** A revealed value with the version it belongs to, so a value replaced since is concealed again. */
+type Revealed = Record<string, { version: number; value: string | null }>;
 
 const viewStorageKey = "octopushy.variables.view";
 
@@ -60,6 +63,11 @@ export function VariablesPage() {
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<Variable | null>(null);
   const [managing, setManaging] = useState<string | null>(null);
+  // Held only in this page's state: leaving the page conceals every value again.
+  const [revealed, setRevealed] = useState<Revealed>({});
+  const [revealing, setRevealing] = useState<ReadonlySet<string>>(new Set());
+  const reveal = useRevealVariables();
+  const [revealFailed, setRevealFailed] = useState(false);
   const entries = data?.entries.filter((entry) => !entry.key.startsWith("system/")) ?? [];
   const missing = data?.missing.filter((entry) => !entry.key.startsWith("system/")) ?? [];
   const managed = entries.find((entry) => entry.key === managing);
@@ -75,6 +83,47 @@ export function VariablesPage() {
     storeView(next);
     setPreferredView(next);
     if (next === "all") setParams({});
+  }
+
+  const shown = browsing ? listing.entries : (results ?? entries);
+  const shownSecrets = shown.filter((entry) => entry.visibility === "secret");
+  const revealedValue = (entry: Variable) => {
+    const held = revealed[entry.key];
+    return held && held.version === entry.version ? held.value : undefined;
+  };
+  const allRevealed = shownSecrets.length > 0 && shownSecrets.every((entry) => revealedValue(entry) !== undefined);
+
+  // Each request settles on its own: mutate's per-call callbacks run only for the latest of overlapping calls.
+  async function revealEntries(targets: Variable[]) {
+    const keys = targets.filter((entry) => revealedValue(entry) === undefined && !revealing.has(entry.key)).map((entry) => entry.key);
+    if (keys.length === 0) return;
+    const versions = new Map(targets.map((entry) => [entry.key, entry.version]));
+    setRevealing((current) => new Set([...current, ...keys]));
+    try {
+      const body = await reveal.mutateAsync(keys);
+      setRevealFailed(false);
+      setRevealed((current) => {
+        const next = { ...current };
+        for (const { key, value } of body.values) next[key] = { version: versions.get(key) ?? 0, value: value ?? null };
+        return next;
+      });
+    } catch {
+      setRevealFailed(true);
+    } finally {
+      setRevealing((current) => {
+        const next = new Set(current);
+        for (const key of keys) next.delete(key);
+        return next;
+      });
+    }
+  }
+
+  function hideEntries(targets: Variable[]) {
+    setRevealed((current) => {
+      const next = { ...current };
+      for (const entry of targets) delete next[entry.key];
+      return next;
+    });
   }
 
   const setButton = (
@@ -93,6 +142,23 @@ export function VariablesPage() {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      {shownSecrets.length > 0 ? (
+        allRevealed ? (
+          <button type="button" className="button button--small" onClick={() => hideEntries(shownSecrets)}>
+            <EyeOff size={14} aria-hidden="true" /> Hide all
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="button button--small"
+            onClick={() => void revealEntries(shownSecrets)}
+            disabled={shownSecrets.some((entry) => revealing.has(entry.key))}
+            aria-label={shownSecrets.length === 1 ? "Reveal the 1 secret listed" : `Reveal all ${shownSecrets.length} secrets listed`}
+          >
+            <Eye size={14} aria-hidden="true" /> Reveal all
+          </button>
+        )
+      ) : null}
       <nav className="segmented segmented--inline" aria-label="View">
         <button type="button" className="segmented__item" aria-current={view === "folders" ? "page" : undefined} onClick={() => chooseView("folders")}>
           <FolderTree size={14} aria-hidden="true" /> Folders
@@ -108,6 +174,10 @@ export function VariablesPage() {
     onUpdate: (existing: Variable) => setEditing({ existing }),
     onVersions: (entry: Variable) => setManaging(entry.key),
     onDelete: setDeleting,
+    revealedValue,
+    revealing,
+    onReveal: (entry: Variable) => void revealEntries([entry]),
+    onHide: (entry: Variable) => hideEntries([entry]),
   };
 
   return (
@@ -154,6 +224,11 @@ export function VariablesPage() {
                 </tbody>
               </Table>
             </Card>
+          ) : null}
+          {revealFailed ? (
+            <Callout kind="danger" title="The values could not be revealed." alert>
+              Try again, or reload the page if the store changed.
+            </Callout>
           ) : null}
           <Card
             title={browsing ? <FolderPath path={listing.path} /> : "Entries"}

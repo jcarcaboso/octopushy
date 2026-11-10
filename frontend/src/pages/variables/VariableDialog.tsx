@@ -132,7 +132,7 @@ export function VariableDialog({ existing, presetKey = "", folder = "", onClose 
               <input type="radio" name="visibility" value="secret" checked={visibility === "secret"} onChange={() => setVisibility("secret")} />
               <span>
                 <strong>Secret</strong>
-                <span className="muted small"> · concealed once saved; delivered only to operations that reference it</span>
+                <span className="muted small"> · concealed once saved; delivered to operations that reference it and shown only when revealed</span>
               </span>
             </label>
             <label className={wasSecret ? "radio radio--disabled" : "radio"}>

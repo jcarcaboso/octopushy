@@ -181,6 +181,12 @@ on("PUT", "/api/variables", ({ body }) => {
 on("DELETE", "/api/variables", ({ query }) => {
   data.variables.entries = data.variables.entries.filter((v) => v.key !== query.get("key"));
 });
+on("POST", "/api/variables/reveal", ({ body }) => ({
+  values: (body.keys as string[]).map((key) => {
+    const existing = data.variables.entries.find((v) => v.key === key);
+    return { key, value: existing ? (existing.value ?? `mock-secret-of-${key}`) : null };
+  }),
+}));
 on("POST", "/api/variables/candidates", ({ body }) => {
   const existing = data.variables.entries.find((v) => v.key === body.key);
   if (!existing) return notFound("key");

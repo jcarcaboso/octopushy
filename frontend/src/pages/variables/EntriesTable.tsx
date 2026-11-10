@@ -1,4 +1,4 @@
-import { Folder as FolderIcon, History, Lock, Pencil, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Folder as FolderIcon, History, Lock, Pencil, Trash2 } from "lucide-react";
 import { Link } from "react-router";
 import type { Variable } from "../../api/types";
 import { Badge } from "../../components/Badge";
@@ -49,9 +49,51 @@ interface Props {
   onUpdate: (entry: Variable) => void;
   onVersions: (entry: Variable) => void;
   onDelete: (entry: Variable) => void;
+  /** A secret's value once revealed: null when it has none that may be used, undefined while concealed. */
+  revealedValue: (entry: Variable) => string | null | undefined;
+  /** Keys whose values are being fetched. */
+  revealing: ReadonlySet<string>;
+  onReveal: (entry: Variable) => void;
+  onHide: (entry: Variable) => void;
 }
 
-export function EntriesTable({ folders = [], entries, byName = false, onUpdate, onVersions, onDelete }: Props) {
+function SecretValue({ entry, value, pending, onReveal, onHide }: {
+  entry: Variable;
+  value: string | null | undefined;
+  pending: boolean;
+  onReveal: () => void;
+  onHide: () => void;
+}) {
+  if (value === undefined) {
+    return (
+      <span className="secret-value">
+        <span className="muted">Concealed</span>
+        <button type="button" className="icon-button" onClick={onReveal} disabled={pending} aria-label={`Reveal ${entry.key}`} title="Reveal">
+          <Eye size={14} aria-hidden="true" />
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="secret-value">
+      {value === null ? (
+        <span className="muted">No usable version</span>
+      ) : (
+        <>
+          <code className="mono value-preview" title={value}>
+            {value}
+          </code>
+          <CopyButton text={value} label={`Copy the value of ${entry.key}`} compact />
+        </>
+      )}
+      <button type="button" className="icon-button" onClick={onHide} aria-label={`Hide ${entry.key}`} title="Hide">
+        <EyeOff size={14} aria-hidden="true" />
+      </button>
+    </span>
+  );
+}
+
+export function EntriesTable({ folders = [], entries, byName = false, onUpdate, onVersions, onDelete, revealedValue, revealing, onReveal, onHide }: Props) {
   return (
     <Table label="Variable store entries" className="table--variables">
       <thead>
@@ -96,7 +138,13 @@ export function EntriesTable({ folders = [], entries, byName = false, onUpdate, 
                   {v.value}
                 </code>
               ) : (
-                <span className="muted">Concealed</span>
+                <SecretValue
+                  entry={v}
+                  value={revealedValue(v)}
+                  pending={revealing.has(v.key)}
+                  onReveal={() => onReveal(v)}
+                  onHide={() => onHide(v)}
+                />
               )}
             </td>
             <td className="num">

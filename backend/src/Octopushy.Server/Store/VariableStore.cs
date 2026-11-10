@@ -12,7 +12,7 @@ public sealed class StoreConflictException(string message) : StoreException(mess
 
 /// <summary>
 /// The built-in variable store: a key/value dictionary whose values are encrypted at rest.
-/// Plain values can be read back; secret values are write-only once saved.
+/// Plain values are listed; secret values are concealed and read back only when an operator reveals them.
 /// </summary>
 public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, TimeProvider clock)
 {
@@ -265,19 +265,27 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     }
 
     /// <summary>The value of a plain entry; secrets are never returned.</summary>
-    public async Task<string?> GetPlainAsync(string key, CancellationToken cancellationToken)
-    {
-        if (key.StartsWith(SystemScope, StringComparison.Ordinal))
-        {
-            return null;
-        }
+    public Task<string?> GetPlainAsync(string key, CancellationToken cancellationToken) =>
+        key.StartsWith(SystemScope, StringComparison.Ordinal) ? Task.FromResult<string?>(null) : ActiveValueAsync(key, plainOnly: true, cancellationToken);
 
+    /// <summary>
+    /// The active value of a key outside the system scope, plain or secret, for an operator who asked to see it. Null when the
+    /// key is missing or its active version is revoked or was never promoted.
+    /// </summary>
+    public Task<string?> RevealAsync(string key, CancellationToken cancellationToken)
+    {
+        CheckUserKey(key);
+        return ActiveValueAsync(key, plainOnly: false, cancellationToken);
+    }
+
+    private async Task<string?> ActiveValueAsync(string key, bool plainOnly, CancellationToken cancellationToken)
+    {
         // Visibility and the immutable version come from one database snapshot. A
         // concurrent plain -> secret update must never return the new secret value.
         var value = await (from entry in db.StoreEntries.AsNoTracking()
                            join version in db.StoreVersions.AsNoTracking()
                                on new { entry.Key, Version = entry.CurrentVersion } equals new { version.Key, version.Version }
-                           where entry.Key == key && entry.Visibility == Visibilities.Plain &&
+                           where entry.Key == key && (!plainOnly || entry.Visibility == Visibilities.Plain) &&
                                  version.RevokedAt == null && version.ActivatedAt != null
                            select version).FirstOrDefaultAsync(cancellationToken);
         return value is null ? null : Encoding.UTF8.GetString(envelope.Open(value.Ciphertext, value.WrappedKey, Context(key, value.Version)));

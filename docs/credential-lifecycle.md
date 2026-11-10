@@ -84,6 +84,7 @@ All endpoints require the existing authenticated administrator session:
 | `PUT /api/variables` | Create initial value, edit a plain value, or change description. Replacing an existing secret value is refused. |
 | `POST /api/variables/candidates` | `{key, value, description?}` → `{version}`; existing secret only. |
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
+| `POST /api/variables/reveal` | `{keys}` → `{values: [{key, value}]}`: each key's active value, plain or secret. `null` when the active version is revoked or was never promoted, or the key is missing. Keys under `system/` are refused. The server logs who revealed which keys. |
 | `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote}`. |
 | `POST /api/variables/revoke` | `{key, version, reason}`. |
 | `DELETE /api/variables?key=…` | Deletes the key once nothing needs it; see below. |

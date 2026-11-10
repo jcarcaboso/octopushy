@@ -121,8 +121,8 @@ while a key below it does; a key is always its full path.
 _Avoid_: Using a folder as a reference target; references name keys
 
 **Secret**:
-A variable-store entry whose value is concealed once saved and is delivered only
-to operations that reference it.
+A variable-store entry whose value is concealed once saved: it is delivered to
+operations that reference it, and shown only to an operator who reveals it.
 _Avoid_: Variable when the value must stay concealed
 
 **Secret reference**:

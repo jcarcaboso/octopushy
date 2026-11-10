@@ -547,6 +547,24 @@ public static partial class Endpoints
         })
         .WithName("deleteVariable");
 
+        group.MapPost("/reveal", async (VariableRevealRequest request, HttpContext http, VariableStore store, ILoggerFactory loggers, CancellationToken ct) =>
+        {
+            var keys = request.Keys.Distinct(StringComparer.Ordinal).ToList();
+            if (keys.Count is 0 or > 1000)
+            {
+                throw new StoreException("Name between 1 and 1000 keys to reveal.");
+            }
+            var values = new List<RevealedVariableDto>(keys.Count);
+            foreach (var key in keys)
+            {
+                values.Add(new RevealedVariableDto(key, await store.RevealAsync(key, ct)));
+            }
+            loggers.CreateLogger("Octopushy.Server.Variables").LogInformation(
+                "{User} revealed the values of {Keys}.", http.User.Identity?.Name ?? "administrator", string.Join(", ", keys));
+            return TypedResults.Ok(new VariableRevealDto(values));
+        })
+        .WithName("revealVariables");
+
         group.MapPost("/candidates", async (VariableCandidateRequest request, RunEngine engine, CancellationToken ct) =>
         {
             var version = await engine.ExecuteAsync(async (_, services) =>

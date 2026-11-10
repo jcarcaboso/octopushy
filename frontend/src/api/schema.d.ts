@@ -900,6 +900,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/variables/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revealVariables"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables/candidates": {
         parameters: {
             query?: never;
@@ -1774,6 +1790,10 @@ export interface components {
             credentialUsername: null | string;
             credentialSecret: null | string;
         };
+        RevealedVariableDto: {
+            key: string;
+            value: null | string;
+        };
         RevisionDetailDto: {
             revision: components["schemas"]["RevisionDto"];
             issues: components["schemas"]["IssueDto"][];
@@ -2036,6 +2056,12 @@ export interface components {
             /** Format: int32 */
             expectedCurrentVersion: number;
             verificationNote: string;
+        };
+        VariableRevealDto: {
+            values: components["schemas"]["RevealedVariableDto"][];
+        };
+        VariableRevealRequest: {
+            keys: string[];
         };
         VariableRevocationRequest: {
             key: string;
@@ -5358,6 +5384,57 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    revealVariables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariableRevealRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VariableRevealDto"];
+                };
             };
             /** @description Bad Request */
             400: {
