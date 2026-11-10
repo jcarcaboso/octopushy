@@ -568,7 +568,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
             <div className="stack stack--large">
               <p className="muted">
                 Values live in the variable store, never in Git. The definition names the store key. A generated value is made when you
-                deploy, is never shown, and is deleted again if nothing is committed.
+                deploy, is not shown here, and is deleted again if nothing is committed. Reveal it under Variables.
               </p>
               {Object.keys(secrets).length === 0 ? <p>This workflow takes no secrets.</p> : null}
               {Object.entries(secrets).map(([secret, state]) => (
@@ -626,7 +626,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                     <ul className="plain-list">
                       {reviewed.generated.map((g) => (
                         <li key={g.key}>
-                          <span className="mono">{g.secret}</span>: {g.detail}, stored as <span className="mono">{g.key}</span>. Never shown.
+                          <span className="mono">{g.secret}</span>: {g.detail}, stored as <span className="mono">{g.key}</span>. Not shown here.
                         </li>
                       ))}
                     </ul>

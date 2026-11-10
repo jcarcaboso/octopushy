@@ -406,6 +406,14 @@ export function useSetVariable() {
   });
 }
 
+/** Values come back in the response only: they are never kept in the query cache. */
+export function useRevealVariables() {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (keys: string[]) => unwrap(api.POST("/api/variables/reveal", { body: { keys } })),
+  });
+}
+
 export function useStageVariable() {
   const client = useQueryClient();
   return useMutation({

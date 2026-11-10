@@ -45,7 +45,7 @@ Do not duplicate one credential into two entries to simulate separation: differe
 key names cannot prove different upstream identities or privileges. For split mode,
 use independently scoped identities and review effective user **and** token ACLs.
 Pool membership alone does not cover initial allocation, host/storage access, or
-proving absence after deletion. Store values remain write-only secrets; existing
+proving absence after deletion. Store values remain concealed secrets; existing
 candidate/promotion/revocation and audit behavior is unchanged. See
 [credential lifecycle](credential-lifecycle.md).
 

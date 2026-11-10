@@ -3841,6 +3841,66 @@
         }
       }
     },
+    "/api/variables/reveal": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "revealVariables",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableRevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableRevealDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variables/candidates": {
       "post": {
         "tags": [
@@ -7700,6 +7760,24 @@
           }
         }
       },
+      "RevealedVariableDto": {
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "RevisionDetailDto": {
         "required": [
           "revision",
@@ -8822,6 +8900,34 @@
           },
           "verificationNote": {
             "type": "string"
+          }
+        }
+      },
+      "VariableRevealDto": {
+        "required": [
+          "values"
+        ],
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevealedVariableDto"
+            }
+          }
+        }
+      },
+      "VariableRevealRequest": {
+        "required": [
+          "keys"
+        ],
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

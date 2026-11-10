@@ -809,6 +809,17 @@
   gap: var(--space-1);
 }
 
+.secret-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.secret-value .value-preview {
+  min-width: 0;
+}
+
 .folder-summary {
   display: flex;
   flex-wrap: wrap;

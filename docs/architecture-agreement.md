@@ -369,8 +369,8 @@ decisions; everything after it is a working proposal awaiting confirmation.
 
 - **Entry:** key, value (multi-line allowed), visibility, description, optional
   usage scope, and version history. *Plain* values can be read back; *secret*
-  values are write-only after saving, masked in logs, and cannot be downgraded to
-  plain. All values are encrypted at rest regardless of visibility.
+  values are concealed after saving and returned only when a signed-in operator
+  reveals them, masked in logs, and cannot be downgraded to plain. All values are encrypted at rest regardless of visibility.
 - **Keys:** envelope encryption with a key-encryption key held outside the database
   and its backups, such as a protected file or systemd credential. Values use
   authenticated encryption bound to their key name and version, unlike Jenkins'

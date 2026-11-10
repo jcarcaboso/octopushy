@@ -663,3 +663,120 @@ describe("VariablesPage folders", () => {
     expect(within(screen.getByRole("navigation", { name: "Folder" })).getByText("proxmox")).toHaveAttribute("aria-current", "page");
   });
 });
+
+describe("VariablesPage revealing secrets", () => {
+  beforeEach(() => window.localStorage.setItem(viewStorageKey, "all"));
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+  });
+
+  const other = "proxmox/site-b/api-token";
+  const store = (versionOfKey = 3) => ({
+    entries: [
+      entry({ version: versionOfKey }),
+      entry({ key: other, version: 1, latestVersion: 1 }),
+      entry({ key: "region", visibility: "plain", value: "eu-west", version: 1, latestVersion: 1 }),
+    ],
+    missing: [],
+    system: [],
+  });
+  const secrets: Record<string, string> = { [key]: "token-a-value", [other]: "token-b-value" };
+  const reveals = (requests: { method: string; path: string; body?: unknown }[]) =>
+    requests.filter((request) => request.method === "POST" && request.path.endsWith("/api/variables/reveal")).map((request) => request.body);
+
+  it("reveals and hides one secret, asking only for its key", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(),
+      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
+    });
+    renderPage();
+    const table = await screen.findByRole("region", { name: "Variable store entries" });
+
+    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
+    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
+    expect(within(table).queryByText("token-b-value")).not.toBeInTheDocument();
+    expect(reveals(requests)).toEqual([{ keys: [key] }]);
+
+    await user.click(within(table).getByRole("button", { name: `Hide ${key}` }));
+    expect(within(table).queryByText("token-a-value")).not.toBeInTheDocument();
+    expect(within(table).getAllByText("Concealed")).toHaveLength(2);
+  });
+
+  it("reveals every listed secret with one request, then hides them all", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(),
+      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
+    });
+    renderPage();
+    const table = await screen.findByRole("region", { name: "Variable store entries" });
+
+    await user.click(screen.getByRole("button", { name: "Reveal all 2 secrets listed" }));
+    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
+    expect(within(table).getByText("token-b-value")).toBeInTheDocument();
+    expect(reveals(requests)).toEqual([{ keys: [key, other] }]);
+
+    await user.click(screen.getByRole("button", { name: "Hide all" }));
+    expect(within(table).getAllByText("Concealed")).toHaveLength(2);
+  });
+
+  it("reveals only the secrets a search lists", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(),
+      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
+    });
+    renderPage();
+    await user.type(await screen.findByRole("searchbox", { name: "Search all keys" }), "site-b");
+
+    await user.click(screen.getByRole("button", { name: "Reveal the 1 secret listed" }));
+    expect(await screen.findByText("token-b-value")).toBeInTheDocument();
+    expect(reveals(requests)).toEqual([{ keys: [other] }]);
+  });
+
+  it("settles each of two overlapping reveals on its own", async () => {
+    const user = userEvent.setup();
+    const pending: (() => void)[] = [];
+    mockApi({
+      "GET /api/variables": () => store(),
+      "POST /api/variables/reveal": ({ body }) =>
+        new Promise((resolve) =>
+          pending.push(() => resolve({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) })),
+        ),
+    });
+    renderPage();
+    const table = await screen.findByRole("region", { name: "Variable store entries" });
+
+    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
+    await user.click(within(table).getByRole("button", { name: `Reveal ${other}` }));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    pending[0]();
+    pending[1]();
+
+    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
+    expect(await within(table).findByText("token-b-value")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide all" })).toBeEnabled();
+  });
+
+  it("says when a secret has no usable version, and shows the failure of a reveal", async () => {
+    const user = userEvent.setup();
+    let fail = false;
+    mockApi({
+      "GET /api/variables": () => store(),
+      "POST /api/variables/reveal": ({ body }) =>
+        fail ? problem(500, "boom") : { values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: null })) },
+    });
+    renderPage();
+    const table = await screen.findByRole("region", { name: "Variable store entries" });
+
+    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
+    expect(await within(table).findByText("No usable version")).toBeInTheDocument();
+
+    fail = true;
+    await user.click(within(table).getByRole("button", { name: `Reveal ${other}` }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The values could not be revealed.");
+    expect(within(within(table).getByRole("row", { name: new RegExp(other) })).getByText("Concealed")).toBeInTheDocument();
+  });
+});

@@ -37,7 +37,7 @@ export function mockApi(handlers: Record<string, Handler>) {
         headers: { "content-type": "application/problem+json" },
       });
     }
-    const result = handler(recorded);
+    const result = await handler(recorded);
     if (result instanceof Response) return result;
     if (result === undefined) return new Response(null, { status: 204 });
     return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });

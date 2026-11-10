@@ -527,8 +527,8 @@ the VMID it holds is unknown. A guest that is YAML but fails validation still ho
 
 Each goes into the variable store as a secret, under `proxmox/<installation>/<guest>/<name>`, or
 `proxmox/<installation>/<guest>/<service>/<name>` for a service, with the secret's name verbatim ([store
-keys](#store-keys)). The new definition references it, `{ store: … }`. The value is never shown, returned by the API,
-logged, or written to Git. A key that is already in the store refuses the deploy rather than replacing it. The key
+keys](#store-keys)). The new definition references it, `{ store: … }`. The value is not shown by the deploy, logged, or
+written to Git; it is returned only when an operator reveals it under **Variables**. A key that is already in the store refuses the deploy rather than replacing it. The key
 leaves the lab out, so a guest in another lab with the same installation and guest names would get the same key: its
 deploy is refused, and the first guest's value is untouched. Give the second guest's secret a key of its own. Choose the existing
 key only for a value both may reuse, such as a password: an agent enrollment token enrolls one agent, so the second guest
@@ -601,7 +601,7 @@ cannot be referenced by definitions.
 same as renaming it. The reference is in Git, the stored value is encrypted under the key's name, and run history records
 it, so the change is a replacement made in this order:
 
-1. Set the new key. A secret's value cannot be read back, so enter it from its source.
+1. Set the new key. Enter the value from its source, or reveal the old key's under **Variables** and copy it.
 2. Commit the changed references. A new key starts at version 1, and a key deleted before continues after its last
    version, so change any `version` too.
 3. Review the plans this causes. A reference in a guest, or in an installation's `connection`, is part of what a guest's
