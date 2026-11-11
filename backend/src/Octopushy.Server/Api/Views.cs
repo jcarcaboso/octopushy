@@ -51,7 +51,21 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         run.FinishedAt,
         run.Steps.OrderBy(s => s.Ordinal).FirstOrDefault(s => !StepStatuses.IsDone(s.Status))?.Name,
         Waiting(run),
+        run.Steps.OrderBy(s => s.Ordinal).Select(s => new RunStepSummaryDto(
+            s.Id,
+            s.Name,
+            s.Kind,
+            s.Status,
+            RunStatuses.IsTerminal(run.Status) ? null : Plan(s)?.Counts,
+            s.Kind == StepKinds.Approval ? s.PlanSha256 : null)).ToList(),
+        CanCancel(run),
         run.ReasonDetail);
+
+    /// <summary>Whether an agent is changing the run's target right now.</summary>
+    public static bool Applying(Run run) => run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && AttemptStatuses.IsActive(a.Status));
+
+    /// <summary>Whether the run can be cancelled: it has not ended, its outcome is known, and nothing is changing its target.</summary>
+    public static bool CanCancel(Run run) => !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain && !Applying(run);
 
     public static RunSummaryDto Summary(Run run, (string Address, string Kind) resource) => Summary(run, resource.Address, resource.Kind);
 

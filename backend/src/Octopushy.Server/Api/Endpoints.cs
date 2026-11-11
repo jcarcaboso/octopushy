@@ -313,20 +313,17 @@ public static partial class Endpoints
                 s.Stage,
                 access[s.Id]))
                 .ToList();
-            var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
-            var applying = attempts.Any(a => a.Mutating && AttemptStatuses.IsActive(a.Status));
-            var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain && !applying;
             return TypedResults.Ok(new RunDetailDto(
                 Views.Summary(run, resource?.Address ?? "?", resource?.Kind ?? "?"),
                 steps,
                 context.AgentLabels,
                 context.AgentLabelsSetBy,
                 context.Policy is { } p ? new RunPolicyDto(p.Approval, p.ApprovalSetBy, p.Destructive, p.DestructiveSetBy) : null,
-                canCancel,
+                Views.CanCancel(run),
                 run.Status == RunStatuses.Uncertain,
                 context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null,
                 await Planner.CanRunAgainAsync(db, run, ct),
-                !RunStatuses.IsTerminal(run.Status) && applying));
+                !RunStatuses.IsTerminal(run.Status) && Views.Applying(run)));
         })
         .WithName("getRun");
 

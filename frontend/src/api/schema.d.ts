@@ -1885,6 +1885,15 @@ export interface components {
             destructive: string;
             destructiveSetBy: string;
         };
+        RunStepSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            kind: string;
+            status: string;
+            counts: null | components["schemas"]["PlanCountsDto"];
+            planSha256: null | string;
+        };
         RunSummaryDto: {
             /** Format: uuid */
             id: string;
@@ -1907,6 +1916,8 @@ export interface components {
             finishedAt: null | string;
             currentStep: null | string;
             waiting: null | string;
+            steps: components["schemas"]["RunStepSummaryDto"][];
+            canCancel: boolean;
             reasonDetail?: null | string;
         };
         RunWorkflowDto: {

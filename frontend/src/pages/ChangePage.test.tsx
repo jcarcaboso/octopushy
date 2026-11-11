@@ -28,7 +28,7 @@ function change(overrides: Partial<Change> = {}): Change {
     files: ["labs/home/proxmox/pve01/guests/pve01-ai/guest.yaml"],
     runs: [{ id: "run-7", number: 7, operation: "provision", resourceId: "guest-1", resourceKind: "guest", address: "home/pve01/pve01-ai",
       status: "awaiting-approval", detail: null, reason: "revision", commit, createdAt: at, startedAt: at, finishedAt: null, currentStep: "approval",
-      waiting: null }],
+      waiting: null, steps: [], canCancel: true }],
     createdAt: at,
     syncedAt: at,
     updatedAt: at,

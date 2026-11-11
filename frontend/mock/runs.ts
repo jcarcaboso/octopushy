@@ -295,6 +295,9 @@ function run(input: RunInput): RunDetail {
       finishedAt: done ? ago(input.minutesAgo, input.seconds ?? 90) : null,
       currentStep: done ? null : input.currentStep,
       waiting: null,
+      // Filled by refreshFlags, as the steps change.
+      steps: [],
+      canCancel: false,
     },
     steps: steps(input.id, input.steps),
     agentLabels: ["home"],
@@ -703,6 +706,15 @@ function refreshFlags(detail: RunDetail): RunDetail {
   detail.canForceStop = !terminal.has(detail.run.status) && active;
   detail.canClose = detail.run.status === "uncertain";
   detail.canRunAgain = detail.run.status === "failed";
+  detail.run.canCancel = detail.canCancel;
+  detail.run.steps = detail.steps.map((s) => ({
+    id: s.id,
+    name: s.name,
+    kind: s.kind,
+    status: s.status,
+    counts: terminal.has(detail.run.status) ? null : (s.plan?.counts ?? null),
+    planSha256: s.approval?.planSha256 ?? null,
+  }));
   return detail;
 }
 

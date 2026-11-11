@@ -100,7 +100,15 @@ public sealed record RunSummaryDto(
     DateTimeOffset? FinishedAt,
     string? CurrentStep,
     string? Waiting,
+    IReadOnlyList<RunStepSummaryDto> Steps,
+    bool CanCancel,
     string? ReasonDetail = null);
+
+/// <summary>
+/// A run's step as a list of runs shows it: its place in the run's progress, what the plan of an unfinished run would
+/// change, and the fingerprint an approval step is decided against.
+/// </summary>
+public sealed record RunStepSummaryDto(Guid Id, string Name, string Kind, string Status, PlanCountsDto? Counts, string? PlanSha256);
 
 public sealed record ApprovalDto(
     bool Required,

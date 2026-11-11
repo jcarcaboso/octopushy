@@ -8125,6 +8125,48 @@
           }
         }
       },
+      "RunStepSummaryDto": {
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "status",
+          "counts",
+          "planSha256"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanCountsDto"
+              }
+            ]
+          },
+          "planSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "RunSummaryDto": {
         "required": [
           "id",
@@ -8141,7 +8183,9 @@
           "startedAt",
           "finishedAt",
           "currentStep",
-          "waiting"
+          "waiting",
+          "steps",
+          "canCancel"
         ],
         "type": "object",
         "properties": {
@@ -8213,6 +8257,15 @@
               "null",
               "string"
             ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunStepSummaryDto"
+            }
+          },
+          "canCancel": {
+            "type": "boolean"
           },
           "reasonDetail": {
             "type": [
