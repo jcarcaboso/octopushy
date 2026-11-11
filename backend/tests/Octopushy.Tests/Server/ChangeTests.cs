@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
+using Octopushy.Server.Api;
 using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -346,8 +347,12 @@ public class ChangeTests(PostgresFixture postgres)
 
         var run = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(change.Runs.Single().Id, run.Id);
-        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
-        (await setup.Client.PostAsJsonAsync($"/api/runs/{run.Id}/steps/{approval.Id}/approve", new { planSha256 = approval.PlanSha256 }))
+        // The list of runs carries what deciding from it needs: the waiting step, what the plan changes, and its fingerprint.
+        var listed = Assert.Single((await setup.Client.GetFromJsonAsync<List<RunSummaryDto>>("/api/runs?status=awaiting-approval"))!);
+        Assert.True(listed.CanCancel);
+        Assert.Equal(1, listed.Steps.Single(s => s.Name == StepNames.Plan).Counts!.Create);
+        var approval = listed.Steps.Single(s => s.Status == StepStatuses.AwaitingApproval);
+        (await setup.Client.PostAsJsonAsync($"/api/runs/{listed.Id}/steps/{approval.Id}/approve", new { planSha256 = approval.PlanSha256 }))
             .EnsureSuccessStatusCode();
         var apply = await agent.NextAsync("apply");
         change = (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{change.Id}"))!;

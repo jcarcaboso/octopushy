@@ -197,6 +197,8 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
       finishedAt: null,
       currentStep: "approval",
       waiting: null,
+      steps: [],
+      canCancel: true,
       ...overrides,
     },
     steps: [
