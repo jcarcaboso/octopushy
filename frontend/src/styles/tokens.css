@@ -25,7 +25,7 @@
   --radius-lg: 10px;
 
   --sidebar-width: 13.5rem;
-  --topbar-height: 3rem;
+  --topbar-height: 3.5rem;
   --content-max: 96rem;
 
   /* Surfaces and text */
@@ -42,11 +42,11 @@
   --link: #1f4fbf;
   --link-hover: #163b91;
 
-  --accent: #2856c9;
-  --accent-hover: #1f47ab;
+  --accent: #2f5bd3;
+  --accent-hover: #264cb5;
   --accent-text: #ffffff;
   --accent-soft: #e7eefc;
-  --focus: #2856c9;
+  --focus: #2f5bd3;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
 
   --shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
@@ -110,23 +110,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e131a;
-    --surface: #151b24;
-    --surface-2: #19202a;
-    --surface-3: #202834;
-    --sidebar-bg: #111720;
-    --border: #283241;
-    --border-strong: #3a4657;
-    --text: #e3e8ef;
-    --text-muted: #a1acbb;
-    --text-faint: #8d98a8;
+    --bg: #0e1218;
+    --surface: #131922;
+    --surface-2: #171e28;
+    --surface-3: #1d2531;
+    --sidebar-bg: #0b0f14;
+    --border: #1f2835;
+    --border-strong: #364255;
+    --text: #e2e8f0;
+    --text-muted: #94a0b3;
+    --text-faint: #8794a8;
     --link: #8db2ff;
     --link-hover: #b3cbff;
 
-    --accent: #4f7fe8;
-    --accent-hover: #6690ef;
+    --accent: #2f5bd3;
+    --accent-hover: #3d69e0;
     --accent-text: #ffffff;
-    --accent-soft: #1d2a45;
+    --accent-soft: #172340;
     --focus: #8db2ff;
 
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
