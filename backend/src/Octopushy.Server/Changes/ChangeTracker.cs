@@ -241,6 +241,9 @@ public static class ChangeTracker
                 return (ChangeStatuses.Failed, change.Kind == ChangeKinds.Remove ? problem : $"{problem} ({change.ResourceKind} at {Short(revision.Commit)})");
             if (owed is not null)
                 return (ChangeStatuses.Planning, owed);
+            // Its provisioning is wanted and waits, as for the image of a built template: it is proposed when that is ready.
+            if (resource?.ProvisionWaiting is { } held && resource.DesiredRevisionId == revision.Id)
+                return (ChangeStatuses.Planning, held);
             if (change.Kind == ChangeKinds.Remove)
                 return resource?.RetiredAt is not null
                     ? (ChangeStatuses.Applied, $"{change.Address} is retired.")

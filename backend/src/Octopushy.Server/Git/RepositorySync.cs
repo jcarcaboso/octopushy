@@ -67,6 +67,16 @@ public sealed class RepositorySync(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // At startup, before the first fetch: builds that the revision already applied needs, which a failed fetch would delay.
+        try
+        {
+            await engine.QueueImageBuildsAsync(stoppingToken);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogError(e, "Queueing image builds at startup failed.");
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var poll = TimeSpan.FromSeconds(60);
@@ -193,6 +203,15 @@ public sealed class RepositorySync(
                     return 0;
                 }, cancellationToken);
             }
+            // The images built templates need, and retention of those nothing needs any more. Its trouble is not the sync's.
+            try
+            {
+                await engine.QueueImageBuildsAsync(cancellationToken);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                logger.LogError(e, "Queueing image builds, or retention of images, failed.");
+            }
             await PruneAsync(cancellationToken);
         }
         catch (GitException e)
@@ -297,6 +316,11 @@ public sealed class RepositorySync(
             var workflow = RunContext.Parse(run.Context).Workflow;
             Keep(run.Commit, workflow?.Repository, workflow?.Repository is null ? null : workflow.Commit);
         }
+
+        // An image build waiting for an agent, or under way, takes its revision's files.
+        foreach (var build in await db.ImageBuilds.AsNoTracking()
+                     .Where(b => b.Status == ImageBuildStatuses.Queued || b.Status == ImageBuildStatuses.Building).ToListAsync(cancellationToken))
+            Keep(build.RevisionCommit, build.WorkflowRepository, build.WorkflowRepository is null ? null : build.WorkflowCommit);
 
         mirror.Prune(commits, bundles);
         foreach (var (repository, kept) in workflowCommits)

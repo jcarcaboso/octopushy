@@ -24,8 +24,12 @@
           "properties": {
             "build": {
               "type": "object",
-              "properties": { "workflow": { "$ref": "common.schema.json#/$defs/workflowRef" } },
-              "required": ["workflow"],
+              "properties": {
+                "workflow": { "$ref": "common.schema.json#/$defs/workflowRef" },
+                "output": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+                "lock": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+              },
+              "required": ["workflow", "output"],
               "additionalProperties": false
             }
           },

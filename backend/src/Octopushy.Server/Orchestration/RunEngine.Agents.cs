@@ -67,6 +67,17 @@ public sealed partial class RunEngine
 
             foreach (var attempt in queued)
             {
+                // A build of a template's image: no run, no installation, no secrets. See RunEngine.Images.
+                if (Images.TemplateImages.IsBuild(attempt))
+                {
+                    if (await DispatchImageBuildAsync(db, attempt, agents, perAgent, builder, cancellationToken) is { } build)
+                    {
+                        logs.RegisterSecrets(attempt.Id, []);
+                        result.Add((build.Session, build.Message, attempt.Id));
+                    }
+                    continue;
+                }
+
                 var step = attempt.Step;
                 var run = step?.Run;
                 var context = RunContext.Parse(run?.Context ?? attempt.Context!);
@@ -478,6 +489,15 @@ public sealed partial class RunEngine
                 attempt.Outputs = null;
             }
 
+            if (Images.TemplateImages.IsBuild(attempt))
+            {
+                await logs.CloseAsync(attempt.Id, cancellationToken);
+                await FinishImageBuildAsync(db, services, attempt, outputs, cancellationToken);
+                await db.SaveChangesAsync(cancellationToken);
+                signal.Wake();
+                return true;
+            }
+
             if (attempt.Step is null)
             {
                 // The observation's data is assembled from its outputs, and checked with its masks before they are forgotten.
@@ -583,7 +603,11 @@ public sealed partial class RunEngine
             attempt.LeaseExpiresAt = null;
             logger.LogWarning("The lease of attempt {Attempt} expired.", attempt.Id);
             var step = attempt.Step;
-            if (step is null)
+            if (Images.TemplateImages.IsBuild(attempt))
+            {
+                await ExpireImageBuildAsync(db, attempt, cancellationToken);
+            }
+            else if (step is null)
             {
                 // An observation is not retried here; the schedule observes again.
                 await FinishObservationAsync(db, attempt, null, cancellationToken);

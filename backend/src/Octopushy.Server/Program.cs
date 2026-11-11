@@ -54,6 +54,7 @@ builder.Services.AddSingleton<WorkerReachability>();
 builder.Services.AddSingleton<AttemptLogStore>();
 builder.Services.AddSingleton<AttemptMasks>();
 builder.Services.AddSingleton<ArtifactStore>();
+builder.Services.AddSingleton<Octopushy.Server.Images.ImageStore>();
 builder.Services.AddSingleton<OrchestratorSignal>();
 builder.Services.AddSingleton<RunFactory>();
 builder.Services.AddSingleton<RunEngine>();

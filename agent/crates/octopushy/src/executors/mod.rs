@@ -3,6 +3,7 @@
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
 pub mod ansible;
+pub mod nix;
 pub mod opentofu;
 pub mod proxmox;
 
@@ -16,10 +17,11 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::attempts::logs::AttemptLogger;
+use crate::images::ServerLink;
 use crate::tools::ToolRuntime;
 
 /// Executors this binary provides, as announced in `Hello`.
-pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "ansible"];
+pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "ansible", "nix"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
 /// interruption by a restart makes their outcome uncertain.
@@ -40,6 +42,10 @@ pub struct ExecutorConfig {
     pub poll_interval: Duration,
     /// Timeout of each Proxmox API request.
     pub proxmox_timeout: Duration,
+    /// Where images go to and come from.
+    pub server: ServerLink,
+    /// The `nix` executor's store and its limit.
+    pub nix: nix::NixSettings,
 }
 
 /// The secrets of one attempt, by name. `Debug` shows only the names.
@@ -181,6 +187,7 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
         "proxmox" => proxmox::run(cfg, ctx).await,
         "opentofu" => opentofu::run(cfg, ctx).await,
         "ansible" => ansible::run(cfg, ctx).await,
+        "nix" => nix::run(cfg, ctx).await,
         #[cfg(test)]
         "test" => test_executor(ctx).await,
         other => Err(Failure::msg(format!(

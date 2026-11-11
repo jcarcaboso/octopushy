@@ -65,7 +65,8 @@ public static class GuestRemoval
             throw new RunException($"The guest's definition in {lastDefined.Commit[..10]} is not valid, so its removal cannot be planned; restore its folder instead.");
 
         var run = factory.RemoveDeleted(repository, guest, resource, lastDefined, removal.Commit,
-            $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct));
+            $"definition removed in {removal.Commit[..10]}", await GuestAccessCredentials.IssuedAsync(db, resource.Id, ct),
+            await Images.TemplateImages.ForAsync(db, repository, guest, ct));
         // The same removal is this time the folder is gone; restoring it, valid or not, and deleting it again is another, since
         // a return clears the occurrence. Planned by hand, the same removal keeps its occurrence.
         var sameWork = resource.DesiredInputsHash == run.InputsHash && resource.DesiredRevisionId == lastDefined.Id;

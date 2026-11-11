@@ -12,6 +12,10 @@
 //!   home/          HOME for OpenTofu; home/.ssh/known_hosts holds the input's `knownHosts`
 //!   tmp/           TMPDIR (local runtime only; containers get a tmpfs)
 //! ```
+//!
+//! A built template's image, when the input names `templateImage`, is fetched into
+//! `<root>/.octopushy-images/<fileName>` before OpenTofu runs: inside the root, so every tool
+//! runtime sees it, and at a path relative to the root, as a saved plan names it.
 
 pub mod archive;
 pub mod plan;
@@ -26,6 +30,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{ExecContext, ExecResult, ExecutorConfig, Failure, Success};
+use crate::images::{self, ImageDigest};
 use crate::tls::sha256_hex;
 use crate::tools::{Invocation, Tool, ToolOutput};
 
@@ -33,6 +38,17 @@ pub const PLAN_ARTIFACT: &str = "plan.tar.gz";
 const LOCK_FILE: &str = ".terraform.lock.hcl";
 const TFVARS_FILE: &str = "octopushy.auto.tfvars.json";
 const BACKEND_FILE: &str = "octopushy_backend.tf.json";
+/// The folder in the root a built template's image is fetched into.
+pub const IMAGES_DIR: &str = ".octopushy-images";
+
+/// A built template's image (`templateImage`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TemplateImage {
+    sha256: String,
+    file_name: String,
+    size: u64,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +71,8 @@ struct Input {
     /// has not seen, so without this its first connection would trust whoever answered.
     #[serde(default)]
     known_hosts: Option<String>,
+    #[serde(default)]
+    template_image: Option<TemplateImage>,
 }
 
 /// Checks `knownHosts` before it is written: printable lines, nothing that could end a line early.
@@ -121,7 +139,7 @@ fn check_env_name(name: &str) -> Result<(), Failure> {
 }
 
 /// A relative directory inside the repository, without `..`.
-fn check_root(root: &str) -> Result<PathBuf, Failure> {
+pub(crate) fn check_root(root: &str) -> Result<PathBuf, Failure> {
     let path = Path::new(root);
     let mut out = PathBuf::new();
     for c in path.components() {
@@ -140,7 +158,7 @@ fn check_root(root: &str) -> Result<PathBuf, Failure> {
 
 /// Removes whatever is at `path` (a file or symlink from the repository) and
 /// writes a fresh file, so the write never follows a symlink.
-fn write_fresh(path: &Path, contents: &[u8]) -> Result<(), Failure> {
+pub(crate) fn write_fresh(path: &Path, contents: &[u8]) -> Result<(), Failure> {
     if let Ok(meta) = fs::symlink_metadata(path) {
         if meta.is_dir() {
             return Err(Failure::msg(format!("{} is a directory", path.display())));
@@ -167,6 +185,12 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
 
     if rt.is_container() && input.image.trim().is_empty() {
         return Err(Failure::msg("the input names no OpenTofu image"));
+    }
+    if let Some(image) = &input.template_image {
+        images::check_file_name(&image.file_name)
+            .map_err(|e| Failure::msg(format!("templateImage.fileName: {e:#}")))?;
+        images::check_sha256(&image.sha256)
+            .map_err(|e| Failure::msg(format!("templateImage.sha256: {e:#}")))?;
     }
 
     // Environment: ours, then `env`, then `secretEnv`.
@@ -276,6 +300,59 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     })
 }
 
+/// Removes whatever `path` is (a folder, file or link from the repository) without following it.
+fn remove_any(path: &Path) -> Result<(), Failure> {
+    let removed = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    };
+    removed.map_err(|e| Failure::msg(format!("removing {}: {e}", path.display())))
+}
+
+/// Fetches the input's `templateImage` into the root, replacing whatever the repository has
+/// there, and checks its size and SHA-256.
+async fn fetch_template_image(
+    cfg: &ExecutorConfig,
+    ctx: &ExecContext,
+    prep: &Prepared,
+) -> Result<(), Failure> {
+    let Some(image) = &prep.input.template_image else {
+        return Ok(());
+    };
+    let dir = prep.root.join(IMAGES_DIR);
+    remove_any(&dir)?;
+    fs::create_dir(&dir).map_err(|e| Failure::msg(format!("creating {}: {e}", dir.display())))?;
+    let expected = ImageDigest {
+        sha256: image.sha256.to_ascii_lowercase(),
+        size: image.size,
+    };
+    ctx.log.agent(format!(
+        "fetching the template image {IMAGES_DIR}/{} ({:.1} MiB, sha256 {})",
+        image.file_name,
+        image.size as f64 / (1024.0 * 1024.0),
+        expected.sha256
+    ));
+    let started = std::time::Instant::now();
+    let download = images::download(
+        &cfg.server,
+        &ctx.attempt_id,
+        &expected,
+        &image.file_name,
+        &dir,
+    );
+    tokio::select! {
+        r = download => r.map_err(|e| Failure::msg(format!("fetching the template image: {e:#}")))?,
+        _ = ctx.cancel.cancelled() => return Err(Failure::Cancelled),
+    };
+    ctx.log.agent(format!(
+        "fetched the template image in {:.1}s",
+        started.elapsed().as_secs_f64()
+    ));
+    Ok(())
+}
+
 /// Runs OpenTofu steps for one attempt.
 struct Tofu<'a> {
     cfg: &'a ExecutorConfig,
@@ -381,6 +458,7 @@ fn step_failed(step: &str, out: &ToolOutput) -> Failure {
 
 async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let prep = prepare(cfg, ctx)?;
+    fetch_template_image(cfg, ctx, &prep).await?;
     let tofu = Tofu {
         cfg,
         ctx,
@@ -476,6 +554,7 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 
     let prep = prepare(cfg, ctx)?;
+    fetch_template_image(cfg, ctx, &prep).await?;
     let tofu = Tofu {
         cfg,
         ctx,
@@ -612,6 +691,26 @@ mod tests {
         ] {
             assert!(check_env_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_images_folder_is_removed_without_following_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), b"x").unwrap();
+        let root = dir.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let images = root.join(IMAGES_DIR);
+        std::os::unix::fs::symlink(&outside, &images).unwrap();
+        remove_any(&images).unwrap();
+        assert!(fs::symlink_metadata(&images).is_err());
+        assert!(outside.join("keep").exists());
+        fs::create_dir_all(images.join("sub")).unwrap();
+        fs::write(images.join("sub/a.qcow2"), b"x").unwrap();
+        remove_any(&images).unwrap();
+        assert!(!images.exists());
+        remove_any(&images).unwrap();
     }
 
     #[test]

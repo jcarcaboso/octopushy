@@ -317,17 +317,24 @@ public sealed class ServerHarness : IAsyncDisposable
     public Task<FakeAgent> ConnectProbedAgentAsync(string name, string runtime = "local", params string[] labels) =>
         ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], runtime, null);
 
+    /// <summary>
+    /// An agent that advertises only <c>nix</c>, with no labels and no reachability reports, as one that builds templates' images
+    /// may be.
+    /// </summary>
+    public Task<FakeAgent> ConnectNixAgentAsync(string name = "nix", int maxConcurrency = 4) =>
+        ConnectAsync(name, [], [], "local", null, ["nix"], maxConcurrency);
+
     private async Task<FakeAgent> ConnectAsync(string name, string[] labels, string[] capabilities, string? runtime,
-        Func<ReachabilityProbe, ReachabilityReport>? responder)
+        Func<ReachabilityProbe, ReachabilityReport>? responder, string[]? executors = null, int maxConcurrency = 4)
     {
         var agent = new AgentRecord
         {
             Id = Guid.CreateVersion7(),
             Name = name,
             Labels = labels,
-            MaxConcurrency = 4,
+            MaxConcurrency = maxConcurrency,
             EnrolledAt = DateTimeOffset.UtcNow,
-            Executors = ["opentofu", "proxmox", "ansible"],
+            Executors = executors ?? ["opentofu", "proxmox", "ansible"],
             CertificateSerial = Guid.NewGuid().ToString("N"),
             CertificateExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
         };

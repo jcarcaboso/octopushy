@@ -265,12 +265,13 @@ public sealed class LabRepositoryLoader
 
             CollectStoreUses(json, address, file, document);
             var parsed = ParseTemplate(id, file, json, document);
+            var valid = parsed is not null && ErrorCount() == errorsBefore;
             if (parsed is not null)
             {
-                result[id] = parsed;
+                result[id] = parsed with { Valid = valid };
             }
 
-            if (parsed is null || ErrorCount() > errorsBefore)
+            if (!valid)
             {
                 _invalidTemplates.Add(id);
             }
@@ -296,13 +297,61 @@ public sealed class LabRepositoryLoader
 
             image = new ImageSource(url, checksum[..colon], checksum[(colon + 1)..], fileName);
         }
-        else if (json["source"]?["build"] is not null)
+
+        var build = json["source"]?["build"] is JsonObject declared ? ParseBuild(id, file, declared, document) : null;
+        var availableOn = (json["availableOn"] as JsonArray)?.Select(n => n!.GetValue<string>()).ToList() ?? [];
+        return new TemplateDefinition(id, file, json, json["os"]?.GetValue<string>(), image, availableOn, build);
+    }
+
+    /// <summary>
+    /// <c>source.build</c>: its workflow resolved as a guest's is, its lock read, and its build key. Null, with an error, when the
+    /// workflow does not resolve, has no flake, or the lock it names is missing. See docs/built-templates.md.
+    /// </summary>
+    private BuildSource? ParseBuild(string id, string file, JsonObject build, YamlDocument document)
+    {
+        var address = $"templates/{id}";
+        var reference = WorkflowReference.Parse(build["workflow"]!.GetValue<string>())!;
+        var output = build["output"]!.GetValue<string>();
+        var resolution = _workflows.Resolve(reference);
+        string? lockPath = null;
+        string? lockSha256 = null;
+        if (build["lock"]?.GetValue<string>() is { } lockName)
         {
-            Warning(file, document.LineOf("/source/build"), "Building images is not supported yet; guests cannot use this template.", $"templates/{id}");
+            lockPath = $"templates/{id}/{lockName}";
+            var full = Path.Combine(_root, "templates", id, lockName);
+            if (!File.Exists(full))
+            {
+                Error(file, document.LineOf("/source/build/lock"), $"source.build.lock names {lockPath}, which does not exist.", address);
+                return null;
+            }
+
+            lockSha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full)));
         }
 
-        var availableOn = (json["availableOn"] as JsonArray)?.Select(n => n!.GetValue<string>()).ToList() ?? [];
-        return new TemplateDefinition(id, file, json, json["os"]?.GetValue<string>(), image, availableOn);
+        if (resolution.Workflow is not { } workflow)
+        {
+            Error(file, document.LineOf("/source/build/workflow"), resolution.Problem!, address);
+            return null;
+        }
+
+        if (!workflow.Valid)
+        {
+            Error(file, document.LineOf("/source/build/workflow"), $"{reference} resolved to {workflow.Label}, which has errors: see its issues.", address);
+            return null;
+        }
+
+        if (!File.Exists(Path.Combine(workflow.SourceRoot, BuildSource.Flake, "flake.nix")))
+        {
+            Error(file, document.LineOf("/source/build/workflow"),
+                $"{reference} resolved to {workflow.Label}, whose {(workflow.Repository is null ? "repository" : "release")} has no {BuildSource.Flake}/flake.nix to build {output} from.",
+                address);
+            return null;
+        }
+
+        // A workflow kept here has no release commit: the flake's own files stand in for it, so an unrelated commit builds nothing.
+        var commit = workflow.Commit ?? "tree:" + ProvisionInputs.TreeHash(workflow.SourceRoot, BuildSource.Flake);
+        return new BuildSource(reference.ToString(), workflow.Id, workflow.Version.ToString(), commit, workflow.Repository, output, lockPath, lockSha256,
+            BuildSource.KeyOf(commit, output, lockSha256));
     }
 
     private void LoadLab(
@@ -605,8 +654,9 @@ public sealed class LabRepositoryLoader
             {
                 Error(guest.File, LineOf(guest.File, "/template"), $"The template '{templateId}' does not exist under templates/.", guest.Address);
             }
-            else if (template.Image is null)
+            else if (template.Image is null && template.Build is null && template.Json["source"]?["build"] is null)
             {
+                // A build that did not resolve says why in the template's own issues.
                 Error(guest.File, LineOf(guest.File, "/template"), $"The template '{templateId}' has no downloadable image.", guest.Address);
             }
             else if (template.AvailableOn.Count > 0 && !template.AvailableOn.Contains(installation.Address))

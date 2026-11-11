@@ -36,6 +36,24 @@ public sealed class OctopushyOptions
     public ChangeOptions Changes { get; set; } = new();
 
     public DeployOptions Deploy { get; set; } = new();
+
+    public ImageOptions Images { get; set; } = new();
+}
+
+/// <summary>The images Octopushy builds for built templates, kept on the server. See docs/built-templates.md.</summary>
+public sealed class ImageOptions
+{
+    /// <summary>Where images are kept; by default <c>images</c> under <see cref="OctopushyOptions.DataDirectory"/>. It may be its own mount point.</summary>
+    public string? Directory { get; set; }
+
+    /// <summary>How many images per template that nothing refers to any more are kept, newest first, for a rollback.</summary>
+    public int KeepUnreferenced { get; set; } = 1;
+
+    /// <summary>The most the images may take together. Unreferenced images go first; a build that would pass it otherwise fails.</summary>
+    public long MaxBytes { get; set; } = 10L * 1024 * 1024 * 1024;
+
+    /// <summary>The directory in use: <see cref="Directory"/>, or <c>images</c> under the data directory.</summary>
+    public string Resolve(string dataDirectory) => Path.GetFullPath(Directory ?? Path.Combine(dataDirectory, "images"), dataDirectory);
 }
 
 /// <summary>Changes made in the UI.</summary>

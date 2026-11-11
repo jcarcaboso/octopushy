@@ -71,6 +71,8 @@ async fn run(
         provider_cache: dir.join("cache"),
         poll_interval: Duration::from_secs(60),
         proxmox_timeout: Duration::from_secs(1),
+        server: Default::default(),
+        nix: Default::default(),
     };
     let workspace = dir.join(id);
     std::fs::create_dir_all(&workspace).unwrap();

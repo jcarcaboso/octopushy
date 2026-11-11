@@ -164,13 +164,78 @@ public sealed record StageDefinition(
 
 public sealed record ImageSource(string Url, string ChecksumAlgorithm, string Checksum, string FileName);
 
+/// <summary>
+/// A template whose image Octopushy builds from a Nix flake output: <c>source.build</c>. The flake is <see cref="Flake"/> of the
+/// workflow it names, at the version that resolved. See docs/built-templates.md.
+/// </summary>
+/// <param name="WorkflowReference">What <c>source.build.workflow</c> names, such as <c>nixos-host@1</c>.</param>
+/// <param name="WorkflowCommit">
+/// The commit of the workflows repository the workflow resolved to. For a workflow kept in the lab repository, which has no
+/// release commit, <c>tree:</c> and a hash of the flake's folder, so only a change of the flake builds again.
+/// </param>
+/// <param name="WorkflowRepository">The workflows repository, or null for a workflow kept in the lab repository.</param>
+/// <param name="LockPath">The lab's <c>flake.lock</c>, repository-relative, or null to use the workflow's own.</param>
+/// <param name="LockSha256">The SHA-256 of the lock's bytes, or null without one.</param>
+/// <param name="Key">The build key: the same key is never built twice. See <see cref="KeyOf"/>.</param>
+public sealed record BuildSource(
+    string WorkflowReference,
+    string WorkflowId,
+    string WorkflowVersion,
+    string WorkflowCommit,
+    string? WorkflowRepository,
+    string Output,
+    string? LockPath,
+    string? LockSha256,
+    string Key)
+{
+    /// <summary>The only system built for now. The key names it, so another can come later.</summary>
+    public const string System = "x86_64-linux";
+
+    /// <summary>
+    /// Where the flake is in a run bundle. A workflow's folder names no flake today, so it is this folder of the workflows
+    /// repository at the resolved release, or of the lab repository for workflows kept there.
+    /// </summary>
+    public const string Flake = "modules/nixos";
+
+    public string WorkflowLabel => $"{WorkflowId}@{WorkflowVersion}";
+
+    /// <summary>
+    /// The lowercase hex SHA-256 of <c>"octopushy-image-build-v1\n" + commit + "\n" + output + "\n" + system + "\n" + (lock
+    /// SHA-256 or "none")</c>, in UTF-8.
+    /// </summary>
+    public static string KeyOf(string workflowCommit, string output, string? lockSha256) =>
+        Convert.ToHexStringLower(global::System.Security.Cryptography.SHA256.HashData(global::System.Text.Encoding.UTF8.GetBytes(
+            "octopushy-image-build-v1\n" + workflowCommit + "\n" + output + "\n" + System + "\n" + (lockSha256 ?? "none"))));
+}
+
+/// <summary>
+/// A built template's image as a provision run gets it: its SHA-256, its size, and the plain file name the agent puts it at,
+/// <c>&lt;first 12 of the SHA-256&gt;-&lt;the name the build gave it&gt;</c>.
+/// </summary>
+public sealed record TemplateImage(string Sha256, long Size, string FileName)
+{
+    /// <summary>The longest name a build may give its image: the agent takes a <c>templateImage</c> name of at most 128 characters, and the prefix adds 13.</summary>
+    public const int MaxBuiltFileName = 128 - 13;
+
+    public static TemplateImage Of(string sha256, long size, string builtFileName) => new(sha256, size, $"{sha256[..12]}-{builtFileName}");
+}
+
+/// <param name="Build">For <c>source.build</c>, the build as it resolved; null for a downloaded image, or a build that did not resolve.</param>
 public sealed record TemplateDefinition(
     string Id,
     string File,
     JsonObject Json,
     string? Os,
     ImageSource? Image,
-    IReadOnlyList<string> AvailableOn);
+    IReadOnlyList<string> AvailableOn,
+    BuildSource? Build = null)
+{
+    /// <summary>False when the template has an error of its own: no guest using it is valid then.</summary>
+    public bool Valid { get; init; } = true;
+
+    /// <summary>The address its issues are filed under.</summary>
+    public string Address => $"templates/{Id}";
+}
 
 /// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
 public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);

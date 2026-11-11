@@ -24,6 +24,35 @@ service AgentChannel {
 
   // Issues a new certificate for a new key before the current one expires.
   rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
+
+  // Sends the image a "nix" "build" attempt of this agent made, in chunks. Images are too big
+  // for one message, so they never travel as an Artifact. See docs/built-templates.md.
+  rpc UploadImage(stream ImageChunk) returns (ImageUploaded);
+
+  // Fetches an image an attempt assigned to this agent names in its input, in chunks.
+  rpc DownloadImage(DownloadImageRequest) returns (stream ImageChunk);
+}
+
+// One piece of an image. The first chunk of an upload carries attempt_id, file_name and
+// size; every chunk carries data, at most 4 MiB; the last carries sha256, the lowercase hex
+// SHA-256 of the whole file. A download's chunks carry the same, file_name and size first.
+message ImageChunk {
+  string attempt_id = 1;
+  string file_name = 2;
+  uint64 size = 3;
+  bytes data = 4;
+  string sha256 = 5;
+}
+
+message ImageUploaded {
+  string sha256 = 1;
+  uint64 size = 2;
+}
+
+message DownloadImageRequest {
+  // An attempt assigned to the calling agent, whose input names this image.
+  string attempt_id = 1;
+  string sha256 = 2;
 }
 
 message EnrollRequest {
@@ -161,7 +190,7 @@ message Welcome {
 
 message Assignment {
   string attempt_id = 1;
-  // "opentofu" or "proxmox".
+  // "opentofu", "ansible", "proxmox" or "nix".
   string executor = 2;
   // Executor-specific, such as "preview", "apply", "observe", "verify-guest".
   string action = 3;

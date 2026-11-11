@@ -824,8 +824,28 @@ availableOn: [home/korriban, home/moraband]
 
 A template is a base image, and is data: the image URL and its checksum. For a container it is an OS template, such as
 Proxmox's `debian-13-standard_13.6-1_amd64.tar.zst` with the SHA-512 its signed `aplinfo` index gives; a `fileName` may end in
-`.tar.gz`, `.tar.xz`, `.tar.zst` or `.tar.bz2`. `source.build` naming a workflow is accepted with a
-warning and cannot be used yet.
+`.tar.gz`, `.tar.xz`, `.tar.zst` or `.tar.bz2`.
+
+A VM template can instead be **built** by Octopushy from a Nix flake output, and kept on the server:
+
+```yaml
+# templates/nixos-base/template.yaml
+schemaVersion: 1
+os: nixos
+source:
+  build:
+    workflow: nixos-host@1   # resolved as a guest's is; the flake is that release's modules/nixos
+    output: base-image       # packages.x86_64-linux.base-image
+    lock: flake.lock         # optional: the lab's lock, next to template.yaml
+availableOn: [home/moraband]
+```
+
+Each sync queues one build per build key (the resolved workflow commit, `output`, the system and the lock's SHA-256) that a
+guest whose lifecycle is active needs, on any connected agent that advertises `nix`. A guest using the template gets its
+provision run once the image is built, and waits until then with "Waiting for the image of template `<id>`."; a new release
+or a new lock is a new key, and plans its guests again. A failed build is not retried by itself:
+`POST /api/templates/{id}/build` queues it again. The workflow must resolve, its release must have `modules/nixos/flake.nix`,
+and a named lock must exist, or the template and its guests are invalid. See [built templates](built-templates.md).
 
 ## Services and their runs
 

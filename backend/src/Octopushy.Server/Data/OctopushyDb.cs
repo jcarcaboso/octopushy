@@ -39,6 +39,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ArtifactRecord> Artifacts => Set<ArtifactRecord>();
 
+    public DbSet<ImageBuild> ImageBuilds => Set<ImageBuild>();
+
 
     public DbSet<AgentRecord> Agents => Set<AgentRecord>();
 
@@ -192,6 +194,16 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<ArtifactRecord>(e =>
         {
             e.HasIndex(x => new { x.AttemptId, x.Name }).IsUnique();
+        });
+
+        model.Entity<ImageBuild>(e =>
+        {
+            e.ToTable("image_builds");
+            e.HasIndex(x => x.Key).IsUnique();
+            e.HasIndex(x => x.TemplateId);
+            e.HasIndex(x => x.AttemptId);
+            e.Property(x => x.Key).HasMaxLength(64);
+            e.Property(x => x.Sha256).HasMaxLength(64);
         });
 
         model.Entity<AgentRecord>(e =>

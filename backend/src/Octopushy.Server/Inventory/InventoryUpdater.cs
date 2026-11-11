@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Images;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Inventory;
@@ -164,6 +165,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         // The same for its host key; see ManagedHostKey.Wanted.
         var hostKeys = (await db.GuestHostKeys.AsNoTracking().Where(k => guestIds.Contains(k.ResourceId)).Select(k => k.ResourceId).Distinct()
             .ToListAsync(cancellationToken)).ToHashSet();
+        var images = await TemplateImages.BuiltAsync(db, repository, cancellationToken);
         foreach (var resource in guests)
         {
             if (!resource.Valid)
@@ -172,44 +174,9 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 continue;
             }
 
-            var guest = repository.Guest(resource.Address)!;
-            var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, issued.Contains(resource.Id), hostKeys.Contains(resource.Id));
-            var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
-            // A desired hash only counts as proposed while a run exists for its occurrence: one recorded without its run, as a
-            // crash could leave before revisions were applied in one transaction, is proposed now, even by a later revision that
-            // changes nothing for the guest. A run for the same inputs at an earlier time is not this work.
-            var unfinished = !await GuestRemoval.ProposedAsync(db, resource, desired, cancellationToken);
-            if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty) && !unfinished)
-            {
-                // Only promote a real replacement already proposed by discovery. Metadata
-                // or policy-only revisions leave the older pinned plan/approval intact.
-                if (activeRuns.Any(r => r.ResourceId == resource.Id && r.RevisionId == revision.Id))
-                    await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
-                continue;
-            }
-
-            Run proposed;
-            try
-            {
-                proposed = factory.Guest(repository, guest, resource, revision, "revision", issued.Contains(resource.Id), hostKeys.Contains(resource.Id));
-            }
-            catch (RunException error)
-            {
-                // Controller/image compatibility is a per-guest refusal, not a
-                // reason to abandon other runs after recording this repository head.
-                resource.Valid = false;
-                var issues = repository.IssuesFor(resource.Address).ToList();
-                issues.Add(new DefinitionIssue(IssueSeverity.Error, guest.File, null, error.Message, resource.Address));
-                resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
-                await SupersedeAsync(db, activeRuns, revision, resource, $"The definition cannot be planned in {Short(revision.Commit)}.", cancellationToken);
-                continue;
-            }
-
-            // The same work proposed again, when it was recorded without its run, keeps its occurrence; new work gets a new one.
-            GuestRemoval.Record(resource, desired, revision.Id, proposed,
-                sameWork: resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty));
-            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
-            runs.Add(proposed);
+            if (await ProposeGuestAsync(db, activeRuns, revision, repository, resource, issued.Contains(resource.Id), hostKeys.Contains(resource.Id),
+                    currentSourceIds, images, cancellationToken) is { } proposed)
+                runs.Add(proposed);
         }
 
         await UpdateConfigurationsAsync(db, activeRuns, revision, repository, guests, cancellationToken);
@@ -236,6 +203,103 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         {
             await engine.ObserveAsync(db, resource, revision, context, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// The provision or retire run a valid guest's definition asks for in <paramref name="revision"/>, or null when it has one
+    /// already, cannot be planned, or waits for the image of its built template. A guest that waits records its desired work
+    /// without a run and says why; <see cref="ProposeWaitingAsync"/> proposes it once the image is built.
+    /// </summary>
+    private async Task<Run?> ProposeGuestAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, LabRepository repository,
+        Resource resource, bool keyIssued, bool hostKeyIssued, List<Guid> currentSourceIds, IReadOnlyDictionary<string, TemplateImage> images,
+        CancellationToken cancellationToken)
+    {
+        var guest = repository.Guest(resource.Address)!;
+        var image = TemplateImages.For(repository, guest, images);
+        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued, image);
+        var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
+        // A desired hash only counts as proposed while a run exists for its occurrence: one recorded without its run, as a
+        // crash could leave before revisions were applied in one transaction, is proposed now, even by a later revision that
+        // changes nothing for the guest. A run for the same inputs at an earlier time is not this work.
+        var unfinished = !await GuestRemoval.ProposedAsync(db, resource, desired, cancellationToken);
+        if (resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty) && !unfinished)
+        {
+            // Only promote a real replacement already proposed by discovery. Metadata
+            // or policy-only revisions leave the older pinned plan/approval intact.
+            if (activeRuns.Any(r => r.ResourceId == resource.Id && r.RevisionId == revision.Id))
+                await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            resource.ProvisionWaiting = null;
+            return null;
+        }
+
+        var sameWork = resource.DesiredInputsHash == desired && currentSourceIds.Contains(resource.DesiredRevisionId ?? Guid.Empty);
+        // The work is wanted, and is recorded as such, but cannot be planned before its image is built: a plan names its file.
+        if (RunFactory.WaitingForImage(repository, guest, image) is { } waiting)
+        {
+            if (!sameWork || resource.DesiredOccurrence is null)
+                resource.DesiredOccurrence = Guid.NewGuid();
+            resource.DesiredInputsHash = desired;
+            resource.DesiredRevisionId = revision.Id;
+            resource.ProvisionWaiting = waiting;
+            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            return null;
+        }
+
+        Run proposed;
+        try
+        {
+            proposed = factory.Guest(repository, guest, resource, revision, "revision", keyIssued, hostKeyIssued, image);
+        }
+        catch (RunException error)
+        {
+            // Controller/image compatibility is a per-guest refusal, not a
+            // reason to abandon other runs after recording this repository head.
+            resource.Valid = false;
+            var issues = repository.IssuesFor(resource.Address).ToList();
+            issues.Add(new DefinitionIssue(IssueSeverity.Error, guest.File, null, error.Message, resource.Address));
+            resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
+            await SupersedeAsync(db, activeRuns, revision, resource, $"The definition cannot be planned in {Short(revision.Commit)}.", cancellationToken);
+            return null;
+        }
+
+        // The same work proposed again, when it was recorded without its run, keeps its occurrence; new work gets a new one.
+        GuestRemoval.Record(resource, desired, revision.Id, proposed, sameWork);
+        resource.ProvisionWaiting = null;
+        await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+        return proposed;
+    }
+
+    /// <summary>
+    /// Proposes the provision runs that waited for the image of a built template, now that it may be built: for each valid guest
+    /// of <paramref name="revision"/> that is waiting, as <see cref="ApplyAsync"/> would. Runs inside the engine's gate.
+    /// </summary>
+    public async Task<int> ProposeWaitingAsync(OctopushyDb db, DefinitionRevision revision, LabRepository repository, CancellationToken cancellationToken)
+    {
+        var waiting = await db.Resources.Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null && r.MissingSince == null && r.Valid
+                && r.ProvisionWaiting != null)
+            .ToListAsync(cancellationToken);
+        if (waiting.Count == 0)
+            return 0;
+        var activeRuns = await db.Runs.Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
+            .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+            .ToListAsync(cancellationToken);
+        var currentSourceIds = await RepositoryTrust.CurrentRevisions(db).Select(r => r.Id).ToListAsync(cancellationToken);
+        var images = await TemplateImages.BuiltAsync(db, repository, cancellationToken);
+        var runs = new List<Run>();
+        foreach (var resource in waiting)
+        {
+            if (repository.Guest(resource.Address) is null || !repository.IsValid(resource.Address))
+                continue;
+            var keyIssued = await db.GuestAccessKeys.AnyAsync(k => k.ResourceId == resource.Id, cancellationToken);
+            var hostKeyIssued = await db.GuestHostKeys.AnyAsync(k => k.ResourceId == resource.Id, cancellationToken);
+            if (await ProposeGuestAsync(db, activeRuns, revision, repository, resource, keyIssued, hostKeyIssued, currentSourceIds, images, cancellationToken)
+                is { } proposed)
+                runs.Add(proposed);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await engine.AddRunsAsync(db, runs, cancellationToken);
+        return runs.Count;
     }
 
     /// <summary>The errors each examined resource has after this revision, kept for this revision alone.</summary>

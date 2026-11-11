@@ -559,6 +559,12 @@ public sealed class Resource
     /// verified VM that carries Octopushy's tag and description, is the guest bound to it.
     /// </summary>
     public DateTimeOffset? ReservationAppliedAt { get; set; }
+
+    /// <summary>
+    /// Why the guest's desired provisioning has no run yet, such as the image of a built template that is not built: shown
+    /// on the guest, and cleared once its run is proposed.
+    /// </summary>
+    public string? ProvisionWaiting { get; set; }
 }
 
 /// <summary>Where one of a guest's schedules stands. The definition itself stays in Git.</summary>
@@ -988,6 +994,85 @@ public sealed class ArtifactRecord
     public long Size { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+public static class ImageBuildStatuses
+{
+    public const string Queued = "queued";
+    public const string Building = "building";
+    public const string Built = "built";
+    public const string Failed = "failed";
+    /// <summary>Its file was removed by retention; a key that is needed again is built again.</summary>
+    public const string Deleted = "deleted";
+
+    /// <summary>Whether a build of the key is waiting for an agent or under way.</summary>
+    public static bool InProgress(string status) => status is Queued or Building;
+}
+
+/// <summary>
+/// The image of one build key of a built template: queued, built and kept on the server, failed, or deleted by retention. A key
+/// is built once; its attempts are <c>nix</c> <c>build</c> attempts that belong to no run and no installation. See
+/// docs/built-templates.md.
+/// </summary>
+public sealed class ImageBuild
+{
+    public Guid Id { get; set; }
+
+    /// <summary>The build key, from <see cref="Definitions.BuildSource.KeyOf"/>.</summary>
+    public required string Key { get; set; }
+
+    /// <summary>The template that asked for it first; another with the same key shares it.</summary>
+    public required string TemplateId { get; set; }
+
+    public required string WorkflowId { get; set; }
+
+    public required string WorkflowVersion { get; set; }
+
+    /// <summary>The workflows repository's commit, or <c>tree:</c> and a hash for a workflow kept in the lab repository.</summary>
+    public required string WorkflowCommit { get; set; }
+
+    /// <summary>The workflows repository, or null for a workflow kept in the lab repository.</summary>
+    public string? WorkflowRepository { get; set; }
+
+    public required string Output { get; set; }
+
+    /// <summary>The lab's <c>flake.lock</c>, repository-relative, or null for the workflow's own.</summary>
+    public string? LockPath { get; set; }
+
+    /// <summary>The revision whose files the build gets: the lab repository at its commit, with the workflow's release.</summary>
+    public Guid RevisionId { get; set; }
+
+    public required string RevisionCommit { get; set; }
+
+    public string Status { get; set; } = ImageBuildStatuses.Queued;
+
+    /// <summary>The current attempt.</summary>
+    public Guid? AttemptId { get; set; }
+
+    /// <summary>Attempts since the build was last queued, for retries after a lost agent.</summary>
+    public int AttemptCount { get; set; }
+
+    /// <summary>The image's SHA-256, once uploaded.</summary>
+    public string? Sha256 { get; set; }
+
+    public long? Size { get; set; }
+
+    /// <summary>The image's file name as the agent reported it, a plain name.</summary>
+    public string? FileName { get; set; }
+
+    /// <summary>The attempt whose upload <see cref="Sha256"/>, <see cref="Size"/> and <see cref="FileName"/> are from.</summary>
+    public Guid? UploadAttemptId { get; set; }
+
+    public string? Error { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset? BuiltAt { get; set; }
+
+    /// <summary>When a provision run last took it, or it was built.</summary>
+    public DateTimeOffset? LastUsedAt { get; set; }
+
+    public DateTimeOffset? DeletedAt { get; set; }
 }
 
 public sealed class AgentRecord

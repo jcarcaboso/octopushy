@@ -38,6 +38,8 @@ async fn exec(action: &str, input: Value, token: &str) -> (Result<Success, Failu
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_millis(20),
         proxmox_timeout: Duration::from_secs(5),
+        server: Default::default(),
+        nix: Default::default(),
     };
     let secrets = HashMap::from([("proxmox.token".to_owned(), token.to_owned())]);
     let buffer = Arc::new(LogBuffer::default());

@@ -106,6 +106,15 @@ pub struct RunArgs {
     /// The `octopushy-ansible` program for `--tool-runtime local`.
     #[arg(long, default_value = "octopushy-ansible")]
     pub ansible_binary: PathBuf,
+    /// The `nix` binary for `--tool-runtime local`. Builds need it; other runtimes never build.
+    #[arg(long, default_value = "nix")]
+    pub nix_binary: PathBuf,
+    /// Free space, in GiB, the Nix store's file system needs for this agent to take builds.
+    #[arg(long, env = "OCTOPUSHY_NIX_MIN_FREE_GB", default_value_t = 20)]
+    pub nix_min_free_gb: u64,
+    /// Above this size, in GiB, the Nix store is garbage-collected after a build.
+    #[arg(long, env = "OCTOPUSHY_NIX_STORE_MAX_GB", default_value_t = 40)]
+    pub nix_store_max_gb: u64,
     /// The podman or docker binary (default: from PATH).
     #[arg(long)]
     pub container_binary: Option<PathBuf>,

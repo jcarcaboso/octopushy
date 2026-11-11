@@ -4,7 +4,8 @@
 //! - [`connection`]: the mutual-TLS gRPC channel (hello, heartbeats, reconnects).
 //! - [`attempts`]: running assignments, logs, cancellation, restart recovery.
 //! - [`outbox`]: results stored on disk until acknowledged.
-//! - [`executors`]: `proxmox` and `opentofu`.
+//! - [`executors`]: `proxmox`, `opentofu`, `ansible` and `nix`.
+//! - [`images`]: built templates' images, sent and fetched in chunks.
 //! - [`tools`]: running OpenTofu with podman, docker, or locally.
 //! - [`masking`]: secret masking for logs and errors.
 //! - [`reachability`]: credential-free probes the server routes work by.
@@ -18,6 +19,7 @@ pub mod enrollment;
 pub mod executors;
 pub mod fsutil;
 pub mod identity;
+pub mod images;
 pub mod masking;
 pub mod outbox;
 pub mod paths;
