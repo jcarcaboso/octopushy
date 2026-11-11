@@ -1173,6 +1173,10 @@
   background: var(--surface-2);
 }
 
+.runs-section__summary:focus-visible {
+  outline-offset: -2px;
+}
+
 .runs-section__chevron {
   color: var(--text-muted);
   transition: transform 120ms;
@@ -1191,20 +1195,15 @@
   color: var(--attention-fg);
 }
 
-/* The run's link covers its row, so the whole row opens the run; the buttons sit above it. */
+/* A click anywhere on a row opens its run; the row's text stays selectable. */
 .runs-row {
-  position: relative;
   min-height: 4.25rem;
   border-top: 1px solid var(--border);
+  cursor: pointer;
 }
 
 .runs-row:hover {
   background: var(--surface-2);
-}
-
-.runs-row:has(.runs-row__link:focus-visible) {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
 }
 
 .runs-row__link {
@@ -1213,18 +1212,8 @@
 }
 
 .runs-row__link:hover {
-  color: var(--text-muted);
+  color: var(--text);
   text-decoration: none;
-}
-
-.runs-row__link:focus-visible {
-  outline: none;
-}
-
-.runs-row__link::after {
-  content: "";
-  position: absolute;
-  inset: 0;
 }
 
 .runs-row__number {
@@ -1255,11 +1244,6 @@
   display: flex;
   justify-content: flex-end;
   gap: 0.375rem;
-}
-
-.runs-row__actions .button {
-  position: relative;
-  z-index: 1;
 }
 
 .run-chip {
@@ -1321,7 +1305,10 @@
 .run-progress__label--uncertain { color: var(--uncertain-fg); }
 .run-progress__label--muted { color: var(--muted-fg); }
 
-/* A run's steps: done ones recede, the one it is at carries the color of its state. */
+/*
+ * A run's steps. Every segment keeps 3:1 against its row in both themes: a step still to come is hollow,
+ * a finished one is solid grey, and the one the run is at carries the color of its state.
+ */
 .track {
   display: flex;
   gap: 3px;
@@ -1329,17 +1316,21 @@
 
 .track__segment {
   width: 2.5rem;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--meter-track);
+  height: 5px;
+  border-radius: 2.5px;
+  background: var(--text-faint);
 }
 
-.track__segment--done { background: color-mix(in srgb, var(--text-muted) 55%, var(--surface)); }
+.track__segment--todo {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+
 .track__segment--success { background: color-mix(in srgb, var(--success-fg) 70%, var(--surface)); }
-.track__segment--neutral { background: var(--text-muted); }
+.track__segment--neutral { background: var(--neutral-fg); }
 .track__segment--info { background: var(--meter-ok); }
 .track__segment--attention { background: var(--attention-fg); }
-.track__segment--warning { background: var(--meter-warning); }
+.track__segment--warning { background: var(--warning-fg); }
 .track__segment--danger { background: var(--meter-danger); }
 .track__segment--uncertain { background: var(--uncertain-fg); }
-.track__segment--muted { background: var(--text-faint); }
+.track__segment--muted { background: var(--text-muted); }

@@ -1,6 +1,6 @@
 import { ChevronRight, HardDrive, Layers, Server, type LucideIcon } from "lucide-react";
-import { useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useState, type MouseEvent } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { useApproveStep, useCancelRun, useRejectStep, useRuns } from "../api/queries";
 import type { RunSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -41,7 +41,9 @@ function StageTrack({ progress }: { progress: RunProgress }) {
       <div className="run-progress__text">
         <span className={`run-progress__label run-progress__label--${progress.tone}`}>{progress.label}</span>
         {progress.note ? (
-          <span className="run-progress__note">{progress.note}</span>
+          <span className="run-progress__note" title={progress.note}>
+            {progress.note}
+          </span>
         ) : null}
       </div>
     </div>
@@ -53,8 +55,14 @@ function RunRow({ run, now, onDecide }: { run: RunSummary; now: number; onDecide
   const progress = runProgress(run, now);
   const Icon = typeIcons[target.type];
   const decide = (kind: Decision["kind"]) => onDecide({ kind, run, progress });
+  const navigate = useNavigate();
+  // The whole row opens the run, unless the click was on a control or ended a text selection.
+  const open = (event: MouseEvent<HTMLLIElement>) => {
+    if ((event.target as Element).closest("a, button") || window.getSelection()?.toString()) return;
+    navigate(`/runs/${run.id}`);
+  };
   return (
-    <li className="runs-row">
+    <li className="runs-row" onClick={open}>
       <Link to={`/runs/${run.id}`} className="runs-row__link">
         <span className="runs-row__number">#{run.number}</span> {operationLabel(run.operation)}
       </Link>

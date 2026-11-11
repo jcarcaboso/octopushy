@@ -68,17 +68,14 @@ export interface RunProgress {
 
 const isDone = (step: Step) => step.status === "succeeded" || step.status === "skipped";
 
+/** What the plans of a run change, added up: a pipeline's approval covers every stage. Null when they change nothing. */
 function countsText(steps: Step[]): string | null {
-  const counts = steps.findLast((s) => s.counts)?.counts;
-  if (!counts) return null;
-  const parts = [
-    [counts.create, "to create"],
-    [counts.update, "to update"],
-    [counts.replace, "to replace"],
-    [counts.delete, "to delete"],
-  ] as const;
-  const text = parts.filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`).join(", ");
-  return text || "No changes";
+  const text = (["create", "update", "replace", "delete"] as const)
+    .map((kind) => [steps.reduce((sum, s) => sum + (s.counts?.[kind] ?? 0), 0), kind] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, kind]) => `${n} to ${kind}`)
+    .join(", ");
+  return text || null;
 }
 
 /** A run's steps as a track of segments, with the stage it is at and a few words about it. */

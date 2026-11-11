@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, it } from "vitest";
 import type { RunSummary } from "../api/types";
 import { mockApi, renderAt } from "../test/utils";
+import { runProgress } from "../lib/runs";
 import { RunsPage } from "./RunsPage";
 
 const sha = "3f6c2a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615e4d3";
@@ -125,4 +126,21 @@ it("filters by type, node and name", async () => {
   await userEvent.type(screen.getByRole("searchbox", { name: "Filter by machine or service" }), "web");
   expect(screen.getByRole("link", { name: "#41 Pipeline" })).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "#50 Provision" })).not.toBeInTheDocument();
+});
+
+it("adds up every plan a pipeline's approval covers, and says nothing when they change nothing", () => {
+  const pipeline = (first: number, second: number) =>
+    run(47, {
+      status: "awaiting-approval",
+      finishedAt: null,
+      detail: "Approval is manual.",
+      steps: [
+        step("plan", "succeeded", { id: "plan-1", counts: { create: first, update: 0, delete: 0, replace: 0 } }),
+        step("plan", "succeeded", { id: "plan-2", counts: { create: second, update: second, delete: 0, replace: 0 } }),
+        step("preview", "succeeded"),
+        step("approval", "awaiting-approval", { planSha256: sha }),
+      ],
+    });
+  expect(runProgress(pipeline(2, 1)).note).toBe("3 to create, 1 to update");
+  expect(runProgress(pipeline(0, 0)).note).toBe("Approval is manual.");
 });
