@@ -58,7 +58,7 @@ public sealed partial class RunEngine
                          && await db.Attempts.FirstOrDefaultAsync(a => a.Id == waiting && a.Status == AttemptStatuses.Queued, cancellationToken) is { } attempt)
                 {
                     // Still waiting for an agent: it takes its files from the newest revision, whose lock is the same by its key.
-                    (row.RevisionId, row.RevisionCommit, attempt.RevisionId) = (revision.Id, revision.Commit, revision.Id);
+                    (row.RevisionId, row.RevisionCommit, row.LockPath, attempt.RevisionId) = (revision.Id, revision.Commit, build.LockPath, revision.Id);
                 }
             }
 
@@ -348,8 +348,9 @@ public sealed partial class RunEngine
             var build = await db.ImageBuilds.FirstOrDefaultAsync(b => b.AttemptId == attemptId, cancellationToken);
             if (build?.Status != ImageBuildStatuses.Building)
                 throw new ImageAccessException("This attempt's build is not building.");
-            if (!ImageStore.IsPlainFileName(fileName))
-                throw new ImageUploadException("The image's file name must be a plain name: letters, digits, '.', '_' and '-'.");
+            if (!ImageStore.IsPlainFileName(fileName) || fileName.Length > TemplateImage.MaxBuiltFileName)
+                throw new ImageUploadException(
+                    $"The image's file name must be a plain name of at most {TemplateImage.MaxBuiltFileName} characters: letters, digits, '.', '_' and '-'.");
             if (size <= 0)
                 throw new ImageUploadException("An image has a size.");
 
@@ -369,7 +370,10 @@ public sealed partial class RunEngine
                 throw new ImageUploadException("image store full", full: true);
             }
 
-            images.Reserve(attemptId, size);
+            // One upload per attempt at a time: a second, such as a retry while the server still reads the first, is refused
+            // without touching the first's room or partial file.
+            if (!images.TryReserve(attemptId, size))
+                throw new ImageAccessException("An upload of this attempt is already under way.");
             return 0;
         }, cancellationToken);
 

@@ -291,6 +291,37 @@ public class BuiltTemplateTests(PostgresFixture postgres)
         Assert.Equal(Grpc.Core.StatusCode.PermissionDenied, denied.StatusCode);
     }
 
+    [Fact]
+    public async Task A_second_upload_of_an_attempt_under_way_is_refused_and_leaves_the_first_whole()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, BuiltTemplateFixtures.WithBuiltTemplate());
+        await server.SyncAndTrustAsync();
+        var nix = await server.ConnectNixAgentAsync();
+        var assignment = await nix.NextAsync("build");
+        await server.Engine.OnStartedAsync(nix.Id, Guid.Parse(assignment.AttemptId), CancellationToken.None);
+        var service = ActivatorUtilities.CreateInstance<Octopushy.Server.Agents.AgentChannelService>(server.Services);
+        var nixCall = await CallAsAsync(server, nix);
+        var chunks = ImageBytes.Chunk(ImageStore.ChunkBytes).Select((data, i) => new ImageChunk
+        {
+            AttemptId = i == 0 ? assignment.AttemptId : "",
+            FileName = i == 0 ? "nixos.qcow2" : "",
+            Size = i == 0 ? (ulong)ImageBytes.Length : 0,
+            Data = ByteString.CopyFrom(data),
+        }).ToList();
+        chunks[^1].Sha256 = ImageSha256;
+
+        var held = new HeldChunks(chunks);
+        var first = service.UploadImage(held, nixCall);
+        await held.Holding.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var second = await Assert.ThrowsAsync<Grpc.Core.RpcException>(() => service.UploadImage(new Chunks(chunks.Select(c => c.Clone()).ToList()), nixCall));
+        Assert.Equal(Grpc.Core.StatusCode.PermissionDenied, second.StatusCode);
+
+        held.Release();
+        var uploaded = await first;
+        Assert.Equal((ImageSha256, (ulong)ImageBytes.Length), (uploaded.Sha256, uploaded.Size));
+        Assert.Equal(ImageBytes, await File.ReadAllBytesAsync(server.Services.GetRequiredService<ImageStore>().PathOf(ImageSha256)));
+    }
+
     /// <summary>A call as the agent, with a client certificate the server's CA issued it.</summary>
     private static async Task<Grpc.Core.ServerCallContext> CallAsAsync(ServerHarness server, FakeAgent agent)
     {
@@ -323,6 +354,30 @@ public class BuiltTemplateTests(PostgresFixture postgres)
         protected override Grpc.Core.ContextPropagationToken CreatePropagationTokenCore(Grpc.Core.ContextPropagationOptions? options) =>
             throw new NotSupportedException();
         protected override Task WriteResponseHeadersAsyncCore(Grpc.Core.Metadata responseHeaders) => Task.CompletedTask;
+    }
+
+    /// <summary>Chunks whose second waits for <see cref="Release"/>: an upload held open after it was let in.</summary>
+    private sealed class HeldChunks(IReadOnlyList<ImageChunk> chunks) : Grpc.Core.IAsyncStreamReader<ImageChunk>
+    {
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _next = -1;
+
+        public TaskCompletionSource Holding { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ImageChunk Current => chunks[_next];
+
+        public void Release() => _released.TrySetResult();
+
+        public async Task<bool> MoveNext(CancellationToken cancellationToken)
+        {
+            if (_next == 0)
+            {
+                Holding.TrySetResult();
+                await _released.Task;
+            }
+
+            return ++_next < chunks.Count;
+        }
     }
 
     private sealed class Chunks(IReadOnlyList<ImageChunk> chunks) : Grpc.Core.IAsyncStreamReader<ImageChunk>

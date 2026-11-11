@@ -214,6 +214,9 @@ public sealed record BuildSource(
 /// </summary>
 public sealed record TemplateImage(string Sha256, long Size, string FileName)
 {
+    /// <summary>The longest name a build may give its image: the agent takes a <c>templateImage</c> name of at most 128 characters, and the prefix adds 13.</summary>
+    public const int MaxBuiltFileName = 128 - 13;
+
     public static TemplateImage Of(string sha256, long size, string builtFileName) => new(sha256, size, $"{sha256[..12]}-{builtFileName}");
 }
 

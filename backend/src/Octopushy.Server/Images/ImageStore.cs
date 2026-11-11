@@ -49,7 +49,8 @@ public sealed partial class ImageStore(IOptions<OctopushyOptions> options, ILogg
     /// <summary>Bytes promised to uploads under way, except <paramref name="except"/>'s.</summary>
     public long Reserved(Guid except) => _reserved.Where(r => r.Key != except).Sum(r => r.Value);
 
-    public void Reserve(Guid attemptId, long size) => _reserved[attemptId] = size;
+    /// <summary>Holds room for an attempt's upload; false while another upload of the same attempt holds it.</summary>
+    public bool TryReserve(Guid attemptId, long size) => _reserved.TryAdd(attemptId, size);
 
     public void Release(Guid attemptId)
     {
