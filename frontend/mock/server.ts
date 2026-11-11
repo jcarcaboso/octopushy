@@ -6,7 +6,7 @@ import type {
   SnippetAccess,
 } from "../src/api/types.ts";
 import * as data from "./data.ts";
-import { Refused, approve, cancel, headCommit, hex, logChunk, reject, resources, runs, startRun, summary, type Resource } from "./runs.ts";
+import { Refused, approve, cancel, forceStop, headCommit, hex, logChunk, reject, resources, runs, startRun, summary, type Resource } from "./runs.ts";
 
 const port = Number(process.env.MOCK_PORT ?? 18280);
 let user: string | null = "ops";
@@ -122,6 +122,7 @@ on("POST", "/api/runs/{id}/steps/{stepId}/approve", ({ params, body }) =>
   approve(params.id, params.stepId, user ?? "ops", (body.note as string) ?? null, (body.planSha256 as string) ?? null));
 on("POST", "/api/runs/{id}/steps/{stepId}/reject", ({ params, body }) => reject(params.id, params.stepId, user ?? "ops", (body.note as string) ?? null));
 on("POST", "/api/runs/{id}/cancel", ({ params }) => cancel(params.id, user ?? "ops"));
+on("POST", "/api/runs/{id}/force-stop", ({ params }) => forceStop(params.id, user ?? "ops"));
 on("POST", "/api/runs/{id}/close", () => problem(409, "Only a run with an uncertain outcome can be closed."));
 on("POST", "/api/runs/{id}/retry-stage", () => undefined);
 on("POST", "/api/runs/{id}/run-again", ({ params }) => {

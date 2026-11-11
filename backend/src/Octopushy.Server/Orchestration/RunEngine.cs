@@ -141,6 +141,43 @@ public sealed partial class RunEngine(
     public Task CancelAsync(Guid runId, string reason, CancellationToken cancellationToken) =>
         WithDbAsync(db => CancelInternalAsync(db, runId, reason, cancellationToken), cancellationToken);
 
+    /// <summary>
+    /// Stops a run whose change is in progress, without waiting for its agent: for an agent that will never report, as one
+    /// stuck restarting itself. The agent is asked to cancel, and the change is uncertain, as when its lease runs out: a
+    /// later result still settles it, and otherwise the run is closed after the user has looked at the guest.
+    /// </summary>
+    public Task ForceStopAsync(Guid runId, string user, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            var run = await LoadRunAsync(db, runId, cancellationToken);
+            var active = run.Steps.SelectMany(s => s.Attempts).Where(a => AttemptStatuses.IsActive(a.Status)).ToList();
+            if (RunStatuses.IsTerminal(run.Status) || !active.Any(a => a.Mutating))
+            {
+                throw new RunException("No change is being applied; cancel the run instead.");
+            }
+
+            var now = clock.GetUtcNow();
+            foreach (var attempt in active)
+            {
+                if (attempt.AgentId is { } agentId && connections.Get(agentId) is { } session)
+                    session.TrySend(new ServerMessage { Cancel = new CancelAttempt { AttemptId = attempt.Id.ToString() } });
+                attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Cancelled;
+                attempt.Error = $"Stopped by {user} before the agent reported.";
+                attempt.FinishedAt = now;
+                attempt.LeaseExpiresAt = null;
+                var step = attempt.Step!;
+                step.Status = attempt.Mutating ? StepStatuses.Uncertain : StepStatuses.Cancelled;
+                step.Detail = attempt.Mutating
+                    ? $"Stopped by {user} during {attempt.Action}; whether the change was made is unknown. Check the guest, then close the run, or wait for the agent to report."
+                    : $"Stopped by {user}.";
+                step.FinishedAt = now;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            await AdvanceAsync(db, run.Id, cancellationToken);
+            signal.Wake();
+        }, cancellationToken);
+
     /// <summary>Closes a run whose outcome is uncertain, after the user has looked at it.</summary>
     public Task CloseUncertainAsync(Guid runId, string user, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>

@@ -121,6 +121,22 @@ Statuses are `reachable`, `refused`, `timeout`, `dns`, `unreachable`, `protocol`
 - **Health.** What one agent reaches says nothing about the health of a resource. Probe failures never touch
   installation observations, and no failure from one agent is recorded against a host.
 
+## An agent never configures its own guest
+
+A worker's agent often runs on a guest Octopushy configures, and it reaches that guest's SSH like any other. Setup
+may restart the agent, as a new agent version does, and stopping an agent waits for the work it is running: if that
+is the setup that asked for the restart, each waits for the other until the agent is killed and the run is
+uncertain. So an agent never gets a step whose guest SSH address is the address it connects to the server from. It
+is not probed for that step, and the waiting reason says `runs on ssh://<address>:22, the guest this step
+configures`. Another agent takes the step.
+
+The check compares IP addresses only. A guest reached by name, or an agent whose connection the server sees through
+NAT, is not matched; for those, give the guest `execution.agentLabels` that only another agent has.
+
+A change already stuck this way can be stopped with **Force stop** on its run: the agent is asked to cancel, without
+waiting for it, and the change becomes uncertain, as when its lease runs out. A later result from the agent still
+settles it; otherwise check the guest and close the run.
+
 ## Labels
 
 Labels are still optional, additional constraints. An attempt still requires every label its lab sets, and

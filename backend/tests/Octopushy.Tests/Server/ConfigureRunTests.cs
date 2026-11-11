@@ -153,6 +153,64 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_agent_running_on_the_guest_never_configures_it()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        // The guest is a worker: its agent connects from the guest's address, and the other agent leaves.
+        var worker = await server.ConnectAgentFromAsync(IPAddress.Parse("10.1.0.31"), "krb-app-01", "home");
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+
+        await ScheduleAsync(server);
+        await PreviewAsync(worker);
+        await server.TickAsync();
+        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "run");
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        var playbook = run.Steps.Single(s => s.Name == StepNames.Playbook).Attempts.Single();
+        Assert.Equal(AttemptStatuses.Queued, playbook.Status);
+        Assert.Contains("krb-app-01: runs on ssh://10.1.0.31:22, the guest this step configures", playbook.WaitingReason);
+
+        // Any other agent takes it.
+        var other = await server.ConnectAgentAsync("home");
+        await other.ReportAsync(await other.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Fact]
+    public async Task A_change_whose_agent_never_reports_can_be_force_stopped_and_closed()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        var playbook = await agent.NextAsync("run");
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+
+        // A change in progress cannot be cancelled, only force stopped.
+        Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync($"/api/runs/{run.Id}/cancel", null)).StatusCode);
+        var view = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!;
+        Assert.False(view["canCancel"]!.GetValue<bool>());
+        Assert.True(view["canForceStop"]!.GetValue<bool>());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await http.PostAsync($"/api/runs/{run.Id}/force-stop", null)).StatusCode);
+        Assert.Equal([playbook.AttemptId], agent.TakeCancels());
+        run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunStatuses.Uncertain, run.Status);
+        Assert.Contains("Stopped by ops during run", run.Detail);
+        Assert.Equal(AttemptStatuses.Uncertain, run.Steps.Single(s => s.Name == StepNames.Playbook).Attempts.Single().Status);
+        view = (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{run.Id}"))!;
+        Assert.False(view["canForceStop"]!.GetValue<bool>());
+        Assert.True(view["canClose"]!.GetValue<bool>());
+        Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync($"/api/runs/{run.Id}/force-stop", null)).StatusCode);
+
+        (await http.PostAsync($"/api/runs/{run.Id}/close", null)).EnsureSuccessStatusCode();
+        Assert.Equal(RunStatuses.Failed, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+    }
+
+    [Fact]
     public async Task A_guest_waits_for_its_provisioning_before_it_is_configured()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

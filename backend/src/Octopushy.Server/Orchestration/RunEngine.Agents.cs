@@ -280,6 +280,11 @@ public sealed partial class RunEngine
         {
             if (connections.Get(candidate.Id) is not { } session)
                 continue;
+            if (needs.Targets.FirstOrDefault(t => NetworkRequirements.RunsOn(t, session.RemoteAddress)) is { } own)
+            {
+                reasons.Add($"{candidate.Name}: runs on {own.Endpoint}, the guest this step configures, and would wait for itself if the step restarted it");
+                continue;
+            }
             var verdict = await reachability.CheckAsync(session, needs.Targets, cancellationToken);
             if (verdict.Ready)
             {

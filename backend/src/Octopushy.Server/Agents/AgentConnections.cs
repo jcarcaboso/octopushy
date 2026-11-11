@@ -32,6 +32,12 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
 
     public string? ToolRuntime { get; } = toolRuntime;
 
+    /// <summary>
+    /// The address the agent connected from, as this server sees it: through NAT, not the agent's own. Null when unknown.
+    /// Used only to keep the agent off its own guest's SSH (<see cref="Orchestration.NetworkRequirements.RunsOn"/>).
+    /// </summary>
+    public System.Net.IPAddress? RemoteAddress { get; init; }
+
     /// <summary>Whether the agent answers reachability probes (<see cref="WorkerReachability.Capability"/>).</summary>
     public bool ReportsReachability => Capabilities.Contains(WorkerReachability.Capability);
 

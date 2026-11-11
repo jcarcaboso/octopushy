@@ -22,6 +22,22 @@ it("retries a failed stage of a pipeline and names its stage", async () => {
   expect(screen.getByText("deploy")).toBeInTheDocument();
 });
 
+it("force stops a change in progress that cannot be cancelled", async () => {
+  const detail = runDetail({ status: "running" });
+  detail.canCancel = false;
+  detail.canForceStop = true;
+  const { requests } = mockApi({
+    "GET /api/runs/run-1": () => detail,
+    "POST /api/runs/run-1/force-stop": () => undefined,
+  });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  expect(screen.queryByRole("button", { name: /Cancel run/ })).not.toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: "Force stop" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Force stop the run" }));
+  await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/force-stop"]);
+});
+
 it("runs a failed run again as a new run and opens it", async () => {
   const detail = runDetail({ status: "failed", currentStep: null });
   detail.canRunAgain = true;
@@ -266,6 +282,7 @@ function runDetail(overrides: Partial<RunDetail["run"]> = {}): RunDetail {
     canCancel: true,
     canClose: false,
     canRunAgain: false,
+    canForceStop: false,
   };
 }
 
