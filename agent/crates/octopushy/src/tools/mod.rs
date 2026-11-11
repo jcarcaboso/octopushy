@@ -1,5 +1,5 @@
-//! Running tools (OpenTofu, Ansible) for attempts: in a rootless container
-//! (`podman`, `docker`) or directly (`local`).
+//! Running tools (OpenTofu, Ansible, Nix) for attempts: in a rootless container
+//! (`podman`, `docker`) or directly (`local`). Nix runs only directly.
 //!
 //! Secrets never appear on a command line, where `/proc/<pid>/cmdline` would
 //! show them: the tool's environment is set on the child process, and container
@@ -53,6 +53,7 @@ impl RuntimeKind {
 pub enum Tool {
     OpenTofu,
     Ansible,
+    Nix,
 }
 
 impl Tool {
@@ -60,6 +61,7 @@ impl Tool {
         match self {
             Tool::OpenTofu => "tofu",
             Tool::Ansible => "ansible-playbook",
+            Tool::Nix => "nix",
         }
     }
 }
@@ -74,6 +76,8 @@ pub struct ToolRuntime {
     pub tofu_binary: PathBuf,
     /// The `octopushy-ansible` program for the `local` runtime.
     pub ansible_binary: PathBuf,
+    /// The `nix` binary (`local` runtime only).
+    pub nix_binary: PathBuf,
     /// `--network` for containers.
     pub network: Option<String>,
     /// How long a cancelled tool gets to exit after SIGTERM.
@@ -169,6 +173,7 @@ impl ToolRuntime {
             container_binary: container_binary.unwrap_or_else(|| PathBuf::from(kind.as_str())),
             tofu_binary,
             ansible_binary: PathBuf::from("octopushy-ansible"),
+            nix_binary: PathBuf::from("nix"),
             network,
             kill_grace: Duration::from_secs(10),
             docker_rootless: OnceCell::new(),
@@ -258,10 +263,38 @@ impl ToolRuntime {
             .to_owned())
     }
 
+    /// Whether `nix` can run: only directly, never in a container.
+    pub async fn probe_nix(&self) -> Result<String> {
+        if self.is_container() {
+            bail!("nix runs only with the local tool runtime");
+        }
+        let out = Command::new(&self.nix_binary)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .with_context(|| format!("cannot run {}", self.nix_binary.display()))?;
+        if !out.status.success() {
+            bail!(
+                "{} --version exited with {}",
+                self.nix_binary.display(),
+                out.status
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_owned())
+    }
+
     fn local_binary(&self, tool: Tool) -> &Path {
         match tool {
             Tool::OpenTofu => &self.tofu_binary,
             Tool::Ansible => &self.ansible_binary,
+            Tool::Nix => &self.nix_binary,
         }
     }
 
@@ -341,6 +374,9 @@ impl ToolRuntime {
                 cmd.envs(inv.settings.iter().chain(&inv.env).map(|(k, v)| (k, v)));
             }
             RuntimeKind::Podman | RuntimeKind::Docker => {
+                if inv.tool == Tool::Nix {
+                    bail!("nix runs only with the local tool runtime");
+                }
                 if inv.image.trim().is_empty() {
                     bail!("the input names no container image");
                 }

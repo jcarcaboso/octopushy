@@ -48,6 +48,7 @@ public sealed partial class RunEngine(
     OrchestratorSignal signal,
     RevisionCache revisions,
     RepositoryMirror mirror,
+    Images.ImageStore images,
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RunEngine> logger)

@@ -142,26 +142,30 @@ public static class WorkflowResolver
 public static class WorkflowReferences
 {
     /// <summary>
-    /// The references in <c>guest.yaml</c> and <c>service.yaml</c> files, where the loader looks for them. A file that cannot be
-    /// read is skipped: the loader reports it.
+    /// The references in <c>guest.yaml</c> and <c>service.yaml</c> files, and in a <c>template.yaml</c>'s <c>source.build</c>,
+    /// where the loader looks for them. A file that cannot be read is skipped: the loader reports it.
     /// </summary>
     public static IReadOnlyList<WorkflowReference> In(string root)
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
-        void Read(string file)
+        void Read(string file, bool template = false)
         {
             if (!File.Exists(file))
                 return;
             try
             {
-                if (YamlDocumentReader.Read(File.ReadAllText(file)).Root?["workflow"] is JsonValue value
+                var document = YamlDocumentReader.Read(File.ReadAllText(file)).Root;
+                if ((template ? document?["source"]?["build"]?["workflow"] : document?["workflow"]) is JsonValue value
                     && value.TryGetValue<string>(out var text) && WorkflowReference.Parse(text) is not null)
                     found.Add(text);
             }
-            catch (YamlReadException)
+            catch (Exception e) when (e is YamlReadException or InvalidOperationException)
             {
             }
         }
+
+        foreach (var template in DefinitionFiles.SubDirectories(Path.Combine(root, "templates")))
+            Read(Path.Combine(template, "template.yaml"), template: true);
 
         foreach (var lab in DefinitionFiles.SubDirectories(Path.Combine(root, "labs")))
         foreach (var installation in DefinitionFiles.SubDirectories(Path.Combine(lab, "proxmox")))

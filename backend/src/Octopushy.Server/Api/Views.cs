@@ -205,6 +205,12 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             }, active.Detail);
         }
 
+        // Its desired work has no run yet, as when it waits for the image of its built template.
+        if (resource.ProvisionWaiting is { } held)
+        {
+            return (GuestStatuses.Pending, held);
+        }
+
         if (last is { Status: RunStatuses.Failed })
         {
             return (GuestStatuses.Failed, last.Detail);
@@ -213,6 +219,30 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         return resource.SyncedInputsHash is not null && resource.SyncedInputsHash == resource.DesiredInputsHash
             ? (GuestStatuses.InSync, null)
             : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not provisioned from the current definition yet.");
+    }
+
+    /// <summary>The head revision's templates, with what each built template's current key has: see docs/built-templates.md.</summary>
+    public async Task<IReadOnlyList<TemplateDto>> TemplatesAsync(CancellationToken cancellationToken)
+    {
+        var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        if (head is null)
+            return [];
+        var repository = await revisions.GetAsync(head, cancellationToken);
+        var keys = repository.Templates.Values.Select(t => t.Build?.Key).OfType<string>().ToList();
+        var builds = await db.ImageBuilds.AsNoTracking().Where(b => keys.Contains(b.Key)).ToDictionaryAsync(b => b.Key, cancellationToken);
+        return repository.Templates.Values.OrderBy(t => t.Id, StringComparer.Ordinal).Select(t => new TemplateDto(
+            t.Id,
+            t.Os,
+            t.Json["source"]?["build"] is null ? "download" : "built",
+            t.Valid,
+            t.AvailableOn,
+            t.Build is not { } build ? null
+                : builds.GetValueOrDefault(build.Key) is { } row
+                    ? new TemplateBuildDto(build.Key, build.WorkflowLabel, build.WorkflowReference, build.Output, build.LockPath, row.Status, row.AttemptId,
+                        row.Status == ImageBuildStatuses.Built ? row.Sha256 : null, row.Status == ImageBuildStatuses.Built ? row.Size : null,
+                        row.Status == ImageBuildStatuses.Built ? row.FileName : null, row.Error, row.BuiltAt, row.LastUsedAt)
+                    : new TemplateBuildDto(build.Key, build.WorkflowLabel, build.WorkflowReference, build.Output, build.LockPath, "not-built",
+                        null, null, null, null, null, null, null))).ToList();
     }
 
     public async Task<RevisionDto?> LatestRevisionAsync(CancellationToken cancellationToken)

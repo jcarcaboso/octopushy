@@ -165,6 +165,19 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("rotateGuestAccess");
 
+        api.MapGet("/templates", async (Views views, CancellationToken ct) => TypedResults.Ok(await views.TemplatesAsync(ct)))
+            .WithTags("Inventory")
+            .WithName("listTemplates");
+
+        // Builds a built template's current key again: after a failure, which is not retried by itself, or a deletion.
+        api.MapPost("/templates/{id}/build", async (string id, RunEngine engine, Views views, CancellationToken ct) =>
+        {
+            await engine.RetryImageBuildAsync(id, ct);
+            return TypedResults.Ok((await views.TemplatesAsync(ct)).FirstOrDefault(t => t.Id == id));
+        })
+            .WithTags("Inventory")
+            .WithName("buildTemplate");
+
         api.MapGet("/installations/{id:guid}", async Task<Results<Ok<InstallationDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.InstallationAsync(id, ct) is { } installation ? TypedResults.Ok(installation) : TypedResults.NotFound())
             .WithTags("Inventory")
@@ -650,7 +663,7 @@ public static partial class Endpoints
             // Observations belong to no run; their releases and pins are named by installation.
             var observed = releases.Where(r => r.RunId is null && r.ResourceId is not null).ToList();
             var waiting = await db.Attempts.AsNoTracking()
-                .Where(a => a.StepId == null && a.Status == AttemptStatuses.Queued)
+                .Where(a => a.StepId == null && a.ResourceId != null && a.Status == AttemptStatuses.Queued)
                 .Select(a => new { a.ResourceId, a.Context })
                 .ToListAsync(ct);
             var installationIds = observed.Select(r => r.ResourceId).Concat(waiting.Select(a => a.ResourceId)).Distinct().ToList();

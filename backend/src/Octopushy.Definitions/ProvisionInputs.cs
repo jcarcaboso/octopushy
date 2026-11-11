@@ -20,6 +20,9 @@ public sealed record ProvisionInputs(
     JsonObject Variables,
     string Hash)
 {
+    /// <summary>For a built template, the image the variables name, or null when it was not given: see <see cref="Build"/>.</summary>
+    public TemplateImage? Image { get; init; }
+
     /// <summary>Guest fields excluded from the infrastructure hash.</summary>
     private static readonly string[] NotProvisioned =
         ["description", "policy", "execution", "secrets", "secretFiles", "schedules", "renamedFrom", "workflow"];
@@ -27,8 +30,12 @@ public sealed record ProvisionInputs(
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
     /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>
     /// <param name="hostKeyIssued">Whether Octopushy already holds a host key for the guest; see <see cref="ManagedHostKey.Wanted"/>.</param>
+    /// <param name="image">
+    /// For a guest whose template is built, the image built for the template's key. Without it the variables name no file, and
+    /// only the hash is of use: a provision run waits for the image. A downloaded template ignores it.
+    /// </param>
     public static ProvisionInputs Build(LabRepository repository, GuestDefinition guest, string revision, bool keyIssued = false,
-        bool hostKeyIssued = false)
+        bool hostKeyIssued = false, TemplateImage? image = null)
     {
         var installation = repository.Installation(guest.InstallationAddress)
             ?? throw new InvalidOperationException($"{guest.Address} has no installation.");
@@ -36,6 +43,8 @@ public sealed record ProvisionInputs(
         var workflow = guest.Workflow!;
         var stage = workflow.Machine!;
         var template = guest.Template is null ? null : repository.Templates[guest.Template];
+        if (template?.Build is null)
+            image = null;
 
         var variables = new JsonObject
         {
@@ -74,20 +83,22 @@ public sealed record ProvisionInputs(
                 ["endpoint"] = EndpointFor(installation, host),
                 ["verifyTls"] = installation.Connection.VerifyTls,
             },
-            ["template"] = template?.Image is { } image
+            ["template"] = template?.Image is { } download
                 ? new JsonObject
                 {
                     ["id"] = template.Id,
                     ["os"] = template.Os,
                     ["source"] = new JsonObject
                     {
-                        ["url"] = image.Url,
-                        ["checksum"] = image.Checksum,
-                        ["checksumAlgorithm"] = image.ChecksumAlgorithm,
-                        ["fileName"] = image.FileName,
+                        ["url"] = download.Url,
+                        ["checksum"] = download.Checksum,
+                        ["checksumAlgorithm"] = download.ChecksumAlgorithm,
+                        ["fileName"] = download.FileName,
                     },
                 }
-                : null,
+                : template?.Build is not null
+                    ? BuiltTemplate(template, image)
+                    : null,
         };
 
         // Where the guest's snippet goes. Its public host key joins it when a run is built, so it is never in Git;
@@ -130,6 +141,12 @@ public sealed record ProvisionInputs(
             ["template"] = template?.Json.DeepClone(),
             ["workflow"] = WorkflowHash(workflow, [stage.Root]),
         };
+        // A built template's image is its key: a new release of its workflow, or a new lock, plans again, as a new URL does. Not
+        // the image's own digest, which is known only once built. Omitted otherwise, to preserve the hashes of downloaded templates.
+        if (template?.Build is { } build)
+        {
+            hashed["templateBuild"] = build.Key;
+        }
         // That Octopushy has a key on the machine is part of it; which version is not, so a rotation
         // plans nothing. Omitted otherwise, to preserve the hashes of existing definitions.
         if (ManagedAccess.Wanted(repository, guest, keyIssued))
@@ -143,8 +160,28 @@ public sealed record ProvisionInputs(
             hashed["managedHostKey"] = new JsonObject { ["datastore"] = snippets.Datastore };
         }
 
-        return new ProvisionInputs(guest, installation, host, workflow, stage, template, variables, Canonical.Hash(hashed));
+        return new ProvisionInputs(guest, installation, host, workflow, stage, template, variables, Canonical.Hash(hashed)) { Image = image };
     }
+
+    /// <summary>
+    /// The variable <c>template</c> of a built template. Its <c>source</c> names the file the agent fetches before OpenTofu
+    /// runs, with its digest twice: as a download's checksum would be, and as <c>sha256</c>. Without an image, the file is null.
+    /// </summary>
+    private static JsonObject BuiltTemplate(TemplateDefinition template, TemplateImage? image) => new()
+    {
+        ["id"] = template.Id,
+        ["os"] = template.Os,
+        ["source"] = new JsonObject
+        {
+            ["kind"] = "built",
+            ["url"] = null,
+            ["checksum"] = image?.Sha256,
+            ["checksumAlgorithm"] = "sha256",
+            ["fileName"] = image?.FileName,
+            ["sha256"] = image?.Sha256,
+            ["size"] = image?.Size,
+        },
+    };
 
     /// <summary>
     /// What a run takes from its workflow: which one, at which version, every file in its folder, and every file of the

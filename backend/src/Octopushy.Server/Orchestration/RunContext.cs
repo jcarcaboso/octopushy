@@ -194,13 +194,18 @@ public sealed record SnippetsContext(string Installation, string User, string Ad
 
 public sealed record PolicyContext(string Approval, string ApprovalSetBy, string Destructive, string DestructiveSetBy, bool DestructiveExplicit = false);
 
+/// <param name="TemplateImage">
+/// For a guest whose template is built, the image its plan and apply fetch with <c>DownloadImage</c> before OpenTofu runs, as
+/// <c>templateImage</c> in their input. See contracts/agent/v1/executors.md.
+/// </param>
 public sealed record OpenTofuContext(
     string Stack,
     string Root,
     string Image,
     JsonObject Variables,
     Dictionary<string, string> Env,
-    Dictionary<string, string> SecretEnv);
+    Dictionary<string, string> SecretEnv,
+    Definitions.TemplateImage? TemplateImage = null);
 
 /// <summary>
 /// A configure run: one action of a workflow's Ansible stage, against one guest. <c>Workflow</c> is the workflow at its version. <see cref="Vars"/> holds no secret

@@ -205,6 +205,9 @@ public sealed partial class AssignmentBuilder(
             };
             if (nodeHostKey is not null)
                 input["knownHosts"] = KnownHosts(nodeHostKey, context.Snippets!);
+            // A built template's image, which the agent fetches with DownloadImage before OpenTofu runs.
+            if (tofu.TemplateImage is { } image)
+                input["templateImage"] = new JsonObject { ["sha256"] = image.Sha256, ["fileName"] = image.FileName, ["size"] = image.Size };
             assignment.FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(run, context, cancellationToken));
             if (stepName == StepNames.Apply)
             {

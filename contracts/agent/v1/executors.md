@@ -228,6 +228,23 @@ Input (the same for both actions):
   `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, and `TF_PLUGIN_CACHE_DIR`. Secret values are
   passed through the environment, never as command-line arguments.
 
+### A built template's image
+
+A guest whose template is built ([built templates](../../../docs/built-templates.md)) gets
+`templateImage` in the input of both actions:
+
+```json
+"templateImage": { "sha256": "<64 hex>", "fileName": "3f2a9c1e04b7-nixos-host.qcow2", "size": 867041280 }
+```
+
+Before OpenTofu runs, the executor fetches it with `DownloadImage(attempt_id, sha256)` into
+`<root>/.octopushy-images/<fileName>`, checks its size and SHA-256, and fails the attempt
+if either differs. The path is relative to the root, as the state's is, so a saved plan that
+names it applies from another workspace and another agent. `fileName` is a plain file name:
+letters, digits, `.`, `_` and `-`. The variable `template.source` names the same file, and
+the module uploads it to Proxmox itself. A file of that folder from the repository is
+removed first.
+
 ### Built-in state
 
 The controller keeps every stack's state; there is no other backend, and the input names
@@ -505,3 +522,46 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.
 With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
 restart for attempts it lost.
+
+## `nix`
+
+Builds a flake output: a built template's image. The agent advertises `nix` only when the
+tool runtime is `local`, `nix --version` works, and the file system holding the Nix store
+has at least `OCTOPUSHY_NIX_MIN_FREE_GB` free (20 by default). That is how a small agent
+stays out of builds without labels.
+
+### `build`
+
+Input:
+
+```json
+{
+  "key": "<64 hex: the build key>",
+  "flake": "modules/nixos",
+  "output": "base-image",
+  "system": "x86_64-linux",
+  "lock": "templates/nixos-base/flake.lock"
+}
+```
+
+- `files_tar_gz` holds the run bundle: the lab repository at the revision with the workflows
+  repository's `workflows/` and `modules/` at the resolved release, as for a run. `flake` and
+  `lock` are paths inside it; `lock` is optional.
+- With `lock`, the executor copies it over `<flake>/flake.lock` first. It then runs
+  `nix build --no-update-lock-file --no-link --print-out-paths path:<flake>#packages.<system>.<output>`
+  with `TMPDIR` on the agent's state volume, never on `/tmp`. A lock whose inputs do not
+  match the flake fails the build; nothing re-locks.
+- The output path must be a regular file, or a folder holding exactly one regular file
+  ending in `.qcow2`, `.raw` or `.img`. That file is the image.
+- The executor sends it with `UploadImage` and waits for `ImageUploaded`, whose SHA-256 must
+  match its own. The image then leaves the agent: the store keeps it only as a cache, and
+  after each build the executor runs `nix store gc` when the store is above
+  `OCTOPUSHY_NIX_STORE_MAX_GB` (40 by default).
+- A build connects to the binary cache and to what the flake fetches, never to the lab.
+  It gets no secrets.
+
+Output:
+
+```json
+{ "sha256": "<64 hex>", "size": 867041280, "fileName": "nixos-host.qcow2", "outPath": "/nix/store/…" }
+```

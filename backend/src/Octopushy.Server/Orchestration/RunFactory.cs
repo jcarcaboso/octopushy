@@ -15,26 +15,40 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// <paramref name="keyIssued"/> is whether Octopushy already holds a key for the guest, as <see cref="GuestAccessCredentials.IssuedAsync"/> says,
     /// and <paramref name="hostKeyIssued"/> the same for its host key, as <see cref="GuestHostCredentials.IssuedAsync"/> says.
     /// </remarks>
+    /// <param name="image">
+    /// For a guest whose template is built, the image built for its key. A provision run cannot be made without it: see
+    /// <see cref="WaitingForImage"/>. A retire run takes it when there is one, and otherwise names no file.
+    /// </param>
     public Run Guest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason, bool keyIssued,
-        bool hostKeyIssued = false) =>
-        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued, hostKeyIssued);
+        bool hostKeyIssued = false, TemplateImage? image = null) =>
+        CreateGuest(repository, guest, resource, revision, reason, null, keyIssued, hostKeyIssued, image);
+
+    /// <summary>Why a guest's provision run cannot be made yet: its template is built, and its image is not.</summary>
+    public static string? WaitingForImage(LabRepository repository, GuestDefinition guest, TemplateImage? image) =>
+        !guest.Retired && image is null && guest.Template is { } id && repository.Templates.GetValueOrDefault(id)?.Build is not null
+            ? WaitingForImageReason(id)
+            : null;
+
+    public static string WaitingForImageReason(string template) => $"Waiting for the image of template {template}.";
 
     /// <summary>
     /// Removes a guest whose folder was deleted: a retire run built from <paramref name="lastDefined"/>,
     /// the last revision that defined it, so it destroys exactly what that definition created.
     /// </summary>
     public Run RemoveDeleted(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision lastDefined,
-        string removedIn, string reason, bool keyIssued) =>
-        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued, false);
+        string removedIn, string reason, bool keyIssued, TemplateImage? image = null) =>
+        CreateGuest(repository, guest, resource, lastDefined, reason, removedIn, keyIssued, false, image);
 
     private Run CreateGuest(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string reason,
-        string? removedIn, bool keyIssued, bool hostKeyIssued)
+        string? removedIn, bool keyIssued, bool hostKeyIssued, TemplateImage? image)
     {
         var removal = removedIn is not null;
         if (removal && guest.Retired)
             throw new RunException("Only a guest whose definition was deleted can be removed this way.");
         Managed(repository, guest.InstallationAddress);
-        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued);
+        if (!removal && WaitingForImage(repository, guest, image) is { } waiting)
+            throw new RunException(waiting);
+        var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued, image);
         var policy = PolicyResolver.For(repository, guest);
         var labels = PolicyResolver.AgentLabels(repository, guest);
         var connection = inputs.Installation.Connection;
@@ -114,7 +128,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 inputs.Stage.Image ?? options.Value.Tools.OpenTofuImage,
                 inputs.Variables,
                 env,
-                secretEnv),
+                secretEnv,
+                inputs.Image),
             Proxmox = new ProxmoxContext(endpoint, connection.VerifyTls, connection.CaCertificate?.Key, guest.Host, guest.Vmid, guest.Id, ProvisionInputs.ExpectedIpv4(guest),
                 guest.ProxmoxKind),
             Secrets = secrets,

@@ -11,20 +11,29 @@ namespace Octopushy.Server.Orchestration;
 /// </summary>
 public sealed class RunBundles(RepositoryMirror mirror, WorkflowsMirrors workflows)
 {
-    public async Task<byte[]> ForAsync(Run run, RunContext context, CancellationToken cancellationToken)
+    public Task<byte[]> ForAsync(Run run, RunContext context, CancellationToken cancellationToken) =>
+        context.Workflow is { Repository: { } repository } workflow
+            ? ForAsync(run.Commit!, repository, workflow.Commit, workflow.Label, cancellationToken)
+            : mirror.BundleAsync(run.Commit!, cancellationToken);
+
+    /// <summary>
+    /// The lab repository at <paramref name="commit"/> with, when <paramref name="repository"/> is set, the workflows repository's
+    /// <c>workflows/</c> and <c>modules/</c> at <paramref name="workflowCommit"/>: as a run gets it, for work that is not a run.
+    /// </summary>
+    public async Task<byte[]> ForAsync(string commit, string? repository, string? workflowCommit, string label, CancellationToken cancellationToken)
     {
-        if (context.Workflow is not { Repository: { } repository } workflow)
-            return await mirror.BundleAsync(run.Commit!, cancellationToken);
+        if (repository is null || workflowCommit is null)
+            return await mirror.BundleAsync(commit, cancellationToken);
         string snapshot;
         try
         {
-            snapshot = await workflows.For(repository).SnapshotAsync(workflow.Commit, cancellationToken);
+            snapshot = await workflows.For(repository).SnapshotAsync(workflowCommit, cancellationToken);
         }
         catch (GitException e)
         {
-            throw new AssignmentException($"{workflow.Label} at {workflow.Commit[..Math.Min(10, workflow.Commit.Length)]} cannot be read from {repository}: {e.Message}");
+            throw new AssignmentException($"{label} at {workflowCommit[..Math.Min(10, workflowCommit.Length)]} cannot be read from {repository}: {e.Message}");
         }
 
-        return await mirror.BundleAsync(run.Commit!, cancellationToken, snapshot, workflow.Commit);
+        return await mirror.BundleAsync(commit, cancellationToken, snapshot, workflowCommit);
     }
 }

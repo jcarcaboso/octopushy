@@ -1,15 +1,16 @@
 //! A minimal fake Octopushy server for integration tests: a test CA (rcgen), the
 //! `Enrollment` and `AgentChannel` services over real mutual TLS, and
-//! `GET /agent/ca.pem` on the same port.
+//! `GET /agent/ca.pem` on the same port. Images are kept in memory by SHA-256.
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use octopushy_proto::v1::{
-    AgentMessage, EnrollRequest, EnrollResponse, RenewCertificateRequest, RenewCertificateResponse,
-    ResultAck, ServerMessage, Welcome,
+    AgentMessage, DownloadImageRequest, EnrollRequest, EnrollResponse, ImageChunk, ImageUploaded,
+    RenewCertificateRequest, RenewCertificateResponse, ResultAck, ServerMessage, Welcome,
     agent_channel_server::{AgentChannel, AgentChannelServer},
     agent_message::Kind as AgentKind,
     enrollment_server::{Enrollment, EnrollmentServer},
@@ -28,6 +29,8 @@ use tonic::{Request, Response, Status, Streaming};
 
 pub const AGENT_ID: &str = "agent-0001";
 pub const TOKEN_SECRET: &str = "dGVzdC1lbnJvbGxtZW50LXNlY3JldA";
+/// The most data an image chunk may carry.
+pub const CHUNK: usize = 4 * 1024 * 1024;
 
 pub struct TestCa {
     pub cert_pem: String,
@@ -96,11 +99,34 @@ impl TestCa {
 /// What the agent did, as seen by the server.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Enrolled { name: String },
-    Connected { cn: String, cert_der: Vec<u8> },
+    Enrolled {
+        name: String,
+    },
+    Connected {
+        cn: String,
+        cert_der: Vec<u8>,
+    },
     Message(AgentMessage),
     Renewed,
     Disconnected,
+    /// An upload the server accepted, with the data size of each chunk.
+    ImageUploaded {
+        attempt_id: String,
+        file_name: String,
+        sha256: String,
+        chunks: Vec<usize>,
+    },
+    ImageRequested {
+        attempt_id: String,
+        sha256: String,
+    },
+}
+
+/// An image the server keeps.
+#[derive(Debug, Clone)]
+pub struct StoredImage {
+    pub file_name: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -111,6 +137,8 @@ pub struct Options {
     pub heartbeat_seconds: u32,
     /// Acknowledge every result as soon as it arrives.
     pub auto_ack: bool,
+    /// Answer an upload with a SHA-256 other than the one received.
+    pub misreport_upload: bool,
 }
 
 impl Default for Options {
@@ -120,6 +148,7 @@ impl Default for Options {
             max_concurrency: 2,
             heartbeat_seconds: 1,
             auto_ack: false,
+            misreport_upload: false,
         }
     }
 }
@@ -132,6 +161,7 @@ struct Shared {
     opts: Options,
     events: mpsc::UnboundedSender<Event>,
     current: Arc<Mutex<Option<Outbound>>>,
+    images: Arc<Mutex<HashMap<String, StoredImage>>>,
 }
 
 const DAY: Duration = Duration::from_secs(86_400);
@@ -250,6 +280,118 @@ impl AgentChannel for Shared {
             certificate_der: cert,
         }))
     }
+
+    /// Checks the chunks as the contract says: names first, at most 4 MiB each, the SHA-256 last.
+    async fn upload_image(
+        &self,
+        req: Request<Streaming<ImageChunk>>,
+    ) -> Result<Response<ImageUploaded>, Status> {
+        peer_cn(&req)?;
+        let mut inbound = req.into_inner();
+        let first = inbound
+            .message()
+            .await?
+            .ok_or_else(|| Status::invalid_argument("no chunks"))?;
+        if first.attempt_id.is_empty() || first.file_name.is_empty() || first.size == 0 {
+            return Err(Status::invalid_argument("the first chunk names nothing"));
+        }
+        let (attempt_id, file_name, size) = (
+            first.attempt_id.clone(),
+            first.file_name.clone(),
+            first.size,
+        );
+        let mut data = Vec::new();
+        let mut chunks = Vec::new();
+        let mut announced = String::new();
+        let mut next = Some(first);
+        while let Some(chunk) = next {
+            if !announced.is_empty() {
+                return Err(Status::invalid_argument("a chunk after the SHA-256"));
+            }
+            if chunk.data.len() > CHUNK {
+                return Err(Status::invalid_argument("a chunk above 4 MiB"));
+            }
+            chunks.push(chunk.data.len());
+            data.extend_from_slice(&chunk.data);
+            announced = chunk.sha256;
+            next = inbound.message().await?;
+        }
+        let sha256 = hex::encode(Sha256::digest(&data));
+        if announced != sha256 || data.len() as u64 != size {
+            return Err(Status::data_loss(
+                "the image does not match its SHA-256 or size",
+            ));
+        }
+        self.images.lock().unwrap().insert(
+            sha256.clone(),
+            StoredImage {
+                file_name: file_name.clone(),
+                data,
+            },
+        );
+        let _ = self.events.send(Event::ImageUploaded {
+            attempt_id,
+            file_name,
+            sha256: sha256.clone(),
+            chunks,
+        });
+        Ok(Response::new(ImageUploaded {
+            sha256: if self.opts.misreport_upload {
+                "0".repeat(64)
+            } else {
+                sha256
+            },
+            size,
+        }))
+    }
+
+    type DownloadImageStream = ReceiverStream<Result<ImageChunk, Status>>;
+
+    /// Sends what is stored under the SHA-256, whether or not it matches it.
+    async fn download_image(
+        &self,
+        req: Request<DownloadImageRequest>,
+    ) -> Result<Response<Self::DownloadImageStream>, Status> {
+        peer_cn(&req)?;
+        let r = req.into_inner();
+        let _ = self.events.send(Event::ImageRequested {
+            attempt_id: r.attempt_id.clone(),
+            sha256: r.sha256.clone(),
+        });
+        let image = self
+            .images
+            .lock()
+            .unwrap()
+            .get(&r.sha256)
+            .cloned()
+            .ok_or_else(|| Status::not_found("no such image"))?;
+        let (tx, rx) = mpsc::channel(4);
+        tokio::spawn(async move {
+            let pieces: Vec<&[u8]> = image.data.chunks(CHUNK).collect();
+            let n = pieces.len();
+            for (i, piece) in pieces.into_iter().enumerate() {
+                let chunk = ImageChunk {
+                    attempt_id: String::new(),
+                    file_name: if i == 0 {
+                        image.file_name.clone()
+                    } else {
+                        String::new()
+                    },
+                    size: if i == 0 { image.data.len() as u64 } else { 0 },
+                    data: piece.to_vec(),
+                    sha256: if i + 1 == n {
+                        r.sha256.clone()
+                    } else {
+                        String::new()
+                    },
+                };
+                if tx.send(Ok(chunk)).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
 }
 
 impl Shared {
@@ -283,6 +425,7 @@ impl FakeServer {
             opts,
             events: events_tx,
             current: Arc::new(Mutex::new(None)),
+            images: Arc::new(Mutex::new(HashMap::new())),
         };
         let (cert_pem, key_pem) = ca.server_identity();
         let tls = ServerTlsConfig::new()
@@ -342,6 +485,21 @@ impl FakeServer {
         tx.send(Ok(ServerMessage { kind: Some(kind) }))
             .await
             .unwrap();
+    }
+
+    /// Keeps `data` as the image `sha256` names, whether or not that is its SHA-256.
+    pub fn put_image(&self, sha256: &str, file_name: &str, data: Vec<u8>) {
+        self.shared.images.lock().unwrap().insert(
+            sha256.to_owned(),
+            StoredImage {
+                file_name: file_name.to_owned(),
+                data,
+            },
+        );
+    }
+
+    pub fn image(&self, sha256: &str) -> Option<StoredImage> {
+        self.shared.images.lock().unwrap().get(sha256).cloned()
     }
 
     /// Ends the current stream from the server side.

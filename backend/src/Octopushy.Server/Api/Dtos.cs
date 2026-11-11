@@ -563,3 +563,28 @@ public sealed record VariableVersionDto(
     DateTimeOffset? ActivatedAt, string? ActivatedBy, string? ActivationNote,
     DateTimeOffset? RevokedAt, string? RevokedBy, string? RevocationNote,
     IReadOnlyList<string> UsedBy);
+
+/// <summary>
+/// A template of the head revision: its image is downloaded by Proxmox (<c>download</c>) or built by Octopushy (<c>built</c>).
+/// </summary>
+public sealed record TemplateDto(string Id, string? Os, string Kind, bool Valid, IReadOnlyList<string> AvailableOn, TemplateBuildDto? Build);
+
+/// <summary>
+/// A built template's image for its current key. <c>Status</c> is <c>queued</c>, <c>building</c>, <c>built</c>, <c>failed</c>,
+/// <c>deleted</c>, or <c>not-built</c> while no guest needs it. <c>AttemptId</c> is the current attempt, whose log is at
+/// <c>/api/attempts/{id}/log</c>.
+/// </summary>
+public sealed record TemplateBuildDto(
+    string Key,
+    string Workflow,
+    string WorkflowReference,
+    string Output,
+    string? Lock,
+    string Status,
+    Guid? AttemptId,
+    string? Sha256,
+    long? Size,
+    string? FileName,
+    string? Error,
+    DateTimeOffset? BuiltAt,
+    DateTimeOffset? LastUsedAt);

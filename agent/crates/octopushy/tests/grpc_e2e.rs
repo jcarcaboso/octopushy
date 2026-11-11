@@ -86,6 +86,7 @@ fn start_agent(
     let mut opts = RunOptions::new(dir.to_path_buf());
     opts.tool_runtime = RuntimeKind::Local;
     opts.tofu_binary = "/bin/false".into();
+    opts.nix_binary = "/nonexistent/octopushy-test-nix".into();
     opts.poll_interval = Duration::from_millis(100);
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(run(opts, shutdown.clone()));
@@ -146,6 +147,7 @@ async fn hello_only_advertises_usable_tool_capabilities() {
         let mut opts = RunOptions::new(state.path().to_path_buf());
         opts.tool_runtime = kind;
         opts.tofu_binary = binary.into();
+        opts.nix_binary = "/nonexistent/octopushy-test-nix".into();
         opts.container_binary = Some(binary.into());
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(opts, shutdown.clone()));

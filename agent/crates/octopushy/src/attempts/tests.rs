@@ -24,6 +24,8 @@ fn harness() -> Harness {
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_millis(10),
         proxmox_timeout: Duration::from_secs(1),
+        server: Default::default(),
+        nix: Default::default(),
     });
     let manager = AttemptManager::new(work.clone(), Outbox::open(&outbox_dir).unwrap(), exec);
     Harness {
@@ -384,6 +386,8 @@ esac
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_secs(60),
         proxmox_timeout: Duration::from_secs(1),
+        server: Default::default(),
+        nix: Default::default(),
     });
     std::fs::create_dir_all(dir.path().join("work")).unwrap();
     let work = dir.path().join("work").canonicalize().unwrap();

@@ -37,8 +37,11 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             // The latest observation may be newer than the sync that found this guest valid.
             if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
                 throw new RunException(collision);
+            // A guest whose template is built is planned with its image, and waits while there is none: see RunFactory.WaitingForImage.
             var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
-                await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken));
+                await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken),
+                await Images.TemplateImages.ForAsync(db, repository, guest, cancellationToken));
+            resource.ProvisionWaiting = null;
             // Planned by hand, it is still the run of the work it plans: the desired work already recorded keeps its occurrence,
             // so cancelling it on purpose is not undone by the next sync.
             GuestRemoval.Record(resource, run.InputsHash!, revision.Id, run, sameWork: resource.DesiredInputsHash == run.InputsHash);

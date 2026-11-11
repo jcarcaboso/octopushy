@@ -1,6 +1,8 @@
 //! The opentofu executor with the `local` runtime and a fake `tofu` script that
 //! records its arguments and environment.
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -50,6 +52,7 @@ case "$1" in
     for a in "$@"; do case "$a" in -out=*) out="${a#-out=}" ;; -destroy) destroy=1 ;; esac; done
     echo "PLAN destroy=$destroy" > "$out"
     if [ -n "$state" ] && [ -f "$state" ]; then cp "$state" "$REC/state-at-plan.json"; fi
+    if [ -e .octopushy-images ]; then ls -A .octopushy-images > "$REC/images-at-plan.txt"; fi
     if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
     echo "Plan: 2 to add, 1 to change, 1 to destroy."
     echo "debug: provider token $PROXMOX_VE_API_TOKEN" >&2
@@ -72,6 +75,7 @@ JSON
     fi ;;
   apply)
     grep -q PLAN "$last" || { echo "not a plan: $last" >&2; exit 1; }
+    if [ -e .octopushy-images ]; then ls -A .octopushy-images > "$REC/images-at-apply.txt"; fi
     if [ -n "$state" ]; then
       [ -f "$state" ] && cp "$state" "$REC/state-at-apply.json"
       echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
@@ -114,6 +118,8 @@ impl Fixture {
             provider_cache: dir.path().join("cache"),
             poll_interval: Duration::from_millis(10),
             proxmox_timeout: Duration::from_secs(1),
+            server: Default::default(),
+            nix: Default::default(),
         };
         Self { dir, rec, cfg }
     }
@@ -944,4 +950,152 @@ async fn cancel_stops_a_running_plan() {
         started.elapsed()
     );
     assert!(r.lines.iter().any(|(_, t)| t == "stopping the tool"));
+}
+
+/// A repository whose root already has a `.octopushy-images` folder, as a commit might.
+fn repo_tar_with_stale_image() -> Vec<u8> {
+    archive::pack(&[
+        (
+            "modules/opentofu/test-vm/main.tf",
+            b"resource \"terraform_data\" \"a\" {}\n",
+        ),
+        (
+            "modules/opentofu/test-vm/.octopushy-images/stale.qcow2",
+            b"from the repository\n",
+        ),
+    ])
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_template_image_is_fetched_into_the_root_before_tofu_runs() {
+    use common::{CHUNK, Event, FakeServer, Options};
+    use octopushy::images::ServerLink;
+    use octopushy::paths::StatePaths;
+    use sha2::{Digest, Sha256};
+
+    let mut server = FakeServer::start(Options::default()).await;
+    let state = tempfile::tempdir().unwrap();
+    octopushy::enrollment::enroll(octopushy::enrollment::EnrollOptions {
+        server: server.url.clone(),
+        token: octopushy::enrollment::EnrollmentToken::parse(&server.token()).unwrap(),
+        name: Some("test-agent".into()),
+        state_dir: state.path().to_path_buf(),
+        force: false,
+    })
+    .await
+    .unwrap();
+    let mut fx = Fixture::new();
+    fx.cfg.server = ServerLink::Enrolled(StatePaths::new(state.path()));
+
+    let image: Vec<u8> = (0..CHUNK + 3).map(|i| (i % 253) as u8).collect();
+    let sha256 = hex::encode(Sha256::digest(&image));
+    let file_name = "3f2a9c1e04b7-nixos-host.qcow2";
+    server.put_image(&sha256, file_name, image.clone());
+    let with_image = |sha: &str, name: &str, size: usize| {
+        let mut i = input(false, json!({}));
+        i["templateImage"] = json!({ "sha256": sha, "fileName": name, "size": size });
+        i
+    };
+
+    // Preview: the repository's folder is replaced by the image alone.
+    let r = run(
+        &fx,
+        "img-prev",
+        "preview",
+        &with_image(&sha256.to_uppercase(), file_name, image.len()),
+        repo_tar_with_stale_image(),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    let success = r
+        .result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    let root = r
+        .workspace
+        .join("repo/modules/opentofu/test-vm")
+        .canonicalize()
+        .unwrap();
+    assert_eq!(
+        std::fs::read(root.join(".octopushy-images").join(file_name)).unwrap(),
+        image
+    );
+    assert_eq!(fx.read("images-at-plan.txt"), format!("{file_name}\n"));
+    let requested = server
+        .wait_for(|e| match e {
+            Event::ImageRequested { attempt_id, sha256 } => {
+                Some((attempt_id.clone(), sha256.clone()))
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(requested, ("img-prev".to_owned(), sha256.clone()));
+
+    // Apply fetches it again: it may run on another agent.
+    fx.reset();
+    let r = run(
+        &fx,
+        "img-apply",
+        "apply",
+        &with_image(&sha256, file_name, image.len()),
+        repo_tar_with_stale_image(),
+        success.artifacts.clone(),
+        CancellationToken::new(),
+    )
+    .await;
+    r.result
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{e:?}\n{:#?}", r.lines));
+    assert_eq!(fx.read("images-at-apply.txt"), format!("{file_name}\n"));
+
+    // Whatever does not match fails the attempt before OpenTofu runs, and leaves no file.
+    let other = vec![1u8; 10];
+    let other_sha = hex::encode(Sha256::digest(&other));
+    server.put_image(&other_sha, "x.raw", image.clone());
+    let unknown = "ab".repeat(32);
+    for (n, (input, expected)) in [
+        (
+            with_image(&sha256, file_name, image.len() + 1),
+            "the server sends an image of",
+        ),
+        (
+            with_image(&other_sha, "x.raw", 10),
+            "the server sends an image of",
+        ),
+        (
+            with_image(&other_sha, "x.raw", image.len()),
+            "the image's SHA-256 is",
+        ),
+        (with_image(&unknown, "x.raw", 10), "no such image"),
+        (with_image(&sha256, "../x.raw", 10), "not a plain file name"),
+        (with_image(&sha256, ".x.raw", 10), "not a plain file name"),
+        (with_image("abc", "x.raw", 10), "is not a SHA-256"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fx.reset();
+        let r = run(
+            &fx,
+            &format!("img-bad-{n}"),
+            "preview",
+            &input,
+            repo_tar_with_stale_image(),
+            vec![],
+            CancellationToken::new(),
+        )
+        .await;
+        let err = r.result.expect_err(expected);
+        assert!(err.message().contains(expected), "{n}: {}", err.message());
+        assert_eq!(fx.read("args.log"), "", "{n}: tofu must not run");
+        let dir = r
+            .workspace
+            .join("repo/modules/opentofu/test-vm/.octopushy-images");
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .map(|d| d.map(|e| e.unwrap().file_name()).collect())
+            .unwrap_or_default();
+        assert!(left.is_empty(), "{n}: {left:?}");
+    }
 }

@@ -10,10 +10,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::attempts::AttemptManager;
 use crate::connection::{self, Agent};
+use crate::executors::nix::{self, NixSettings};
 use crate::executors::opentofu::state;
 use crate::executors::{EXECUTORS, ExecutorConfig};
 use crate::fsutil::ensure_private_dir;
 use crate::identity;
+use crate::images::ServerLink;
 use crate::outbox::Outbox;
 use crate::paths::StatePaths;
 use crate::reachability::{self, Prober};
@@ -27,6 +29,13 @@ pub struct RunOptions {
     pub tool_runtime: RuntimeKind,
     pub tofu_binary: PathBuf,
     pub ansible_binary: PathBuf,
+    pub nix_binary: PathBuf,
+    /// The folder holding the Nix store.
+    pub nix_store_dir: PathBuf,
+    /// Free space the Nix store's file system needs for `nix` to be advertised.
+    pub nix_min_free_bytes: u64,
+    /// Above this, the Nix store is collected after a build.
+    pub nix_store_max_bytes: u64,
     pub container_binary: Option<PathBuf>,
     pub container_network: Option<String>,
     pub poll_interval: Duration,
@@ -40,6 +49,10 @@ impl RunOptions {
             tool_runtime: RuntimeKind::Podman,
             tofu_binary: PathBuf::from("tofu"),
             ansible_binary: PathBuf::from("octopushy-ansible"),
+            nix_binary: PathBuf::from("nix"),
+            nix_store_dir: PathBuf::from("/nix"),
+            nix_min_free_bytes: NixSettings::DEFAULT_MIN_FREE_GB << 30,
+            nix_store_max_bytes: NixSettings::DEFAULT_STORE_MAX_GB << 30,
             container_binary: None,
             container_network: None,
             poll_interval: Duration::from_secs(5),
@@ -65,6 +78,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         opts.container_network.clone(),
     );
     runtime.ansible_binary = opts.ansible_binary.clone();
+    runtime.nix_binary = opts.nix_binary.clone();
     let tools_available = match runtime.probe().await {
         Ok(v) => {
             tracing::info!("tool runtime {}: {v}", opts.tool_runtime.as_str());
@@ -88,11 +102,27 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
             false
         }
     };
+    let nix_available = match nix::availability(
+        !runtime.is_container(),
+        runtime.probe_nix().await.map_err(|e| format!("{e:#}")),
+        nix::free_bytes(&opts.nix_store_dir),
+        opts.nix_min_free_bytes,
+    ) {
+        Ok(v) => {
+            tracing::info!("nix: {v}");
+            true
+        }
+        Err(e) => {
+            tracing::info!("not advertising nix: {e}");
+            false
+        }
+    };
     let executors = EXECUTORS
         .iter()
         .filter(|&&name| match name {
             "opentofu" => tools_available,
             "ansible" => tools_available && ansible_available,
+            "nix" => nix_available,
             _ => true,
         })
         .map(|&name| name.to_owned())
@@ -109,6 +139,12 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         provider_cache,
         poll_interval: opts.poll_interval,
         proxmox_timeout: Duration::from_secs(30),
+        server: ServerLink::Enrolled(paths.clone()),
+        nix: NixSettings::new(
+            opts.nix_store_dir.clone(),
+            opts.nix_store_max_bytes,
+            Some(paths.root.join("cache").join("nix")),
+        ),
     });
 
     let prober = Arc::new(Prober::new(exec.clone()));

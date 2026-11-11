@@ -91,6 +91,8 @@ async fn podman_preview_and_apply() {
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
+        server: Default::default(),
+        nix: Default::default(),
     };
     let main_tf = br#"
 variable "octopushy" { type = any }

@@ -55,6 +55,8 @@ fn prober(kind: RuntimeKind, network: Option<&str>) -> Prober {
         provider_cache: PathBuf::from("/nonexistent"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
+        server: Default::default(),
+        nix: Default::default(),
     }))
 }
 

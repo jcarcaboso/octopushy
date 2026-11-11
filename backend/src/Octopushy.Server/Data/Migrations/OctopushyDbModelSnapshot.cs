@@ -728,6 +728,127 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("guest_schedules", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ImageBuild", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<Guid?>("AttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attempt_id");
+
+                    b.Property<DateTimeOffset?>("BuiltAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("built_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text")
+                        .HasColumnName("error");
+
+                    b.Property<string>("FileName")
+                        .HasColumnType("text")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("key");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_used_at");
+
+                    b.Property<string>("LockPath")
+                        .HasColumnType("text")
+                        .HasColumnName("lock_path");
+
+                    b.Property<string>("Output")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("output");
+
+                    b.Property<string>("RevisionCommit")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("revision_commit");
+
+                    b.Property<Guid>("RevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revision_id");
+
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<long?>("Size")
+                        .HasColumnType("bigint")
+                        .HasColumnName("size");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TemplateId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("template_id");
+
+                    b.Property<Guid?>("UploadAttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("upload_attempt_id");
+
+                    b.Property<string>("WorkflowCommit")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_commit");
+
+                    b.Property<string>("WorkflowId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_id");
+
+                    b.Property<string>("WorkflowRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_repository");
+
+                    b.Property<string>("WorkflowVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_version");
+
+                    b.HasKey("Id")
+                        .HasName("pk_image_builds");
+
+                    b.HasIndex("AttemptId")
+                        .HasDatabaseName("ix_image_builds_attempt_id");
+
+                    b.HasIndex("Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_image_builds_key");
+
+                    b.HasIndex("TemplateId")
+                        .HasDatabaseName("ix_image_builds_template_id");
+
+                    b.ToTable("image_builds", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.InstallationSnippetKey", b =>
                 {
                     b.Property<string>("Installation")
@@ -1120,6 +1241,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("ParentAddress")
                         .HasColumnType("text")
                         .HasColumnName("parent_address");
+
+                    b.Property<string>("ProvisionWaiting")
+                        .HasColumnType("text")
+                        .HasColumnName("provision_waiting");
 
                     b.Property<DateTimeOffset?>("ReservationAppliedAt")
                         .HasColumnType("timestamp with time zone")

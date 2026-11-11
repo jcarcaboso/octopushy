@@ -18,7 +18,8 @@ agent/
 Agent modules (`crates/octopushy/src`): `cli`, `enrollment`, `renewal`,
 `identity` (stored credentials), `tls`, `connection` (the gRPC channel), `outbox`,
 `attempts` (manager, logs, workspaces, restart recovery, concurrency limiter),
-`executors/{proxmox,opentofu}`, `tools` (podman, docker, local), `masking`, `paths`.
+`executors/{proxmox,opentofu,ansible,nix}`, `images` (built templates' images, in
+chunks), `tools` (podman, docker, local), `masking`, `paths`.
 
 ## Build
 
@@ -83,6 +84,10 @@ The runtime is probed once: if that probe fails, the agent warns and omits
 `opentofu` from `Hello`, while native `proxmox` remains advertised.
 Fix the tool/runtime and restart the agent to advertise OpenTofu again. A successful
 version probe does not prove image pulls, provider access or backend connectivity.
+`nix` is advertised only with the `local` runtime, when `nix --version` works and the
+file system holding `/nix` has `OCTOPUSHY_NIX_MIN_FREE_GB` (20) free, checked at start.
+After a build the store is collected down to `OCTOPUSHY_NIX_STORE_MAX_GB` (40). The agent
+image carries a single-user Nix 2.34 owned by the agent's user, without a sandbox.
 
 What the agent does on the channel:
 
@@ -267,7 +272,11 @@ certificate for 127.0.0.1, ::1, and localhost; `--ca-out` writes the CA for
 - `tests/opentofu_fake.rs`: the opentofu executor with the local runtime and a fake
   `tofu` script that records arguments and environment (secrets in the environment,
   never in arguments; outputs; artifact contents; destroy; replace counting; lock-file
-  restore; corrupt artifacts; cancel; the built-in state).
+  restore; corrupt artifacts; cancel; the built-in state; a template image fetched into
+  the root and refused when its size or SHA-256 differs).
+- `tests/nix_build.rs`: the nix executor with a fake `nix` over real mutual TLS: when
+  Hello advertises it, the build command, the lab's lock, the image's 4 MiB chunks, its
+  outputs, garbage collection, and a server that reports another image.
 - `tests/proxmox_executor.rs`: all four proxmox actions against mock-proxmox.
 - `tests/podman_smoke.rs` (ignored by default): real OpenTofu in rootless podman,
   `tofu version` through the container runner and a full preview + apply of a
