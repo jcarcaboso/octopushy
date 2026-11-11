@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.8.0:
+Milestone 1 has shipped, up to release 0.8.1:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,20 @@ Milestone 1 has shipped, up to release 0.8.0:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.8.1:
+
+- An agent never configures its own guest, from #67. A worker's agent could take its own guest's setup, which then
+  waited on itself: a new agent version restarts the agent, and the stop waits for that setup, until the agent is
+  killed after 30 minutes and the run is uncertain. The server now keeps the address each agent connects from, and
+  never gives an agent a step whose guest SSH address is that address. IP addresses only: behind NAT, or for a guest
+  reached by name, give the guest `execution.agentLabels` that only another agent has. See
+  [worker routing](docs/worker-routing.md#an-agent-never-configures-its-own-guest).
+- **Force stop** on a run whose change is in progress, `POST /api/runs/{id}/force-stop`, for an agent that will never
+  report. The agent is asked to cancel, without waiting for it, and the change becomes uncertain, as when its lease
+  runs out: a later result still settles it, and otherwise the run is closed after checking the guest.
+
+No agent contract or database change: upgrade the backend; agents need no update.
 
 New in 0.8.0:
 
