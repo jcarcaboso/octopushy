@@ -112,6 +112,19 @@ public static class NetworkRequirements
         return new("proxmox-api", "tls", host, uri.Port, host, trust, ca, caVersion, from, image, proxy);
     }
 
+    /// <summary>
+    /// Whether an agent connected from <paramref name="agentAddress"/> runs on the guest <paramref name="target"/> reaches:
+    /// its SSH address is the agent's. Such an agent must not configure it, since setup may restart the agent, and a stop
+    /// waits for the setup it is running. Only an IP address is compared, never a name; behind NAT nothing matches.
+    /// </summary>
+    public static bool RunsOn(NetworkTarget target, System.Net.IPAddress? agentAddress) =>
+        target.Kind == "guest-ssh" && agentAddress is not null
+        && System.Net.IPAddress.TryParse(target.Host, out var host)
+        && Unmapped(host).Equals(Unmapped(agentAddress));
+
+    private static System.Net.IPAddress Unmapped(System.Net.IPAddress address) =>
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+
     private static NetworkTarget Ssh(string kind, string address, int port, string image, string? proxy) =>
         new(kind, "ssh", address.Trim().TrimStart('[').TrimEnd(']'), port, null, "none", null, null, NetworkTarget.ToolContext, image, proxy);
 

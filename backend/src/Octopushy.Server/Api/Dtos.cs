@@ -200,7 +200,8 @@ public sealed record RunDetailDto(
     bool CanCancel,
     bool CanClose,
     RunWorkflowDto? Workflow = null,
-    bool CanRunAgain = false);
+    bool CanRunAgain = false,
+    bool CanForceStop = false);
 
 /// <summary>The workflow a run executed: which one, at which version, and the commit its files came from.</summary>
 public sealed record RunWorkflowDto(string Id, string Version, string Reference, string Commit, string? Repository);

@@ -65,6 +65,7 @@ function run(status: string): RunDetail {
     canCancel: true,
     canClose: false,
     canRunAgain: false,
+    canForceStop: false,
   };
 }
 

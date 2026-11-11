@@ -321,6 +321,14 @@ export function useCancelRun() {
   });
 }
 
+export function useForceStopRun() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/runs/{id}/force-stop", { params: { path: { id } } })),
+    onSettled: () => refresh(),
+  });
+}
+
 export function useCloseRun() {
   const refresh = useRefreshRuns();
   return useMutation({

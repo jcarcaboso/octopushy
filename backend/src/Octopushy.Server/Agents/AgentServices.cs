@@ -116,7 +116,10 @@ public sealed class AgentChannelService(
             }
         }, call.Token);
 
-        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList(), hello.ToolRuntime);
+        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList(), hello.ToolRuntime)
+        {
+            RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
+        };
         connections.Add(session);
         reachability.OnConnected(session);
         logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);

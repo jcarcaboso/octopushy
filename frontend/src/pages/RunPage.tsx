@@ -1,8 +1,8 @@
-import { Ban, CircleX, RotateCcw } from "lucide-react";
+import { Ban, CircleX, OctagonX, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { isNotFound } from "../api/client";
 import { Link, useNavigate, useParams } from "react-router";
-import { isRunFinished, useCancelRun, useCloseRun, useRun, useRunAgain } from "../api/queries";
+import { isRunFinished, useCancelRun, useCloseRun, useForceStopRun, useRun, useRunAgain } from "../api/queries";
 import type { RunDetail } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { WaitingNote } from "../components/WaitingNote";
@@ -112,9 +112,10 @@ export function RunPage() {
   const { data, error, isPending } = useRun(id);
   const cancel = useCancelRun();
   const close = useCloseRun();
+  const forceStop = useForceStopRun();
   const again = useRunAgain();
   const navigate = useNavigate();
-  const [confirm, setConfirm] = useState<"cancel" | "close" | "again" | null>(null);
+  const [confirm, setConfirm] = useState<"cancel" | "stop" | "close" | "again" | null>(null);
 
   if (isPending) return <PageSkeleton rows={3} />;
   if (!data) return isNotFound(error) ? <NotFound what="run" /> : <ErrorMessage error={error} title="The run could not be loaded" />;
@@ -159,6 +160,12 @@ export function RunPage() {
               <button type="button" className="button button--danger-outline" onClick={() => setConfirm("cancel")}>
                 <Ban size={15} aria-hidden="true" />
                 Cancel run
+              </button>
+            ) : null}
+            {data.canForceStop ? (
+              <button type="button" className="button button--danger-outline" onClick={() => setConfirm("stop")}>
+                <OctagonX size={15} aria-hidden="true" />
+                Force stop
               </button>
             ) : null}
             {data.canClose ? (
@@ -215,6 +222,24 @@ export function RunPage() {
         onConfirm={() => cancel.mutate(run.id, { onSuccess: () => setConfirm(null) })}
       >
         <p>Steps that have not started are skipped. A change that is being applied is never interrupted.</p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirm === "stop"}
+        title={`Force stop run #${number}?`}
+        confirmLabel="Force stop the run"
+        danger
+        pending={forceStop.isPending}
+        error={forceStop.error}
+        onClose={() => {
+          setConfirm(null);
+          forceStop.reset();
+        }}
+        onConfirm={() => forceStop.mutate(run.id, { onSuccess: () => setConfirm(null) })}
+      >
+        <p>
+          For a change whose agent will not report, such as one stuck restarting itself. The agent is asked to cancel, without
+          waiting for it, and the run becomes uncertain: check the guest, then close the run.
+        </p>
       </ConfirmDialog>
       <ConfirmDialog
         open={confirm === "close"}

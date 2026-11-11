@@ -306,6 +306,11 @@ public sealed class ServerHarness : IAsyncDisposable
     public Task<FakeAgent> ConnectAgentAsync(params string[] labels) =>
         ConnectAsync("fake", labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], "podman", FakeAgent.ReachEverything);
 
+    /// <summary>An agent that reaches everything, connected from <paramref name="address"/>, as one running on a guest is.</summary>
+    public Task<FakeAgent> ConnectAgentFromAsync(System.Net.IPAddress address, string name, params string[] labels) =>
+        ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], "podman", FakeAgent.ReachEverything,
+            remote: address);
+
     /// <summary>An agent from before built-in state and reachability reports.</summary>
     public Task<FakeAgent> ConnectOlderAgentAsync(params string[] labels) => ConnectAsync("fake", labels, [], null, null);
 
@@ -325,7 +330,8 @@ public sealed class ServerHarness : IAsyncDisposable
         ConnectAsync(name, [], [], "local", null, ["nix"], maxConcurrency);
 
     private async Task<FakeAgent> ConnectAsync(string name, string[] labels, string[] capabilities, string? runtime,
-        Func<ReachabilityProbe, ReachabilityReport>? responder, string[]? executors = null, int maxConcurrency = 4)
+        Func<ReachabilityProbe, ReachabilityReport>? responder, string[]? executors = null, int maxConcurrency = 4,
+        System.Net.IPAddress? remote = null)
     {
         var agent = new AgentRecord
         {
@@ -343,7 +349,7 @@ public sealed class ServerHarness : IAsyncDisposable
             db.Agents.Add(agent);
             await db.SaveChangesAsync();
         });
-        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime) { Responder = responder };
+        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime) { Responder = responder, RemoteAddress = remote };
         Services.GetRequiredService<AgentConnections>().Add(session);
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         return new FakeAgent(this, agent.Id, session);
@@ -383,6 +389,7 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
 {
     private readonly List<ReachabilityProbe> _probes = [];
     private readonly List<Assignment> _assignments = [];
+    private readonly List<string> _cancels = [];
 
     public Guid Id { get; } = id;
 
@@ -396,6 +403,8 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
                 _assignments.Add(message.Assignment);
             else if (message.KindCase == ServerMessage.KindOneofCase.Probe)
                 _probes.Add(message.Probe);
+            else if (message.KindCase == ServerMessage.KindOneofCase.Cancel)
+                _cancels.Add(message.Cancel.AttemptId);
         }
     }
 
@@ -404,6 +413,15 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         Drain();
         var result = _assignments.ToList();
         _assignments.Clear();
+        return result;
+    }
+
+    /// <summary>The attempts this agent was asked to cancel since the last call.</summary>
+    public List<string> TakeCancels()
+    {
+        Drain();
+        var result = _cancels.ToList();
+        _cancels.Clear();
         return result;
     }
 

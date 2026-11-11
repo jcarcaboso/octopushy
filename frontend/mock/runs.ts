@@ -303,6 +303,7 @@ function run(input: RunInput): RunDetail {
     canCancel: false,
     canClose: false,
     canRunAgain: false,
+    canForceStop: false,
     workflow: {
       id: input.workflow.id,
       version: input.workflow.version,
@@ -699,6 +700,7 @@ export const isFinished = (status: string) => terminal.has(status);
 function refreshFlags(detail: RunDetail): RunDetail {
   const active = detail.steps.some((s) => s.attempts.some((a) => a.mutating && (a.status === "running" || a.status === "assigned")));
   detail.canCancel = !terminal.has(detail.run.status) && detail.run.status !== "uncertain" && !active;
+  detail.canForceStop = !terminal.has(detail.run.status) && active;
   detail.canClose = detail.run.status === "uncertain";
   detail.canRunAgain = detail.run.status === "failed";
   return detail;
@@ -776,6 +778,29 @@ export function cancel(runId: string, user: string) {
   if (terminal.has(detail.run.status)) throw new Refused(409, "The run has already finished.");
   if (!detail.canCancel) throw new Refused(409, "A change is being applied; it cannot be interrupted. Wait for it to finish.");
   finish(detail, "cancelled", `Cancelled by ${user}.`);
+}
+
+/** Stops a change in progress without its agent, as the server's ForceStopAsync does: the change becomes uncertain. */
+export function forceStop(runId: string, user: string) {
+  const detail = runs.find((r) => r.run.id === runId);
+  if (!detail) throw new Refused(404, "The run does not exist.");
+  if (!detail.canForceStop) throw new Refused(409, "No change is being applied; cancel the run instead.");
+  const now = iso(Date.now());
+  for (const step of detail.steps) {
+    for (const a of step.attempts.filter((a) => a.status === "running" || a.status === "assigned")) {
+      Object.assign(a, { status: a.mutating ? "uncertain" : "cancelled", error: `Stopped by ${user} before the agent reported.`, finishedAt: now });
+      Object.assign(step, {
+        status: a.mutating ? "uncertain" : "cancelled",
+        detail: a.mutating
+          ? `Stopped by ${user} during ${a.action}; whether the change was made is unknown. Check the guest, then close the run, or wait for the agent to report.`
+          : `Stopped by ${user}.`,
+        finishedAt: now,
+      });
+    }
+  }
+  const uncertain = detail.steps.find((s) => s.status === "uncertain");
+  Object.assign(detail.run, { status: "uncertain", detail: uncertain?.detail ?? null, waiting: null });
+  refreshFlags(detail);
 }
 
 const stepsFor: Record<string, string[]> = {

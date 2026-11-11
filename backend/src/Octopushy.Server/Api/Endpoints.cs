@@ -314,8 +314,8 @@ public static partial class Endpoints
                 access[s.Id]))
                 .ToList();
             var attempts = run.Steps.SelectMany(s => s.Attempts).ToList();
-            var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain
-                            && !attempts.Any(a => a.Mutating && AttemptStatuses.IsActive(a.Status));
+            var applying = attempts.Any(a => a.Mutating && AttemptStatuses.IsActive(a.Status));
+            var canCancel = !RunStatuses.IsTerminal(run.Status) && run.Status != RunStatuses.Uncertain && !applying;
             return TypedResults.Ok(new RunDetailDto(
                 Views.Summary(run, resource?.Address ?? "?", resource?.Kind ?? "?"),
                 steps,
@@ -325,7 +325,8 @@ public static partial class Endpoints
                 canCancel,
                 run.Status == RunStatuses.Uncertain,
                 context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null,
-                await Planner.CanRunAgainAsync(db, run, ct)));
+                await Planner.CanRunAgainAsync(db, run, ct),
+                !RunStatuses.IsTerminal(run.Status) && applying));
         })
         .WithName("getRun");
 
@@ -349,6 +350,13 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("cancelRun");
+
+        group.MapPost("/{id:guid}/force-stop", async (Guid id, HttpContext http, RunEngine engine, CancellationToken ct) =>
+        {
+            await engine.ForceStopAsync(id, http.User.Identity!.Name!, ct);
+            return TypedResults.NoContent();
+        })
+        .WithName("forceStopRun");
 
         group.MapPost("/{id:guid}/retry-stage", async (Guid id, RunEngine engine, CancellationToken ct) =>
         {
