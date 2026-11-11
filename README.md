@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.7.3:
+Milestone 1 has shipped, up to release 0.8.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,24 @@ Milestone 1 has shipped, up to release 0.7.3:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.8.0:
+
+- [Built templates](docs/built-templates.md), from #65. A template may name a Nix flake output of the workflows
+  repository, `source.build: { workflow, output, lock }`, instead of an image URL. Any connected agent that advertises
+  the new `nix` executor builds it, with no labels: a build touches no installation and carries no secrets. The agent
+  streams the image to the server, which keeps it by SHA-256 under `Octopushy:Images` (`KeepUnreferenced` 1,
+  `MaxBytes` 10 GiB) and never deletes one the newest revision or an unfinished run needs. A guest on a built template
+  waits for its image; its plan and apply then fetch it into `.octopushy-images/` of the OpenTofu root, and the
+  workflow's module uploads it to Proxmox inside the approved apply. `GET /api/templates` shows each build, and
+  `POST /api/templates/{id}/build` retries a failed one.
+- The agent image carries Nix. An agent advertises `nix` only with the local tool runtime, a writable `/nix` and
+  20 GiB free (`OCTOPUSHY_NIX_MIN_FREE_GB`); its store is a cache, trimmed to `OCTOPUSHY_NIX_STORE_MAX_GB` (40).
+
+Upgrade the backend first, then the agents: the agent contract gained `UploadImage` and `DownloadImage`, which only
+builds use, so 0.7 agents keep working and never build. A worker whose container root is read-only needs a volume at
+`/nix` to build: octopushy-lab's octopushy-worker 1.5 and octopushy-worker-lxc 1.2 mount one. The database gains the
+`image_builds` table. Validate a lab with a built template with the 0.8.0 validator; older ones refuse its guests.
 
 New in 0.7.3:
 
