@@ -1,20 +1,7 @@
-import {
-  Bot,
-  CirclePlay,
-  FilePen,
-  GitBranch,
-  GitCommitHorizontal,
-  KeyRound,
-  LayoutDashboard,
-  LogOut,
-  Rocket,
-  Server,
-  TriangleAlert,
-  User,
-} from "lucide-react";
+import { Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, KeyRound, LayoutDashboard, LogOut, Rocket, Server, User } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useAuthState, useLogout, useRepository } from "../api/queries";
-import { shortCommit } from "../lib/format";
 
 const groups = [
   {
@@ -46,48 +33,59 @@ const groups = [
   },
 ];
 
-function RevisionIndicator() {
-  const { data } = useRepository();
-  if (!data) return <span className="topbar__revision muted">…</span>;
-  if (!data.url) {
-    return (
-      <NavLink to="/repository" className="topbar__revision muted">
-        No lab repository connected
-      </NavLink>
-    );
-  }
-  const revision = data.revision;
+/** The signed-in user, at the foot of the sidebar; signing out is one step behind the name. */
+function Account() {
+  const { data: auth } = useAuthState();
+  const logout = useLogout();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+
   return (
-    <span className="topbar__status">
-      <NavLink
-        to="/repository"
-        className="topbar__revision"
-        title={revision ? `Current revision ${revision.commit}${revision.subject ? `: ${revision.subject}` : ""}` : "No revision loaded yet"}
-      >
-        <GitCommitHorizontal size={16} aria-hidden="true" />
-        {revision ? (
-          <>
-            <code className="mono">{shortCommit(revision.commit)}</code>
-            <span className="topbar__subject">{revision.subject ?? "(no subject)"}</span>
-          </>
-        ) : (
-          <span className="muted">No revision loaded yet</span>
-        )}
-      </NavLink>
-      {data.lastFetchError ? (
-        <NavLink to="/repository" className="badge badge--danger" title={data.lastFetchError}>
-          <TriangleAlert size={13} aria-hidden="true" className="badge__icon" />
-          Last fetch failed
-        </NavLink>
-      ) : null}
-    </span>
+    <div
+      className="account"
+      ref={ref}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !open) return;
+        setOpen(false);
+        ref.current?.querySelector<HTMLButtonElement>(".account__toggle")?.focus();
+      }}
+    >
+      <button type="button" className="account__toggle" aria-expanded={open} aria-controls="account-menu" onClick={() => setOpen(!open)}>
+        <span className="account__avatar" aria-hidden="true">
+          {auth?.username?.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="account__name">{auth?.username}</span>
+        <ChevronsUpDown size={14} aria-hidden="true" />
+      </button>
+      <div id="account-menu" className="account__menu" hidden={!open}>
+        <button
+          type="button"
+          className="account__item"
+          onClick={() => logout.mutate(undefined, { onSettled: () => navigate("/login", { replace: true }) })}
+          disabled={logout.isPending}
+        >
+          <LogOut size={15} aria-hidden="true" />
+          <span>Sign out</span>
+        </button>
+      </div>
+    </div>
   );
 }
 
 export function Layout() {
-  const { data: auth } = useAuthState();
-  const logout = useLogout();
-  const navigate = useNavigate();
+  const { data: repository } = useRepository();
+  // The Repository item carries what the top bar used to say on every page: the lab repository is missing or its fetch failed.
+  const repositoryAlert = !repository ? null : !repository.url ? "Not connected" : repository.lastFetchError ? "Last fetch failed" : null;
 
   return (
     <div className="shell">
@@ -110,7 +108,12 @@ export function Layout() {
                   <li key={to}>
                     <NavLink to={to} end={end} className={({ isActive }) => (isActive ? "nav__link nav__link--active" : "nav__link")}>
                       <Icon size={18} aria-hidden="true" />
-                      <span>{label}</span>
+                      <span>{label}</span>{" "}
+                      {to === "/repository" && repositoryAlert ? (
+                        <span className={repository?.url ? "nav__alert nav__alert--danger" : "nav__alert"} title={repositoryAlert}>
+                          <span className="visually-hidden">{repositoryAlert}</span>
+                        </span>
+                      ) : null}
                     </NavLink>
                   </li>
                 ))}
@@ -118,23 +121,9 @@ export function Layout() {
             </div>
           ))}
         </nav>
+        <Account />
       </aside>
       <div className="shell__main">
-        <header className="topbar">
-          <RevisionIndicator />
-          <div className="topbar__user">
-            <span className="topbar__name">{auth?.username}</span>
-            <button
-              type="button"
-              className="button button--small topbar__signout"
-              onClick={() => logout.mutate(undefined, { onSettled: () => navigate("/login", { replace: true }) })}
-              disabled={logout.isPending}
-            >
-              <LogOut size={15} aria-hidden="true" />
-              Sign out
-            </button>
-          </div>
-        </header>
         <main id="main" className="content" tabIndex={-1}>
           <Outlet />
         </main>
