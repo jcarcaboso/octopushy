@@ -30,17 +30,17 @@ public class InterfaceTests
         """;
 
     /// <summary>The service repository with a workflow whose second stage fills <c>dns</c>, the slot's schema, and a binding.</summary>
-    internal static TestRepository Repository(string service = Service, string binding = BindingYaml, bool bound = true)
+    internal static TestRepository Repository(string service = Service, string binding = BindingYaml, bool bound = true, string dnsStage = "")
     {
         var test = ServiceDefinitionTests.Repository(service);
-        test.Write("workflows/web-dns/workflow.yaml", """
+        test.Write("workflows/web-dns/workflow.yaml", $$"""
             schemaVersion: 1
             version: "1.0"
             manages: service
             secrets: [web_password]
             stages:
               - { name: deploy, executor: ansible, root: ../../modules/ansible/web, playbook: deploy.yml }
-              - { name: dns, executor: ansible, root: ../../modules/ansible/web, playbook: deploy.yml, interface: dns }
+              - { name: dns, executor: ansible, root: ../../modules/ansible/web, playbook: deploy.yml, interface: dns{{dnsStage}} }
             """);
         test.Write("interfaces/dns.schema.json", """
             { "type": "object", "properties": { "inputs": { "type": "object",

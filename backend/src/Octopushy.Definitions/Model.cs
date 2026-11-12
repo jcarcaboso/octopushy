@@ -170,8 +170,31 @@ public sealed record ServiceDefinition(
 {
     public string Address => $"{GuestAddress}/{Id}";
 
-    /// <inheritdoc cref="LinksOf"/>
-    public IReadOnlyList<string> Links => LinksOf(Json);
+    /// <summary>
+    /// Where people open the service and what uptime checks: its own <see cref="LinksOf">links</see>, then each of its
+    /// <see cref="Names"/> as <c>https://&lt;name&gt;/</c> unless a link already opens that host. Never part of what a run does.
+    /// </summary>
+    public IReadOnlyList<string> Links
+    {
+        get
+        {
+            var links = LinksOf(Json);
+            var hosts = links.Select(l => new Uri(l).IdnHost).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return links.Concat(Names.Where(n => !hosts.Contains(n.Name)).Select(n => n.Url)).Distinct(StringComparer.Ordinal).ToList();
+        }
+    }
+
+    /// <summary>
+    /// The host names the service's stages set, from the input each stage names with <c>names</c>, for the stages that run:
+    /// a stage whose interface slot is not bound sets none. What is not a host name, such as <c>_dmarc.example.com</c> or a
+    /// wildcard, is left out; a trailing dot is dropped, and each name is kept once, in lower case.
+    /// </summary>
+    public IReadOnlyList<ServiceName> Names =>
+        Stages.Where(s => s.Definition.Names is not null)
+            .SelectMany(s => ServiceName.Read(new JsonObject { ["inputs"] = Json["inputs"]?.DeepClone() }, s.Definition.Names!)
+                .Select(name => new ServiceName(name, s.Name, $"https://{name}/")))
+            .DistinctBy(n => n.Name, StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>
     /// Where people open the service, from <c>links</c> in <c>service.yaml</c>: shown in the Inventory and checked for uptime,
@@ -184,6 +207,36 @@ public sealed record ServiceDefinition(
             .Select(l => l!)
             .Distinct(StringComparer.Ordinal)
             .ToList() ?? [];
+}
+
+/// <summary>A host name a service's <paramref name="Stage"/> sets, and the URL it is opened and checked at.</summary>
+public sealed record ServiceName(string Name, string Stage, string Url)
+{
+    /// <summary>
+    /// The host names at <paramref name="path"/> in <paramref name="root"/>: dotted property names, where <c>[]</c> after one
+    /// goes through each item of its array. Anything missing or not a host name is skipped.
+    /// </summary>
+    public static IEnumerable<string> Read(JsonNode root, string path)
+    {
+        IEnumerable<JsonNode?> nodes = [root];
+        foreach (var segment in path.Split('.'))
+        {
+            var each = segment.EndsWith("[]", StringComparison.Ordinal);
+            var property = each ? segment[..^2] : segment;
+            nodes = nodes.Select(n => (n as JsonObject)?[property]);
+            if (each)
+                nodes = nodes.SelectMany(n => (n as JsonArray) ?? []);
+        }
+
+        foreach (var node in nodes)
+        {
+            if (node is not JsonValue value || !value.TryGetValue<string>(out var text))
+                continue;
+            var name = text.TrimEnd('.').ToLowerInvariant();
+            if (name.Contains('.') && Uri.CheckHostName(name) == UriHostNameType.Dns)
+                yield return name;
+        }
+    }
 }
 
 /// <summary>

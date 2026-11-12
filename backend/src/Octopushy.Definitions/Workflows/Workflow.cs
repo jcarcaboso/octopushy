@@ -167,6 +167,12 @@ public sealed record WorkflowStage(
 
     /// <summary>The slot's schema, from <c>interfaces/&lt;slot&gt;.schema.json</c> of the workflow's source, built; null without <see cref="Interface"/>.</summary>
     public JsonSchema? InterfaceSchema { get; init; }
+
+    /// <summary>
+    /// For a stage of <c>manages: service</c>, the host names it sets: a path into <c>{ inputs }</c> such as
+    /// <c>inputs.dns_records[].name</c>. See <see cref="ServiceDefinition.Names"/>.
+    /// </summary>
+    public string? Names { get; init; }
 }
 
 /// <summary>What an Ansible stage offers: the action that runs on change, any others, the outcomes it may report, and the secrets it needs.</summary>

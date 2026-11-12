@@ -550,11 +550,13 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var runs = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
         var ids = services.Select(s => s.Id).ToList();
         var states = await db.GuestConfigurations.AsNoTracking().Where(c => ids.Contains(c.ResourceId)).ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        var repository = latest is null || !latest.RepositoryValid ? null : await revisions.GetAsync(latest, cancellationToken);
         var summaries = new List<ServiceSummaryDto>();
         foreach (var service in services)
         {
             var (active, last) = runs.GetValueOrDefault(service.Id);
-            summaries.Add(ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), await ServiceWaitingAsync(guest, service, latest, cancellationToken)));
+            summaries.Add(ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), await ServiceWaitingAsync(guest, service, latest, cancellationToken),
+                repository?.Service(service.Address)));
         }
 
         return summaries;
@@ -569,14 +571,17 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         return await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, repository.Service(service.Address));
     }
 
-    private static ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting)
+    /// <param name="definition">The service as the head revision reads it, for the names its stages set; null shows only its links.</param>
+    private static ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting,
+        ServiceDefinition? definition)
     {
         var (status, detail) = ServiceStatus(resource, active, last, state, waiting);
         return new ServiceSummaryDto(resource.Id, resource.Address, resource.Address.Split('/')[^1], status, detail, resource.Valid,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
             Workflow(resource),
-            ServiceDefinition.LinksOf(resource.Definition is null ? null : JsonNode.Parse(resource.Definition)));
+            definition?.Links ?? ServiceDefinition.LinksOf(resource.Definition is null ? null : JsonNode.Parse(resource.Definition)),
+            definition?.Names.Select(n => new ServiceNameDto(n.Name, n.Stage, n.Url)).ToList() ?? []);
     }
 
     /// <summary>What a guest or service names in its definition, and what the latest revision resolved that to.</summary>
@@ -647,7 +652,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var active = runs.Where(r => !RunStatuses.IsTerminal(r.Status)).MinBy(r => r.CreatedAt);
         var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
         return new ServiceDetailDto(
-            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken)),
+            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken), definition),
             guest?.Id,
             resource.ParentAddress,
             resource.DefinitionFile,

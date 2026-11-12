@@ -794,7 +794,9 @@ policy: { approval: manual }
 Each service folder is one deployment instance, such as `home/korriban/krb-app-01/web`, with its own status, approval, and
 failure domain. Octopushy holds nothing about what it is: ports, DNS, routes and verification are stages of its workflow, and
 what they mean is the workflow's. The one exception is `links`: where people open it, which the Inventory shows and an agent
-checks for [uptime](uptime.md). They are not part of the service's hash, so changing them runs nothing. `secrets` and `secretFiles` reach only the workflow's Ansible stages, so a workflow with
+checks for [uptime](uptime.md). They are not part of the service's hash, so changing them runs nothing. The host names a
+stage sets, such as its DNS records, are opened and checked the same way when the workflow declares them: see
+[names a stage sets](#names-a-stage-sets). `secrets` and `secretFiles` reach only the workflow's Ansible stages, so a workflow with
 none refuses them.
 
 ### Maintenance windows
@@ -1117,6 +1119,32 @@ stages:
   does not model that second endpoint: the agent chosen reaches the guest, and is expected to reach the slot's systems
   from there.
 - Nothing removes what a stage wrote when its service is deleted, as for any service today.
+
+## Names a stage sets
+
+A stage of a workflow with `manages: service` may say which of its inputs are the host names it sets, such as the DNS
+records a `dns` stage writes. Octopushy knows nothing of what sets them: `names` is a path into `{ inputs }`.
+[ADR 0007](adr/0007-names-a-stage-sets.md) records why.
+
+```yaml
+stages:
+  - name: dns
+    executor: ansible
+    root: ../../modules/ansible/technitium
+    playbook: records.yml
+    interface: dns
+    names: inputs.dns_records[].name     # each item's name; [] goes through an array
+```
+
+- **Where the stage runs, each name is where the service is opened, and what uptime checks,** as `https://<name>/`, after
+  the service's own `links`. A stage whose interface slot its installation does not bind sets no names.
+- **A link that already opens a host stands for that name,** so a service that needs a path, a port or `http` writes a
+  link with that host, and the name is shown beside it but not checked twice.
+- **Only host names are kept.** A trailing dot is dropped and a name is lower-cased and kept once. A name that is not a
+  host, such as `_dmarc.example.com` or `*.example.com`, or a value that is not a string, is left out.
+- **Names follow the head revision, as links do, and change nothing a run does.** A name is checked from the commit
+  that adds it, so it reads as down until the stage has set it. The inputs it is read from are part of the hash already.
+- `names` is allowed on any stage of `manages: service`, and refused on any other workflow.
 
 ## Later
 

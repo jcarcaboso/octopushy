@@ -321,4 +321,24 @@ public class UptimeTests(PostgresFixture postgres)
         Assert.Equal("web", service["name"]!.GetValue<string>());
         Assert.Equal(["https://web.lab.test/health?full=1", "http://web.lab.test:8080/"], service["links"]!.AsArray().Select(l => l!.GetValue<string>()));
     }
+
+    [Fact]
+    public async Task The_names_a_services_stage_sets_are_shown_opened_and_checked()
+    {
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres,
+            Octopushy.Tests.Definitions.InterfaceTests.Repository(dnsStage: ", names: 'inputs.records[].name'"), clock: clock);
+        var monitor = server.Services.GetRequiredService<UptimeMonitor>();
+        await server.SyncAndTrustAsync();
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Contains("service-http|home/korriban/krb-app-01/web|https://web.example.com/", monitor.Targets.Select(t => t.Key));
+
+        var client = await server.SignedInClientAsync();
+        var service = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!["labs"]![0]!["installations"]![0]!["guests"]![0]!["services"]![0]!;
+        Assert.Equal(["https://web.example.com/"], service["links"]!.AsArray().Select(l => l!.GetValue<string>()));
+        var name = Assert.Single(service["names"]!.AsArray())!;
+        Assert.Equal("web.example.com", name["name"]!.GetValue<string>());
+        Assert.Equal("dns", name["stage"]!.GetValue<string>());
+        Assert.Equal("https://web.example.com/", name["url"]!.GetValue<string>());
+    }
 }

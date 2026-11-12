@@ -8867,6 +8867,25 @@
           }
         }
       },
+      "ServiceNameDto": {
+        "required": [
+          "name",
+          "stage",
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "ServiceStageDto": {
         "required": [
           "name",
@@ -8893,7 +8912,8 @@
           "activeRun",
           "lastRun",
           "workflow",
-          "links"
+          "links",
+          "names"
         ],
         "type": "object",
         "properties": {
@@ -8953,6 +8973,12 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceNameDto"
             }
           }
         }

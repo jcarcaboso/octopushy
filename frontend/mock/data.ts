@@ -202,9 +202,10 @@ export function guestDetail(id: string): GuestDetail | null {
 
 export const appLinks = ["https://app.home.example.org/"];
 
-export const otherServices: { id: string; guest: string; name: string; workflow: string; links: string[] }[] = [
+export const otherServices: { id: string; guest: string; name: string; workflow: string; links: string[]; names?: { name: string; stage: string; url: string }[] }[] = [
   { id: "svc-traefik", guest: "web", name: "traefik", workflow: "traefik@2", links: ["https://traefik.home.example.org/dashboard/"] },
-  { id: "svc-jellyfin", guest: "media", name: "jellyfin", workflow: "compose-app@1", links: ["https://jellyfin.home.example.org/", "https://media.home.example.org/"] },
+  { id: "svc-jellyfin", guest: "media", name: "jellyfin", workflow: "compose-app@1", links: ["https://jellyfin.home.example.org/", "https://media.home.example.org/"],
+    names: [{ name: "jellyfin.home.example.org", stage: "dns", url: "https://jellyfin.home.example.org/" }] },
   { id: "svc-technitium", guest: "dns", name: "technitium", workflow: "compose-app@1", links: ["http://10.15.60.21:5380/"] },
   { id: "svc-pbs", guest: "pbs", name: "proxmox-backup", workflow: "pbs@1", links: ["https://pbs.home.example.org:8007/"] },
   { id: "svc-samba", guest: "nas", name: "samba", workflow: "samba@1", links: [] },
@@ -218,12 +219,12 @@ const guestAddressOf = (id: string) => {
 function serviceSummary(): ServiceSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(resources.app.id);
   return { id: resources.app.id, address: resources.app.address, name: "app", status: state, statusDetail, valid: true, activeRun, lastRun,
-    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks };
+    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks, names: [] };
 }
 
 function otherSummary(s: (typeof otherServices)[number]): ServiceSummary {
   return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: "in-sync", statusDetail: null, valid: true,
-    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links };
+    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [] };
 }
 
 function servicesOf(guestId: string): ServiceSummary[] {

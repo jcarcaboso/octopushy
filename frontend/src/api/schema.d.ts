@@ -2053,6 +2053,11 @@ export interface components {
             retiredAt: null | string;
             runs: components["schemas"]["RunSummaryDto"][];
         };
+        ServiceNameDto: {
+            name: string;
+            stage: string;
+            url: string;
+        };
         ServiceStageDto: {
             name: string;
             executor: string;
@@ -2069,6 +2074,7 @@ export interface components {
             lastRun: null | components["schemas"]["RunSummaryDto"];
             workflow: null | components["schemas"]["WorkflowDto"];
             links: string[];
+            names: components["schemas"]["ServiceNameDto"][];
         };
         SetupRequest: {
             setupCode: string;
