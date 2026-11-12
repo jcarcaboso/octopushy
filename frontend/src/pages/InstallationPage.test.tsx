@@ -28,6 +28,7 @@ function summary(trust: Partial<InstallationTrust> = {}): InstallationSummary {
     hosts: [],
     guests: [],
     unmanagedCount: 0,
+    unmanagedGuests: [],
     trust: { endpoints: [endpoint], untrusted: [endpoint], trustedAt: null, trustedBy: null, managementChanged: false, ...trust },
   };
 }
@@ -122,7 +123,8 @@ describe("installation trust", () => {
     mockApi({ "GET /api/inventory": () => inventory });
     renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory" });
 
-    expect(await screen.findByText("Observed only")).toBeInTheDocument();
+    // On the node's row, and on its details.
+    expect(await screen.findAllByText("Observed only")).toHaveLength(2);
   });
 
   it("marks installations that need trust in the inventory", async () => {
@@ -133,7 +135,6 @@ describe("installation trust", () => {
     mockApi({ "GET /api/inventory": () => inventory });
     renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory" });
 
-    const badge = await screen.findByText("Needs trust");
-    expect(badge.closest("a")).toHaveAttribute("href", `/installations/${id}#trust`);
+    expect(await screen.findByRole("link", { name: "Needs trust" })).toHaveAttribute("href", `/installations/${id}#trust`);
   });
 });

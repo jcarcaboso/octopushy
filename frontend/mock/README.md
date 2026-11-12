@@ -19,8 +19,12 @@ memory: approving, rejecting or cancelling changes it until the server restarts.
 
 ## Scenarios
 
-One lab, `home`, with the Proxmox installation `home/pve01`, seven guests, the service `home/pve01/web/app`,
-three agents, variables and a lab repository with revisions and drafts.
+One lab, `home`, with the Proxmox installation `home/pve01`, seven guests, the service `home/pve01/web/app` and five
+more services with links, three agents, variables and a lab repository with revisions and drafts. A second installation,
+`home/korriban`, has been offline for two days, with its one machine, `nas`.
+
+[/inventory](http://127.0.0.1:5176/inventory) shows uptime from `GET /api/uptime` (mock/uptime.ts): korriban and nas are
+down, jellyfin on media is degraded (its first link answers 502 since 40 minutes ago), and dns has no answers yet.
 
 | Run | What it shows |
 |---|---|

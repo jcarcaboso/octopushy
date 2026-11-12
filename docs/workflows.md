@@ -571,7 +571,7 @@ is not hashed, only what it resolved to, so `@2` and `@2.3` resolving to the sam
 - **Configure:** the guest's inputs, secrets, secret files and access; the workflow; the setup stage's root; and the guest's
   own files outside `guest.yaml` and `services/`. Hardware and network are not part of it, and neither is a schedule, which
   says when an action runs, not what it does.
-- **Service:** `service.yaml` without its description, policy and execution; the service's own files; how its guest is
+- **Service:** `service.yaml` without its description, links, policy and execution; the service's own files; how its guest is
   reached; the workflow; and the roots of all its stages.
 
 Because a root must be inside the workflow's folder or under `modules/`, a change to a module a workflow uses changes its
@@ -783,6 +783,7 @@ not applied otherwise yet.
 # labs/home/proxmox/korriban/guests/krb-app-01/services/web/service.yaml
 schemaVersion: 1
 workflow: web@1                   # a workflow with manages: service
+links: ["https://web.home.example.org/"]   # where people open it: shown and checked, never run
 inputs: { port: 8000 }            # given to every stage
 secrets:
   web_password: { store: proxmox/korriban/krb-app-01/web/web_password }
@@ -791,7 +792,8 @@ policy: { approval: manual }
 
 Each service folder is one deployment instance, such as `home/korriban/krb-app-01/web`, with its own status, approval, and
 failure domain. Octopushy holds nothing about what it is: ports, DNS, routes and verification are stages of its workflow, and
-what they mean is the workflow's. `secrets` and `secretFiles` reach only the workflow's Ansible stages, so a workflow with
+what they mean is the workflow's. The one exception is `links`: where people open it, which the Inventory shows and an agent
+checks for [uptime](uptime.md). They are not part of the service's hash, so changing them runs nothing. `secrets` and `secretFiles` reach only the workflow's Ansible stages, so a workflow with
 none refuses them.
 
 ### Maintenance windows

@@ -8,7 +8,7 @@ import { ServicePage } from "./ServicePage";
 function detail(overrides: Partial<ServiceDetail> = {}, status = "in-sync", statusDetail: string | null = null): ServiceDetail {
   return {
     service: { id: "svc-1", address: "home/korriban/krb-app-01/app", name: "app", status, statusDetail, valid: true, activeRun: null, lastRun: null,
-      workflow: { reference: "web@1", resolved: "web@1.2" } },
+      workflow: { reference: "web@1", resolved: "web@1.2" }, links: [] },
     guestId: "guest-1",
     guestAddress: "home/korriban/krb-app-01",
     definitionFile: "labs/home/proxmox/korriban/guests/krb-app-01/services/app/service.yaml",

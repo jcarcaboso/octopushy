@@ -23,6 +23,7 @@ export const keys = {
   auth: ["auth"] as const,
   overview: ["overview"] as const,
   inventory: ["inventory"] as const,
+  uptime: ["uptime"] as const,
   guest: (id: string) => ["guest", id] as const,
   service: (id: string) => ["service", id] as const,
   installation: (id: string) => ["installation", id] as const,
@@ -75,6 +76,15 @@ export function useInventory() {
     queryKey: keys.inventory,
     queryFn: () => unwrap(api.GET("/api/inventory")),
     refetchInterval: 15_000,
+  });
+}
+
+/** What agents answered about each uptime check; they check about once a minute. */
+export function useUptime() {
+  return useQuery({
+    queryKey: keys.uptime,
+    queryFn: () => unwrap(api.GET("/api/uptime")),
+    refetchInterval: 30_000,
   });
 }
 
