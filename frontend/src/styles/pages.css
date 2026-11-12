@@ -2141,9 +2141,7 @@
 }
 
 .check-row__target {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: var(--text-sm);
 }
 
