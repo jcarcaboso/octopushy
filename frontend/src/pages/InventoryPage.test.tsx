@@ -37,6 +37,7 @@ const media = guest("home/pve01", "pve01", "media", 115, [
   service("home/pve01/media", "arcane", ["https://arcane.lab.test/"], [{ name: "arcane.lab.test", stage: "dns", url: "https://arcane.lab.test/" }]),
 ]);
 const dns = guest("home/pve01", "pve01", "dns", 121);
+const data = guest("home/pve01", "pve01", "data", 111, [service("home/pve01/data", "postgres", ["tcp://10.0.0.111:5432"])]);
 const nas = guest("home/korriban", "korriban", "nas", 200);
 
 const inventory: Inventory = {
@@ -44,7 +45,7 @@ const inventory: Inventory = {
   labs: [{
     id: "lab", address: "home", name: "Home", valid: true, issues: [],
     installations: [
-      installation("pve01", "https://10.0.0.2:8006/", true, [media, dns], [haos]),
+      installation("pve01", "https://10.0.0.2:8006/", true, [media, dns, data], [haos]),
       installation("korriban", "https://10.0.0.3:8006/", false, [nas]),
     ],
   }],
@@ -70,6 +71,7 @@ const uptime = (checking = true): Uptime => ({
     check("guest-ssh", "home/korriban", "korriban", nas.address, "ssh://10.0.0.200:22", "down", 0),
     check("service-http", "home/pve01", "pve01", "home/pve01/media/jellyfin", "https://jellyfin.lab.test/", "down", 97.5),
     check("service-http", "home/pve01", "pve01", "home/pve01/media/jellyfin", "https://media.lab.test/", "up", 100),
+    check("service-tcp", "home/pve01", "pve01", "home/pve01/data/postgres", "tcp://10.0.0.111:5432", "up", 100),
   ],
 });
 
@@ -120,6 +122,16 @@ it("shows the names a service's stages set, opens the first and offers it as a l
   expect(within(details).getByRole("link", { name: "arcane.lab.test" })).toHaveAttribute("href", "https://arcane.lab.test/");
   expect(within(details).getByText(/set by stage/)).toHaveTextContent("set by stage dns");
   expect(within(details).queryByText(/No links/)).not.toBeInTheDocument();
+});
+
+it("checks a tcp link without offering to open it", async () => {
+  show("/inventory?node=home/pve01/pve01&machine=home/pve01/data&service=home/pve01/data/postgres");
+  const details = await screen.findByRole("region", { name: "Details" });
+  expect(within(details).getByRole("heading", { name: "postgres" })).toBeInTheDocument();
+  expect(within(details).queryByRole("link", { name: /^Open/ })).not.toBeInTheDocument();
+  expect(within(details).queryByRole("link", { name: /tcp:/ })).not.toBeInTheDocument();
+  expect(within(details).getAllByText("tcp://10.0.0.111:5432").length).toBeGreaterThan(0);
+  expect(within(details).getByText("Up")).toBeInTheDocument();
 });
 
 it("opens a machine in Proxmox in the same tab as its node", async () => {

@@ -11,7 +11,9 @@
 //!
 //! Uptime checks (`uptime-v1`) use the same probes from the agent process: an SSH banner, and
 //! `http`, one HTTP/1.1 GET whose status line alone is read and reported. They hold no
-//! credential either, and the server decides what the answer means. See docs/uptime.md.
+//! credential either, and the server decides what the answer means. With `uptime-tcp-v1`,
+//! `tcp` opens a connection and closes it, having sent nothing, for a service that does not
+//! speak HTTP, such as a database. See docs/uptime.md.
 //!
 //! Contexts, matched to how the step connects:
 //! - `agent`: the agent process, as the `proxmox` executor's reqwest client. If the process
@@ -49,6 +51,8 @@ use crate::tools::{RuntimeKind, ToolRuntime};
 pub const CAPABILITY: &str = "reachability-v1";
 /// Announced in `Hello` by agents that also answer `http` probes and SSH from the agent process.
 pub const UPTIME_CAPABILITY: &str = "uptime-v1";
+/// Announced in `Hello` by agents that also answer `tcp` probes, from the agent process.
+pub const UPTIME_TCP_CAPABILITY: &str = "uptime-tcp-v1";
 /// The longest request target an `http` probe sends.
 pub const MAX_PATH: usize = 1024;
 /// The most of a response read while looking for its status line.
@@ -124,6 +128,8 @@ enum Protocol {
     Tls,
     Ssh,
     Http,
+    /// A connection that opens, and nothing sent.
+    Tcp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,11 +217,12 @@ fn spec(p: &ReachabilityProbe) -> Result<Spec, String> {
         "tls" => Protocol::Tls,
         "ssh" => Protocol::Ssh,
         "http" => Protocol::Http,
+        "tcp" => Protocol::Tcp,
         other => return Err(format!("unknown protocol {:?}", truncate(other, 16))),
     };
     let tls = match protocol {
         Protocol::Tls => true,
-        Protocol::Ssh => false,
+        Protocol::Ssh | Protocol::Tcp => false,
         Protocol::Http => p.tls,
     };
     let path = match protocol {
@@ -247,6 +254,11 @@ fn spec(p: &ReachabilityProbe) -> Result<Spec, String> {
         "tool" => Context::Tool,
         other => return Err(format!("unknown context {:?}", truncate(other, 16))),
     };
+    // A tool container relays a connection it may not have made yet, so only the agent's own
+    // connection says that one opened.
+    if protocol == Protocol::Tcp && context != Context::Agent {
+        return Err("a tcp probe is made from the agent process only".into());
+    }
     let timeout = match p.timeout_seconds {
         0 => DEFAULT_TIMEOUT,
         s => Duration::from_secs(u64::from(s)).min(MAX_TIMEOUT),
@@ -433,10 +445,10 @@ fn report(id: &str, mut outcome: Outcome, elapsed_ms: u128) -> ReachabilityRepor
     }
 }
 
-/// The agent process: as the `proxmox` executor's client connects. SSH there is an uptime
-/// check's banner read: no proxy carries it.
+/// The agent process: as the `proxmox` executor's client connects. SSH and TCP there are uptime
+/// checks: no proxy carries them.
 async fn agent_process(spec: &Spec) -> Outcome {
-    if spec.protocol == Protocol::Ssh {
+    if matches!(spec.protocol, Protocol::Ssh | Protocol::Tcp) {
         return direct(spec).await;
     }
     let scheme = if spec.tls { "https" } else { "http" };
@@ -501,6 +513,11 @@ async fn speak<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, stream: S) -> Out
             Err(o) => o,
         },
         Protocol::Http => http(spec, stream).await,
+        // Dropping the stream closes it: nothing is sent.
+        Protocol::Tcp => {
+            drop(stream);
+            Outcome::new("reachable", "TCP connection opened")
+        }
     }
 }
 

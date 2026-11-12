@@ -12,7 +12,8 @@ in the mode they are in now (see [installation trust](installation-trust.md)):
 | --- | --- | --- | --- |
 | `proxmox-api` | each host's Proxmox API endpoint the trust covers | a TLS handshake, any certificate | the handshake completes |
 | `guest-ssh` | each active guest with an address (`access.address`, or its static or reserved address) | the SSH identification line, on `access.port` or 22 | an SSH server answers |
-| `service-http` | each of a service's `links`, and `https://<name>/` for each [name its stages set](workflows.md#names-a-stage-sets) that no link already opens | one `GET` of the URL, its status line only | the status is 2xx, 3xx, 401 or 403 |
+| `service-http` | each of a service's `http` and `https` links, and `https://<name>/` for each [name its stages set](workflows.md#names-a-stage-sets) that no link already opens | one `GET` of the URL, its status line only | the status is 2xx, 3xx, 401 or 403 |
+| `service-tcp` | each of a service's `tcp://` links | a TCP connection, closed at once with nothing sent | the connection opens |
 
 An API endpoint several hosts share, such as a cluster's, is checked once and speaks for the installation, not for one
 host.
@@ -27,8 +28,16 @@ links:
   - https://vault.home.example.org/
 ```
 
-Each link must be an absolute `http` or `https` URL with a host and no credentials; at most 16. A link is checked as a
-browser would see it: over TLS, the certificate must be trusted by the agent's own trust store.
+Each link must be an absolute `http` or `https` URL with a host and no credentials, or `tcp://host:port`; at most 16. An
+`http` or `https` link is checked as a browser would see it: over TLS, the certificate must be trusted by the agent's own
+trust store.
+
+**A `tcp://` link is for a service that does not speak HTTP,** such as a database: `tcp://10.15.30.3:5432`. It names a
+host and a port, and nothing else. It is checked, shown in the Inventory, and never offered to open. Up says that
+something listens there, not that the service answers its own protocol: a database's readiness is its container's
+healthcheck and its workflow's verification. A `tcp://` link with the host of a name a stage sets stands for that name,
+as any link does, so a database's name is not also checked over https. [ADR 0008](adr/0008-tcp-links.md) records why
+the check is a plain connection.
 
 A workflow can also declare the host names a stage sets, such as the DNS records of compose's `dns` stage ([names a stage
 sets](workflows.md#names-a-stage-sets)). Each is opened and checked as `https://<name>/`, so its certificate too must be
@@ -39,7 +48,9 @@ is better written as a link with that host: the link then stands for the name.
 
 Agents do, as they do all network work; the server never connects anywhere itself. An agent that announces `uptime-v1`
 answers uptime probes from its own process: an SSH banner read, and `http`, one HTTP/1.1 `GET` whose status line alone is
-read and reported. Nothing else is sent: no credential, cookie or body.
+read and reported. Nothing else is sent: no credential, cookie or body. One that also announces `uptime-tcp-v1`, from
+the release after 0.9.2, answers `tcp`, a connection opened and closed with nothing sent. **A `tcp://` link goes only to such agents:**
+while none is connected it stays pending, and nothing is recorded.
 
 - **The agents that reach it.** Each check keeps a pool: the agents that connected to its target and spoke its protocol
   in the last day. A check goes to the one of them that reached it last, then to the rest of the pool, then to the

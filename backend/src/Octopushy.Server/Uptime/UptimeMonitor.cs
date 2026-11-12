@@ -32,6 +32,9 @@ public sealed class UptimeMonitor(
 {
     public const string Capability = "uptime-v1";
 
+    /// <summary>Announced by agents that also answer <c>tcp</c> probes: only they are asked to check a <c>tcp://</c> link.</summary>
+    public const string TcpCapability = "uptime-tcp-v1";
+
     /// <summary>Probe IDs start with this, so an answer is routed here and never taken as reachability evidence.</summary>
     public const string ProbePrefix = "up-";
 
@@ -192,7 +195,7 @@ public sealed class UptimeMonitor(
     /// the others by name.
     /// </summary>
     private static List<AgentSession> Candidates(Slot slot, IEnumerable<AgentSession> sessions) =>
-        sessions.Where(s => !slot.Asked.Contains(s.AgentId))
+        sessions.Where(s => !slot.Asked.Contains(s.AgentId) && (slot.Target.Protocol != "tcp" || s.Capabilities.Contains(TcpCapability)))
             .OrderByDescending(s => slot.Reached.TryGetValue(s.AgentId, out var at) ? at : DateTimeOffset.MinValue)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
@@ -344,7 +347,7 @@ public sealed class UptimeMonitor(
                     ? (true, $"HTTP {code}")
                     : (false, code == 0 ? "no HTTP status was read" : $"HTTP {code}");
             case "reachable":
-                return (true, target.Protocol == "ssh" ? "SSH answered" : "TLS handshake completed");
+                return (true, target.Protocol switch { "ssh" => "SSH answered", "tcp" => "TCP connection opened", _ => "TLS handshake completed" });
             default:
                 return (false, detail.Length > 0 ? detail : report.Status);
         }

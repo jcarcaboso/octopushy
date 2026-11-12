@@ -327,9 +327,10 @@ public sealed class ServerHarness : IAsyncDisposable
         ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], runtime, null);
 
     /// <summary>An agent that also answers uptime probes, each as <paramref name="responder"/> says, at once.</summary>
-    public Task<FakeAgent> ConnectUptimeAgentAsync(string name, Func<ReachabilityProbe, ReachabilityReport> responder) =>
-        ConnectAsync(name, [], [TofuStateStore.AgentCapability, WorkerReachability.Capability, Octopushy.Server.Uptime.UptimeMonitor.Capability],
-            "podman", responder);
+    /// <param name="tcp">Whether it also answers <c>tcp</c> probes, as an agent announcing <c>uptime-tcp-v1</c> does.</param>
+    public Task<FakeAgent> ConnectUptimeAgentAsync(string name, Func<ReachabilityProbe, ReachabilityReport> responder, bool tcp = false) =>
+        ConnectAsync(name, [], [TofuStateStore.AgentCapability, WorkerReachability.Capability, Octopushy.Server.Uptime.UptimeMonitor.Capability,
+            .. tcp ? new[] { Octopushy.Server.Uptime.UptimeMonitor.TcpCapability } : []], "podman", responder);
 
     /// <summary>
     /// An agent that advertises only <c>nix</c>, with no labels and no reachability reports, as one that builds templates' images

@@ -62,7 +62,7 @@ function check(
     resource,
     url,
     status: pending ? "pending" : down ? "down" : "up",
-    detail: pending ? null : down ? (detail ?? "timeout: connecting timed out after 10s") : kind === "service-http" ? "HTTP 200" : kind === "guest-ssh" ? "SSH answered" : "TLS handshake completed",
+    detail: pending ? null : down ? (detail ?? "timeout: connecting timed out after 10s") : kind === "service-http" ? "HTTP 200" : kind === "service-tcp" ? "TCP connection opened" : kind === "guest-ssh" ? "SSH answered" : "TLS handshake completed",
     since: pending ? null : ago(ongoing ? ongoing.start : last ? last.start - last.minutes! : 43_000),
     checkedAt: pending ? null : ago(0.4),
     elapsedMs: pending || down ? null : latency[95],
@@ -101,7 +101,8 @@ export function uptime(inventory: Inventory): Uptime {
       for (const service of guest.services) {
         service.links.forEach((link, i) => {
           const broken = service.name === "jellyfin" && i === 0;
-          checks.push(check(`service-http|${service.address}|${link}`, "service-http", installation.address, guest.host, service.address, link, {
+          const kind = link.startsWith("tcp://") ? "service-tcp" : "service-http";
+          checks.push(check(`${kind}|${service.address}|${link}`, kind, installation.address, guest.host, service.address, link, {
             ms: 25 + i * 9,
             pending: guest.name === "dns",
             incidents: broken

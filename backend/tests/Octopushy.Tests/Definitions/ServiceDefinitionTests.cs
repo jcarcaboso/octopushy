@@ -359,6 +359,28 @@ public class ServiceDefinitionTests
     }
 
     [Fact]
+    public void A_tcp_link_names_a_host_and_a_port()
+    {
+        using var test = Repository();
+        test.Write(ServiceFile, Service + "\nlinks: [\"tcp://10.15.30.3:5432\", \"tcp://db.lab.test:5432\"]\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Address), Errors(test));
+        Assert.Equal(["tcp://10.15.30.3:5432", "tcp://db.lab.test:5432"], repository.Service(Address)!.Links);
+    }
+
+    [Theory]
+    [InlineData("tcp://10.15.30.3")]
+    [InlineData("tcp://10.15.30.3:5432/db")]
+    [InlineData("tcp://user@10.15.30.3:5432")]
+    [InlineData("tcp://10.15.30.3:0")]
+    public void A_tcp_link_has_a_port_and_nothing_else(string link)
+    {
+        using var test = Repository();
+        test.Write(ServiceFile, Service + $"\nlinks: [\"{link}\"]\n");
+        Assert.Contains("links", Errors(test));
+    }
+
+    [Fact]
     public void A_file_in_the_services_folder_changes_its_hash_and_another_module_does_not()
     {
         using var test = Repository();
