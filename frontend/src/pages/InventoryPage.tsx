@@ -23,6 +23,7 @@ import {
   installationNote,
   isProblem,
   nodeEndpoint,
+  opensInBrowser,
   percentOf,
   proxmoxGuestUrl,
   proxmoxTab,
@@ -357,6 +358,7 @@ function MachineDetail({ node, machine, span }: { node: NodeEntry; machine: Mach
 
 function ServiceDetail({ service, span }: { service: ServiceEntry; span: UptimeWindow }) {
   const s = service.service;
+  const opens = s.links.find(opensInBrowser);
   return (
     <>
       <DetailHeader
@@ -371,8 +373,8 @@ function ServiceDetail({ service, span }: { service: ServiceEntry; span: UptimeW
         }
         actions={
           <>
-            {s.links[0] ? (
-              <a className="button button--small button--primary" href={s.links[0]} target="_blank" rel="noreferrer">
+            {opens ? (
+              <a className="button button--small button--primary" href={opens} target="_blank" rel="noreferrer">
                 Open <ExternalLink size={13} aria-hidden="true" />
               </a>
             ) : null}
@@ -394,9 +396,13 @@ function ServiceDetail({ service, span }: { service: ServiceEntry; span: UptimeW
               const name = s.names.find((n) => n.url === link);
               return (
                 <li key={link}>
-                  <a href={link} target="_blank" rel="noreferrer" className="mono">
-                    {name ? name.name : link}
-                  </a>
+                  {opensInBrowser(link) ? (
+                    <a href={link} target="_blank" rel="noreferrer" className="mono">
+                      {name ? name.name : link}
+                    </a>
+                  ) : (
+                    <span className="mono">{link}</span>
+                  )}
                   {name ? <span className="muted small"> set by stage {name.stage}</span> : null}
                 </li>
               );

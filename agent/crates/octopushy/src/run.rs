@@ -135,6 +135,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         .chain([
             reachability::CAPABILITY.to_owned(),
             reachability::UPTIME_CAPABILITY.to_owned(),
+            reachability::UPTIME_TCP_CAPABILITY.to_owned(),
         ])
         .collect();
     let exec = Arc::new(ExecutorConfig {

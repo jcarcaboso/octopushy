@@ -12,7 +12,7 @@ namespace Octopushy.Server.Uptime;
 /// Stable while what is checked stays the same: the kind, the subject and <paramref name="Url"/>. A new address, endpoint or
 /// link is a new check, with its own history.
 /// </param>
-/// <param name="Kind"><c>proxmox-api</c>, <c>guest-ssh</c> or <c>service-http</c>.</param>
+/// <param name="Kind"><c>proxmox-api</c>, <c>guest-ssh</c>, <c>service-http</c>, or <c>service-tcp</c> for a <c>tcp://</c> link.</param>
 /// <param name="Installation">The installation it belongs to, <c>lab/installation</c>.</param>
 /// <param name="Host">
 /// The Proxmox host: the host whose API endpoint this is, or the guest's host. Null for an API endpoint several hosts share,
@@ -37,6 +37,7 @@ public sealed record UptimeTarget(
     public const string ProxmoxApi = "proxmox-api";
     public const string GuestSsh = "guest-ssh";
     public const string ServiceHttp = "service-http";
+    public const string ServiceTcp = "service-tcp";
 
     /// <summary>The most checks kept, so a repository cannot make the agents probe without bound.</summary>
     public const int MaxTargets = 1000;
@@ -95,8 +96,12 @@ public sealed record UptimeTarget(
                     foreach (var link in service.Links)
                     {
                         var uri = new Uri(link);
-                        targets.Add(new($"{ServiceHttp}|{service.Address}|{link}", ServiceHttp, installation.Address, guest.Host, service.Address,
-                            link, "http", uri.DnsSafeHost, uri.Port, uri.DnsSafeHost, uri.PathAndQuery, uri.Scheme == Uri.UriSchemeHttps));
+                        if (uri.Scheme == "tcp")
+                            targets.Add(new($"{ServiceTcp}|{service.Address}|{link}", ServiceTcp, installation.Address, guest.Host, service.Address,
+                                link, "tcp", uri.DnsSafeHost, uri.Port, null, null, false));
+                        else
+                            targets.Add(new($"{ServiceHttp}|{service.Address}|{link}", ServiceHttp, installation.Address, guest.Host, service.Address,
+                                link, "http", uri.DnsSafeHost, uri.Port, uri.DnsSafeHost, uri.PathAndQuery, uri.Scheme == Uri.UriSchemeHttps));
                     }
                 }
             }

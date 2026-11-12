@@ -5,13 +5,13 @@ import type { UptimeCheck } from "../../api/types";
 import { RelativeTime } from "../../components/RelativeTime";
 import { Skeleton } from "../../components/States";
 import { plural } from "../../lib/format";
-import { barState, dailyMean, formatPercent } from "../../lib/inventory";
+import { barState, dailyMean, formatPercent, isServiceCheck } from "../../lib/inventory";
 import { Figure, Tile } from "./Tile";
 
 const kinds = [
-  { kind: "proxmox-api", label: "Nodes" },
-  { kind: "guest-ssh", label: "Machines" },
-  { kind: "service-http", label: "Services" },
+  { kind: "proxmox-api", label: "Nodes", of: (c: UptimeCheck) => c.kind === "proxmox-api" },
+  { kind: "guest-ssh", label: "Machines", of: (c: UptimeCheck) => c.kind === "guest-ssh" },
+  { kind: "service", label: "Services", of: isServiceCheck },
 ];
 
 const mean = (values: number[]) => (values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length);
@@ -82,8 +82,8 @@ export function UptimeTile() {
         {!data.checking ? <p className="uptime-off">Nothing checks uptime right now: no connected agent answers uptime checks.</p> : null}
         <Figure value={formatPercent(month)} caption={plural(checks.length, "check")} />
         <ul className="uptime-kinds">
-          {kinds.map(({ kind, label }) => {
-            const own = checks.filter((c) => c.kind === kind);
+          {kinds.map(({ kind, label, of }) => {
+            const own = checks.filter(of);
             return own.length > 0 ? <KindRow key={kind} label={label} checks={own} /> : null;
           })}
         </ul>

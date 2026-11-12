@@ -341,4 +341,60 @@ public class UptimeTests(PostgresFixture postgres)
         Assert.Equal("dns", name["stage"]!.GetValue<string>());
         Assert.Equal("https://web.example.com/", name["url"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task A_tcp_link_is_checked_by_opening_a_connection_and_only_by_agents_that_can()
+    {
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres,
+            Services.Repository(Linked.Replace("  - http://web.lab.test:8080/", "  - tcp://10.1.0.31:5432")), clock: clock);
+        var monitor = server.Services.GetRequiredService<UptimeMonitor>();
+        await server.SyncAndTrustAsync();
+        const string key = "service-tcp|home/korriban/krb-app-01/web|tcp://10.1.0.31:5432";
+        async Task<Octopushy.Server.Data.UptimeCheck?> Check() =>
+            await server.QueryAsync(db => db.UptimeChecks.AsNoTracking().FirstOrDefaultAsync(c => c.Key == key));
+        async Task MinuteAsync(int from)
+        {
+            for (var second = from; second < from + 60; second += 5)
+            {
+                clock.Now = Start.AddSeconds(second);
+                await monitor.TickAsync(CancellationToken.None);
+            }
+        }
+
+        // An agent without uptime-tcp-v1 is never asked, and nothing is recorded.
+        var older = new List<ReachabilityProbe>();
+        await server.ConnectUptimeAgentAsync("a-older", p => { older.Add(p); return Lab(p); });
+        await MinuteAsync(0);
+        var target = Assert.Single(monitor.Targets, t => t.Key == key);
+        Assert.Equal(("tcp", "10.1.0.31", 5432, UptimeTarget.ServiceTcp, "home/korriban/krb-app-01/web"),
+            (target.Protocol, target.HostName, target.Port, target.Kind, target.Resource));
+        Assert.Contains(older, p => p.Protocol == "http");
+        Assert.DoesNotContain(older, p => p.Protocol == "tcp");
+        Assert.Null(await Check());
+
+        // One that announces it opens a connection from its own process, and that is up.
+        var newer = new List<ReachabilityProbe>();
+        await server.ConnectUptimeAgentAsync("b-newer", p =>
+        {
+            newer.Add(p);
+            return p.Protocol == "tcp" ? new() { ProbeId = p.ProbeId, Status = "reachable", ElapsedMs = 2 } : Lab(p);
+        }, tcp: true);
+        await MinuteAsync(60);
+        var probe = Assert.Single(newer, p => p.Protocol == "tcp");
+        Assert.Equal(("10.1.0.31", 5432u, "agent", false, "", ""), (probe.Host, probe.Port, probe.Context, probe.Tls, probe.Path, probe.TlsTrust));
+        var check = await Check();
+        Assert.Equal((true, "TCP connection opened", "b-newer"), (check!.Up, check.Detail, check.Agent));
+    }
+
+    [Theory]
+    [InlineData("reachable", true, "TCP connection opened")]
+    [InlineData("refused", false, "10.1.0.31:5432 refused the connection")]
+    public void A_tcp_check_is_up_when_the_connection_opens(string status, bool up, string detail)
+    {
+        var target = new UptimeTarget("k", UptimeTarget.ServiceTcp, "home/korriban", "korriban", "home/korriban/krb-app-01/web", "tcp://10.1.0.31:5432",
+            "tcp", "10.1.0.31", 5432, null, null, false);
+        var report = new ReachabilityReport { ProbeId = "up-1", Status = status, Detail = status == "refused" ? detail : "" };
+        Assert.Equal((up, detail), UptimeMonitor.Judge(target, report));
+    }
 }

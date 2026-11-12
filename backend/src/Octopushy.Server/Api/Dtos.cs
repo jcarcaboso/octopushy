@@ -649,7 +649,7 @@ public sealed record TemplateBuildDto(
 public sealed record UptimeDto(bool Checking, int IntervalSeconds, DateTimeOffset GeneratedAt, IReadOnlyList<UptimeCheckDto> Checks);
 
 /// <summary>
-/// One uptime check. <c>Kind</c> is <c>proxmox-api</c>, <c>guest-ssh</c> or <c>service-http</c>; <c>Host</c> the Proxmox host,
+/// One uptime check. <c>Kind</c> is <c>proxmox-api</c>, <c>guest-ssh</c>, <c>service-http</c> or <c>service-tcp</c>; <c>Host</c> the Proxmox host,
 /// null for an API endpoint several hosts share; <c>Resource</c> the guest or service address. <c>Status</c> is <c>up</c>,
 /// <c>down</c>, or <c>pending</c> until a first answer.
 /// <para>

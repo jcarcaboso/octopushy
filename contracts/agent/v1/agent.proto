@@ -178,7 +178,8 @@ message ServerMessage {
     CancelAttempt cancel = 3;
     ResultAck result_ack = 4;
     // Sent only to an agent whose Hello lists the capability "reachability-v1"; the "http"
-    // protocol and "ssh" from the "agent" context only to one that also lists "uptime-v1".
+    // protocol and "ssh" from the "agent" context only to one that also lists "uptime-v1", and
+    // "tcp" only to one that also lists "uptime-tcp-v1".
     ReachabilityProbe probe = 5;
   }
 }
@@ -226,6 +227,8 @@ message ReachabilityProbe {
   // authenticated and nothing is sent after the handshake or the banner.
   // "http" (uptime-v1): one HTTP/1.1 GET of path, over TLS when tls is set, and only its
   // status line is read. No credential, cookie or body is sent.
+  // "tcp" (uptime-tcp-v1): a connection that opens is "reachable"; it is closed at once, and
+  // nothing is sent. From the "agent" context only.
   string protocol = 2;
   // A DNS name or an IP address, without brackets.
   string host = 3;

@@ -198,12 +198,14 @@ public sealed record ServiceDefinition(
 
     /// <summary>
     /// Where people open the service, from <c>links</c> in <c>service.yaml</c>: shown in the Inventory and checked for uptime,
-    /// never part of what a run does. Only absolute http and https URLs with a host are kept.
+    /// never part of what a run does. Only absolute http and https URLs with a host are kept, and <c>tcp://host:port</c> for a
+    /// service that does not speak HTTP.
     /// </summary>
     public static IReadOnlyList<string> LinksOf(JsonNode? definition) =>
         (definition?["links"] as JsonArray)?
             .Select(l => l is JsonValue v && v.TryGetValue<string>(out var text) ? text : null)
-            .Where(l => Uri.TryCreate(l, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.Host.Length > 0)
+            .Where(l => Uri.TryCreate(l, UriKind.Absolute, out var uri) && uri.Host.Length > 0
+                && (uri.Scheme is "http" or "https" || uri.Scheme == "tcp" && uri.Port is > 0 and <= 65535 && uri.PathAndQuery is "" or "/"))
             .Select(l => l!)
             .Distinct(StringComparer.Ordinal)
             .ToList() ?? [];

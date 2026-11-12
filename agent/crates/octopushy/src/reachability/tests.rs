@@ -203,6 +203,51 @@ async fn ssh_from_the_agent_process_reads_the_banner() {
 }
 
 #[tokio::test]
+async fn tcp_from_the_agent_process_opens_a_connection_and_sends_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = u32::from(listener.local_addr().unwrap().port());
+    let received = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await.unwrap();
+        bytes
+    });
+    let o = run(probe("tcp", "127.0.0.1", port, "", "agent")).await;
+    assert_eq!(o.status, "reachable", "{o:?}");
+    assert_eq!(o.detail, "TCP connection opened");
+    assert_eq!(o.http_status, 0);
+    // The probe closes the connection at once, having sent nothing.
+    let bytes = tokio::time::timeout(Duration::from_secs(5), received)
+        .await
+        .expect("the probe closes its connection")
+        .unwrap();
+    assert!(bytes.is_empty(), "{bytes:?}");
+}
+
+#[tokio::test]
+async fn tcp_refused_is_refused() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = u32::from(listener.local_addr().unwrap().port());
+    drop(listener);
+    let o = run(probe("tcp", "127.0.0.1", port, "", "agent")).await;
+    assert_eq!(o.status, "refused", "{o:?}");
+}
+
+#[tokio::test]
+async fn tcp_is_probed_from_the_agent_process_only() {
+    // A tool container relays a connection it may never have made: it cannot say one opened.
+    let port = talker(b"").await;
+    let o = prober(RuntimeKind::Podman)
+        .probe(
+            &probe("tcp", "127.0.0.1", port, "", "tool"),
+            &CancellationToken::new(),
+        )
+        .await;
+    assert_eq!(o.status, "error", "{o:?}");
+    assert!(o.detail.contains("agent process"), "{o:?}");
+}
+
+#[tokio::test]
 async fn http_reports_the_status_code_and_sends_only_a_plain_get() {
     let (port, seen) =
         http_listener(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await;

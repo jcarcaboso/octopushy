@@ -107,7 +107,7 @@ export function buildTree(inventory: Inventory, uptime: Uptime | undefined): Nod
           .filter((g) => g.host === host.name || (host === hosts[0] && !hosts.some((h) => h.name === g.host)))
           .map((guest): MachineEntry => {
             const services = guest.services.map((service): ServiceEntry => {
-              const serviceChecks = checks.filter((c) => c.kind === "service-http" && c.resource === service.address);
+              const serviceChecks = checks.filter((c) => isServiceCheck(c) && c.resource === service.address);
               return { key: service.address, service, checks: serviceChecks, liveness: livenessOf(serviceChecks) };
             });
             const guestChecks = checks.filter((c) => c.kind === "guest-ssh" && c.resource === guest.address);
@@ -160,6 +160,12 @@ function matches(haystack: (string | number | null | undefined)[], text: string)
 
 export const nodeText = (n: NodeEntry) => [n.host.name, n.installation.name, n.installation.address, nodeEndpoint(n)];
 export const machineText = (m: MachineEntry) => [m.guest.name, m.guest.address, m.guest.accessAddress, m.guest.vmid, m.guest.workflow?.reference];
+/** A service's check, of an http(s) link or a tcp:// one. */
+export const isServiceCheck = (c: UptimeCheck) => c.kind === "service-http" || c.kind === "service-tcp";
+
+/** A link people can open in a browser: a tcp:// link is only checked. */
+export const opensInBrowser = (link: string) => link.startsWith("http://") || link.startsWith("https://");
+
 export const serviceText = (s: ServiceEntry) => [s.service.name, s.service.address, ...s.service.links];
 export const unmanagedText = (u: UnmanagedEntry) => [u.guest.name, u.guest.vmid, u.guest.status, ...u.guest.tags];
 

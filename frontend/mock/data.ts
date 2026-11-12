@@ -208,7 +208,7 @@ export const otherServices: { id: string; guest: string; name: string; workflow:
     names: [{ name: "jellyfin.home.example.org", stage: "dns", url: "https://jellyfin.home.example.org/" }] },
   { id: "svc-technitium", guest: "dns", name: "technitium", workflow: "compose-app@1", links: ["http://10.15.60.21:5380/"] },
   { id: "svc-pbs", guest: "pbs", name: "proxmox-backup", workflow: "pbs@1", links: ["https://pbs.home.example.org:8007/"] },
-  { id: "svc-samba", guest: "nas", name: "samba", workflow: "samba@1", links: [] },
+  { id: "svc-samba", guest: "nas", name: "samba", workflow: "samba@1", links: ["tcp://10.15.60.40:445"] },
 ];
 
 const guestAddressOf = (id: string) => {

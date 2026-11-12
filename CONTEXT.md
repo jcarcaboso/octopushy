@@ -190,7 +190,7 @@ people open the service and what uptime checks, beside its links.
 _Avoid_: DNS record, which is what one kind of stage writes; the engine knows no DNS
 
 **Uptime check**:
-Whether a node's Proxmox API, a machine's SSH or a service's link or name answers, asked of an agent about once a minute and kept
+Whether a node's Proxmox API, a machine's SSH or a service's link or name answers, or for a `tcp://` link, listens, asked of an agent about once a minute and kept
 for 30 days. It is liveness from one agent's place in the network, not proof that anything works.
 _Avoid_: Health or verification, which a workflow establishes; reachability, which decides where work may go
 
