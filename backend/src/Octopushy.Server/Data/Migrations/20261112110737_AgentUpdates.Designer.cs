@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261112102159_AgentUpdates")]
+    [Migration("20261112110737_AgentUpdates")]
     partial class AgentUpdates
     {
         /// <inheritdoc />
@@ -1930,6 +1930,77 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_tofu_state_versions_resource_id_stage_version");
 
                     b.ToTable("tofu_state_versions", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.UptimeBucket", b =>
+                {
+                    b.Property<string>("CheckKey")
+                        .HasMaxLength(2600)
+                        .HasColumnType("character varying(2600)")
+                        .HasColumnName("check_key");
+
+                    b.Property<DateTimeOffset>("StartsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("starts_at");
+
+                    b.Property<int>("Down")
+                        .HasColumnType("integer")
+                        .HasColumnName("down");
+
+                    b.Property<long>("LatencyMsTotal")
+                        .HasColumnType("bigint")
+                        .HasColumnName("latency_ms_total");
+
+                    b.Property<int>("Up")
+                        .HasColumnType("integer")
+                        .HasColumnName("up");
+
+                    b.HasKey("CheckKey", "StartsAt")
+                        .HasName("pk_uptime_buckets");
+
+                    b.HasIndex("StartsAt")
+                        .HasDatabaseName("ix_uptime_buckets_starts_at");
+
+                    b.ToTable("uptime_buckets", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.UptimeCheck", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(2600)
+                        .HasColumnType("character varying(2600)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Agent")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("agent");
+
+                    b.Property<DateTimeOffset>("CheckedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("checked_at");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("detail");
+
+                    b.Property<int?>("ElapsedMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("elapsed_ms");
+
+                    b.Property<DateTimeOffset>("Since")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("since");
+
+                    b.Property<bool>("Up")
+                        .HasColumnType("boolean")
+                        .HasColumnName("up");
+
+                    b.HasKey("Key")
+                        .HasName("pk_uptime_checks");
+
+                    b.ToTable("uptime_checks", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.User", b =>

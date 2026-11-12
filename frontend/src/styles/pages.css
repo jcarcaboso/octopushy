@@ -2178,6 +2178,7 @@
     padding: var(--space-4);
   }
 }
+
 /* Agents: one line per agent that opens in place, then the tokens waiting to be used */
 .agents {
   background: var(--surface);
