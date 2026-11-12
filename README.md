@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.1:
+Milestone 1 has shipped, up to release 0.9.2:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,18 @@ Milestone 1 has shipped, up to release 0.9.1:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.2:
+
+- A rebuilt Overview page, from #78: five tiles for guests (a ring with a legend that opens the inventory on those
+  statuses), what needs you (failed runs and repository problems), recent runs, uptime over 30 days by kind, and
+  agents that are missing or have an update. `GET /api/overview` gains `failed`, the last run of each guest and
+  service the inventory shows as failed, and `week`, the runs of the last 7 days counted by status.
+- The Runs page, from #79: "Approve all N" in the Waiting for you header approves each shown run with its own plan
+  fingerprint; a refusal does not stop the rest, and the dialog names the runs that were not approved. Earlier shows
+  the 50 newest finished runs and says when more were cut. Selects draw their own chevron in both themes.
+
+No agent contract or database change: upgrade the backend; agents need no update.
 
 New in 0.9.1:
 
