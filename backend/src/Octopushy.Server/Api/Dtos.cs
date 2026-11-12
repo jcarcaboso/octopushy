@@ -524,13 +524,34 @@ public sealed record AgentDto(
     string? ToolRuntime,
     DateTimeOffset CertificateExpiresAt,
     int RunningAttempts,
+    IReadOnlyList<AgentWork> Work,
+    AgentGuest? Guest,
+    AgentUpdateState Update,
     bool Draining = false,
     bool ReportsReachability = false,
     IReadOnlyList<Agents.ReachabilityEntry>? Reachability = null);
 
+/// <summary>
+/// An attempt assigned to or running on an agent. <c>Operation</c> and <c>Address</c> are as a run summary has them, <c>Step</c>
+/// is the step's name, and <c>Since</c> is when the attempt started, or was assigned when it has not started yet.
+/// </summary>
+public sealed record AgentWork(Guid RunId, long RunNumber, string Operation, string Address, string Step, string Status, DateTimeOffset Since);
+
+/// <summary>The guest an agent runs on, from the head revision: <c>DeclaredVersion</c> is its <c>inputs.worker_agent_version</c>.</summary>
+public sealed record AgentGuest(Guid ResourceId, string Address, string? DeclaredVersion);
+
+/// <summary>
+/// Whether an agent can be updated to the server's version from here, and where an update stands: <c>current</c>,
+/// <c>available</c>, <c>unavailable</c>, <c>queued</c>, <c>updating</c> or <c>failed</c>. <c>Reason</c> says why it is
+/// unavailable or why it failed. <c>ChangeId</c> and <c>RunId</c> are the change carrying the update and its latest run.
+/// See docs/worker-routing.md.
+/// </summary>
+public sealed record AgentUpdateState(string State, string? TargetVersion, string? Reason, Guid? ChangeId, Guid? RunId);
+
 public sealed record AgentUpdate(IReadOnlyList<string>? Labels, int? MaxConcurrency, bool? Disabled, bool? Draining = null);
 
-public sealed record TokenRequest(string? Name, IReadOnlyList<string> Labels, int? MaxConcurrency, int? ExpiresInMinutes);
+/// <summary>An enrollment token to create. <c>Labels</c> may be left out: the agent then has none.</summary>
+public sealed record TokenRequest(string? Name, int? MaxConcurrency, int? ExpiresInMinutes, IReadOnlyList<string>? Labels = null);
 
 public sealed record CreatedToken(Guid Id, string Token, string Command, DateTimeOffset ExpiresAt, string CaFingerprint);
 

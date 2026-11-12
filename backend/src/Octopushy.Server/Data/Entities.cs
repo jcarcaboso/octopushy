@@ -1108,6 +1108,38 @@ public sealed class AgentRecord
     public string? PreviousCertificateSerial { get; set; }
 
     public DateTimeOffset CertificateExpiresAt { get; set; }
+
+    /// <summary><see cref="AgentUpdateStates"/>: an update asked for and not settled, or one that failed. Null otherwise.</summary>
+    public string? UpdateState { get; set; }
+
+    /// <summary>When the update was asked for: the queue's order.</summary>
+    public DateTimeOffset? UpdateRequestedAt { get; set; }
+
+    /// <summary>The operator who asked: the change is committed and approved as them.</summary>
+    public string? UpdateRequestedBy { get; set; }
+
+    /// <summary>The version the update sets, the server's own when it was started.</summary>
+    public string? UpdateTargetVersion { get; set; }
+
+    /// <summary>The change that carries the update, once it is committed.</summary>
+    public Guid? UpdateChangeId { get; set; }
+
+    /// <summary>When the change was applied: the agent has <see cref="Agents.AgentUpdates.ComeBackWithin"/> from then to report the target.</summary>
+    public DateTimeOffset? UpdateAppliedAt { get; set; }
+
+    /// <summary>Why the update failed, for people.</summary>
+    public string? UpdateDetail { get; set; }
+
+    /// <summary>Whether the update paused the agent, so it lifts that pause and never one a person set.</summary>
+    public bool UpdatePaused { get; set; }
+}
+
+/// <summary>Where an agent's update stands, when one was asked for. See docs/worker-routing.md.</summary>
+public static class AgentUpdateStates
+{
+    public const string Queued = "queued";
+    public const string Updating = "updating";
+    public const string Failed = "failed";
 }
 
 public sealed class EnrollmentToken

@@ -522,6 +522,10 @@ public sealed partial class RunEngine(
             : (false, null);
         if (preApproval.Approved)
             return true;
+        // An agent update approves its guest's provision plan only when that changes no resource.
+        if (run.Operation == Operations.Provision && resourceChanges == 0 && deletes == 0 && !removesVm
+            && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
+            return true;
 
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();

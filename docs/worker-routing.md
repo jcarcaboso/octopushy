@@ -160,6 +160,48 @@ protection, configure and pipeline Ansible runs. It waits with `update the agent
 never sent work without that evidence. Configure previews and pipeline OpenTofu stages still run on older agents.
 Once one agent per site is updated, its work flows again.
 
+## Updating an agent from Agents
+
+An agent that runs on a guest Octopushy deploys can be updated from **Agents** with **Update to `<version>`**. The
+version is always the server's own: one version is shared by the server, the agent and the frontend, and nothing is
+looked up in a registry.
+
+**Which guest an agent runs on.** A guest of the head revision whose `inputs` set `worker_agent_version`, and whose
+`inputs.worker_agent_name`, or else its own name, is the agent's name. That is what the worker workflows enroll the
+agent with. When several guests match, the one whose `network.address` or `network.reservedAddress` is the address
+the agent connects from; when that does not settle it, none. `inputs.worker_agent_digest`, when set, wins over the
+version on the guest.
+
+**What an update does,** one agent at a time:
+
+1. The agent is paused, so it takes no new work and finishes what it runs. A pause set by hand before stays.
+2. A change to the guest's definition is committed as the operator who asked: `worker_agent_version` becomes the
+   server's version and `worker_agent_digest` is removed. The other inputs and the file's comments are kept.
+3. The change is approved in the same click, whatever `policy.approval` says: its setup run, and its provision plan
+   when that changes no resource. A destructive setup under `destructive: manual` still waits for a person.
+4. The guest's setup run rolls the new image out. Another agent runs it, since an agent never configures its own guest.
+5. The update ends when the agent connects reporting the server's version. Its pause is lifted then, unless a person
+   had set it.
+
+An update asked for while another is in flight is queued and starts, in the order asked, when that one ends.
+**Update all** asks for every agent that can be updated, in name order. A queued update can be taken back.
+
+**An update fails** when its change is refused, its run fails or ends uncertain, or the agent is not back on the
+server's version 15 minutes after the change is applied. The pause is lifted, and every queued update is dropped, so
+one bad release cannot take every agent down in turn. The agent shows why, and asking again retries.
+
+**When the button is not offered,** the agent says why:
+
+- No guest names it. An agent that ships with the server, such as the internal one, is updated with the server.
+- Several guests name it, and none is at the address it connects from.
+- The head revision cannot be read, or has errors.
+- Committing from the UI is off, or the repository has no credential to push with.
+- The guest's installation is observed only, the guest has errors, or its workflow has no setup stage.
+- The guest declares the server's version already: its setup has not rolled it out yet.
+- No other connected agent that is not paused has the ansible executor and the guest's labels. Reachability of the
+  guest is not checked: that takes a probe, and a request for agents never sends one. Such a run waits for an agent
+  with fresh evidence, as any setup does.
+
 ## Where it shows
 
 **Agents** lists, for each connected agent, the endpoint, context and image, its state, the time since the last

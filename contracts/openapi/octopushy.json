@@ -2415,6 +2415,158 @@
         }
       }
     },
+    "/api/agents/{id}/update": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "updateAgentVersion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "cancelAgentUpdate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/agents/update": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "updateAllAgents",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/agents/{id}": {
       "patch": {
         "tags": [
@@ -4405,7 +4557,10 @@
           "executors",
           "toolRuntime",
           "certificateExpiresAt",
-          "runningAttempts"
+          "runningAttempts",
+          "work",
+          "guest",
+          "update"
         ],
         "type": "object",
         "properties": {
@@ -4469,6 +4624,25 @@
             "type": "integer",
             "format": "int32"
           },
+          "work": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentWork"
+            }
+          },
+          "guest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentGuest"
+              }
+            ]
+          },
+          "update": {
+            "$ref": "#/components/schemas/AgentUpdateState"
+          },
           "draining": {
             "type": "boolean",
             "default": false
@@ -4485,6 +4659,29 @@
             "items": {
               "$ref": "#/components/schemas/ReachabilityEntry"
             }
+          }
+        }
+      },
+      "AgentGuest": {
+        "required": [
+          "resourceId",
+          "address",
+          "declaredVersion"
+        ],
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "address": {
+            "type": "string"
+          },
+          "declaredVersion": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -4523,6 +4720,85 @@
               "null",
               "boolean"
             ]
+          }
+        }
+      },
+      "AgentUpdateState": {
+        "required": [
+          "state",
+          "targetVersion",
+          "reason",
+          "changeId",
+          "runId"
+        ],
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "targetVersion": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "changeId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "runId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "AgentWork": {
+        "required": [
+          "runId",
+          "runNumber",
+          "operation",
+          "address",
+          "step",
+          "status",
+          "since"
+        ],
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runNumber": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -7827,7 +8103,9 @@
           "expiresAt",
           "usable",
           "probing",
-          "leafSha256"
+          "leafSha256",
+          "name",
+          "resourceId"
         ],
         "type": "object",
         "properties": {
@@ -7880,6 +8158,19 @@
               "null",
               "string"
             ]
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "resourceId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -9181,7 +9472,6 @@
       "TokenRequest": {
         "required": [
           "name",
-          "labels",
           "maxConcurrency",
           "expiresInMinutes"
         ],
@@ -9192,12 +9482,6 @@
               "null",
               "string"
             ]
-          },
-          "labels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           },
           "maxConcurrency": {
             "type": [
@@ -9212,6 +9496,15 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "labels": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

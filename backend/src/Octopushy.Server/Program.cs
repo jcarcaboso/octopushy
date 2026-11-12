@@ -65,6 +65,7 @@ builder.Services.AddSingleton<InventoryFaults>();
 builder.Services.AddSingleton<Planner>();
 builder.Services.AddSingleton<WorkflowCatalog>();
 builder.Services.AddSingleton<ChangeService>();
+builder.Services.AddSingleton<AgentUpdates>();
 if (!generatingDocument && settings.RunBackgroundServices)
 {
     builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySync>());
