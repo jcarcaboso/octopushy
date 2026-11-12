@@ -781,6 +781,31 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             .OrderBy(r => r.Address)
             .ToListAsync(cancellationToken);
         var agents = await db.Agents.AsNoTracking().CountAsync(a => !a.Disabled, cancellationToken);
+
+        // The last run of each guest and service the inventory shows as failed, by the same rule it uses.
+        var guestAddresses = guests.Select(g => g.Address).ToList();
+        var services = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Service && r.RetiredAt == null && guestAddresses.Contains(r.ParentAddress!))
+            .ToListAsync(cancellationToken);
+        var serviceRuns = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
+        var failed = guests.Select(g => (Resource: g, Run: runs.GetValueOrDefault(g.Id)))
+            .Where(x => GuestStatus(x.Resource, x.Run.Active, x.Run.Last).Status == GuestStatuses.Failed)
+            .Concat(services.Select(s => (Resource: s, Run: serviceRuns.GetValueOrDefault(s.Id)))
+                .Where(x => ServiceStatus(x.Resource, x.Run.Active, x.Run.Last, null, null).Status == GuestStatuses.Failed))
+            .Select(x => (x.Resource, Last: x.Run.Last!))
+            .OrderByDescending(x => x.Last.CreatedAt)
+            .Take(50)
+            .Select(x => Summary(x.Last, (x.Resource.Address, x.Resource.Kind)))
+            .ToList();
+
+        var since = clock.GetUtcNow().AddDays(-7);
+        var week = await db.Runs.AsNoTracking().Where(r => r.CreatedAt >= since)
+            .GroupBy(r => r.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count, cancellationToken);
+        int Week(string status) => week.GetValueOrDefault(status);
+        var unfinished = week.Where(p => !RunStatuses.IsTerminal(p.Key)).Sum(p => p.Value);
+
         return new OverviewDto(
             repository,
             counts,
@@ -788,7 +813,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             agents,
             attention.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
             observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt)).ToList(),
-            recent.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList());
+            recent.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
+            failed,
+            new OverviewWeekDto(week.Values.Sum(), Week(RunStatuses.Succeeded), Week(RunStatuses.Failed), Week(RunStatuses.Cancelled), unfinished));
     }
 
     private InstallationSummaryDto InstallationSummary(

@@ -508,7 +508,12 @@ public sealed record OverviewDto(
     int AgentsTotal,
     IReadOnlyList<RunSummaryDto> Attention,
     IReadOnlyList<ObserveErrorDto> ObserveErrors,
-    IReadOnlyList<RunSummaryDto> Recent);
+    IReadOnlyList<RunSummaryDto> Recent,
+    IReadOnlyList<RunSummaryDto> Failed,
+    OverviewWeekDto Week);
+
+/// <summary>The runs created in the last 7 days, by status. Unfinished holds every status that is not succeeded, failed or cancelled.</summary>
+public sealed record OverviewWeekDto(int Total, int Succeeded, int Failed, int Cancelled, int Unfinished);
 
 public sealed record AgentDto(
     Guid Id,
