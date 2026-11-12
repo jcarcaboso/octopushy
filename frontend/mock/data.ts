@@ -422,6 +422,18 @@ export function inventory(): Inventory {
   };
 }
 
+/** The runs created in the last 7 days, by status, as the server counts them. */
+function week(all: RunSummary[]): Overview["week"] {
+  const since = Date.now() - 7 * 86_400_000;
+  const recent = all.filter((r) => Date.parse(r.createdAt) >= since);
+  const count = (...names: string[]) => recent.filter((r) => names.includes(r.status)).length;
+  const succeeded = count("succeeded");
+  const failed = count("failed");
+  const cancelled = count("cancelled");
+  const unfinished = count("queued", "running", "awaiting-approval", "blocked", "uncertain");
+  return { total: succeeded + failed + cancelled + unfinished, succeeded, failed, cancelled, unfinished };
+}
+
 export function overview(): Overview {
   const statuses = guests.map((g) => status(g.id).status);
   const count = (...names: string[]) => statuses.filter((s) => names.includes(s)).length;
@@ -438,6 +450,9 @@ export function overview(): Overview {
     attention: all.filter((r) => ["awaiting-approval", "blocked", "uncertain"].includes(r.status)).reverse(),
     observeErrors: [],
     recent: all.slice(0, 15),
+    // The last run of each guest or service, when it failed. `all` is newest first.
+    failed: all.filter((r, i) => r.status === "failed" && all.findIndex((o) => o.resourceId === r.resourceId) === i).slice(0, 50),
+    week: week(all),
   };
 }
 

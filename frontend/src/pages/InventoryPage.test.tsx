@@ -142,6 +142,29 @@ it("filters by text across nodes, machines, services and links, and by problems"
   expect(await screen.findByText("Nothing matches these filters")).toBeInTheDocument();
 });
 
+it("keeps only the machines in the statuses the address names, and shows all again when asked", async () => {
+  const user = userEvent.setup();
+  const failing: Inventory = {
+    ...inventory,
+    labs: [{
+      ...inventory.labs[0],
+      installations: [
+        installation("pve01", "https://10.0.0.2:8006/", true, [media, { ...dns, status: "failed" }], [haos]),
+        installation("korriban", "https://10.0.0.3:8006/", false, [nas]),
+      ],
+    }],
+  };
+  mockApi({ "GET /api/inventory": () => failing, "GET /api/uptime": () => uptime() });
+  renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory?status=failed,uncertain" });
+  const nodes = await screen.findByRole("region", { name: "Nodes" });
+  expect(within(nodes).getAllByRole("button").map((b) => b.textContent)).toEqual([expect.stringContaining("pve01")]);
+  expect(within(column("Machines")).getAllByRole("button", { name: /media|dns|haos/ }).map((b) => b.textContent)).toEqual([expect.stringContaining("dns")]);
+  expect(screen.queryByText(/Unmanaged/)).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("link", { name: "Show all" }));
+  expect(within(column("Nodes")).getAllByRole("button")).toHaveLength(2);
+});
+
 it("says when no agent checks uptime", async () => {
   show("/inventory", false);
   expect(await screen.findByText("Nothing checks uptime right now")).toBeInTheDocument();

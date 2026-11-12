@@ -63,3 +63,20 @@ export function StatusBadge({ status, title }: { status: string; title?: string 
     </span>
   );
 }
+
+/**
+ * A status as its icon alone, for tight rows: the shape carries it, the color only supports it. It names the status to a
+ * screen reader, unless `decorative` says the text beside it already does.
+ */
+export function StatusMark({ status, size = 15, decorative = false }: { status: string; size?: number; decorative?: boolean }) {
+  const style = statusStyle(status);
+  const Icon = icons[style.icon];
+  return (
+    <Icon
+      className={`status-mark status-mark--${style.tone}${style.icon === "spinner" ? " badge__icon--spin" : ""}`}
+      {...(decorative ? { "aria-hidden": true } : { role: "img", "aria-label": style.label })}
+      size={size}
+      strokeWidth={2.25}
+    />
+  );
+}

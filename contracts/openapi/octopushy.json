@@ -7842,7 +7842,9 @@
           "agentsTotal",
           "attention",
           "observeErrors",
-          "recent"
+          "recent",
+          "failed",
+          "week"
         ],
         "type": "object",
         "properties": {
@@ -7877,6 +7879,47 @@
             "items": {
               "$ref": "#/components/schemas/RunSummaryDto"
             }
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDto"
+            }
+          },
+          "week": {
+            "$ref": "#/components/schemas/OverviewWeekDto"
+          }
+        }
+      },
+      "OverviewWeekDto": {
+        "required": [
+          "total",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "unfinished"
+        ],
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cancelled": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unfinished": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },
