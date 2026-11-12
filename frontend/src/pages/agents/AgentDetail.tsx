@@ -79,7 +79,9 @@ function Reaches({ agent }: { agent: Agent }) {
             <span className="reach-line__main">
               <span>
                 {entry.resourceId ? <Link to={`/guests/${entry.resourceId}`}>{entryName(entry)}</Link> : <span>{entryName(entry)}</span>}{" "}
-                <span className="muted">{kinds[entry.kind] ?? humanize(entry.kind)}</span>
+                <span className="muted">
+                  {kinds[entry.kind] ?? humanize(entry.kind)}, {entry.context === "agent" ? "from the agent" : "from its tools"}
+                </span>
               </span>
               {entry.detail ? <span className="muted small break">{entry.detail}</span> : null}
             </span>

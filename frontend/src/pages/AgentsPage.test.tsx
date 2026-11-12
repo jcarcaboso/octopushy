@@ -108,7 +108,7 @@ it("opens a row in place: every route it checked, its work and its settings", as
   expect(toggle).toHaveAttribute("aria-expanded", "true");
 
   const lines = screen.getByRole("list", { name: "Every route site-a checked" });
-  expect(lines).toHaveTextContent("home/korriban Proxmox API");
+  expect(lines).toHaveTextContent("home/korriban Proxmox API, from the agent");
   expect(lines).toHaveTextContent("Timeout · probing");
   expect(lines).toHaveTextContent("connecting timed out");
   expect(lines).toHaveTextContent("home/pve01 Snippet upload");
