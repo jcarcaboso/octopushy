@@ -36,13 +36,21 @@ Agents do, as they do all network work; the server never connects anywhere itsel
 answers uptime probes from its own process: an SSH banner read, and `http`, one HTTP/1.1 `GET` whose status line alone is
 read and reported. Nothing else is sent: no credential, cookie or body.
 
-- **One agent per check.** A check goes to the agent that answered it last while it stays connected, else to the first by
-  name. One agent that reaches everything is enough; what another agent would see is not asked.
+- **The agents that reach it.** Each check keeps a pool: the agents that connected to its target and spoke its protocol
+  in the last day. A check goes to the one of them that reached it last, then to the rest of the pool, then to the
+  other agents by name. One agent at a time; the first that connects settles it, whatever the target answers, so an
+  HTTP 503 is down without asking anyone else.
+- **A failed connection moves on.** An agent that cannot connect (a timeout, a refused or unreachable address) may only
+  lack a route, so the next agent is asked at once. The check is down when every connected agent failed and one of
+  them is in the pool, with what that agent saw; or when nobody is in the pool, so no agent has reached the target at
+  all. When the agents in the pool are not connected, or one of them did not answer or could not check, and the
+  others all fail, nothing is recorded.
+- **The pool is in memory.** It starts empty when the server starts, and is learned again from the first answers.
 - **About once a minute.** New checks are spread over the minute. At most 8 uptime probes are awaited per agent, and none
   is sent while 32 messages are queued for it, so assignments always have room.
-- **No answer is not down.** A probe the agent does not answer within its timeout plus 30 seconds is dropped and records
-  nothing. Neither does an agent that says it cannot check faithfully (`unsupported`), such as when its environment would
-  send the request through a proxy. Every other answer is about the target: up, or down with what the agent saw.
+- **No answer is not down.** A probe the agent does not answer within its timeout plus 30 seconds is dropped, and the next
+  agent is asked. So is an agent that says it cannot check faithfully (`unsupported`), such as when its environment would
+  send the request through a proxy. Neither counts as a failed connection.
 - **No agent, no history.** While no connected agent announces `uptime-v1`, nothing is checked, the Inventory says so, and
   the history has a gap.
 
@@ -63,6 +71,7 @@ changes is a new check with its own history.
 
 - **Up is a route and a protocol.** It does not show that a credential works or that the service does what it should. A
   service whose health needs more than its status code says so in its own workflow's verification.
-- **It is what one agent sees.** A failure may be the network between that agent and the target.
+- **It is what the agents see.** Down means none of the connected agents could reach the target, among them one that
+  used to; a failure may still be the network between them and the target.
 - **The Proxmox check does not verify identity.** It accepts any certificate, so it says that something answers at the
   endpoint, not that it is the installation. Work that uses credentials still goes through trust and reachability.

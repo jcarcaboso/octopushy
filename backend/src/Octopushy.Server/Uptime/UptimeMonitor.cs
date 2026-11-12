@@ -10,12 +10,16 @@ namespace Octopushy.Server.Uptime;
 /// Checks every <see cref="UptimeTarget"/> about once a minute through a connected agent that answers uptime probes, and
 /// records what it answers. The server never connects anywhere itself: agents do the network work, as they do for steps.
 /// <list type="bullet">
-/// <item>A check goes to the agent that answered it last, while it is connected; else to the first by name. One agent
-/// that reaches everything is enough. What another agent would see is not asked.</item>
+/// <item>Each check keeps a pool: the agents that reached its target, that is connected and spoke the protocol, in the last
+/// day. A check goes to the one of them that reached it last, else to the others by name. An agent that cannot connect
+/// says something about its own route, not about the target: the check goes on to the next agent at once. Down is
+/// recorded when an agent of the pool cannot connect and no other agent can either, or when no agent reached it at all;
+/// when only agents outside the pool are connected and none connects, nothing is recorded. An agent that connects but
+/// gets a bad answer, such as HTTP 503, joins the pool and its answer stands.</item>
 /// <item>Probes are few per session and never fill the queue assignments share. An answer counts only for a probe of
 /// the same session still awaited; one that never comes is not evidence of anything, so it records nothing.</item>
-/// <item>An agent that says it cannot make the check faithfully, such as through a proxy, records nothing either. Every
-/// other answer is about the target: up, or down with why.</item>
+/// <item>An agent that says it cannot make the check faithfully, such as through a proxy, records nothing either; like
+/// one that does not answer, the next agent is asked.</item>
 /// </list>
 /// See docs/uptime.md.
 /// </summary>
@@ -36,6 +40,8 @@ public sealed class UptimeMonitor(
     public static readonly TimeSpan Retention = TimeSpan.FromDays(31);
     private static readonly TimeSpan TargetsRefresh = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan AnswerGrace = TimeSpan.FromSeconds(30);
+    /// <summary>How long an agent stays in a check's pool after it last reached the target.</summary>
+    public static readonly TimeSpan PoolLifetime = TimeSpan.FromDays(1);
     public const int TimeoutSeconds = 10;
     /// <summary>Uptime probes awaited per session; the agent runs a few at a time and refuses more than 32 queued.</summary>
     public const int MaxOutstanding = 8;
@@ -54,10 +60,37 @@ public sealed class UptimeMonitor(
         public UptimeTarget Target { get; set; } = target;
         public DateTimeOffset NextAt { get; set; } = next;
         public string? OutstandingId { get; set; }
-        public Guid? LastSession { get; set; }
+
+        /// <summary>The pool: agents that reached the target, by agent ID, and when they last did. In memory only.</summary>
+        public Dictionary<Guid, DateTimeOffset> Reached { get; } = [];
+
+        /// <summary>When the current round sent its first probe; null between rounds.</summary>
+        public DateTimeOffset? RoundStart { get; set; }
+
+        /// <summary>The agents this round asked.</summary>
+        public HashSet<Guid> Asked { get; } = [];
+
+        /// <summary>The down answer this round would record: the first from the pool, else the first.</summary>
+        public Down? Down { get; set; }
+
+        /// <summary>Whether an agent of the pool did not answer this round, or could not check: it might have reached it.</summary>
+        public bool PoolUnsure { get; set; }
+
+        public void EndRound()
+        {
+            NextAt = (RoundStart ?? NextAt) + Interval;
+            RoundStart = null;
+            Asked.Clear();
+            Down = null;
+            PoolUnsure = false;
+        }
     }
 
-    private sealed record Pending(string Key, Guid Session, DateTimeOffset Until);
+    private sealed record Pending(string Key, Guid Session, Guid Agent, DateTimeOffset Until);
+
+    private sealed record Down(string Detail, string Agent, bool FromPool, DateTimeOffset At);
+
+    private sealed record Verdict(string Key, bool Up, string Detail, int? ElapsedMs, string Agent, DateTimeOffset At);
 
     /// <summary>The checks as of the last refresh, for the API.</summary>
     public IReadOnlyList<UptimeTarget> Targets
@@ -83,6 +116,7 @@ public sealed class UptimeMonitor(
 
         var sessions = connections.All.Where(s => s.Capabilities.Contains(Capability)).OrderBy(s => s.Name, StringComparer.Ordinal).ToList();
         var sends = new List<(AgentSession Session, ReachabilityProbe Probe)>();
+        var verdicts = new List<Verdict>();
         lock (_gate)
         {
             foreach (var (id, pending) in _outstanding.ToList())
@@ -90,28 +124,46 @@ public sealed class UptimeMonitor(
                 if (pending.Until > now)
                     continue;
                 _outstanding.Remove(id);
+                // No answer says nothing about the target: the round goes on to the next agent.
                 if (_slots.TryGetValue(pending.Key, out var slot) && slot.OutstandingId == id)
-                    slot.OutstandingId = null;
+                {
+                    (slot.OutstandingId, slot.NextAt) = (null, now);
+                    slot.PoolUnsure |= slot.Reached.ContainsKey(pending.Agent);
+                }
             }
 
             if (sessions.Count == 0)
                 return;
             var busy = _outstanding.Values.GroupBy(p => p.Session).ToDictionary(g => g.Key, g => g.Count());
-            foreach (var slot in _slots.Values.Where(s => s.OutstandingId is null && s.NextAt <= now).OrderBy(s => s.NextAt))
+            bool Free(AgentSession s) => busy.GetValueOrDefault(s.Id) < MaxOutstanding && (s.Responder is not null || s.Queued < MaxQueued);
+            foreach (var slot in _slots.Values.Where(s => s.OutstandingId is null && s.NextAt <= now).OrderBy(s => s.NextAt).ToList())
             {
-                bool Free(AgentSession s) => busy.GetValueOrDefault(s.Id) < MaxOutstanding && (s.Responder is not null || s.Queued < MaxQueued);
-                var session = sessions.FirstOrDefault(s => s.Id == slot.LastSession && Free(s)) ?? sessions.FirstOrDefault(Free);
-                if (session is null)
-                    break;
+                foreach (var gone in slot.Reached.Where(r => now - r.Value > PoolLifetime).Select(r => r.Key).ToList())
+                    slot.Reached.Remove(gone);
+                var candidates = Candidates(slot, sessions);
+                if (candidates.Count == 0)
+                {
+                    // Every connected agent was asked this round, and none reached the target.
+                    if (Conclude(slot) is { } verdict)
+                        verdicts.Add(verdict);
+                    continue;
+                }
+
+                if (candidates.FirstOrDefault(Free) is not { } session)
+                    continue;
                 var probe = ProbeFor(slot.Target);
                 slot.OutstandingId = probe.ProbeId;
-                slot.LastSession = session.Id;
-                slot.NextAt = now + Interval;
-                _outstanding[probe.ProbeId] = new(slot.Target.Key, session.Id, now + TimeSpan.FromSeconds(TimeoutSeconds) + AnswerGrace);
+                slot.RoundStart ??= now;
+                slot.Asked.Add(session.AgentId);
+                slot.NextAt = slot.RoundStart.Value + Interval;
+                _outstanding[probe.ProbeId] = new(slot.Target.Key, session.Id, session.AgentId, now + TimeSpan.FromSeconds(TimeoutSeconds) + AnswerGrace);
                 busy[session.Id] = busy.GetValueOrDefault(session.Id) + 1;
                 sends.Add((session, probe));
             }
         }
+
+        foreach (var verdict in verdicts)
+            await StoreAsync(verdict, cancellationToken);
 
         foreach (var (session, probe) in sends)
         {
@@ -126,10 +178,37 @@ public sealed class UptimeMonitor(
                 lock (_gate)
                 {
                     if (_outstanding.Remove(probe.ProbeId, out var pending) && _slots.TryGetValue(pending.Key, out var slot))
+                    {
+                        slot.Asked.Remove(pending.Agent);
                         (slot.OutstandingId, slot.NextAt) = (null, now);
+                    }
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// The connected agents this round has not asked yet: the pool first, the one that reached the target last first, then
+    /// the others by name.
+    /// </summary>
+    private static List<AgentSession> Candidates(Slot slot, IEnumerable<AgentSession> sessions) =>
+        sessions.Where(s => !slot.Asked.Contains(s.AgentId))
+            .OrderByDescending(s => slot.Reached.TryGetValue(s.AgentId, out var at) ? at : DateTimeOffset.MinValue)
+            .ThenBy(s => s.Name, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// Ends a round in which no agent reached the target: down when an agent of the pool could not connect and none of the
+    /// pool left it unsure, or when there is no pool; else nothing, since the agents that answered may simply have no route
+    /// there.
+    /// </summary>
+    private static Verdict? Conclude(Slot slot)
+    {
+        var down = slot.Down;
+        var key = slot.Target.Key;
+        var record = down is not null && (down.FromPool && !slot.PoolUnsure || slot.Reached.Count == 0);
+        slot.EndRound();
+        return record ? new Verdict(key, false, down!.Detail, null, down.Agent, down.At) : null;
     }
 
     private static ReachabilityProbe ProbeFor(UptimeTarget target) => new()
@@ -192,7 +271,7 @@ public sealed class UptimeMonitor(
         if (!report.ProbeId.StartsWith(ProbePrefix, StringComparison.Ordinal))
             return false;
         var received = clock.GetUtcNow();
-        UptimeTarget target;
+        Verdict? verdict = null;
         lock (_gate)
         {
             if (!_outstanding.TryGetValue(report.ProbeId, out var pending) || pending.Session != session.Id || pending.Until <= received
@@ -204,23 +283,48 @@ public sealed class UptimeMonitor(
 
             _outstanding.Remove(report.ProbeId);
             slot.OutstandingId = null;
-            target = slot.Target;
+            var judged = Judge(slot.Target, report);
+            if (Reached(report))
+            {
+                // It connected and spoke the protocol: it is in the pool, and its answer stands.
+                slot.Reached[session.AgentId] = received;
+                if (judged is { } j)
+                    verdict = new(slot.Target.Key, j.Up, j.Detail, j.Up ? (int)Math.Min(report.ElapsedMs, int.MaxValue) : null, session.Name, received);
+                slot.EndRound();
+            }
+            else
+            {
+                // It could not connect, or could not check: that may be its own route. The next agent is asked at once.
+                slot.PoolUnsure |= judged is null && slot.Reached.ContainsKey(session.AgentId);
+                if (judged is { } j && (slot.Down is null || (!slot.Down.FromPool && slot.Reached.ContainsKey(session.AgentId))))
+                    slot.Down = new(j.Detail, session.Name, slot.Reached.ContainsKey(session.AgentId), received);
+                slot.NextAt = received;
+                var connected = connections.All.Where(s => s.Capabilities.Contains(Capability));
+                if (Candidates(slot, connected).Count == 0)
+                    verdict = Conclude(slot);
+            }
         }
 
-        if (Judge(target, report) is not { } verdict)
-            return true;
+        if (verdict is not null)
+            await StoreAsync(verdict, cancellationToken);
+        return true;
+    }
+
+    /// <summary>Whether the agent connected to the target and spoke its protocol, whatever the target answered.</summary>
+    public static bool Reached(ReachabilityReport report) => report.Status == "reachable";
+
+    private async Task StoreAsync(Verdict verdict, CancellationToken cancellationToken)
+    {
         try
         {
             await using var scope = scopes.CreateAsyncScope();
-            await RecordAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), target.Key, verdict.Up, verdict.Detail,
-                verdict.Up ? (int)Math.Min(report.ElapsedMs, int.MaxValue) : null, session.Name, received, cancellationToken);
+            await RecordAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), verdict.Key, verdict.Up, verdict.Detail, verdict.ElapsedMs,
+                verdict.Agent, verdict.At, cancellationToken);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            logger.LogWarning(e, "Recording an uptime answer for {Key} failed.", target.Key);
+            logger.LogWarning(e, "Recording an uptime answer for {Key} failed.", verdict.Key);
         }
-
-        return true;
     }
 
     /// <summary>
