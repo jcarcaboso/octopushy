@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory · Launchpad</title>
+<!--
+  04 · Launchpad. A browser start page: service tiles are the hero, the search box is a launcher
+  (type, arrow to a tile, Enter opens it). Hosts sit in a compact health strip at the top.
+  URL hash for testing: #q=fleet  #group=category  #live=down,warn  #urls=1  #win=d7  #detail=svc:mrb-crt-01/fleet  #detail=node:korriban
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --bg: #eef1f6;
+  --bg-glow: rgb(47 91 211 / 13%);
+  --surface: #ffffff;
+  --surface-2: #f6f8fb;
+  --surface-3: #e9edf3;
+  --border: #dbe1ea;
+  --border-strong: #c2cbd8;
+  --text: #141b27;
+  --muted: #536074;
+  --faint: #6d788a;
+  --accent: #2f5bd3;
+  --accent-soft: #e5ecfc;
+  --accent-text: #1f4fbf;
+  --up: #1d8a4a;
+  --warn: #b26b00;
+  --down: #cf2f2c;
+  --none: #7c8698;
+  --up-soft: #e3f3e9;
+  --warn-soft: #fcf0d8;
+  --down-soft: #fde8e7;
+  --none-soft: #eceff3;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 14px rgb(16 24 40 / 6%);
+  --shadow-hi: 0 2px 4px rgb(16 24 40 / 8%), 0 14px 32px rgb(16 24 40 / 14%);
+  --mono-l: .66; --mono-c: .12;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c1018;
+    --bg-glow: rgb(47 91 211 / 22%);
+    --surface: #151b26;
+    --surface-2: #1a212e;
+    --surface-3: #232c3b;
+    --border: #283244;
+    --border-strong: #3a465b;
+    --text: #e7ecf3;
+    --muted: #a3aec0;
+    --faint: #8692a6;
+    --accent: #5b82ec;
+    --accent-soft: #1c2a4d;
+    --accent-text: #8fadf7;
+    --up: #3ccf78;
+    --warn: #f0b03c;
+    --down: #ff6b66;
+    --none: #8d97a8;
+    --up-soft: #12301f;
+    --warn-soft: #36290d;
+    --down-soft: #3a1616;
+    --none-soft: #222a37;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 18px rgb(0 0 0 / 25%);
+    --shadow-hi: 0 2px 4px rgb(0 0 0 / 40%), 0 16px 36px rgb(0 0 0 / 45%);
+    --mono-l: .60; --mono-c: .11;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 80px; }
+body {
+  margin: 0; font: 14px/1.45 var(--font); color: var(--text); background: var(--bg);
+  background-image: radial-gradient(1100px 420px at 50% -120px, var(--bg-glow), transparent 70%);
+  background-repeat: no-repeat; min-height: 100vh;
+}
+a { color: var(--accent-text); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 0 28px 96px; }
+
+/* status glyphs: shape + color */
+.gl { display: inline-block; width: 10px; height: 10px; flex: none; vertical-align: -1px; }
+.s-up { color: var(--up); } .s-warn { color: var(--warn); } .s-down { color: var(--down); } .s-unknown { color: var(--none); }
+.fill-up { fill: var(--up); } .fill-warn { fill: var(--warn); } .fill-down { fill: var(--down); } .fill-unknown { fill: var(--border-strong); }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 16px; padding: 18px 0 14px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
+.logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #4b74e6, #2f5bd3 55%, #2445a8); display: grid; place-items: center; box-shadow: 0 2px 6px rgb(47 91 211 / 35%); }
+.rev { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; min-width: 0; }
+.rev code { font: 12px var(--mono); background: var(--surface); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; color: var(--text); }
+.rev span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.counts { margin-left: auto; display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+.counts b { color: var(--text); font-weight: 650; }
+.counts .obs { display: inline-flex; gap: 6px; align-items: center; }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 3px var(--up-soft); }
+
+/* host pills */
+.hosts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.hpill { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 5px 6px 5px 6px; box-shadow: var(--shadow); }
+.hpill.is-down { border-color: color-mix(in srgb, var(--down) 45%, var(--border)); background: color-mix(in srgb, var(--down-soft) 55%, var(--surface)); }
+.hname { display: flex; align-items: center; gap: 7px; border: 0; background: none; cursor: pointer; padding: 3px 4px 3px 8px; border-radius: 999px; }
+.hname:hover { background: var(--surface-3); }
+.hname b { font-weight: 650; }
+.hname small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.meter { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meter i { display: block; width: 30px; height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.meter i > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.meter i.na { background: repeating-linear-gradient(-45deg, var(--surface-3) 0 3px, var(--border) 3px 5px); }
+.meter em { font-style: normal; min-width: 24px; color: var(--text); }
+.pve { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--muted); text-decoration: none; background: var(--surface-2); border: 1px solid var(--border); }
+.pve:hover { color: var(--accent-text); border-color: var(--accent); }
+.offline-tag { font-size: 11px; color: var(--down); font-weight: 600; }
+
+/* hero */
+.hero { text-align: center; padding: 34px 0 22px; }
+.hello { color: var(--muted); font-size: 13px; margin-bottom: 14px; letter-spacing: .01em; }
+.hello time { display: block; font-size: 44px; font-weight: 250; color: var(--text); letter-spacing: -.03em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.search { position: relative; max-width: 660px; margin: 0 auto; }
+.search svg.mag { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); color: var(--faint); pointer-events: none; }
+.search input {
+  width: 100%; font: 400 19px var(--font); color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 17px 110px 17px 54px; box-shadow: var(--shadow-hi); outline: none;
+}
+.search input:focus { border-color: var(--accent); box-shadow: var(--shadow-hi), 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+.search kbd, .hint kbd { font: 11px var(--mono); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--muted); background: var(--surface-2); }
+.search .slash { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); }
+.hint { margin-top: 10px; font-size: 12px; color: var(--faint); min-height: 18px; }
+.hint b { color: var(--text); font-weight: 600; }
+
+/* toolbar */
+.bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: center; margin: 4px 0 26px; }
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 5px 11px; border-radius: 7px; cursor: pointer; font-size: 12.5px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.seg button:hover { color: var(--text); background: var(--surface-2); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.seg button .n { font-variant-numeric: tabular-nums; color: var(--faint); font-weight: 400; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-right: 2px; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 0; background: none; padding: 4px; }
+.toggle .sw { width: 30px; height: 18px; border-radius: 9px; background: var(--border-strong); position: relative; transition: background .15s; }
+.toggle .sw::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgb(0 0 0 / 25%); }
+.toggle[aria-pressed="true"] .sw { background: var(--accent); }
+.toggle[aria-pressed="true"] .sw::after { transform: translateX(12px); }
+
+/* groups */
+.host { margin-top: 30px; }
+.host-h { display: flex; align-items: baseline; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
+.host-h h2 { font-size: 21px; margin: 0; letter-spacing: -.02em; display: flex; gap: 9px; align-items: center; }
+.host-h h2 .gl { width: 12px; height: 12px; }
+.host-h .facts { font-size: 12.5px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.host-h .facts b { color: var(--text); font-weight: 600; }
+.host-h a { margin-left: auto; font-size: 12.5px; text-decoration: none; }
+.host-h .off { color: var(--down); font-weight: 600; font-size: 12.5px; }
+.guest { margin: 0 0 22px; }
+.guest-h { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.guest-h h3 { margin: 0; font: 600 13.5px var(--font); color: var(--text); display: flex; gap: 7px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 0 6px; font-size: 11.5px; line-height: 19px; color: var(--muted); white-space: nowrap; }
+.chip.mono { font-family: var(--mono); font-size: 11px; }
+.chip.t-danger { color: var(--down); border-color: color-mix(in srgb, var(--down) 35%, var(--border)); background: var(--down-soft); }
+.chip.t-attention { color: #7442c8; border-color: #d8c9f4; background: #f3edfd; }
+.chip.t-uncertain { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); background: var(--warn-soft); }
+@media (prefers-color-scheme: dark) { .chip.t-attention { color: #c3a8f5; border-color: #4a3678; background: #261c3d; } }
+.mini-beats { width: 96px; height: 10px; border-radius: 2px; overflow: hidden; }
+.guest-h .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.guest-h .tools a { text-decoration: none; }
+.noserv { font-size: 12.5px; color: var(--faint); padding: 8px 14px; border: 1px dashed var(--border-strong); border-radius: 12px; }
+.nos { font-size: 12px; color: var(--faint); font-style: italic; }
+.guest.bare { margin-bottom: 12px; } .guest.bare .guest-h { margin: 0; }
+.cat-h { display: flex; align-items: baseline; gap: 10px; margin: 28px 0 12px; }
+.cat-h h2 { font-size: 19px; margin: 0; text-transform: capitalize; letter-spacing: -.01em; }
+.cat-h span { color: var(--faint); font-size: 12.5px; }
+
+/* tiles */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(262px, 1fr)); gap: 14px; }
+.grid + .grid { margin-top: 10px; }
+.tile {
+  position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px 16px 18px;
+  box-shadow: var(--shadow); transition: transform .12s, box-shadow .12s, border-color .12s; overflow: hidden; min-width: 0;
+}
+.tile.has-url:hover, .tile.hi { transform: translateY(-2px); box-shadow: var(--shadow-hi); border-color: var(--border-strong); }
+.tile.hi { border-color: var(--accent); box-shadow: var(--shadow-hi), 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+.tile.is-down { border-color: color-mix(in srgb, var(--down) 40%, var(--border)); }
+.tile.is-warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.tile .main { position: static; text-decoration: none; color: inherit; display: flex; gap: 13px; align-items: center; min-width: 0; padding-right: 26px; }
+.tile .main::after { content: ""; position: absolute; inset: 0; border-radius: 16px; }
+.tile .main:focus-visible { outline: none; }
+.tile .main:focus-visible::after { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mono-ic {
+  --h: 220; width: 46px; height: 46px; border-radius: 13px; flex: none; display: grid; place-items: center;
+  font: 650 17px var(--font); color: #fff; letter-spacing: -.02em; text-shadow: 0 1px 1px rgb(0 0 0 / 18%);
+  background: linear-gradient(140deg, oklch(calc(var(--mono-l) + .08) var(--mono-c) var(--h)), oklch(calc(var(--mono-l) - .07) calc(var(--mono-c) + .02) calc(var(--h) + 28)));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), 0 2px 6px oklch(.5 .1 var(--h) / 30%);
+}
+.tname { min-width: 0; }
+.tname b { display: block; font-size: 15px; font-weight: 650; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tname span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tstat { display: flex; align-items: center; gap: 8px; margin-top: 13px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tstat .lv { display: inline-flex; gap: 5px; align-items: center; font-weight: 600; }
+.tstat .up-pct { margin-left: auto; color: var(--text); font-weight: 600; }
+.tstat .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--border-strong); }
+.more { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.more a { font-size: 11px; text-decoration: none; padding: 2px 7px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+.more a:hover { color: var(--accent-text); border-color: var(--accent); }
+.dots { position: absolute; z-index: 2; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; cursor: pointer; color: var(--faint); font-size: 17px; line-height: 1; display: grid; place-items: center; }
+.dots:hover { background: var(--surface-3); color: var(--text); }
+.tile .strip { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; width: 100%; display: block; opacity: .9; }
+.tile.minor { background: var(--surface-2); box-shadow: none; border-style: dashed; padding: 11px 12px; border-radius: 12px; }
+.tile.minor .mono-ic { width: 30px; height: 30px; border-radius: 9px; font-size: 12px; background: oklch(.72 .025 var(--h)); box-shadow: none; text-shadow: none; }
+.tile.minor .main { gap: 10px; }
+.tile.minor .tname b { font-size: 13px; }
+.tile.minor .note { font-size: 11.5px; color: var(--muted); margin-top: 7px; line-height: 1.35; }
+.grid.minor-grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 10px; }
+
+/* unmanaged */
+.unmanaged { margin-top: 44px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
+.unmanaged summary { cursor: pointer; padding: 13px 18px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; list-style: none; }
+.unmanaged summary::-webkit-details-marker { display: none; }
+.unmanaged summary .car { transition: transform .15s; display: inline-block; }
+.unmanaged[open] summary .car { transform: rotate(90deg); }
+.unmanaged summary b { color: var(--text); font-weight: 600; }
+.um-body { padding: 0 18px 16px; display: grid; gap: 14px; }
+.um-host h4 { margin: 0 0 6px; font-size: 12px; color: var(--faint); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.um-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.um { display: flex; gap: 8px; align-items: center; font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); padding: 5px 10px; border-radius: 9px; color: var(--muted); }
+.um b { color: var(--text); font-weight: 600; }
+.um .tpl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; }
+
+.empty { text-align: center; padding: 70px 20px; color: var(--muted); }
+.empty h2 { color: var(--text); margin: 0 0 6px; font-size: 18px; }
+.empty button { margin-top: 14px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 9px; padding: 7px 14px; cursor: pointer; }
+
+/* details dialog */
+dialog { border: 1px solid var(--border); border-radius: 18px; padding: 0; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); background: var(--surface); color: var(--text); box-shadow: 0 30px 80px rgb(0 0 0 / 35%); }
+dialog::backdrop { background: rgb(10 14 22 / 45%); backdrop-filter: blur(3px); }
+.d-head { display: flex; gap: 16px; align-items: center; padding: 22px 24px 16px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.d-head .mono-ic { width: 56px; height: 56px; font-size: 21px; border-radius: 16px; }
+.d-head h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+.d-head p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.d-head .x { margin-left: auto; align-self: flex-start; border: 0; background: var(--surface-2); width: 32px; height: 32px; border-radius: 9px; cursor: pointer; font-size: 18px; color: var(--muted); }
+.d-body { padding: 18px 24px 24px; display: grid; gap: 20px; }
+.d-sec h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 600; }
+.pill { display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.pill.up { background: var(--up-soft); color: var(--up); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.down { background: var(--down-soft); color: var(--down); } .pill.unknown { background: var(--none-soft); color: var(--muted); }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+.stat small { display: block; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.stat b { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.beatbox svg { width: 100%; height: 30px; display: block; border-radius: 4px; }
+.axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); margin-top: 4px; }
+.daily svg { width: 100%; height: 34px; display: block; }
+.rows { display: grid; gap: 6px; }
+.row { display: flex; gap: 10px; align-items: center; font-size: 13px; padding: 7px 10px; background: var(--surface-2); border-radius: 9px; min-width: 0; }
+.row a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.row .r { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 12px; }
+table.dns { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.dns th { text-align: left; font-weight: 600; color: var(--faint); font-size: 11px; padding: 4px 8px; }
+table.dns td { padding: 5px 8px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; font-size: 13px; }
+.kv dt { color: var(--faint); } .kv dd { margin: 0; }
+.notes { margin: 0; padding: 10px 12px; background: var(--warn-soft); border-radius: 10px; font-size: 12.5px; color: var(--text); list-style: none; }
+.meters { display: grid; gap: 10px; }
+.bigm { display: grid; grid-template-columns: 70px 1fr 170px; gap: 12px; align-items: center; font-size: 12.5px; }
+.bigm .tr { height: 8px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
+.bigm .tr span { display: block; height: 100%; background: var(--accent); }
+.bigm .tr.na { background: repeating-linear-gradient(-45deg, var(--surface-3) 0 4px, var(--border) 4px 7px); }
+.bigm .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ev { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+
+@media (max-width: 1100px) { .rev span { display: none; } }
+@media (max-width: 720px) {
+  .wrap { padding: 0 16px 80px; }
+  .hello time { font-size: 34px; }
+  .search input { font-size: 16px; padding-right: 20px; }
+  .search .slash { display: none; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .bigm { grid-template-columns: 56px 1fr; } .bigm .v { grid-column: 1 / -1; text-align: left; }
+  .counts { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="7" r="4.6" fill="#fff"/><path d="M3.6 9.5 2 14M6 11l-.6 4M10 11l.6 4M12.4 9.5 14 14" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <h1>Inventory</h1>
+    </div>
+    <div class="rev" id="rev"></div>
+    <div class="counts" id="counts"></div>
+  </header>
+
+  <section class="hosts" id="hosts" aria-label="Proxmox hosts"></section>
+
+  <section class="hero">
+    <div class="hello" id="hello"></div>
+    <div class="search" role="search">
+      <svg class="mag" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="m13 13 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <label for="q" class="sr">Search services, guests and hosts</label>
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Jump to a service, guest or host…">
+      <kbd class="slash" aria-hidden="true">/</kbd>
+    </div>
+    <div class="hint" id="hint" aria-live="polite"></div>
+  </section>
+
+  <div class="bar" role="toolbar" aria-label="Filters">
+    <div><span class="lbl">Liveness</span> <span class="seg" id="live"></span></div>
+    <button class="toggle" id="urls" aria-pressed="false"><span class="sw" aria-hidden="true"></span>Only with URLs</button>
+    <div><span class="lbl">Group</span> <span class="seg" id="group"><button data-v="guest">By guest</button><button data-v="category">By category</button></span></div>
+    <div><span class="lbl">Uptime</span> <span class="seg" id="win"><button data-v="h24">24h</button><button data-v="d7">7d</button><button data-v="d30">30d</button></span></div>
+  </div>
+
+  <main id="groups"></main>
+  <details class="unmanaged" id="unmanaged"></details>
+</div>
+<dialog id="dlg" aria-labelledby="dlg-title"><div id="dlg-in"></div></dialog>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+const { fmt, liveness: LV, runLabels } = INV;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const WIN_LABEL = { h24: "24h", d7: "7d", d30: "30d" };
+const S = { q: "", live: new Set(), urls: false, group: "guest", win: "h24", hi: -1 };
+
+// ---------- small renderers ----------
+function glyph(st, size = 10) {
+  const shape = {
+    up: '<circle cx="5" cy="5" r="4.5" fill="currentColor"/>',
+    warn: '<path d="M5 .4 9.8 9.3H.2Z" fill="currentColor"/>',
+    down: '<rect x=".8" y=".8" width="8.4" height="8.4" rx="1.4" fill="currentColor"/><path d="M3.3 3.3l3.4 3.4M6.7 3.3 3.3 6.7" stroke="var(--surface)" stroke-width="1.3"/>',
+    unknown: '<circle cx="5" cy="5" r="3.9" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  }[st];
+  return `<svg class="gl s-${st}" width="${size}" height="${size}" viewBox="0 0 10 10" aria-hidden="true">${shape}</svg>`;
+}
+const lvText = (st) => `${glyph(st)}<span>${LV[st].label}</span>`;
+function hue(name) { let h = 2166136261; for (const c of name) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) % 360; }
+function initials(name) {
+  const parts = name.split(/[-_.\s]+/).filter(Boolean);
+  return parts.length > 1 ? (parts[0][0] + parts[1][0]).toUpperCase() : name[0].toUpperCase() + (name[1] || "");
+}
+const monogram = (name) => `<span class="mono-ic" style="--h:${hue(name)}" aria-hidden="true">${esc(initials(name))}</span>`;
+function beats(list, cls = "") {
+  const w = 100 / list.length;
+  return `<svg class="${cls}" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true">${list
+    .map((b, i) => `<rect class="fill-${b}" x="${(i * w).toFixed(3)}" y="0" width="${(w * 0.78).toFixed(3)}" height="10"/>`).join("")}</svg>`;
+}
+const up = (check) => (check ? fmt.pct(check.uptime[S.win], check.uptime[S.win] >= 99.95 || check.uptime[S.win] === 0 ? 2 : 1) : "—");
+const pctNum = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+const ext = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+const nodeOf = (g) => INV.nodeById[g.node];
+const kindLabel = (k) => (k === "lxc" ? "Container" : "VM");
+function runChip(rs) {
+  const r = runLabels[rs]; if (!r) return "";
+  return `<span class="chip t-${r.tone}" title="Run status: does it match its definition">${esc(r.label)}</span>`;
+}
+
+// ---------- matching ----------
+const terms = () => S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+const has = (txt) => terms().every((t) => txt.includes(t));
+const liveOk = (st) => !S.live.size || S.live.has(st);
+const hayN = (n) => INV.haystack("node", n);
+const hayG = (g) => hayN(nodeOf(g)) + " " + INV.haystack("guest", g);
+const hayS = (s) => hayG(INV.guestById[s.guest]) + " " + INV.haystack("service", s);
+const svcVisible = (s) => has(hayS(s)) && liveOk(s.status) && (!S.urls || s.urls.length);
+function guestView(g) {
+  const svcs = INV.servicesOf(g.id).filter(svcVisible);
+  const self = has(hayG(g)) && liveOk(g.status) && !S.urls;
+  return { g, svcs, show: svcs.length > 0 || self };
+}
+
+// ---------- header ----------
+function header() {
+  const t = INV.totals();
+  $("#rev").innerHTML = `<span class="sr">Revision</span><code title="${esc(INV.revision.subject)}">${esc(INV.revision.commit)}</code><span>${esc(INV.revision.subject)}</span>`;
+  $("#counts").innerHTML = `
+    <span><b>${t.nodes.total}</b> hosts</span><span><b>${t.guests.total}</b> guests</span>
+    <span><b>${t.services.total}</b> services</span><span><b>${t.unmanaged}</b> unmanaged</span>
+    <span class="obs"><span class="pulse" aria-hidden="true"></span>Observed ${esc(fmt.ago(INV.observedAt))}</span>`;
+  const d = new Date();
+  const hr = d.getHours();
+  const hello = hr < 5 ? "Good night" : hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
+  const s = t.services;
+  const problems = s.down + s.warn + t.guests.down + t.nodes.down;
+  $("#hello").innerHTML = `<time>${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+    ${hello} · ${d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })} ·
+    ${problems ? `<span class="s-down">${problems} need${problems === 1 ? "s" : ""} attention</span>` : "all clear"}`;
+}
+
+function hostPills() {
+  $("#hosts").innerHTML = INV.nodes.map((n) => {
+    const cpu = n.cpu.used, mem = n.memory.used == null ? null : n.memory.used / n.memory.total;
+    const m = (label, v) => `<span class="meter" title="${label} ${v == null ? "unknown (last value not reported)" : pctNum(v)}">${label}<i class="${v == null ? "na" : ""}">${v == null ? "" : `<span style="width:${Math.round(v * 100)}%"></span>`}</i><em>${v == null ? "—" : pctNum(v)}</em></span>`;
+    return `<div class="hpill ${n.online ? "" : "is-down"}">
+      <button class="hname" data-detail="node:${n.id}" title="${esc(`${n.name} · PVE ${n.version} · ${n.cpu.cores} cores · disk ${fmt.bytes(n.disk.used)} / ${fmt.bytes(n.disk.total)}`)}">
+        ${glyph(n.status)}<b>${esc(n.name)}</b><small>${n.online ? up(n.check) : '<span class="offline-tag">Offline</span>'}</small><span class="sr">${LV[n.status].label}</span>
+      </button>
+      ${m("CPU", cpu)}${m("MEM", mem)}
+      <a class="pve" href="${esc(n.proxmoxUrl)}" target="_blank" rel="noopener" title="Open ${esc(n.name)} in Proxmox"><span class="sr">Proxmox web UI for ${esc(n.name)}</span>${ext}</a>
+    </div>`;
+  }).join("");
+}
+
+// ---------- tiles ----------
+function tile(s, ctx) {
+  const g = INV.guestById[s.guest];
+  const sub = ctx === "category" ? `${g.id} · ${g.node}` : null;
+  if (!s.urls.length) {
+    return `<div class="tile minor" data-id="${esc(s.id)}">
+      <div class="main">${monogram(s.name)}<div class="tname"><b>${esc(s.name)}</b><span>${glyph("unknown")} No check${sub ? ` · ${esc(sub)}` : ""}</span></div></div>
+      <div class="note">${esc(s.notes[0] || s.description)}</div>
+      <button class="dots" data-detail="svc:${esc(s.id)}" aria-label="Details for ${esc(s.name)}" title="Details">⋯</button>
+    </div>`;
+  }
+  const c = s.check, [first, ...rest] = s.urls;
+  return `<div class="tile has-url is-${s.status}" data-id="${esc(s.id)}" data-url="${esc(first.url)}">
+    <a class="main" href="${esc(first.url)}" target="_blank" rel="noopener">${monogram(s.name)}
+      <div class="tname"><b>${esc(s.name)}</b><span>${esc(sub || first.host)}</span></div></a>
+    <div class="tstat"><span class="lv s-${s.status}">${lvText(s.status)}</span><span class="sep"></span><span>${fmt.ms(c.ms)}</span>
+      <span class="up-pct" title="Uptime, ${WIN_LABEL[S.win]}">${up(c)}</span></div>
+    ${sub ? `<div class="tstat" style="margin-top:4px">${esc(first.host)}</div>` : ""}
+    ${rest.length ? `<div class="more">${rest.map((u) => `<a href="${esc(u.url)}" target="_blank" rel="noopener" title="${esc(u.url)} · ${LV[u.check.status].label}">${glyph(u.check.status, 8)}${esc(u.host)}</a>`).join("")}</div>` : ""}
+    <button class="dots" data-detail="svc:${esc(s.id)}" aria-label="Details for ${esc(s.name)}" title="Details">⋯</button>
+    ${beats(c.beats, "strip")}
+  </div>`;
+}
+function tileGrids(svcs, ctx) {
+  const main = svcs.filter((s) => s.urls.length), minor = svcs.filter((s) => !s.urls.length);
+  return (main.length ? `<div class="grid">${main.map((s) => tile(s, ctx)).join("")}</div>` : "") +
+    (minor.length ? `<div class="grid minor-grid">${minor.map((s) => tile(s, ctx)).join("")}</div>` : "");
+}
+
+function byGuest() {
+  let out = "";
+  for (const n of INV.nodes) {
+    const views = INV.guestsOf(n.id).map(guestView).filter((v) => v.show);
+    const selfHit = has(hayN(n)) && liveOk(n.status) && !S.urls;
+    if (!views.length && !selfHit) continue;
+    out += `<section class="host" aria-labelledby="h-${n.id}">
+      <div class="host-h">
+        <h2 id="h-${n.id}">${glyph(n.status)}${esc(n.name)}<span class="sr">${LV[n.status].label}</span></h2>
+        <div class="facts">
+          ${n.online ? "" : `<span class="off">Offline · ${esc(n.offlineReason || "")} · last known values</span>`}
+          <span>Uptime <b>${up(n.check)}</b> ${WIN_LABEL[S.win]}</span>
+          <span>PVE <b>${esc(n.version)}</b></span>
+          <span><b>${n.cpu.cores}</b> cores · ${pctNum(n.cpu.used)}</span>
+          <span>Mem <b>${fmt.bytes(n.memory.used)}</b> / ${fmt.bytes(n.memory.total)}</span>
+          <span>Disk <b>${fmt.bytes(n.disk.used)}</b> / ${fmt.bytes(n.disk.total)}</span>
+          <span>Up for <b>${fmt.duration(n.uptimeSeconds)}</b></span>
+        </div>
+        <a href="${esc(n.proxmoxUrl)}" target="_blank" rel="noopener">Proxmox ${ext}</a>
+      </div>
+      ${(views.length ? views : INV.guestsOf(n.id).map((g) => ({ g, svcs: [] }))).map(({ g, svcs }) => `
+        <div class="guest ${INV.servicesOf(g.id).length ? "" : "bare"}">
+          <div class="guest-h">
+            <h3>${glyph(g.status)}${esc(g.id)}<span class="sr">${LV[g.status].label}</span></h3>
+            <span class="chip mono">${kindLabel(g.kind)} ${g.vmid}</span>
+            <span class="chip mono">${esc(g.address || "no address")}</span>
+            <span class="chip">${esc(g.power)}</span>
+            ${runChip(g.runStatus)}
+            ${INV.servicesOf(g.id).length ? "" : `<span class="nos">No services · ${esc(g.description)}</span>`}
+            <span class="tools">
+              ${beats(g.check.beats, "mini-beats")}
+              <span title="Guest uptime, ${WIN_LABEL[S.win]}">${up(g.check)}</span>
+              <a href="${esc(INV.proxmoxGuestUrl(g))}" target="_blank" rel="noopener" title="Open ${esc(g.id)} in Proxmox">Proxmox ${ext}</a>
+              <button class="dots" style="position:static" data-detail="guest:${g.id}" aria-label="Details for ${esc(g.id)}" title="Details">⋯</button>
+            </span>
+          </div>
+          ${svcs.length ? tileGrids(svcs, "guest") : INV.servicesOf(g.id).length ? `<div class="noserv">No services match the filters.</div>` : ""}
+        </div>`).join("")}
+    </section>`;
+  }
+  return out;
+}
+function byCategory() {
+  const all = INV.services.filter(svcVisible);
+  const cats = [...new Set(all.map((s) => s.category))].sort();
+  return cats.map((c) => {
+    const list = all.filter((s) => s.category === c);
+    return `<section><div class="cat-h"><h2>${c === "ai" ? "AI" : esc(c)}</h2><span>${list.length} service${list.length === 1 ? "" : "s"}</span></div>${tileGrids(list, "category")}</section>`;
+  }).join("");
+}
+
+function unmanaged() {
+  const el = $("#unmanaged");
+  const wasOpen = el.open;
+  const rows = INV.nodes.map((n) => ({ n, list: n.unmanaged.filter((u) => has(hayN(n) + " " + INV.haystack("unmanaged", u)) && !S.live.size && !S.urls) })).filter((x) => x.list.length);
+  const total = rows.reduce((a, x) => a + x.list.length, 0);
+  el.hidden = !total;
+  el.innerHTML = `<summary><span class="car" aria-hidden="true">›</span><b>Unmanaged guests</b> (${total}) · on Proxmox, not managed by Octopushy, no checks</summary>
+    <div class="um-body">${rows.map(({ n, list }) => `<div class="um-host"><h4>${esc(n.name)}</h4><div class="um-list">${list.map((u) => `
+      <span class="um">${u.template ? '<span class="tpl">Template</span>' : ""}<b>${esc(u.name)}</b><span>${kindLabel(u.kind)} ${u.vmid}</span><span>${esc(u.status)}</span><span>${u.cores} cores · ${fmt.bytes(u.memory)}</span></span>`).join("")}</div></div>`).join("")}</div>`;
+  el.open = wasOpen || (S.q.trim() !== "" && total > 0);
+}
+
+// ---------- render ----------
+function render() {
+  const html = S.group === "guest" ? byGuest() : byCategory();
+  $("#groups").innerHTML = html || `<div class="empty"><h2>Nothing matches</h2><p>No service, guest or host matches${S.q ? ` “${esc(S.q)}”` : ""} with these filters.</p><button id="clear">Clear search and filters</button></div>`;
+  unmanaged();
+  for (const b of document.querySelectorAll("#group button")) b.setAttribute("aria-pressed", b.dataset.v === S.group);
+  for (const b of document.querySelectorAll("#win button")) b.setAttribute("aria-pressed", b.dataset.v === S.win);
+  $("#urls").setAttribute("aria-pressed", S.urls);
+  const counts = { down: 0, warn: 0, up: 0, unknown: 0 };
+  for (const s of INV.services) counts[s.status]++;
+  $("#live").innerHTML = ["down", "warn", "up", "unknown"].map((k) => `<button data-v="${k}" aria-pressed="${S.live.has(k)}">${glyph(k)}${LV[k].label}<span class="n">${counts[k]}</span></button>`).join("");
+  S.hi = S.q.trim() ? bestTile() : -1;
+  highlight();
+  writeHash();
+}
+const tiles = () => [...document.querySelectorAll("#groups .tile.has-url")];
+// Launcher ranking: prefer the tile whose own name matches, not one kept only by its guest or host.
+function bestTile() {
+  const list = tiles(); if (!list.length) return -1;
+  const ts = terms(), last = ts[ts.length - 1];
+  const score = (t) => {
+    const s = INV.services.find((x) => x.id === t.dataset.id);
+    const own = INV.haystack("service", s);
+    return (s.name.startsWith(last) ? 4 : 0) + (ts.some((w) => s.name.includes(w)) ? 2 : 0) + (ts.every((w) => own.includes(w)) ? 1 : 0);
+  };
+  let best = 0, bs = -1;
+  list.forEach((t, i) => { const v = score(t); if (v > bs) { bs = v; best = i; } });
+  return best;
+}
+function highlight(scroll) {
+  const list = tiles();
+  list.forEach((t, i) => t.classList.toggle("hi", i === S.hi));
+  const t = list[S.hi];
+  const n = list.length;
+  $("#hint").innerHTML = t
+    ? `<kbd>Enter</kbd> opens <b>${esc(t.dataset.url.replace(/^https?:\/\//, ""))}</b> · <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> move · ${n} match${n === 1 ? "" : "es"} · <kbd>Esc</kbd> clears`
+    : `Type to filter · <kbd>↓</kbd> to pick a tile · <kbd>Enter</kbd> to open · <kbd>/</kbd> to focus`;
+  if (t && scroll) t.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function move(dir) {
+  const list = tiles(); if (!list.length) return;
+  if (S.hi < 0) { S.hi = 0; return highlight(true); }
+  if (dir === "left" || dir === "right") S.hi = Math.max(0, Math.min(list.length - 1, S.hi + (dir === "right" ? 1 : -1)));
+  else {
+    const r0 = list[S.hi].getBoundingClientRect(), cx = r0.left + r0.width / 2;
+    const cands = list.map((t, i) => ({ i, r: t.getBoundingClientRect() })).filter(({ r }) => (dir === "down" ? r.top > r0.top + 5 : r.top < r0.top - 5));
+    if (cands.length) {
+      const rowTop = dir === "down" ? Math.min(...cands.map((c) => c.r.top)) : Math.max(...cands.map((c) => c.r.top));
+      const row = cands.filter((c) => Math.abs(c.r.top - rowTop) < 5);
+      row.sort((a, b) => Math.abs(a.r.left + a.r.width / 2 - cx) - Math.abs(b.r.left + b.r.width / 2 - cx));
+      S.hi = row[0].i;
+    }
+  }
+  highlight(true);
+}
+
+// ---------- details ----------
+function stats(c, extra = "") {
+  return `<div class="stats">${["h24", "d7", "d30"].map((k) => `<div class="stat"><small>Uptime ${WIN_LABEL[k]}</small><b>${c ? fmt.pct(c.uptime[k], 2) : "—"}</b></div>`).join("")}${extra}</div>`;
+}
+function historyHtml(c) {
+  if (!c) return "";
+  const dmax = 100, dmin = Math.min(90, ...c.daily);
+  const bars = c.daily.map((v, i) => { const h = 4 + ((v - dmin) / (dmax - dmin || 1)) * 30; const st = v >= 99.9 ? "up" : v >= 95 ? "warn" : "down"; return `<rect class="fill-${st}" x="${i * 10 + 1}" y="${34 - h}" width="8" height="${h}" rx="1.5"><title>${30 - i} days ago: ${v}%</title></rect>`; }).join("");
+  return `<div class="d-sec beatbox"><h3>Last 24 hours · 15-minute beats</h3>${beats(c.beats)}<div class="axis"><span>24h ago</span><span>18h</span><span>12h</span><span>6h</span><span>now</span></div></div>
+    <div class="d-sec daily"><h3>Last 30 days · daily uptime</h3><svg viewBox="0 0 300 34" preserveAspectRatio="none" aria-label="Daily uptime for the last 30 days">${bars}</svg><div class="axis"><span>30 days ago</span><span>today</span></div></div>`;
+}
+function events(c) {
+  if (!c || !c.events.length) return "";
+  return `<div class="d-sec"><h3>Status changes</h3><div class="rows">${c.events.slice(0, 5).map((e) => `<div class="ev">${glyph(e.from)} → ${glyph(e.to)} <span>${LV[e.from].label} → ${LV[e.to].label}</span><span style="margin-left:auto">${esc(fmt.time(e.at))} · ${esc(fmt.ago(e.at))}</span></div>`).join("")}</div></div>`;
+}
+const statusPill = (st, c) => `<span class="pill ${st}">${glyph(st)}${LV[st].label}${c && c.since ? ` · since ${esc(fmt.ago(c.since))}` : ""}</span>`;
+const meterRow = (label, v, txt) => `<div class="bigm"><span>${label}</span><div class="tr ${v == null ? "na" : ""}">${v == null ? "" : `<span style="width:${Math.round(v * 100)}%"></span>`}</div><span class="v">${txt}</span></div>`;
+
+function detailHtml(kind, id) {
+  if (kind === "svc") {
+    const s = INV.services.find((x) => x.id === id), g = INV.guestById[s.guest], n = nodeOf(g), c = s.check;
+    return `<div class="d-head">${monogram(s.name)}<div><h2 id="dlg-title">${esc(s.name)}</h2><p>${esc(s.description)} · ${esc(s.category)}</p><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${statusPill(s.status, c)}${runChip(s.runStatus)}</div></div><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="d-body">
+      ${s.notes.length ? `<ul class="notes">${s.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${stats(c, `<div class="stat"><small>Latency</small><b>${c ? fmt.ms(c.ms) : "—"}</b></div>`)}
+      ${historyHtml(c)}
+      <div class="d-sec"><h3>URLs</h3>${s.urls.length ? `<div class="rows">${s.urls.map((u) => `<div class="row">${glyph(u.check.status)}<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a><span class="r">${fmt.pct(u.check.uptime.h24)} · ${fmt.ms(u.check.ms)}</span></div>`).join("")}</div>` : `<p class="ev">No URL declared.</p>`}</div>
+      ${s.health ? `<div class="d-sec"><h3>Health check</h3><div class="row"><code style="font:12px var(--mono)">${esc(s.health.url)}</code><span class="r">${s.health.probed ? "probed" : "not probed from here"}</span></div></div>` : ""}
+      <div class="d-sec"><h3>DNS records</h3>${s.dns.length ? `<table class="dns"><thead><tr><th>Type</th><th>Name</th><th>Points to</th><th>Zone</th></tr></thead><tbody>${s.dns.map((d) => `<tr><td>${d.type}</td><td>${esc(d.name)}</td><td>${esc(d.expected)}</td><td>${esc(d.zone)}</td></tr>`).join("")}</tbody></table>` : `<p class="ev">No DNS records declared.</p>`}</div>
+      <div class="d-sec"><h3>Runs on</h3><dl class="kv">
+        <dt>Guest</dt><dd>${glyph(g.status)} <button class="linkish" data-detail="guest:${g.id}" style="border:0;background:none;padding:0;color:var(--accent-text);cursor:pointer;text-decoration:underline">${esc(g.id)}</button> · ${kindLabel(g.kind)} ${g.vmid} · ${esc(g.address || "no address")} · <a href="${esc(INV.proxmoxGuestUrl(g))}" target="_blank" rel="noopener">Proxmox ${ext}</a></dd>
+        <dt>Host</dt><dd>${glyph(n.status)} ${esc(n.name)} · <a href="${esc(n.proxmoxUrl)}" target="_blank" rel="noopener">Proxmox web UI ${ext}</a></dd>
+        <dt>Workflow</dt><dd><code>${esc(s.workflow)}</code></dd></dl></div>
+      ${events(c)}
+    </div>`;
+  }
+  if (kind === "guest") {
+    const g = INV.guestById[id], n = nodeOf(g), c = g.check, svcs = INV.servicesOf(g.id);
+    return `<div class="d-head">${monogram(g.id)}<div><h2 id="dlg-title">${esc(g.id)}</h2><p>${esc(g.description)}</p><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${statusPill(g.status, c)}${runChip(g.runStatus)}</div></div><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="d-body">
+      <dl class="kv"><dt>Kind</dt><dd>${kindLabel(g.kind)} ${g.vmid}</dd><dt>Hostname</dt><dd><code>${esc(g.hostname)}</code></dd><dt>Address</dt><dd>${esc(g.address || "—")}</dd><dt>Power</dt><dd>${esc(g.power)}</dd>
+        <dt>Size</dt><dd>${g.cores} cores · ${fmt.bytes(g.memory)} memory · ${fmt.bytes(g.disk)} disk</dd><dt>Host</dt><dd>${esc(n.name)} · <a href="${esc(INV.proxmoxGuestUrl(g))}" target="_blank" rel="noopener">Open in Proxmox ${ext}</a></dd>
+        <dt>Last run</dt><dd>${esc(runLabels[g.lastRun.status]?.label || g.lastRun.status)} · ${esc(fmt.ago(g.lastRun.at))}</dd><dt>Workflow</dt><dd><code>${esc(g.workflow)}</code></dd></dl>
+      ${stats(c, `<div class="stat"><small>Up for</small><b>${fmt.duration(g.uptimeSeconds)}</b></div>`)}
+      ${historyHtml(c)}
+      <div class="d-sec"><h3>Services (${svcs.length})</h3>${svcs.length ? `<div class="rows">${svcs.map((s) => `<div class="row">${glyph(s.status)}<button data-detail="svc:${esc(s.id)}" style="border:0;background:none;padding:0;cursor:pointer;color:var(--accent-text)">${esc(s.name)}</button><span class="r">${s.check ? fmt.pct(s.check.uptime.h24) : "No check"}</span></div>`).join("")}</div>` : `<p class="ev">No services declared.</p>`}</div>
+      ${events(c)}
+    </div>`;
+  }
+  const n = INV.nodeById[id], c = n.check;
+  return `<div class="d-head">${monogram(n.name)}<div><h2 id="dlg-title">${esc(n.name)}</h2><p>Proxmox host · PVE ${esc(n.version)} · ${esc(n.address)}</p><div style="margin-top:8px">${statusPill(n.status, c)}</div></div><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="d-body">
+      ${n.online ? "" : `<ul class="notes"><li>Offline: ${esc(n.offlineReason)}. Showing the last values seen.</li></ul>`}
+      <div class="d-sec"><h3>Resources</h3><div class="meters">
+        ${meterRow("CPU", n.cpu.used, `${pctNum(n.cpu.used)} of ${n.cpu.cores} cores`)}
+        ${meterRow("Memory", n.memory.used == null ? null : n.memory.used / n.memory.total, `${fmt.bytes(n.memory.used)} / ${fmt.bytes(n.memory.total)}`)}
+        ${meterRow("Disk", n.disk.used == null ? null : n.disk.used / n.disk.total, `${fmt.bytes(n.disk.used)} / ${fmt.bytes(n.disk.total)}`)}
+      </div><p class="ev" style="margin:8px 0 0">${esc(n.cpu.model)}</p></div>
+      ${stats(c, `<div class="stat"><small>Host uptime</small><b>${fmt.duration(n.uptimeSeconds)}</b></div>`)}
+      ${historyHtml(c)}
+      <div class="d-sec"><h3>Guests</h3><div class="rows">${INV.guestsOf(n.id).map((g) => `<div class="row">${glyph(g.status)}<button data-detail="guest:${g.id}" style="border:0;background:none;padding:0;cursor:pointer;color:var(--accent-text)">${esc(g.id)}</button><span class="r">${kindLabel(g.kind)} ${g.vmid} · ${fmt.pct(g.check.uptime.h24)}</span></div>`).join("")}</div></div>
+      <a href="${esc(n.proxmoxUrl)}" target="_blank" rel="noopener" style="font-weight:600">Open the Proxmox web UI ${ext}</a>
+      ${events(c)}
+    </div>`;
+}
+function openDetail(ref) {
+  const [kind, ...rest] = ref.split(":");
+  $("#dlg-in").innerHTML = detailHtml(kind, rest.join(":"));
+  const d = $("#dlg");
+  if (!d.open) d.showModal();
+  d.scrollTop = 0;
+}
+
+// ---------- hash state ----------
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (p.get("q")) S.q = p.get("q");
+  if (p.get("group")) S.group = p.get("group");
+  if (p.get("win")) S.win = p.get("win");
+  if (p.get("live")) S.live = new Set(p.get("live").split(","));
+  if (p.get("urls")) S.urls = p.get("urls") === "1";
+  return p.get("detail");
+}
+function writeHash() {
+  const p = new URLSearchParams();
+  if (S.q) p.set("q", S.q);
+  if (S.group !== "guest") p.set("group", S.group);
+  if (S.win !== "h24") p.set("win", S.win);
+  if (S.live.size) p.set("live", [...S.live].join(","));
+  if (S.urls) p.set("urls", "1");
+  history_replace(p.toString());
+}
+function history_replace(h) { try { window.history.replaceState(null, "", h ? `#${h}` : location.pathname); } catch {} }
+
+// ---------- events ----------
+const q = $("#q");
+q.addEventListener("input", () => { S.q = q.value; render(); });
+q.addEventListener("keydown", (e) => {
+  const atEnd = q.selectionStart === q.value.length;
+  if (e.key === "ArrowDown") { e.preventDefault(); move("down"); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); move("up"); }
+  else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && S.hi >= 0 && atEnd) { e.preventDefault(); move(e.key === "ArrowRight" ? "right" : "left"); }
+  else if (e.key === "Enter") {
+    const t = tiles()[S.hi >= 0 ? S.hi : 0];
+    if (t) window.open(t.dataset.url, "_blank", "noopener");
+  } else if (e.key === "Escape") { if (q.value) { q.value = ""; S.q = ""; render(); } else q.blur(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName) && !$("#dlg").open) { e.preventDefault(); q.focus(); q.select(); }
+  // arrow keys between focused tiles
+  const tl = document.activeElement.closest?.(".tile.has-url");
+  if (tl && /^Arrow/.test(e.key)) {
+    e.preventDefault();
+    S.hi = tiles().indexOf(tl);
+    move(e.key.slice(5).toLowerCase());
+    tiles()[S.hi]?.querySelector(".main").focus();
+  }
+});
+document.addEventListener("click", (e) => {
+  const d = e.target.closest("[data-detail]");
+  if (d) { e.preventDefault(); return openDetail(d.dataset.detail); }
+  if (e.target.closest("[data-close]")) return $("#dlg").close();
+  if (e.target === $("#dlg")) return $("#dlg").close();
+  const seg = e.target.closest(".seg button");
+  if (seg) {
+    const box = seg.parentElement.id, v = seg.dataset.v;
+    if (box === "live") S.live.has(v) ? S.live.delete(v) : S.live.add(v);
+    else if (box === "group") S.group = v;
+    else if (box === "win") S.win = v;
+    render(); hostPills(); return;
+  }
+  if (e.target.closest("#urls")) { S.urls = !S.urls; return render(); }
+  if (e.target.closest("#clear")) { S.q = ""; q.value = ""; S.live.clear(); S.urls = false; render(); }
+});
+
+const detail = readHash();
+q.value = S.q;
+header(); hostPills(); render();
+setInterval(header, 30_000);
+if (detail) openDetail(detail);
+})();
+</script>
+</body>
+</html>

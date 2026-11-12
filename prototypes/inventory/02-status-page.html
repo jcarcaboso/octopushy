@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory · Status page</title>
+<!-- Concept: a public-style status page (Uptime Kuma / Statuspage). One calm centered column:
+     an overall banner, one section per Proxmox host with heartbeat bars on every row, then the
+     recent incidents rebuilt from the checks' events. Supports #q=…&live=…&win=…&open=<service id>. -->
+<style>
+:root {
+  color-scheme: light dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --bg: #f5f7fa; --surface: #ffffff; --surface-2: #f8f9fb; --line: #e4e8ee; --line-2: #eef1f5;
+  --text: #17202b; --muted: #5a6575; --faint: #7a8494;
+  --accent: #2f5bd3; --accent-soft: #e8eefc; --link: #1f4fbf;
+  --up: #1f9d55; --up-soft: #e3f5ea; --up-fg: #176b3a;
+  --warn: #e09a0b; --warn-soft: #fdf3dc; --warn-fg: #8a5600;
+  --down: #d93f3f; --down-soft: #fdeaea; --down-fg: #b0211f;
+  --none: #a3abb7; --none-soft: #eef1f4; --none-fg: #556172;
+  --beat-empty: #e6e9ee;
+  --shadow: 0 1px 2px rgb(16 24 40 / 5%), 0 4px 18px rgb(16 24 40 / 4%);
+  --tip: #18202b; --tip-text: #eef2f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --surface: #151a22; --surface-2: #11161d; --line: #252c37; --line-2: #1d232c;
+    --text: #e6ebf2; --muted: #9ba6b5; --faint: #7d8796;
+    --accent: #5b83ec; --accent-soft: #1b2643; --link: #8eaaf5;
+    --up: #34c172; --up-soft: #12291d; --up-fg: #5fd795;
+    --warn: #f0b429; --warn-soft: #2e2410; --warn-fg: #f5c55c;
+    --down: #f2555a; --down-soft: #33161a; --down-fg: #ff8a8e;
+    --none: #5d6675; --none-soft: #1c222b; --none-fg: #a3adbb;
+    --beat-empty: #232a34;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    --tip: #e9eef5; --tip-text: #121820;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 120px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+button { font: inherit; color: inherit; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+.ext { width: 12px; height: 12px; vertical-align: -1px; }
+.host-head.context > :not(.hbar):not(.axis) { opacity: .55; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+.ico { width: 16px; height: 16px; flex: none; vertical-align: -3px; }
+.s-up { color: var(--up); } .s-warn { color: var(--warn); } .s-down { color: var(--down); } .s-unknown { color: var(--none); }
+
+/* Header */
+.top { padding: 40px 0 8px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); display: grid; place-items: center; color: #fff; }
+.top h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+.top .lab { color: var(--muted); font-size: 13px; }
+.top .rev { margin-left: auto; text-align: right; font-size: 12.5px; color: var(--muted); }
+.top .rev code { font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
+
+/* Banner */
+.banner { margin: 22px 0 18px; border-radius: 16px; padding: 26px 28px; display: grid; grid-template-columns: auto 1fr; gap: 6px 20px; align-items: center; border: 1px solid; box-shadow: var(--shadow); }
+.banner.up { background: var(--up-soft); border-color: color-mix(in srgb, var(--up) 35%, transparent); }
+.banner.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.banner.down { background: var(--down-soft); border-color: color-mix(in srgb, var(--down) 35%, transparent); }
+.banner .big { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; color: #fff; grid-row: span 2; }
+.banner.up .big { background: var(--up); } .banner.warn .big { background: var(--warn); } .banner.down .big { background: var(--down); }
+.banner .big svg { width: 30px; height: 30px; }
+.banner h2 { margin: 0; font-size: 24px; letter-spacing: -0.015em; line-height: 1.2; }
+.banner p { margin: 0; color: var(--text); opacity: .85; }
+.banner .ongoing { grid-column: 1 / -1; margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.banner .ongoing a { display: inline-flex; gap: 6px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px 4px 8px; color: var(--text); font-size: 13px; }
+.counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 26px; }
+.count { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+.count .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.count .v { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
+.count .v small { font-size: 14px; color: var(--muted); font-weight: 500; }
+.count .parts { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.count .parts span { display: inline-flex; gap: 4px; align-items: center; }
+.count .parts .ico { width: 13px; height: 13px; vertical-align: 0; }
+
+/* Sticky filter bar */
+.filters { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.filters .wrap { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 9px; padding-bottom: 9px; }
+.search { position: relative; flex: 1 1 120px; min-width: 120px; }
+.search input { width: 100%; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 34px 0 30px; font: inherit; }
+.search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.search svg { position: absolute; left: 9px; top: 8px; color: var(--faint); }
+.search kbd { position: absolute; right: 8px; top: 6px; font: 11px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: var(--surface-2); }
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.seg button { border: 0; background: none; padding: 4px 7px; border-radius: 6px; font-size: 12px; cursor: pointer; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.seg button .n { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.seg .ico { width: 13px; height: 13px; vertical-align: 0; }
+.chips { display: inline-flex; gap: 4px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 8px 3px 6px; font-size: 12px; cursor: pointer; display: inline-flex; gap: 5px; align-items: center; color: var(--muted); }
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+.chip .ico { width: 13px; height: 13px; vertical-align: 0; }
+
+/* Host sections */
+main { padding: 26px 0 40px; }
+.section-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 10px; }
+.section-title h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.host { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); margin-bottom: 22px; overflow: hidden; }
+.host-head { padding: 20px 22px 16px; border-bottom: 1px solid var(--line-2); }
+.hh1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hh1 h4 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+.hh1 .ico { width: 20px; height: 20px; }
+.hh1 .px { margin-left: auto; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; border: 1px solid var(--line); padding: 4px 10px; border-radius: 8px; color: var(--text); }
+.hh1 .px:hover { border-color: var(--accent); text-decoration: none; }
+.hmeta { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.res { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 14px 0 16px; }
+.meter .ml { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.meter .ml b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.meter .tr { height: 6px; border-radius: 4px; background: var(--line-2); overflow: hidden; }
+.meter .tr i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.meter .tr.na { background: repeating-linear-gradient(135deg, var(--line-2) 0 4px, transparent 4px 8px); border: 1px dashed var(--line); }
+.hbar { display: grid; grid-template-columns: 1fr 74px; gap: 14px; align-items: center; }
+.hbar .bar { height: 34px; }
+.axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--faint); margin-top: 4px; padding-right: 88px; }
+
+.badge { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 9px 2px 6px; border-radius: 999px; white-space: nowrap; }
+.badge .ico { width: 13px; height: 13px; vertical-align: 0; }
+.badge.up { background: var(--up-soft); color: var(--up-fg); } .badge.warn { background: var(--warn-soft); color: var(--warn-fg); }
+.badge.down { background: var(--down-soft); color: var(--down-fg); } .badge.unknown { background: var(--none-soft); color: var(--none-fg); }
+.tag { font-size: 11.5px; padding: 1px 7px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.tag.run-failed { color: var(--down-fg); border-color: color-mix(in srgb, var(--down) 35%, transparent); }
+.tag.run-awaiting-approval { color: #6d3fc0; border-color: #d8c9f4; }
+.tag.run-uncertain { color: var(--warn-fg); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.tag.run-in-sync { color: var(--up-fg); }
+@media (prefers-color-scheme: dark) { .tag.run-awaiting-approval { color: #b99cf2; border-color: #4a3a73; } }
+
+/* Rows */
+.row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 1.15fr) 66px; gap: 16px; align-items: center; padding: 11px 22px; border-top: 1px solid var(--line-2); }
+.guest-row { padding-top: 14px; background: var(--surface-2); }
+.svc-row { padding-left: 46px; position: relative; }
+.svc-row::before { content: ""; position: absolute; left: 30px; top: 0; bottom: 0; border-left: 2px solid var(--line-2); }
+.row.context { opacity: .55; }
+.who { min-width: 0; display: flex; gap: 9px; }
+.who > .ico { margin-top: 2px; }
+.who .nm { font-weight: 600; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.who .nm a.svc { color: var(--text); }
+.who .nm a.svc:hover { color: var(--link); }
+.who .nm a.svc .ext { width: 12px; height: 12px; color: var(--faint); vertical-align: -1px; }
+.who .sub { font-size: 12.5px; color: var(--muted); display: flex; gap: 4px 8px; flex-wrap: wrap; margin-top: 1px; }
+.who .sub a { color: var(--muted); }
+.who .sub a:hover { color: var(--link); }
+.who .host-n { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more { border: 0; background: none; cursor: pointer; padding: 0 4px; font-size: 12px; color: var(--muted); display: inline-flex; gap: 3px; align-items: center; border-radius: 5px; }
+.more:hover { color: var(--link); }
+.more svg { width: 12px; height: 12px; transition: transform .15s; }
+.more[aria-expanded="true"] svg { transform: rotate(90deg); }
+.pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13.5px; }
+.pct small { display: block; font-weight: 400; font-size: 11px; color: var(--faint); }
+
+/* Heartbeat bars */
+.bar { display: flex; align-items: center; gap: 2px; height: 26px; border-radius: 4px; cursor: default; }
+.bar:focus-visible { outline-offset: 4px; }
+.beat { flex: 1 1 0; min-width: 1px; border-radius: 2px; height: 64%; background: var(--up); transition: transform .08s; }
+.beat.warn { background: var(--warn); height: 82%; }
+.beat.down { background: var(--down); height: 100%; }
+.beat.empty { background: var(--beat-empty); }
+.bar.days .beat { border-radius: 3px; }
+.bar.w7 { gap: 6px; } .bar.w7 .beat { border-radius: 4px; }
+.beat:hover, .beat.active { transform: scaleY(1.18); filter: brightness(1.08); box-shadow: 0 0 0 1.5px var(--text); }
+.nocheck { height: 26px; border: 1px dashed var(--line); border-radius: 6px; display: flex; align-items: center; padding: 0 10px; gap: 6px; font-size: 12px; color: var(--none-fg); background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line-2) 6px 7px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nocheck span { overflow: hidden; text-overflow: ellipsis; }
+
+/* Service detail */
+.detail { padding: 4px 22px 16px 75px; border-top: 0; position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; font-size: 13px; }
+.detail::before { content: ""; position: absolute; left: 30px; top: 0; bottom: 0; border-left: 2px solid var(--line-2); }
+.detail h5 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+.detail table { border-collapse: collapse; width: 100%; }
+.detail td { padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--line-2); }
+.detail td:first-child { white-space: nowrap; }
+.detail .full { grid-column: 1 / -1; }
+.ulist { display: grid; gap: 4px; }
+.ulist div { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.ulist a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.ulist .u { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.note { background: var(--none-soft); border-radius: 8px; padding: 6px 10px; color: var(--none-fg); }
+
+/* Unmanaged */
+details.unm { border-top: 1px solid var(--line-2); }
+details.unm summary { cursor: pointer; padding: 11px 22px; font-size: 13px; color: var(--muted); list-style: none; display: flex; gap: 8px; align-items: center; }
+details.unm summary::-webkit-details-marker { display: none; }
+details.unm summary svg { width: 12px; height: 12px; transition: transform .15s; }
+details.unm[open] summary svg { transform: rotate(90deg); }
+details.unm table { width: calc(100% - 44px); margin: 0 22px 14px; border-collapse: collapse; font-size: 12.5px; color: var(--muted); }
+details.unm th { text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); padding: 4px 8px 4px 0; }
+details.unm td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line-2); }
+
+/* Incidents */
+.incidents { margin-top: 38px; }
+.inc { display: grid; grid-template-columns: 132px 1fr; gap: 18px; padding: 16px 0; border-top: 1px solid var(--line); }
+.inc:first-of-type { border-top: 0; }
+.inc .when { font-size: 12.5px; color: var(--muted); }
+.inc .when b { display: block; color: var(--text); font-size: 13.5px; }
+.inc h4 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inc .span { font-size: 12.5px; color: var(--muted); }
+.inc .aff { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.inc .aff a { display: inline-flex; gap: 5px; align-items: center; font-size: 12.5px; border: 1px solid var(--line); background: var(--surface); padding: 2px 9px 2px 6px; border-radius: 999px; color: var(--text); }
+.inc .aff a .ico { width: 13px; height: 13px; vertical-align: 0; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--down); box-shadow: 0 0 0 0 var(--down); animation: pulse 1.8s infinite; display: inline-block; }
+@keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.inc-box { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 4px 22px; box-shadow: var(--shadow); }
+.linkbtn { border: 0; background: none; color: var(--link); cursor: pointer; padding: 0; font-size: 13px; }
+.empty { text-align: center; padding: 60px 20px; background: var(--surface); border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); }
+.empty h3 { color: var(--text); margin: 10px 0 4px; }
+.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { 0%, 30% { background: var(--accent-soft); } }
+footer { text-align: center; color: var(--faint); font-size: 12px; padding: 10px 0 80px; }
+
+/* Tooltip */
+#tip { position: fixed; z-index: 50; pointer-events: none; background: var(--tip); color: var(--tip-text); font-size: 12px; padding: 7px 10px; border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 22%); white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); opacity: 0; transition: opacity .1s; }
+#tip.on { opacity: 1; }
+#tip b { display: flex; gap: 5px; align-items: center; font-size: 12.5px; }
+#tip .t { opacity: .75; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (max-width: 760px) {
+  .row { grid-template-columns: 1fr 60px; }
+  .row .bar, .row .nocheck { grid-column: 1 / -1; grid-row: 2; }
+  .row .pct { grid-row: 1; grid-column: 2; }
+  .res, .counts { grid-template-columns: 1fr; }
+  .detail { grid-template-columns: 1fr; padding-left: 46px; }
+  .inc { grid-template-columns: 1fr; gap: 4px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+    <div><h1>Inventory</h1><div class="lab" id="lab"></div></div>
+    <div class="rev" id="rev"></div>
+  </header>
+  <section id="banner" aria-live="polite"></section>
+</div>
+<div class="filters" role="search">
+  <div class="wrap">
+    <label class="search"><span class="sr">Search hosts, guests and services</span>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search…" autocomplete="off"><kbd>/</kbd></label>
+    <div class="seg" id="live" role="group" aria-label="Liveness"></div>
+    <div class="chips" id="hosts" role="group" aria-label="Proxmox hosts"></div>
+    <div class="seg" id="win" role="group" aria-label="History window"></div>
+  </div>
+</div>
+<div class="wrap"><main id="main"></main><footer id="foot"></footer></div>
+<div id="tip" role="tooltip"></div>
+<div class="sr" aria-live="polite" id="announce"></div>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+const { nodes, guests, services, fmt, liveness, runLabels, guestById, nodeById } = INV;
+const NOW = INV.now;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const ICON = {
+  up: '<path d="M8 12.5l2.5 2.5L16 9.5"/><circle cx="12" cy="12" r="9"/>',
+  warn: '<path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4M12 17v.01"/>',
+  down: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>',
+  unknown: '<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><path d="M8.5 12h7"/>',
+};
+const icon = (st, cls = "") => `<svg class="ico s-${st} ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[st]}</svg>`;
+const EXT = '<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+const CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+const label = (st) => liveness[st].label;
+const badge = (st, text) => `<span class="badge ${st}">${icon(st)}${esc(text ?? label(st))}</span>`;
+const hostOf = (s) => guestById[s.guest].node;
+
+// ---------- State (hash-seedable) ----------
+const state = { q: "", live: "all", hosts: new Set(), win: "h24", open: new Set() };
+for (const part of location.hash.slice(1).split("&")) {
+  const [k, v = ""] = part.split("=").map(decodeURIComponent);
+  if (k === "q") state.q = v;
+  if (k === "live" && ["all", "up", "warn", "down", "unknown"].includes(v)) state.live = v;
+  if (k === "win" && ["h24", "d7", "d30", "24h", "7d", "30d"].includes(v)) state.win = { "24h": "h24", "7d": "d7", "30d": "d30" }[v] ?? v;
+  if (k === "open") state.open.add(v);
+  if (k === "host") state.hosts.add(v);
+}
+$("#q").value = state.q;
+
+// ---------- Incidents from events ----------
+// Each check's events are status changes (newest first). Pair them into spans, then group spans that
+// start within 10 minutes on the same host into one incident (korriban takes its guests with it).
+function spansOf(check) {
+  const out = [];
+  let open = null;
+  for (const e of [...check.events].reverse()) {
+    if (e.to !== "up") {
+      if (!open && e.from === "up") open = { start: e.at, worst: e.to };
+      else if (open && e.to === "down") open.worst = "down";
+    } else if (open) { out.push({ ...open, end: e.at }); open = null; }
+  }
+  if (open && check.status !== "up") out.push({ ...open, end: null });
+  return out;
+}
+function buildIncidents() {
+  const ents = [];
+  for (const n of nodes) ents.push({ key: `n:${n.id}`, label: n.name, kind: "Proxmox host", host: n.id, check: n.check });
+  for (const g of guests) ents.push({ key: `g:${g.id}`, label: g.id, kind: g.kind === "lxc" ? "container" : "VM", host: g.node, check: g.check });
+  for (const s of services) for (const u of s.urls) ents.push({ key: `s:${s.id}`, label: s.name, kind: "service", via: u.host, host: hostOf(s), check: u.check });
+  const spans = [];
+  for (const e of ents) for (const sp of spansOf(e.check)) spans.push({ ...sp, ent: e });
+  spans.sort((a, b) => a.start - b.start);
+  const out = [];
+  for (const sp of spans) {
+    const brief = sp.worst === "warn" && sp.end != null && sp.end - sp.start < 15 * 60_000;
+    let inc = out.find((i) => i.host === sp.ent.host && i.brief === brief && Math.abs(i.start - sp.start) <= 10 * 60_000);
+    if (!inc) out.push((inc = { host: sp.ent.host, start: sp.start, end: sp.end, worst: sp.worst, brief, items: [] }));
+    inc.end = inc.end == null || sp.end == null ? null : Math.max(inc.end, sp.end);
+    if (sp.worst === "down") inc.worst = "down";
+    inc.items.push(sp);
+  }
+  for (const i of out) {
+    const order = { "Proxmox host": 0, VM: 1, container: 1, service: 2 };
+    i.items.sort((a, b) => order[a.ent.kind] - order[b.ent.kind]);
+    const lead = i.items[0].ent;
+    const what = i.worst === "down" ? (lead.kind === "Proxmox host" ? "unreachable" : "down") : "degraded";
+    const others = new Set(i.items.map((x) => x.ent.key)).size - 1;
+    i.title = `${lead.kind === "Proxmox host" ? "Proxmox host " : ""}${lead.label}${lead.via ? ` (${lead.via})` : ""} ${what}${others ? `, ${others} more affected` : ""}`;
+  }
+  return out.sort((a, b) => (b.end == null) - (a.end == null) || b.start - a.start);
+}
+const INCIDENTS = buildIncidents();
+
+// ---------- Heartbeat bars ----------
+const CHECKS = new Map(); // bar id -> check
+const WIN = { h24: { label: "24h", from: "24 hours ago" }, d7: { label: "7d", from: "7 days ago" }, d30: { label: "30d", from: "30 days ago" } };
+const dayTier = (p) => (p >= 100 ? "up" : p >= 95 ? "warn" : "down");
+function beatsOf(check) {
+  if (state.win === "h24") return check.beats.map((b) => b);
+  const d = state.win === "d7" ? check.daily.slice(-7) : check.daily;
+  return d.map(dayTier);
+}
+let barSeq = 0;
+function bar(check, name) {
+  const id = `b${barSeq++}`;
+  CHECKS.set(id, { check, name });
+  const cls = state.win === "h24" ? "beats" : `days ${state.win === "d7" ? "w7" : ""}`;
+  const b = beatsOf(check);
+  const downs = b.filter((x) => x === "down").length, warns = b.filter((x) => x === "warn").length;
+  const summary = `${name}: ${fmt.pct(check.uptime[state.win])} uptime over ${WIN[state.win].label}` +
+    (downs || warns ? `, ${downs} ${state.win === "h24" ? "beats" : "days"} with outage, ${warns} degraded` : ", no outages") + ". Use arrow keys to inspect.";
+  return `<div class="bar ${cls}" data-bar="${id}" tabindex="0" role="group" aria-label="${esc(summary)}">${b.map((x, i) => `<span class="beat ${x}" data-i="${i}"></span>`).join("")}</div>`;
+}
+const pct = (check) => `<div class="pct">${fmt.pct(check.uptime[state.win], check.uptime[state.win] >= 99.995 ? 0 : 2)}<small>${WIN[state.win].label}</small></div>`;
+
+function hm(ts) { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function md(ts) { return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" }); }
+function tipHTML(id, i) {
+  const { check, name } = CHECKS.get(id);
+  if (state.win === "h24") {
+    const start = NOW - (96 - i) * 15 * 60_000, end = start + 15 * 60_000;
+    const st = check.beats[i], ms = check.latency[i];
+    return `<b>${icon(st)} ${label(st)}</b><div>${esc(name)}</div><div class="t">${md(start)}, ${hm(start)} – ${hm(end)} · ${ms == null ? "no response" : `${ms} ms`}</div>`;
+  }
+  const days = state.win === "d7" ? check.daily.slice(-7) : check.daily;
+  const back = days.length - 1 - i, end = NOW - back * 86_400_000, start = end - 86_400_000;
+  const p = days[i], st = dayTier(p), down = Math.round(((100 - p) / 100) * 86_400);
+  const word = st === "up" ? "No downtime" : st === "warn" ? "Partial outage" : "Major outage";
+  return `<b>${icon(st)} ${word}</b><div>${esc(name)}</div><div class="t">${md(start)} ${hm(start)} → ${md(end)} ${hm(end)} · ${fmt.pct(p, 1)} up${down ? ` · ${fmt.duration(down)} down` : ""}</div>`;
+}
+const tip = $("#tip");
+function showTip(beat) {
+  const barEl = beat.parentElement;
+  tip.innerHTML = tipHTML(barEl.dataset.bar, +beat.dataset.i);
+  const r = beat.getBoundingClientRect();
+  const x = Math.min(innerWidth - 150, Math.max(150, r.left + r.width / 2));
+  tip.style.left = `${x}px`;
+  tip.style.top = `${r.top}px`;
+  tip.classList.add("on");
+  $("#announce").textContent = tip.textContent;
+}
+const hideTip = () => tip.classList.remove("on");
+document.addEventListener("mouseover", (e) => { const b = e.target.closest(".beat"); b ? showTip(b) : hideTip(); });
+document.addEventListener("focusin", (e) => {
+  if (!e.target.classList?.contains("bar")) return;
+  const beats = e.target.children, i = Math.min(+(e.target.dataset.active ?? beats.length - 1), beats.length - 1);
+  setActive(e.target, i);
+});
+document.addEventListener("focusout", (e) => { if (e.target.classList?.contains("bar")) { e.target.querySelector(".active")?.classList.remove("active"); hideTip(); } });
+function setActive(barEl, i) {
+  barEl.querySelector(".active")?.classList.remove("active");
+  barEl.dataset.active = i;
+  const b = barEl.children[i];
+  b.classList.add("active");
+  showTip(b);
+}
+document.addEventListener("keydown", (e) => {
+  const barEl = e.target.closest?.(".bar");
+  if (barEl) {
+    const n = barEl.children.length, i = +barEl.dataset.active;
+    const next = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: n - 1 }[e.key];
+    if (next != null) { e.preventDefault(); setActive(barEl, Math.max(0, Math.min(n - 1, next))); }
+    if (e.key === "Escape") hideTip();
+  }
+  if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+  if (e.key === "Escape" && document.activeElement === $("#q") && state.q) { state.q = $("#q").value = ""; render(); }
+});
+addEventListener("scroll", hideTip, { passive: true });
+
+// ---------- Header, banner, controls ----------
+function header() {
+  $("#lab").textContent = `${INV.lab.name} · ${INV.lab.address}`;
+  $("#rev").innerHTML = `Revision <code>${esc(INV.revision.commit)}</code> ${esc(INV.revision.subject)}<br>Last observed ${esc(fmt.ago(INV.observedAt))} · checks every ${INV.intervalSeconds}s`;
+  const t = INV.totals();
+  const hostsDown = nodes.filter((n) => n.status === "down");
+  const guestsDown = guests.filter((g) => g.status === "down" && nodeById[g.node].status !== "down");
+  const behind = guests.filter((g) => g.status === "down" && nodeById[g.node].status === "down");
+  const sDown = services.filter((s) => s.status === "down"), sWarn = services.filter((s) => s.status === "warn");
+  const parts = [];
+  const pl = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  if (hostsDown.length) parts.push(`${pl(hostsDown.length, "Proxmox host", "Proxmox hosts")} down${behind.length ? ` (taking ${pl(behind.length, "guest", "guests")} with it)` : ""}`);
+  if (guestsDown.length) parts.push(`${pl(guestsDown.length, "other guest", "other guests")} down`);
+  if (sDown.length) parts.push(`${pl(sDown.length, "service", "services")} down`);
+  if (sWarn.length) parts.push(`${pl(sWarn.length, "service", "services")} degraded`);
+  const sev = hostsDown.length || guestsDown.length || sDown.length ? "down" : sWarn.length ? "warn" : "up";
+  const head = { up: "All systems operational", warn: "Degraded performance", down: hostsDown.length ? "Partial outage" : "Some systems down" }[sev];
+  const ongoing = INCIDENTS.filter((i) => i.end == null);
+  $("#banner").innerHTML = `
+    <div class="banner ${sev}">
+      <div class="big">${icon(sev).replace('class="ico', 'style="color:#fff" class="ico')}</div>
+      <h2>${head}</h2>
+      <p>${parts.length ? esc(parts.join(", ")) + "." : "Every check is answering."}</p>
+      ${ongoing.length ? `<div class="ongoing">${ongoing.map((i) => `<a href="#row-${esc(i.items[0].ent.key)}" data-jump="${esc(i.items[0].ent.key)}">${icon(i.worst)} ${esc(i.title)} <span class="muted">· ${fmt.duration((NOW - i.start) / 1000)}</span></a>`).join("")}</div>` : ""}
+    </div>
+    <div class="counts">
+      <div class="count"><div class="k">Proxmox hosts</div><div class="v">${t.nodes.up} <small>of ${t.nodes.total} up</small></div>
+        <div class="parts"><span>${icon("up")}${t.nodes.up} up</span><span>${icon("down")}${t.nodes.down} down</span></div></div>
+      <div class="count"><div class="k">Guests</div><div class="v">${t.guests.up} <small>of ${t.guests.total} up</small></div>
+        <div class="parts"><span>${icon("up")}${t.guests.up} up</span><span>${icon("down")}${t.guests.down} down</span><span>+ ${t.unmanaged} unmanaged</span></div></div>
+      <div class="count"><div class="k">Services</div><div class="v">${t.services.up} <small>of ${t.services.total} up</small></div>
+        <div class="parts"><span>${icon("warn")}${t.services.warn}</span><span>${icon("down")}${t.services.down}</span><span>${icon("unknown")}${t.services.unknown} no check</span></div></div>
+    </div>`;
+}
+function controls() {
+  const all = [...nodes, ...guests, ...services];
+  const n = (st) => all.filter((x) => x.status === st).length;
+  $("#live").innerHTML = [["all", "All"], ["down", "Down"], ["warn", "Degraded"], ["up", "Up"], ["unknown", "No check"]]
+    .map(([v, l]) => `<button type="button" data-live="${v}" aria-pressed="${state.live === v}">${v === "all" ? "" : icon(v)}${l}${v === "all" ? "" : ` <span class="n">${n(v)}</span>`}</button>`).join("");
+  $("#hosts").innerHTML = nodes.map((h) => `<button type="button" class="chip" data-host="${h.id}" aria-pressed="${state.hosts.has(h.id)}">${icon(h.status)}${esc(h.name)}</button>`).join("");
+  $("#win").innerHTML = Object.entries(WIN).map(([k, w]) => `<button type="button" data-win="${k}" aria-pressed="${state.win === k}">${w.label}</button>`).join("");
+}
+
+// ---------- Rows ----------
+function hostSection(h, guestList, unmanaged, self, autoOpenUnm) {
+  const mem = h.memory, disk = h.disk;
+  const meter = (name, frac, value) => `<div class="meter"><div class="ml"><span>${name}</span><b>${value}</b></div>
+    <div class="tr ${frac == null ? "na" : ""}">${frac == null ? "" : `<i style="width:${(frac * 100).toFixed(1)}%"></i>`}</div></div>`;
+  const since = fmt.duration((NOW - h.check.since) / 1000);
+  return `<section class="host" id="row-n:${h.id}" aria-labelledby="h-${h.id}">
+    <div class="host-head ${self ? "" : "context"}">
+      <div class="hh1">${icon(h.status)}<h4 id="h-${h.id}">${esc(h.name)}</h4>${badge(h.status, h.online ? label(h.status) : "Offline")}
+        <span class="tag">PVE ${esc(h.version)}</span>
+        <a class="px" href="${esc(h.proxmoxUrl)}" target="_blank" rel="noopener">Proxmox UI ${EXT}</a></div>
+      <div class="hmeta">${esc(h.address)} · ${esc(h.cpu.model)} · ${h.online ? `host uptime ${fmt.duration(h.uptimeSeconds)}` : `${esc(h.offlineReason)} for ${since}, showing last known values`}</div>
+      <div class="res">
+        ${meter("CPU", h.cpu.used, `${h.cpu.used == null ? "—" : fmt.pct(h.cpu.used * 100, 0)} of ${h.cpu.cores} cores`)}
+        ${meter("Memory", mem.used == null ? null : mem.used / mem.total, `${fmt.bytes(mem.used)} / ${fmt.bytes(mem.total)}`)}
+        ${meter("Disk", disk.used == null ? null : disk.used / disk.total, `${fmt.bytes(disk.used)} / ${fmt.bytes(disk.total)}`)}
+      </div>
+      <div class="hbar">${bar(h.check, `Proxmox host ${h.name}`)}${pct(h.check)}</div>
+      <div class="axis"><span>${WIN[state.win].from}</span><span>${state.win === "h24" ? "15-minute beats" : "one bar per day"}</span><span>now</span></div>
+    </div>
+    ${guestList.map(guestBlock).join("")}
+    ${h.unmanaged.length && (unmanaged.length || !filtersOn()) ? unmanagedBlock(h, unmanaged, autoOpenUnm) : ""}
+  </section>`;
+}
+function guestBlock({ g, self, svcs }) {
+  const run = runLabels[g.runStatus];
+  return `<div class="row guest-row ${self ? "" : "context"}" id="row-g:${g.id}">
+      <div class="who">${icon(g.status)}<div style="min-width:0">
+        <div class="nm">${esc(g.id)} <span class="tag">${g.kind === "lxc" ? "Container" : "VM"} ${g.vmid}</span>
+          <span class="tag run-${g.runStatus}" title="Run status: does it match its definition">${esc(run.label)}</span></div>
+        <div class="sub"><span class="host-n">${esc(g.hostname)}</span><span>${g.address ? esc(g.address) : "no address"}</span><span>${esc(g.power)}</span>
+          <a href="${esc(INV.proxmoxGuestUrl(g))}" target="_blank" rel="noopener">Proxmox ${EXT.replace('class="ext"', 'class="ext" style="width:11px;height:11px;vertical-align:-1px"')}</a></div>
+      </div></div>
+      ${bar(g.check, `${g.kind === "lxc" ? "Container" : "VM"} ${g.id}`)}${pct(g.check)}
+    </div>
+    ${svcs.map((x) => serviceRow(x.s, x.self)).join("")}`;
+}
+function serviceRow(s, self) {
+  const open = state.open.has(s.id);
+  const primary = s.urls[0];
+  const extra = s.urls.length - 1;
+  const hasDetail = s.dns.length || s.urls.length > 1 || s.notes.length || s.health;
+  const name = primary ? `<a class="svc" href="${esc(primary.url)}" target="_blank" rel="noopener">${esc(s.name)} ${EXT}</a>` : `<span>${esc(s.name)}</span>`;
+  const toggle = hasDetail ? `<button type="button" class="more" data-open="${esc(s.id)}" aria-expanded="${open}" aria-controls="d-${esc(s.id)}">${CHEV}${[extra > 0 ? `${extra + 1} URLs` : "", s.dns.length ? `DNS ${s.dns.length}` : "", !s.dns.length && extra <= 0 ? "Details" : ""].filter(Boolean).join(" · ")}</button>` : "";
+  const st = s.status;
+  const body = s.check ? bar(s.check, `Service ${s.name}`) + pct(s.check)
+    : `<div class="nocheck">${icon("unknown")}<span>No check${s.notes[0] ? ` · ${esc(s.notes[0])}` : ""}</span></div><div class="pct" style="color:var(--faint)">—<small>no check</small></div>`;
+  return `<div class="row svc-row ${self ? "" : "context"}" id="row-s:${esc(s.id)}">
+    <div class="who">${icon(st)}<div style="min-width:0">
+      <div class="nm">${name}${st === "warn" || st === "down" ? badge(st) : ""}${toggle}</div>
+      <div class="sub">${primary ? `<span class="host-n">${esc(primary.host)}</span>` : `<span>${esc(s.description)}</span>`}<span>${esc(s.category)}</span></div>
+    </div></div>${body}</div>
+    ${open ? serviceDetail(s) : ""}`;
+}
+function serviceDetail(s) {
+  const run = runLabels[s.runStatus];
+  return `<div class="detail" id="d-${esc(s.id)}">
+    ${s.urls.length ? `<div><h5>URLs</h5><div class="ulist">${s.urls.map((u) => `<div>${icon(u.check.status)}<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url.replace(/^https?:\/\//, ""))}</a><span class="u">${fmt.pct(u.check.uptime[state.win])} · ${fmt.ms(u.check.ms)}</span></div>`).join("")}</div></div>` : ""}
+    <div><h5>Service</h5><div>${esc(s.description)}</div><div class="muted">${esc(s.workflow)} · run status <span class="tag run-${s.runStatus}">${esc(run.label)}</span></div>
+      ${s.health ? `<div class="muted" style="margin-top:4px">Health: <span class="mono">${esc(s.health.url)}</span> ${s.health.probed ? "(probed)" : "(not probed)"}</div>` : ""}</div>
+    ${s.dns.length ? `<div class="full"><h5>DNS records</h5><table><tbody>${s.dns.map((d) => `<tr><td><span class="tag">${esc(d.type)}</span></td><td class="mono">${esc(d.name)}</td><td class="mono muted">→ ${esc(d.expected)}</td><td class="muted">zone ${esc(d.zone)}</td><td>${d.status === "ok" ? icon("up") + '<span class="sr">resolves</span>' : esc(d.status)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${s.notes.length ? `<div class="full">${s.notes.map((n) => `<div class="note">${esc(n)}</div>`).join("")}</div>` : ""}
+  </div>`;
+}
+function unmanagedBlock(h, list, open) {
+  return `<details class="unm" ${open ? "open" : ""}><summary>${CHEV}${h.unmanaged.length} unmanaged guest${h.unmanaged.length > 1 ? "s" : ""} on ${esc(h.name)} · not monitored${list.length < h.unmanaged.length ? ` · ${list.length} match` : ""}</summary>
+    <table><thead><tr><th>VMID</th><th>Name</th><th>Kind</th><th>State</th><th>CPU / memory</th><th>Tags</th></tr></thead><tbody>
+    ${list.map((u) => `<tr><td class="mono">${u.vmid}</td><td>${esc(u.name)}${u.template ? ' <span class="tag">template</span>' : ""}</td><td>${u.kind === "lxc" ? "Container" : "VM"}</td><td>${esc(u.status)}</td><td>${u.cores} cores · ${fmt.bytes(u.memory)}</td><td>${u.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")}</td></tr>`).join("") || '<tr><td colspan="6">None match the filters.</td></tr>'}
+    </tbody></table></details>`;
+}
+function incidentsBlock(visibleHosts) {
+  const q = state.q.trim().toLowerCase();
+  const list = INCIDENTS.filter((i) => visibleHosts.has(i.host) && (!q || i.items.some((x) => `${x.ent.label} ${x.ent.via ?? ""} ${i.host}`.toLowerCase().includes(q))));
+  const major = list.filter((i) => !i.brief), brief = list.filter((i) => i.brief);
+  const showBrief = state.showBrief;
+  const shown = showBrief ? list : major;
+  const row = (i) => {
+    const dur = fmt.duration(((i.end ?? NOW) - i.start) / 1000);
+    const ents = [...new Map(i.items.map((x) => [x.ent.key, x])).values()];
+    return `<article class="inc"><div class="when"><b>${md(i.start)}</b>${hm(i.start)}</div><div>
+      <h4>${icon(i.worst)} ${esc(i.title)} ${i.end == null ? `<span class="badge down"><span class="live-dot"></span>Ongoing</span>` : `<span class="badge up">${icon("up")}Resolved</span>`}</h4>
+      <div class="span">${i.end == null ? `Started ${hm(i.start)}, ${md(i.start)} · ongoing for ${dur}` : `${hm(i.start)} → ${md(i.end) === md(i.start) ? "" : md(i.end) + " "}${hm(i.end)} · lasted ${dur}`} · ${i.worst === "down" ? "outage" : "degraded"} on ${esc(nodeById[i.host].name)}</div>
+      <div class="aff">${ents.map((x) => `<a href="#row-${esc(x.ent.key)}" data-jump="${esc(x.ent.key)}">${icon(x.worst)}<span class="muted">${esc(x.ent.kind)}</span> ${esc(x.ent.label)}${x.ent.via ? ` <span class="muted mono">${esc(x.ent.via)}</span>` : ""}</a>`).join("")}</div>
+    </div></article>`;
+  };
+  return `<section class="incidents" aria-labelledby="inc-h"><div class="section-title"><h3 id="inc-h">Recent incidents</h3>
+      ${brief.length ? `<button type="button" class="linkbtn" data-brief>${showBrief ? "Hide" : "Show"} ${brief.length} brief degradation${brief.length > 1 ? "s" : ""} under 15 min</button>` : ""}</div>
+    <div class="inc-box">${shown.length ? shown.map(row).join("") : '<p class="muted" style="padding:14px 0;margin:0">No incidents in the last 30 days for this selection.</p>'}</div></section>`;
+}
+
+// ---------- Filtering + render ----------
+const filtersOn = () => !!(state.q.trim() || state.live !== "all" || state.hosts.size);
+function render() {
+  CHECKS.clear(); barSeq = 0;
+  const q = state.q.trim().toLowerCase();
+  const tm = (kind, x) => !q || INV.haystack(kind, x).includes(q);
+  const lm = (st) => state.live === "all" || st === state.live;
+  const visibleHosts = new Set();
+  const html = [];
+  for (const h of nodes) {
+    if (state.hosts.size && !state.hosts.has(h.id)) continue;
+    const hText = tm("node", h);
+    const gl = INV.guestsOf(h.id).map((g) => {
+      const gText = hText || tm("guest", g);
+      const svcs = INV.servicesOf(g.id).filter((s) => (gText || tm("service", s)) && lm(s.status)).map((s) => ({ s, self: true }));
+      return { g, self: gText && lm(g.status), svcs };
+    }).filter((x) => x.self || x.svcs.length);
+    const unmOk = state.live === "all" || state.live === "unknown";
+    const unm = unmOk ? h.unmanaged.filter((u) => hText || tm("unmanaged", u)) : [];
+    const hSelf = hText && lm(h.status);
+    if (!hSelf && !gl.length && !unm.length) continue;
+    visibleHosts.add(h.id);
+    html.push(hostSection(h, gl, unm, hSelf, !!q && unm.length > 0 && !hText));
+  }
+  const filtered = q || state.live !== "all" || state.hosts.size;
+  $("#main").innerHTML = (html.length
+    ? `<div class="section-title"><h3>Proxmox hosts</h3>${filtered ? `<button type="button" class="linkbtn" data-clear>Clear filters</button>` : `<span class="muted" style="font-size:12.5px">Hover or focus a bar for details</span>`}</div>${html.join("")}`
+    : `<div class="empty">${icon("unknown").replace('class="ico', 'style="width:34px;height:34px" class="ico')}<h3>Nothing matches</h3><p>No host, guest or service matches ${q ? `“${esc(state.q)}”` : "these filters"}${state.live !== "all" ? ` with liveness “${label(state.live)}”` : ""}.</p><button type="button" class="chip" data-clear>Clear filters</button></div>`)
+    + incidentsBlock(html.length ? visibleHosts : new Set(state.hosts.size ? state.hosts : nodes.map((n) => n.id)));
+  controls();
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button, a[data-jump]");
+  if (!t) return;
+  if (t.dataset.live) { state.live = t.dataset.live; render(); }
+  else if (t.dataset.host) { state.hosts.has(t.dataset.host) ? state.hosts.delete(t.dataset.host) : state.hosts.add(t.dataset.host); render(); }
+  else if (t.dataset.win) { state.win = t.dataset.win; render(); }
+  else if (t.dataset.open) { state.open.has(t.dataset.open) ? state.open.delete(t.dataset.open) : state.open.add(t.dataset.open); render(); document.querySelector(`[data-open="${CSS.escape(t.dataset.open)}"]`)?.focus(); }
+  else if ("brief" in t.dataset) { state.showBrief = !state.showBrief; render(); }
+  else if ("clear" in t.dataset) { state.q = $("#q").value = ""; state.live = "all"; state.hosts.clear(); render(); }
+  else if (t.dataset.jump) {
+    e.preventDefault();
+    let el = document.getElementById(`row-${t.dataset.jump}`);
+    if (!el) { state.q = $("#q").value = ""; state.live = "all"; state.hosts.clear(); render(); el = document.getElementById(`row-${t.dataset.jump}`); }
+    const target = el.classList.contains("host") ? el.querySelector(".host-head") : el;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.remove("flash"); void target.offsetWidth; target.classList.add("flash");
+    target.querySelector(".bar")?.focus({ preventScroll: true });
+  }
+});
+$("#q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
+
+header();
+render();
+$("#foot").textContent = `Uptime from Octopushy checks · ${INV.zones.length} DNS zones · data as of ${fmt.time(INV.now)}`;
+})();
+</script>
+</body>
+</html>

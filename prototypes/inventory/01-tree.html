@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory · Outline tree</title>
+<!--
+  01 · Outline tree. A dense IDE-explorer tree (host → guest → service → URL) whose right-hand
+  columns line up like an uptime table. Filter rail on the left, detail drawer on the right.
+  URL state for testing: #q=fleet  #select=s:mrb-crt-01/fleet  #win=7d  #expand=all  #live=down
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --bg: #f4f6f8; --surface: #fff; --surface-2: #f7f8fa; --surface-3: #eef1f4; --rail: #eef1f4;
+  --border: #e1e5ea; --border-strong: #c3cbd5; --guide: #e3e7ec;
+  --text: #19212c; --muted: #556172; --faint: #6b7686; --link: #1f4fbf;
+  --accent: #2f5bd3; --accent-soft: #e7eefc; --accent-text: #fff; --hover: #f1f4f8; --sel: #e7eefc;
+  --focus: #2f5bd3;
+  --up: #1f9d55; --warn: #d99a0b; --down: #d64541; --none: #c3cad4;
+  --up-fg: #1a6a37; --up-bg: #e5f4ea; --warn-fg: #835400; --warn-bg: #fcf2db;
+  --down-fg: #b0211f; --down-bg: #fdeaea; --none-fg: #5d6878; --none-bg: #eef1f4;
+  --att-fg: #5b30ad; --att-bg: #f1ebfd; --unc-fg: #a23f00; --unc-bg: #fdeedf;
+  --meter: #3a7bd5; --track: #e3e7ec;
+  --shadow: 0 16px 40px rgb(16 24 40 / 18%), 0 2px 6px rgb(16 24 40 / 8%);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1218; --surface: #131922; --surface-2: #171e28; --surface-3: #1d2531; --rail: #0f141b;
+    --border: #222c3a; --border-strong: #364255; --guide: #232d3b;
+    --text: #e2e8f0; --muted: #98a3b5; --faint: #8794a8; --link: #8db2ff;
+    --accent: #2f5bd3; --accent-soft: #172340; --hover: #18202b; --sel: #1a2742; --focus: #8db2ff;
+    --up: #3fbf74; --warn: #e8b23a; --down: #f0645e; --none: #3a4556;
+    --up-fg: #82d6a0; --up-bg: #15291e; --warn-fg: #f0c463; --warn-bg: #2c2412;
+    --down-fg: #ff9e9a; --down-bg: #331a1b; --none-fg: #a7b1bf; --none-bg: #1f2732;
+    --att-fg: #c8b0ff; --att-bg: #251d3d; --unc-fg: #ffb57a; --unc-bg: #33210f;
+    --meter: #5b8ff0; --track: #273243;
+    --shadow: 0 16px 40px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 35%);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); -webkit-font-smoothing: antialiased; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 4px; }
+.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.dim { color: var(--muted); }
+mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* ---- header ---- */
+header.top { display: flex; align-items: center; gap: 20px; padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20; flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.rev { display: inline-flex; gap: 6px; align-items: baseline; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rev code { font-family: var(--mono); color: var(--text); background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+.totals { margin-left: auto; display: flex; gap: 18px; font-size: 12px; color: var(--muted); }
+.totals div { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.totals b { color: var(--text); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.totals .br { display: inline-flex; gap: 6px; }
+.totals .br span { display: inline-flex; align-items: center; gap: 2px; }
+.totals .br .i { width: 11px; height: 11px; }
+
+/* ---- layout ---- */
+.layout { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: calc(100vh - var(--hh, 46px)); }
+aside.rail { background: var(--rail); border-right: 1px solid var(--border); padding: 14px 12px 80px; position: sticky; top: var(--hh, 46px); height: calc(100vh - var(--hh, 46px)); overflow: auto; }
+.search { position: relative; margin-bottom: 14px; }
+.search .i { position: absolute; left: 8px; top: 8px; color: var(--faint); }
+.search input { width: 100%; height: 30px; padding: 0 28px 0 28px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.search kbd { position: absolute; right: 7px; top: 6px; font: 11px var(--mono); color: var(--faint); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; background: var(--surface-2); }
+.facet { margin: 0 0 14px; border: 0; padding: 0; }
+.facet legend { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); padding: 0 4px 4px; display: flex; width: 100%; }
+.facet legend button { margin-left: auto; border: 0; background: none; color: var(--link); font-size: 11px; text-transform: none; letter-spacing: 0; cursor: pointer; padding: 0; }
+.opt { display: flex; align-items: center; gap: 7px; padding: 3px 4px; border-radius: 5px; cursor: pointer; user-select: none; }
+.opt:hover { background: var(--hover); }
+.opt input { margin: 0; accent-color: var(--accent); width: 13px; height: 13px; }
+.opt .n { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
+.opt .i { width: 13px; height: 13px; }
+.opt.zero { opacity: 0.55; }
+
+main { min-width: 0; padding: 0 0 80px; }
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; position: sticky; top: var(--hh, 46px); background: var(--bg); z-index: 10; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 4px 11px; cursor: pointer; font-size: 12px; font-weight: 550; color: var(--muted); font-variant-numeric: tabular-nums; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 6px; padding: 4px 9px; font-size: 12px; cursor: pointer; color: var(--text); }
+.btn:hover { background: var(--hover); }
+.toolbar .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.toolbar .lab { color: var(--muted); font-size: 12px; }
+
+/* ---- tree grid ---- */
+.tree { margin: 0 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: clip; }
+.tree { --cols: minmax(220px, 1fr) 288px 100px 156px 68px 74px 78px; }
+.row { display: grid; grid-template-columns: var(--cols); align-items: center; height: 30px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); cursor: pointer; position: relative; }
+.row > * { min-width: 0; padding: 0 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+.row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 0; }
+.row.head { cursor: default; height: 30px; background: var(--surface-2); position: sticky; top: var(--th, 93px); z-index: 5; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+.row.head:hover { background: var(--surface-2); }
+.r { text-align: right; }
+.row.t-host { height: 36px; background: var(--surface-2); border-top: 1px solid var(--border); }
+.row.t-host:first-of-type { border-top: 0; }
+.row.t-host.sel { background: var(--sel); }
+.row.t-host .nm { font-weight: 650; font-size: 13.5px; }
+.row.ctx .nm { color: var(--muted); font-weight: 450; }
+.row.t-folder, .row.t-unmanaged { color: var(--muted); }
+.row.t-folder .nm { font-style: italic; }
+.row.t-unmanaged .ticon, .row.t-folder .ticon { opacity: 0.7; }
+
+.c-name { display: flex; align-items: center; gap: 5px; padding-left: calc(var(--d) * 20px + 6px) !important; position: relative; height: 100%; }
+.c-name .g { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--guide); }
+.chev { width: 18px; height: 18px; display: grid; place-items: center; border: 0; background: none; padding: 0; cursor: pointer; color: var(--faint); border-radius: 4px; flex: none; }
+.chev:hover { background: var(--surface-3); color: var(--text); }
+.chev .i { width: 12px; height: 12px; transition: transform 0.12s; }
+.chev[aria-expanded="true"] .i { transform: rotate(90deg); }
+.chev-sp { width: 18px; flex: none; }
+.ticon { color: var(--faint); display: grid; place-items: center; }
+.t-host .ticon { color: var(--accent); }
+.nm { overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 60%; }
+.sub { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sub.note { font-style: italic; }
+.tag { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-weight: 500; flex: none; }
+.tag.down { background: var(--down-bg); color: var(--down-fg); }
+.tag.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.tag.up { background: var(--up-bg); color: var(--up-fg); }
+.tag.att { background: var(--att-bg); color: var(--att-fg); }
+.tag.unc { background: var(--unc-bg); color: var(--unc-fg); }
+.tag.outline { background: none; border: 1px dashed var(--border-strong); }
+.c-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.c-meta .mono { font-size: 11.5px; }
+
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; line-height: 18px; padding: 0 7px 0 5px; border-radius: 999px; }
+.pill .i { width: 12px; height: 12px; stroke-width: 1.8; }
+.pill.up { background: var(--up-bg); color: var(--up-fg); }
+.pill.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.pill.down { background: var(--down-bg); color: var(--down-fg); }
+.pill.unknown { background: var(--none-bg); color: var(--none-fg); }
+.nomon { color: var(--faint); font-size: 11.5px; }
+
+.hist svg { display: block; width: 100%; height: 16px; }
+.hist .nohist { display: block; height: 0; border-top: 1px dashed var(--border-strong); margin: 0 2px; }
+.b-up { fill: var(--up); } .b-warn { fill: var(--warn); } .b-down { fill: var(--down); } .b-none { fill: var(--none); }
+.c-pct, .c-ms { font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; }
+.c-pct.warn { color: var(--warn-fg); font-weight: 600; } .c-pct.down { color: var(--down-fg); font-weight: 600; }
+.c-ms { color: var(--muted); }
+.row.head .c-ms { font-size: 11px; color: inherit; }
+.row.ctx > :not(.c-name), .row.ctx .sub { opacity: 0.5; }
+.c-links { display: flex; justify-content: flex-end; gap: 2px; }
+.lk { display: inline-grid; place-items: center; height: 22px; min-width: 22px; padding: 0 3px; border-radius: 5px; color: var(--muted); }
+.lk:hover { background: var(--accent-soft); color: var(--link); text-decoration: none; }
+.lk .i { width: 13px; height: 13px; }
+.pve { font: 700 8.5px/1 var(--mono); letter-spacing: 0.02em; border: 1.3px solid currentColor; border-radius: 3px; padding: 2px 2px 1px; }
+
+.meters { display: flex; gap: 10px; }
+.m { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.m b { font-size: 9.5px; font-weight: 600; color: var(--faint); letter-spacing: 0.04em; }
+.m .bar { width: 26px; height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.m .bar i { display: block; height: 100%; background: var(--meter); border-radius: 3px; }
+.m .bar i.hi { background: var(--warn); } .m .bar i.crit { background: var(--down); }
+.m.stale { opacity: 0.6; font-style: italic; }
+
+.empty { padding: 56px 20px; text-align: center; color: var(--muted); }
+.empty h2 { margin: 0 0 6px; font-size: 15px; color: var(--text); }
+
+/* ---- drawer ---- */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow); z-index: 30; transform: translateX(105%); transition: transform 0.18s ease; display: flex; flex-direction: column; }
+.drawer.open { transform: none; }
+.drawer.instant { transition: none; }
+.dh { padding: 14px 18px 12px; border-bottom: 1px solid var(--border); }
+.dh .crumb { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.dh .crumb button { border: 0; background: none; color: var(--link); cursor: pointer; padding: 0; font-size: 12px; }
+.dh h2 { margin: 4px 0 6px; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+.dh .kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.dh .close { position: absolute; right: 12px; top: 12px; border: 0; background: none; cursor: pointer; padding: 6px; border-radius: 6px; color: var(--muted); }
+.dh .close:hover { background: var(--hover); }
+.dh .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.dh .acts a { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 6px; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 550; }
+.dh .acts a.sec { background: var(--surface-3); color: var(--text); }
+.db { overflow: auto; padding: 4px 18px 80px; flex: 1; }
+.db section { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.db section:last-child { border-bottom: 0; }
+.db h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; display: flex; gap: 6px; }
+.db h3 span { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 450; }
+dl.kv { display: grid; grid-template-columns: 112px 1fr; gap: 6px 10px; margin: 0; font-size: 12.5px; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.ups div { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; }
+.ups div.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ups small { display: block; color: var(--muted); font-size: 11px; }
+.ups b { font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 650; }
+.chart { margin: 4px 0 12px; }
+.chart svg { display: block; width: 100%; }
+.chart .ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+.chart .lbl { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; }
+.lat-line { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.lat-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.list li { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; }
+.list li:hover { background: var(--hover); }
+.list .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list button.go { border: 0; background: none; color: var(--text); cursor: pointer; padding: 0; text-align: left; font-weight: 500; }
+.list button.go:hover { color: var(--link); text-decoration: underline; }
+table.dns { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.dns th { text-align: left; font-weight: 600; color: var(--faint); font-size: 11px; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+table.dns td { padding: 5px 6px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); vertical-align: top; overflow-wrap: anywhere; }
+.callout { display: flex; gap: 8px; padding: 8px 10px; border-radius: 7px; background: var(--none-bg); color: var(--text); font-size: 12.5px; margin-bottom: 6px; }
+.callout .i { color: var(--muted); margin-top: 2px; }
+.ev { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; font-size: 12px; padding: 4px 0; }
+.ev .arrow { color: var(--faint); }
+.bigmeter { height: 7px; border-radius: 4px; background: var(--track); overflow: hidden; margin-top: 3px; }
+.bigmeter i { display: block; height: 100%; background: var(--meter); }
+
+@media (max-width: 1260px) {
+  .tree { --cols: minmax(200px, 1fr) 236px 98px 112px 66px 62px 78px; }
+  .meters { gap: 6px; } .m .bar { width: 18px; }
+}
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .tree { --cols: minmax(180px, 1fr) 156px 98px 96px 66px 0 78px; }
+  .c-ms { padding: 0 !important; visibility: hidden; }
+  .m b { display: none; }
+  .c-meta .vmid, .c-meta .pw { display: none; }
+  .totals .br { display: none; }
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  aside.rail { position: static; height: auto; padding-bottom: 14px; }
+  .tree { --cols: minmax(0, 1fr) 0 92px 0 58px 0 52px; margin: 0 8px; }
+  .c-meta, .hist { visibility: hidden; padding: 0 !important; }
+  .toolbar { top: 0; position: static; } .row.head { top: var(--hh, 46px); }
+  .totals { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Inventory</h1>
+    <span class="rev" id="rev"></span>
+  </div>
+  <div class="totals" id="totals" aria-label="Summary"></div>
+</header>
+<div class="layout">
+  <aside class="rail" aria-label="Filters">
+    <div class="search">
+      <svg class="i" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+      <input id="q" type="search" placeholder="Search everything" aria-label="Search hosts, guests and services" autocomplete="off">
+      <kbd aria-hidden="true">/</kbd>
+    </div>
+    <div id="facets"></div>
+  </aside>
+  <main>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Uptime window" id="win">
+        <button data-win="h24">24h</button><button data-win="d7">7d</button><button data-win="d30">30d</button>
+      </div>
+      <button class="btn" id="expandAll"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>Expand all</button>
+      <button class="btn" id="collapseAll"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Collapse all</button>
+      <span class="count" id="count" aria-live="polite"></span>
+    </div>
+    <div class="tree" id="tree" role="treegrid" aria-label="Hosts, guests and services"></div>
+  </main>
+</div>
+<aside class="drawer" id="drawer" aria-label="Details" aria-hidden="true"></aside>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+const INV = window.INV, F = INV.fmt;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const P = {
+  chev: '<path d="M6 3.5L10.5 8 6 12.5"/>',
+  host: '<rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.75h.01M5 11.25h.01M8 4.75h3M8 11.25h3"/>',
+  vm: '<rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M5.5 13.5h5M8 11v2.5"/>',
+  lxc: '<path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z"/><path d="M2.5 4.8L8 7.8l5.5-3M8 7.8v6.4"/>',
+  svc: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="2.25"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="2.25"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
+  link: '<path d="M6.5 9.5l3-3"/><path d="M7.2 4.3l1-1a2.6 2.6 0 013.6 3.6l-1 1M8.8 11.7l-1 1a2.6 2.6 0 01-3.6-3.6l1-1"/>',
+  ext: '<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5"/><path d="M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3"/>',
+  folder: '<path d="M2 4.5a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>',
+  up: '<circle cx="8" cy="8" r="6"/><path d="M5.3 8.2l1.8 1.8 3.6-3.8"/>',
+  warn: '<path d="M8 2.2l6.2 11H1.8z"/><path d="M8 6.5v3M8 11.4h.01"/>',
+  down: '<rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.5"/><path d="M5.7 5.7l4.6 4.6M10.3 5.7l-4.6 4.6"/>',
+  unknown: '<circle cx="8" cy="8" r="6" stroke-dasharray="2.4 1.9"/><path d="M5.5 8h5"/>',
+  x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 5.2h.01"/>',
+  tpl: '<rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke-dasharray="2 1.6"/>',
+};
+const ic = (k, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${P[k]}</svg>`;
+const LIVE = ["down", "warn", "up", "unknown"];
+const pill = (st) => `<span class="pill ${st}">${ic(st)}${INV.liveness[st].label}</span>`;
+const RUNTONE = { success: "up", danger: "down", attention: "att", uncertain: "unc", neutral: "" };
+const runTag = (rs) => { const r = INV.runLabels[rs]; return `<span class="tag ${RUNTONE[r.tone] ?? ""}" title="Run status: does it match its definition">${esc(r.label)}</span>`; };
+const tier = (p) => (p == null ? "none" : p >= 99.9 ? "up" : p >= 99 ? "warn" : "down");
+const WIN = { h24: "Last 24 h", d7: "Last 7 days", d30: "Last 30 days" };
+const pveGuestUrl = (host, kind, vmid) => `${host.proxmoxUrl}#v1:0:=${kind}%2F${vmid}:4:::::::`;
+
+// ---- build the tree ----
+const items = new Map();
+const add = (it, parent) => { it.parent = parent || null; it.depth = parent ? parent.depth + 1 : 0; it.children = []; if (parent) parent.children.push(it); items.set(it.id, it); return it; };
+const roots = INV.nodes.map((n) => {
+  const h = add({ id: "h:" + n.id, type: "host", d: n, host: n, name: n.name, check: n.check, status: n.status, hay: INV.haystack("node", n) });
+  for (const g of INV.guestsOf(n.id)) {
+    const gi = add({ id: "g:" + g.id, type: "guest", d: g, host: n, guest: g, name: g.id, check: g.check, status: g.status, hay: INV.haystack("guest", g) }, h);
+    for (const s of INV.servicesOf(g.id)) {
+      const si = add({ id: "s:" + s.id, type: "service", d: s, host: n, guest: g, name: s.name, check: s.check, status: s.status, hay: INV.haystack("service", s) }, gi);
+      if (s.urls.length > 1) s.urls.forEach((u, k) => add({ id: `u:${s.id}#${k}`, type: "url", d: u, svc: s, host: n, guest: g, name: u.host, check: u.check, status: u.check.status, hay: u.url.toLowerCase() }, si));
+    }
+  }
+  if (n.unmanaged.length) {
+    const f = add({ id: "f:" + n.id, type: "folder", d: n, host: n, name: "Unmanaged", status: "unknown", hay: "unmanaged" }, h);
+    for (const x of n.unmanaged) add({ id: `x:${n.id}:${x.vmid}`, type: "unmanaged", d: x, host: n, name: x.name, status: "unknown", hay: INV.haystack("unmanaged", x) + " unmanaged" + (x.template ? " template" : "") }, f);
+  }
+  return h;
+});
+const cats = [...new Set(INV.services.map((s) => s.category))].sort();
+
+// ---- state ----
+const S = {
+  q: "", live: new Set(LIVE), hosts: new Set(INV.nodes.map((n) => n.id)), kinds: new Set(["qemu", "lxc"]), cats: new Set(cats),
+  win: "h24", open: new Set([...items.values()].filter((i) => i.type === "host" || i.type === "guest").map((i) => i.id)), shut: new Set(), sel: null, focus: null,
+};
+const active = () => ({ q: !!S.q, live: S.live.size < 4, hosts: S.hosts.size < INV.nodes.length, kinds: S.kinds.size < 2, cats: S.cats.size < cats.length });
+const anyActive = () => Object.values(active()).some(Boolean);
+
+// ---- matching ----
+const kindOf = (it) => (it.type === "unmanaged" ? it.d.kind : it.guest ? it.guest.kind : null);
+function selfMatch(it, a, textInherited) {
+  if (it.type === "folder") return false;
+  if (a.q && !textInherited && !it.hay.includes(S.q)) return false;
+  if (a.live && !S.live.has(it.status)) return false;
+  if (a.hosts && !S.hosts.has(it.host.id)) return false;
+  const k = kindOf(it);
+  if (a.kinds && (!k || !S.kinds.has(k))) return false;
+  const s = it.type === "service" ? it.d : it.type === "url" ? it.svc : null;
+  if (a.cats && (!s || !S.cats.has(s.category))) return false;
+  return true;
+}
+let VIS = new Map(); // id -> {match, visible}
+function compute() {
+  const a = active();
+  VIS = new Map();
+  const walk = (it, inh) => {
+    const m = selfMatch(it, a, inh);
+    const pass = inh || (a.q && it.name.toLowerCase().includes(S.q)) || (it.type === "folder" && a.q && it.hay.includes(S.q));
+    let anyChild = false;
+    for (const c of it.children) anyChild = walk(c, pass && a.q) || anyChild;
+    const visible = m || anyChild;
+    VIS.set(it.id, { match: m, visible, kids: anyChild });
+    return visible;
+  };
+  roots.forEach((r) => walk(r, false));
+}
+const isOpen = (it) => {
+  if (!it.children.length) return false;
+  if (S.open.has(it.id)) return true;
+  if (S.shut.has(it.id) || !anyActive() || !VIS.get(it.id).kids) return false;
+  // While filtering, open whatever leads to a match. Unmanaged folders only open for search / liveness / kind.
+  return it.type !== "folder" || !!S.q || S.live.size < 4 || S.kinds.size < 2;
+};
+
+// ---- cells ----
+function hist(check, win, h = 16) {
+  if (!check) return `<span class="nohist" title="No check"></span>`;
+  if (win === "h24") {
+    const k = h > 16 || innerWidth > 1260 ? 1 : 2, n = 96 / k; // merge pairs of beats when the column is narrow
+    const worst = (a) => (a.includes("down") ? "down" : a.includes("warn") ? "warn" : "up");
+    const r = Array.from({ length: n }, (_, i) => {
+      const b = worst(check.beats.slice(i * k, i * k + k)), ago = (96 - i * k) * 15;
+      return `<rect x="${i + 0.14}" y="0" width="0.72" height="${h}" rx="0.25" class="b-${b}"><title>${esc(F.time(INV.now - ago * 60000))} · ${INV.liveness[b].label}</title></rect>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${n} ${h}" preserveAspectRatio="none" role="img" aria-label="Last 24 hours: ${check.beats.filter((b) => b !== "up").length} of 96 intervals not up">${r}</svg>`;
+  }
+  const days = win === "d7" ? check.daily.slice(-7) : check.daily;
+  const n = days.length, gap = n === 7 ? 0.18 : 0.14;
+  const r = days.map((p, i) => {
+    const ago = n - 1 - i, d = new Date(INV.now - ago * 86400000);
+    const hh = Math.max(3, h * (p >= 99.9 ? 1 : 0.35 + 0.65 * Math.max(0, (p - 80) / 20)));
+    return `<rect x="${i + gap}" y="${h - hh}" width="${1 - 2 * gap}" height="${hh}" rx="0.12" class="b-${tier(p)}"><title>${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${F.pct(p, 1)} up</title></rect>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${n} ${h}" preserveAspectRatio="none" role="img" aria-label="${n} daily bars">${r}</svg>`;
+}
+function meter(label, frac, title, stale) {
+  const v = frac == null ? "—" : Math.round(frac * 100) + "%";
+  const cls = frac == null ? "" : frac >= 0.9 ? "crit" : frac >= 0.75 ? "hi" : "";
+  return `<span class="m${stale ? " stale" : ""}" title="${esc(title)}"><b>${label}</b><span class="bar"><i class="${cls}" style="width:${frac == null ? 0 : Math.max(3, frac * 100)}%"></i></span>${v}</span>`;
+}
+function hostMeters(n) {
+  const st = !n.online, last = st ? " (last known, host offline)" : "";
+  return `<span class="meters">${meter("CPU", n.cpu.used, `CPU: ${n.cpu.cores} cores, ${n.cpu.used == null ? "usage unknown" : Math.round(n.cpu.used * 100) + "% used"}${last}`, st)}${meter("MEM", n.memory.used == null ? null : n.memory.used / n.memory.total, `Memory: ${F.bytes(n.memory.used)} of ${F.bytes(n.memory.total)}${last}`, st)}${meter("DISK", n.disk.used == null ? null : n.disk.used / n.disk.total, `Disk: ${F.bytes(n.disk.used)} of ${F.bytes(n.disk.total)}${last}`, st)}</span>`;
+}
+const hl = (text) => {
+  const t = esc(text);
+  if (!S.q) return t;
+  const i = text.toLowerCase().indexOf(S.q);
+  return i < 0 ? t : esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + S.q.length)) + "</mark>" + esc(text.slice(i + S.q.length));
+};
+const pveLink = (href, what) => `<a class="lk" href="${esc(href)}" target="_blank" rel="noopener" aria-label="Open ${esc(what)} in Proxmox" title="Open in Proxmox"><span class="pve">PVE</span></a>`;
+const urlLink = (u) => `<a class="lk" href="${esc(u.url)}" target="_blank" rel="noopener" aria-label="Open ${esc(u.host)}" title="${esc(u.url)}">${ic("ext")}</a>`;
+
+function typeIcon(it) {
+  if (it.type === "host") return ic("host");
+  if (it.type === "guest" || it.type === "unmanaged") return ic(kindOf(it) === "lxc" ? "lxc" : "vm");
+  if (it.type === "service") return ic("svc");
+  if (it.type === "url") return ic("link");
+  return ic("folder");
+}
+function nameCell(it, open) {
+  const guides = [];
+  for (let k = 0; k < it.depth; k++) guides.push(`<i class="g" style="left:${k * 20 + 15}px"></i>`);
+  const chev = it.children.length
+    ? `<button class="chev" tabindex="-1" aria-expanded="${open}" aria-label="${open ? "Collapse" : "Expand"} ${esc(it.name)}" data-toggle="${esc(it.id)}">${ic("chev")}</button>`
+    : `<span class="chev-sp"></span>`;
+  let name = `<span class="nm">${hl(it.name)}</span>`, sub = "";
+  const d = it.d;
+  if (it.type === "host") {
+    sub = [`PVE ${esc(d.version)}`, esc(d.address), d.online && "up " + F.duration(d.uptimeSeconds)].filter(Boolean).join(" · ");
+    if (!d.online) name += `<span class="tag down">${ic("down")}offline · ${esc(d.offlineReason)}</span>`;
+  } else if (it.type === "guest") sub = esc(d.description);
+  else if (it.type === "service") sub = d.status === "unknown" && d.notes.length ? `<span class="note">${esc(d.notes[0])}</span>` : esc(d.description);
+  else if (it.type === "url") name = `<a class="nm" href="${esc(d.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${hl(d.host)}</a>`;
+  else if (it.type === "folder") {
+    const v = it.children.filter((c) => VIS.get(c.id).visible).length;
+    name = `<span class="nm">Unmanaged (${v === it.children.length ? v : v + " of " + it.children.length})</span>`;
+    sub = "on this host, not managed by Octopushy";
+  } else if (it.type === "unmanaged" && d.template) name += `<span class="tag outline">${ic("tpl")}template</span>`;
+  return `<div class="c-name" role="gridcell" style="--d:${it.depth}">${guides.join("")}${chev}<span class="ticon">${typeIcon(it)}</span>${name}<span class="sub">${sub}</span></div>`;
+}
+function metaCell(it) {
+  const d = it.d;
+  let h = "";
+  if (it.type === "host") h = hostMeters(d);
+  else if (it.type === "guest") {
+    h = `<span class="mono vmid">#${d.vmid}</span><span class="mono">${d.address ? esc(d.address) : '<span class="dim">no IP</span>'}</span>`;
+    if (d.power !== "running") h += `<span class="tag pw">${d.power === "unknown" ? "power unknown" : esc(d.power)}</span>`;
+    if (d.runStatus !== "in-sync") h += runTag(d.runStatus);
+  } else if (it.type === "service") {
+    h = `<span class="tag">${esc(d.category)}</span>`;
+    if (d.urls.length === 1) h += `<span class="mono dim">${esc(d.urls[0].host)}</span>`;
+    else if (d.urls.length) h += `<span>${d.urls.length} URLs</span>`;
+    if (d.runStatus !== "in-sync") h += runTag(d.runStatus);
+  } else if (it.type === "url") h = `<span class="dim">HTTP check</span>`;
+  else if (it.type === "folder") {
+    const by = {}; d.unmanaged.forEach((x) => (by[x.status] = (by[x.status] || 0) + 1));
+    const tpl = d.unmanaged.filter((x) => x.template).length;
+    h = `<span>${Object.entries(by).map(([k, n]) => `${n} ${k}`).join(" · ")}${tpl ? ` · ${tpl} template` : ""}</span>`;
+  } else h = `<span class="mono">#${d.vmid}</span><span>${esc(d.status)}</span><span>${d.cores} vCPU · ${F.bytes(d.memory)}</span>`;
+  return `<div class="c-meta" role="gridcell">${h}</div>`;
+}
+function linksCell(it) {
+  let h = "";
+  if (it.type === "host") h = pveLink(it.d.proxmoxUrl, it.d.name);
+  else if (it.type === "guest") h = pveLink(INV.proxmoxGuestUrl(it.d), it.d.id);
+  else if (it.type === "unmanaged") h = pveLink(pveGuestUrl(it.host, it.d.kind, it.d.vmid), it.d.name);
+  else if (it.type === "service") h = it.d.urls.slice(0, 3).map(urlLink).join("");
+  else if (it.type === "url") h = urlLink(it.d);
+  return `<div class="c-links" role="gridcell">${h}</div>`;
+}
+function row(it) {
+  const v = VIS.get(it.id), open = isOpen(it), c = it.check, w = S.win;
+  const live = c ? pill(it.status) : it.type === "service" ? pill("unknown") : it.type === "unmanaged" ? `<span class="nomon" title="Unmanaged guests have no checks">not monitored</span>` : "";
+  const p = c ? c.uptime[w] : null;
+  const pct = c ? `<div class="c-pct ${tier(p)}" role="gridcell">${F.pct(p, p >= 99.995 && p < 100 ? 3 : 2)}</div>` : `<div class="c-pct dim" role="gridcell">${it.type === "folder" ? "" : "—"}</div>`;
+  const ms = `<div class="c-ms" role="gridcell">${c ? F.ms(c.ms) : ""}</div>`;
+  const cls = ["row", "t-" + it.type, v.match || !anyActive() ? "" : "ctx", S.sel === it.id ? "sel" : ""].join(" ");
+  return `<div class="${cls}" role="row" tabindex="${S.focus === it.id ? 0 : -1}" data-id="${esc(it.id)}" aria-level="${it.depth + 1}"${it.children.length ? ` aria-expanded="${open}"` : ""} aria-selected="${S.sel === it.id}">${nameCell(it, open)}${metaCell(it)}<div class="c-live" role="gridcell">${live}</div><div class="hist" role="gridcell">${it.type === "folder" ? "" : hist(c, w)}</div>${pct}${ms}${linksCell(it)}</div>`;
+}
+
+// ---- render ----
+let flat = [];
+function render() {
+  compute();
+  flat = [];
+  const walk = (it) => { if (!VIS.get(it.id).visible) return; flat.push(it); if (isOpen(it)) it.children.forEach(walk); };
+  roots.forEach(walk);
+  if (!S.focus || !flat.some((i) => i.id === S.focus)) S.focus = flat[0]?.id ?? null;
+  const head = `<div class="row head" role="row"><div role="columnheader" style="padding-left:32px">Name</div><div role="columnheader">Details</div><div role="columnheader">Status</div><div role="columnheader">${WIN[S.win]}</div><div role="columnheader" class="r">Uptime</div><div role="columnheader" class="r c-ms h">Latency</div><div role="columnheader" class="r">Open</div></div>`;
+  const tree = document.getElementById("tree");
+  const hadFocus = tree.contains(document.activeElement) && document.activeElement.classList.contains("row");
+  tree.innerHTML = head + (flat.length ? flat.map(row).join("") : `<div class="empty"><h2>Nothing matches${S.q ? ` “${esc(S.q)}”` : ""}</h2><p>Try a shorter search or widen the filters.</p><button class="btn" data-clear>Clear all filters</button></div>`);
+  if (hadFocus && S.focus) tree.querySelector(`.row[data-id="${CSS.escape(S.focus)}"]`)?.focus();
+  const shown = [...VIS.entries()].filter(([id, v]) => v.match && !id.startsWith("u:")).length;
+  document.getElementById("count").textContent = anyActive() ? (shown ? `${shown} matching · parents kept for context` : "No matches") : `${INV.nodes.length} hosts · ${INV.guests.length} guests · ${INV.services.length} services`;
+  for (const b of document.querySelectorAll("#win button")) b.setAttribute("aria-pressed", b.dataset.win === S.win);
+  renderFacets();
+  writeHash();
+}
+
+function renderFacets() {
+  const ents = [...INV.nodes, ...INV.guests, ...INV.services];
+  const cnt = (st) => ents.filter((e) => e.status === st).length;
+  const opt = (group, val, label, n, icon = "", checked) => `<label class="opt${n ? "" : " zero"}"><input type="checkbox" data-f="${group}" value="${esc(val)}"${checked ? " checked" : ""}>${icon}<span>${label}</span><span class="n">${n}</span></label>`;
+  const reset = (g, on) => (on ? `<button data-reset="${g}">Reset</button>` : "");
+  const a = active();
+  document.getElementById("facets").innerHTML = `
+  <fieldset class="facet"><legend>Liveness ${reset("live", a.live)}</legend>${LIVE.map((s) => opt("live", s, INV.liveness[s].label, cnt(s), `<span class="pill ${s}" style="padding:0 3px">${ic(s)}</span>`, S.live.has(s))).join("")}</fieldset>
+  <fieldset class="facet"><legend>Proxmox host ${reset("hosts", a.hosts)}</legend>${INV.nodes.map((n) => opt("hosts", n.id, esc(n.name), INV.guestsOf(n.id).length, `<span class="pill ${n.status}" style="padding:0 3px">${ic(n.status)}</span>`, S.hosts.has(n.id))).join("")}</fieldset>
+  <fieldset class="facet"><legend>Guest kind ${reset("kinds", a.kinds)}</legend>${[["qemu", "VM", "vm"], ["lxc", "Container", "lxc"]].map(([k, l, i]) => opt("kinds", k, l, INV.guests.filter((g) => g.kind === k).length, ic(i), S.kinds.has(k))).join("")}</fieldset>
+  <fieldset class="facet"><legend>Service category ${reset("cats", a.cats)}</legend>${cats.map((c) => opt("cats", c, esc(c), INV.services.filter((s) => s.category === c).length, "", S.cats.has(c))).join("")}</fieldset>
+  <p class="dim" style="font-size:11.5px;margin:4px 4px 0">Last observed ${esc(F.ago(INV.observedAt))}, every ${INV.intervalSeconds}s.</p>`;
+}
+
+// ---- drawer ----
+const drawer = document.getElementById("drawer");
+function latChart(lat) {
+  const vals = lat.filter((v) => v != null);
+  if (!vals.length) return "";
+  const max = Math.max(...vals) * 1.1, H = 40;
+  let line = "", area = "", seg = [];
+  const flush = () => { if (seg.length) { line += "M" + seg.join("L"); area += `M${seg[0].split(",")[0]},${H}L${seg.join("L")}L${seg[seg.length - 1].split(",")[0]},${H}Z`; } seg = []; };
+  lat.forEach((v, i) => (v == null ? flush() : seg.push(`${i},${(H - (v / max) * H).toFixed(1)}`)));
+  flush();
+  const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  return `<div class="chart"><div class="lbl"><span>Response time, last 24 h</span><span>min ${Math.min(...vals)} · avg ${avg} · max ${Math.max(...vals)} ms</span></div><svg viewBox="0 0 95 ${H}" preserveAspectRatio="none" style="height:${H}px"><path class="lat-area" d="${area}"/><path class="lat-line" d="${line}"/></svg></div>`;
+}
+function uptimeSection(c, title = "Uptime") {
+  if (!c) return "";
+  const ev = c.events.length ? c.events.map((e) => `<div class="ev"><span>${pill(e.from === "warn" ? "warn" : e.from)}</span><span class="arrow">→ ${pill(e.to)}</span><span class="dim" title="${esc(F.time(e.at))}">${esc(F.ago(e.at))}</span></div>`).join("") : `<p class="dim" style="margin:0">No status changes in 30 days.</p>`;
+  return `<section><h3>${title}<span>${pill(c.status)} since ${esc(F.ago(c.since))}</span></h3>
+    <div class="ups">${["h24", "d7", "d30"].map((k) => `<div class="${k === S.win ? "on" : ""}"><small>${{ h24: "24 hours", d7: "7 days", d30: "30 days" }[k]}</small><b class="c-pct ${tier(c.uptime[k])}" style="text-align:left;font-size:16px">${F.pct(c.uptime[k])}</b></div>`).join("")}</div>
+    <div class="chart"><div class="lbl"><span>Last 24 h, 15 min beats</span><span>${c.ms != null ? "now " + c.ms + " ms" : ""}</span></div><div class="hist">${hist(c, "h24", 26).replace("<svg", '<svg style="height:26px"')}</div><div class="ax"><span>24 h ago</span><span>12 h</span><span>now</span></div></div>
+    <div class="chart"><div class="lbl"><span>Last 30 days</span></div><div class="hist">${hist(c, "d30", 26).replace("<svg", '<svg style="height:26px"')}</div><div class="ax"><span>30 d ago</span><span>15 d</span><span>today</span></div></div>
+    ${latChart(c.latency)}</section>
+    <section><h3>Status changes<span>${c.events.length} recent</span></h3>${ev}</section>`;
+}
+const kv = (rows) => `<dl class="kv">${rows.filter(Boolean).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+const goBtn = (id, label) => `<button class="go" data-go="${esc(id)}">${esc(label)}</button>`;
+function bigMeter(label, frac, text) {
+  return `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px"><span class="dim">${label}</span><span>${text}</span></div><div class="bigmeter"><i style="width:${frac == null ? 0 : frac * 100}%"></i></div></div>`;
+}
+function drawerHtml(it) {
+  const d = it.d, crumbs = [];
+  for (let p = it.parent; p; p = p.parent) if (p.type !== "folder") crumbs.unshift(goBtn(p.id, p.name));
+  const kindLabel = { host: "Proxmox host", guest: d.kind === "lxc" ? "Container" : "VM", service: "Service", url: "Service URL", unmanaged: (d.kind === "lxc" ? "Container" : "VM") + " · unmanaged" }[it.type];
+  let acts = "", body = "";
+  if (it.type === "host") {
+    acts = `<a href="${esc(d.proxmoxUrl)}" target="_blank" rel="noopener">${ic("ext")}Open Proxmox</a>`;
+    const st = d.online ? "" : ' <span class="dim">(last known)</span>';
+    body = `<section><h3>Details</h3>${kv([["State", d.online ? '<span class="tag up">online</span>' : `<span class="tag down">offline</span> ${esc(d.offlineReason)}`], ["PVE version", esc(d.version)], ["Address", `<span class="mono">${esc(d.address)}</span>`], ["Web UI", `<a href="${esc(d.proxmoxUrl)}" target="_blank" rel="noopener">${esc(d.proxmoxUrl)}</a>`], ["Host uptime", F.duration(d.uptimeSeconds)], ["CPU", `${d.cpu.cores} cores · ${esc(d.cpu.model)}`]])}</section>
+      <section><h3>Resources${st}</h3>${bigMeter("CPU", d.cpu.used, d.cpu.used == null ? "—" : Math.round(d.cpu.used * 100) + "% of " + d.cpu.cores + " cores")}${bigMeter("Memory", d.memory.used == null ? null : d.memory.used / d.memory.total, `${F.bytes(d.memory.used)} / ${F.bytes(d.memory.total)}`)}${bigMeter("Disk", d.disk.used == null ? null : d.disk.used / d.disk.total, `${F.bytes(d.disk.used)} / ${F.bytes(d.disk.total)}`)}</section>
+      <section><h3>Guests<span>${INV.guestsOf(d.id).length} managed · ${d.unmanaged.length} unmanaged</span></h3><ul class="list">${INV.guestsOf(d.id).map((g) => `<li>${ic(g.kind === "lxc" ? "lxc" : "vm")}<span class="grow">${goBtn("g:" + g.id, g.id)}</span><span class="mono dim">#${g.vmid}</span>${pill(g.status)}</li>`).join("")}${d.unmanaged.map((x) => `<li style="opacity:.75">${ic(x.kind === "lxc" ? "lxc" : "vm")}<span class="grow">${goBtn(`x:${d.id}:${x.vmid}`, x.name)} ${x.template ? '<span class="tag outline">template</span>' : ""}</span><span class="mono dim">#${x.vmid}</span><span class="dim">${esc(x.status)}</span></li>`).join("")}</ul></section>`;
+  } else if (it.type === "guest") {
+    acts = `<a href="${esc(INV.proxmoxGuestUrl(d))}" target="_blank" rel="noopener">${ic("ext")}Open in Proxmox</a>`;
+    const svcs = INV.servicesOf(d.id);
+    body = `<section><h3>Details</h3>${kv([["VMID", `<span class="mono">${d.vmid}</span>`], ["Kind", d.kind === "lxc" ? "Container (LXC)" : "VM (QEMU)"], ["Address", d.address ? `<span class="mono">${esc(d.address)}</span>` : '<span class="dim">none</span>'], ["Hostname", `<span class="mono">${esc(d.hostname)}</span>`], ["Power", esc(d.power)], ["Run status", runTag(d.runStatus)], ["Last run", `${esc(INV.runLabels[d.lastRun.status].label)} · ${esc(F.ago(d.lastRun.at))}`], ["Workflow", `<span class="mono">${esc(d.workflow)}</span>`], ["Resources", `${d.cores} vCPU · ${F.bytes(d.memory)} RAM · ${F.bytes(d.disk)} disk`], ["Guest uptime", F.duration(d.uptimeSeconds)], d.tags.length && ["Tags", d.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")], ["Description", esc(d.description)]])}</section>
+      ${svcs.length ? `<section><h3>Services<span>${svcs.length}</span></h3><ul class="list">${svcs.map((s) => `<li>${ic("svc")}<span class="grow">${goBtn("s:" + s.id, s.name)}</span>${s.urls[0] ? urlLink(s.urls[0]) : ""}${pill(s.status)}</li>`).join("")}</ul></section>` : ""}`;
+  } else if (it.type === "service") {
+    if (d.urls[0]) acts = d.urls.map((u, k) => `<a class="${k ? "sec" : ""}" href="${esc(u.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(u.host)}</a>`).join("");
+    body = `${d.notes.length ? `<section>${d.notes.map((n) => `<div class="callout">${ic("info")}<span>${esc(n)}</span></div>`).join("")}</section>` : ""}
+      <section><h3>Details</h3>${kv([["Category", `<span class="tag">${esc(d.category)}</span>`], ["Run status", runTag(d.runStatus)], ["Workflow", `<span class="mono">${esc(d.workflow)}</span>`], ["Description", esc(d.description)], ["Health check", d.health ? `<span class="mono">${esc(d.health.url)}</span><br><span class="dim">${d.health.probed ? "probed from here" : "not probed: only answers on the guest"}</span>` : '<span class="dim">none declared</span>']])}</section>
+      <section><h3>URLs<span>${d.urls.length}</span></h3>${d.urls.length ? `<ul class="list">${d.urls.map((u) => `<li>${ic("link")}<a class="grow" href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a><span class="dim c-pct">${F.pct(u.check.uptime[S.win])}</span>${pill(u.check.status)}</li>`).join("")}</ul>` : '<p class="dim" style="margin:0">No URLs declared.</p>'}</section>
+      <section><h3>DNS records<span>${d.dns.length}</span></h3>${d.dns.length ? `<table class="dns"><thead><tr><th>Type</th><th>Name</th><th>Points to</th></tr></thead><tbody>${d.dns.map((r) => `<tr><td class="mono" style="white-space:nowrap">${esc(r.type)}</td><td class="mono">${esc(r.name)}<br><span class="dim" style="font-family:var(--font);font-size:11px">zone ${esc(r.zone)}</span></td><td class="mono">${esc(r.expected)}</td></tr>`).join("")}</tbody></table>` : '<p class="dim" style="margin:0">No DNS records declared.</p>'}</section>`;
+    if (!d.check) body += `<section><h3>Uptime</h3><p class="dim" style="margin:0">${pill("unknown")} Nothing is probed for this service, so it has no uptime history.</p></section>`;
+  } else if (it.type === "url") {
+    acts = `<a href="${esc(d.url)}" target="_blank" rel="noopener">${ic("ext")}Open ${esc(d.host)}</a>`;
+    body = `<section><h3>URL</h3>${kv([["URL", `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>`], ["Service", goBtn("s:" + it.svc.id, it.svc.name)], ["DNS", it.svc.dns.filter((r) => r.name === d.host).map((r) => `<span class="mono">${esc(r.type)} ${esc(r.name)} → ${esc(r.expected)}</span>`).join("<br>") || '<span class="dim">no record declared</span>']])}</section>`;
+  } else if (it.type === "unmanaged") {
+    acts = `<a href="${esc(pveGuestUrl(it.host, d.kind, d.vmid))}" target="_blank" rel="noopener">${ic("ext")}Open in Proxmox</a>`;
+    body = `<section><div class="callout">${ic("info")}<span>Found on ${esc(it.host.name)} but not managed by Octopushy, so it has no checks.</span></div>${kv([["VMID", `<span class="mono">${d.vmid}</span>`], ["Kind", d.kind === "lxc" ? "Container (LXC)" : "VM (QEMU)"], ["Proxmox status", esc(d.status)], ["Template", d.template ? "yes" : "no"], ["Resources", `${d.cores} vCPU · ${F.bytes(d.memory)}`], ["Uptime", F.duration(d.uptimeSeconds)], d.tags.length && ["Tags", d.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")]])}</section>`;
+  }
+  const status = it.check ? pill(it.status) : it.type === "service" ? pill("unknown") : "";
+  return `<div class="dh"><div class="crumb">${crumbs.join('<span class="dim">›</span>')}</div>
+    <h2><span style="color:var(--faint)">${typeIcon(it)}</span>${esc(it.type === "url" ? d.host : it.name)} ${status}</h2><div class="kind">${kindLabel}</div>
+    <button class="close" data-close aria-label="Close details">${ic("x")}</button>${acts ? `<div class="acts">${acts}</div>` : ""}</div>
+    <div class="db">${body}${it.type !== "unmanaged" ? uptimeSection(it.check) : ""}</div>`;
+}
+function select(id, { reveal = true } = {}) {
+  S.sel = id;
+  if (!id) { drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); render(); return; }
+  const it = items.get(id);
+  if (reveal) for (let p = it.parent; p; p = p.parent) { S.open.add(p.id); S.shut.delete(p.id); }
+  S.focus = id;
+  drawer.innerHTML = drawerHtml(it);
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
+  render();
+}
+
+// ---- header ----
+function header() {
+  const t = INV.totals();
+  document.getElementById("rev").innerHTML = `<code>${esc(INV.revision.commit)}</code><span>${esc(INV.revision.subject)}</span><span>·</span><span>observed ${esc(F.ago(INV.observedAt))}</span>`;
+  const br = (pairs) => `<span class="br">${pairs.filter(([, n]) => n).map(([s, n]) => `<span class="pill ${s}" style="background:none;padding:0">${ic(s)}${n}</span>`).join("")}</span>`;
+  document.getElementById("totals").innerHTML = `
+    <div><b>${t.nodes.total}</b> hosts ${br([["up", t.nodes.up], ["down", t.nodes.down]])}</div>
+    <div><b>${t.guests.total}</b> guests ${br([["up", t.guests.up], ["down", t.guests.down]])}</div>
+    <div><b>${t.services.total}</b> services ${br([["up", t.services.up], ["warn", t.services.warn], ["down", t.services.down], ["unknown", t.services.unknown]])}</div>
+    <div><b>${t.unmanaged}</b> unmanaged</div>`;
+}
+
+// ---- events ----
+const tree = document.getElementById("tree");
+function toggle(it) { if (isOpen(it)) { S.open.delete(it.id); S.shut.add(it.id); } else { S.open.add(it.id); S.shut.delete(it.id); } S.focus = it.id; render(); }
+tree.addEventListener("click", (e) => {
+  if (e.target.closest("[data-clear]")) return clearAll();
+  const t = e.target.closest("[data-toggle]");
+  if (t) { e.stopPropagation(); return toggle(items.get(t.dataset.toggle)); }
+  if (e.target.closest("a")) return;
+  const r = e.target.closest(".row[data-id]");
+  if (r) select(S.sel === r.dataset.id ? null : r.dataset.id, { reveal: false });
+});
+tree.addEventListener("keydown", (e) => {
+  const r = e.target.closest(".row[data-id]");
+  if (!r || e.target !== r) return;
+  const i = flat.findIndex((x) => x.id === r.dataset.id), it = flat[i];
+  const go = (k) => { const n = flat[Math.max(0, Math.min(flat.length - 1, k))]; if (n) { S.focus = n.id; tree.querySelector(`.row[data-id="${CSS.escape(n.id)}"]`).focus(); for (const x of tree.querySelectorAll(".row[tabindex='0']")) x.tabIndex = -1; document.activeElement.tabIndex = 0; } };
+  if (e.key === "ArrowDown") go(i + 1);
+  else if (e.key === "ArrowUp") go(i - 1);
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(flat.length - 1);
+  else if (e.key === "ArrowRight") { if (it.children.length && !isOpen(it)) toggle(it); else if (isOpen(it)) go(i + 1); }
+  else if (e.key === "ArrowLeft") { if (isOpen(it)) toggle(it); else if (it.parent) go(flat.indexOf(it.parent)); }
+  else if (e.key === "Enter" || e.key === " ") select(it.id, { reveal: false });
+  else return;
+  e.preventDefault();
+});
+drawer.addEventListener("click", (e) => {
+  if (e.target.closest("[data-close]")) return select(null);
+  const g = e.target.closest("[data-go]");
+  if (g) select(g.dataset.go);
+});
+document.getElementById("facets").addEventListener("change", (e) => {
+  const c = e.target; const set = S[c.dataset.f];
+  c.checked ? set.add(c.value) : set.delete(c.value);
+  if (!set.size) { // never allow an empty facet: unchecking the last one resets it
+    ({ live: LIVE, hosts: INV.nodes.map((n) => n.id), kinds: ["qemu", "lxc"], cats })[c.dataset.f].forEach((v) => set.add(v));
+  }
+  S.shut.clear(); render();
+});
+document.getElementById("facets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-reset]");
+  if (!b) return;
+  const all = { live: LIVE, hosts: INV.nodes.map((n) => n.id), kinds: ["qemu", "lxc"], cats }[b.dataset.reset];
+  all.forEach((v) => S[b.dataset.reset].add(v)); render();
+});
+// Alt/Ctrl-click a facet label = "only this one"
+document.getElementById("facets").addEventListener("click", (e) => {
+  const l = e.target.closest(".opt"); if (!l || !(e.altKey || e.metaKey || e.ctrlKey)) return;
+  e.preventDefault(); const inp = l.querySelector("input"); const set = S[inp.dataset.f]; set.clear(); set.add(inp.value); S.shut.clear(); render();
+}, true);
+function clearAll() {
+  S.q = ""; document.getElementById("q").value = "";
+  LIVE.forEach((v) => S.live.add(v)); INV.nodes.forEach((n) => S.hosts.add(n.id)); S.kinds.add("qemu"); S.kinds.add("lxc"); cats.forEach((c) => S.cats.add(c));
+  S.shut.clear(); render();
+}
+const qi = document.getElementById("q");
+qi.addEventListener("input", () => { S.q = qi.value.trim().toLowerCase(); S.shut.clear(); render(); });
+qi.addEventListener("keydown", (e) => { if (e.key === "Escape") { qi.value = ""; S.q = ""; render(); qi.blur(); } if (e.key === "ArrowDown") { e.preventDefault(); tree.querySelector(".row[data-id]")?.focus(); } });
+document.getElementById("win").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.win = b.dataset.win; if (S.sel) { const y = drawer.querySelector(".db").scrollTop; drawer.innerHTML = drawerHtml(items.get(S.sel)); drawer.querySelector(".db").scrollTop = y; } render(); });
+document.getElementById("expandAll").onclick = () => { items.forEach((it) => { if (it.children.length) S.open.add(it.id); }); S.shut.clear(); render(); };
+document.getElementById("collapseAll").onclick = () => { S.open.clear(); items.forEach((it) => it.children.length && S.shut.add(it.id)); render(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); qi.focus(); qi.select(); }
+  else if (e.key === "Escape" && S.sel && document.activeElement !== qi) select(null);
+});
+
+// ---- URL hash state (handy for demos and screenshots) ----
+let hashLock = false;
+function writeHash() {
+  if (hashLock) return;
+  const p = new URLSearchParams();
+  if (S.q) p.set("q", S.q);
+  if (S.win !== "h24") p.set("win", S.win.replace("h24", "24h"));
+  if (S.sel) p.set("select", S.sel);
+  if (S.live.size < 4) p.set("live", [...S.live].join(","));
+  const s = p.toString();
+  history.replaceState(null, "", s ? "#" + s : location.pathname);
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  hashLock = true;
+  if (p.get("q")) { S.q = p.get("q").toLowerCase(); qi.value = p.get("q"); }
+  if (p.get("win")) S.win = { "24h": "h24", h24: "h24", "7d": "d7", d7: "d7", "30d": "d30", d30: "d30" }[p.get("win")] || "h24";
+  if (p.get("live")) { S.live = new Set(p.get("live").split(",").filter((s) => LIVE.includes(s))); if (!S.live.size) S.live = new Set(LIVE); }
+  if (p.get("expand") === "all") items.forEach((it) => it.children.length && S.open.add(it.id));
+  const sel = p.get("select");
+  hashLock = false;
+  if (sel) { const id = items.has(sel) ? sel : ["h:", "g:", "s:"].map((x) => x + sel).find((x) => items.has(x)); if (id) return select(id); }
+  render();
+}
+header();
+const sizeTops = () => { const hh = document.querySelector("header.top").offsetHeight, tb = document.querySelector(".toolbar").offsetHeight; document.documentElement.style.setProperty("--hh", hh + "px"); document.documentElement.style.setProperty("--th", hh + tb + "px"); };
+sizeTops(); addEventListener("resize", sizeTops);
+drawer.classList.add("instant");
+readHash();
+requestAnimationFrame(() => requestAnimationFrame(() => drawer.classList.remove("instant")));
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 120); });
+})();
+</script>
+</body>
+</html>
