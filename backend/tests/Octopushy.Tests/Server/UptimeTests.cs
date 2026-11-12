@@ -113,6 +113,114 @@ public class UptimeTests(PostgresFixture postgres)
         Assert.Equal("tls", Assert.Single(probes).Protocol);
     }
 
+    [Fact]
+    public async Task A_check_goes_to_the_agents_that_reach_its_target_and_one_without_a_route_says_nothing_about_it()
+    {
+        var (server, clock, monitor) = await StartAsync(postgres);
+        await using var _ = server;
+        await server.SyncAndTrustAsync();
+        const string guestKey = "guest-ssh|home/korriban/krb-app-01|ssh://10.1.0.31:22";
+        const string healthKey = "service-http|home/korriban/krb-app-01/web|https://web.lab.test/health?full=1";
+        static ReachabilityReport TimedOut(ReachabilityProbe p) =>
+            new() { ProbeId = p.ProbeId, Status = "timeout", Detail = "connecting to 10.1.0.31:22 timed out after 10s" };
+        // "a-far" is first by name and has no route to the guest; "b-near" reaches it until it goes down.
+        var guestDown = false;
+        var far = new List<ReachabilityProbe>();
+        var near = new List<ReachabilityProbe>();
+        await server.ConnectUptimeAgentAsync("a-far", p => { far.Add(p); return p.Protocol == "ssh" ? TimedOut(p) : Lab(p); });
+        var nearAgent = await server.ConnectUptimeAgentAsync("b-near", p =>
+        {
+            near.Add(p);
+            return p.Protocol != "ssh" ? Lab(p) : guestDown ? TimedOut(p) : new() { ProbeId = p.ProbeId, Status = "reachable", ElapsedMs = 3 };
+        });
+        async Task<Octopushy.Server.Data.UptimeCheck?> Check(string key) =>
+            await server.QueryAsync(db => db.UptimeChecks.AsNoTracking().FirstOrDefaultAsync(c => c.Key == key));
+
+        // The first round asks "a-far", which cannot connect: nothing is recorded, and "b-near" is asked next.
+        await monitor.TickAsync(CancellationToken.None);
+        clock.Now = Start.AddSeconds(50);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Single(far, p => p.Protocol == "ssh");
+        Assert.Null(await Check(guestKey));
+        clock.Now = Start.AddSeconds(55);
+        await monitor.TickAsync(CancellationToken.None);
+        var guest = await Check(guestKey);
+        Assert.Equal((true, "b-near"), (guest!.Up, guest.Agent));
+
+        // An agent that connects stands by what the target answers: a 503 is down, and nobody else is asked.
+        var health = await Check(healthKey);
+        Assert.Equal((false, "HTTP 503", "a-far"), (health!.Up, health.Detail, health.Agent));
+        Assert.DoesNotContain(near, p => p.Path == "/health?full=1");
+
+        // From then on the check goes to "b-near", which reached it.
+        far.Clear();
+        near.Clear();
+        clock.Now = Start.AddSeconds(110);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Single(near, p => p.Protocol == "ssh");
+        Assert.DoesNotContain(far, p => p.Protocol == "ssh");
+
+        // When "b-near" cannot connect either, every agent is asked before the guest is down, with what "b-near" saw.
+        guestDown = true;
+        clock.Now = Start.AddSeconds(170);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.True((await Check(guestKey))!.Up);
+        clock.Now = Start.AddSeconds(175);
+        await monitor.TickAsync(CancellationToken.None);
+        guest = await Check(guestKey);
+        Assert.Equal((false, "b-near", Start.AddSeconds(170)), (guest!.Up, guest.Agent, guest.Since));
+
+        // With only "a-far" connected, which never reached the guest, a failed connection records nothing.
+        server.Services.GetRequiredService<AgentConnections>().Remove(nearAgent.Session);
+        guestDown = false;
+        far.Clear();
+        clock.Now = Start.AddSeconds(240);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Single(far, p => p.Protocol == "ssh");
+        Assert.Equal(Start.AddSeconds(170), (await Check(guestKey))!.CheckedAt);
+    }
+
+    [Fact]
+    public async Task A_failure_in_the_pool_is_not_down_while_another_agent_of_the_pool_could_not_check()
+    {
+        var (server, clock, monitor) = await StartAsync(postgres);
+        await using var _ = server;
+        await server.SyncAndTrustAsync();
+        const string guestKey = "guest-ssh|home/korriban/krb-app-01|ssh://10.1.0.31:22";
+        // Both agents reach the guest once, then "b" cannot connect and "a", also in the pool, cannot check.
+        var phase = 1;
+        static ReachabilityReport Reachable(ReachabilityProbe p) => new() { ProbeId = p.ProbeId, Status = "reachable", ElapsedMs = 3 };
+        static ReachabilityReport TimedOut(ReachabilityProbe p) => new() { ProbeId = p.ProbeId, Status = "timeout", Detail = "timed out" };
+        await server.ConnectUptimeAgentAsync("a", p => p.Protocol != "ssh" ? Lab(p) : phase switch
+        {
+            1 => Reachable(p),
+            2 => TimedOut(p),
+            _ => new() { ProbeId = p.ProbeId, Status = "unsupported", Detail = "through a proxy" },
+        });
+        await server.ConnectUptimeAgentAsync("b", p => p.Protocol != "ssh" ? Lab(p) : phase == 3 ? TimedOut(p) : Reachable(p));
+        async Task<Octopushy.Server.Data.UptimeCheck?> Check() =>
+            await server.QueryAsync(db => db.UptimeChecks.AsNoTracking().FirstOrDefaultAsync(c => c.Key == guestKey));
+
+        await monitor.TickAsync(CancellationToken.None);
+        clock.Now = Start.AddSeconds(50);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Equal("a", (await Check())!.Agent);
+        phase = 2;
+        clock.Now = Start.AddSeconds(110);
+        await monitor.TickAsync(CancellationToken.None);
+        clock.Now = Start.AddSeconds(115);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Equal((true, "b"), ((await Check())!.Up, (await Check())!.Agent));
+
+        phase = 3;
+        clock.Now = Start.AddSeconds(170);
+        await monitor.TickAsync(CancellationToken.None);
+        clock.Now = Start.AddSeconds(175);
+        await monitor.TickAsync(CancellationToken.None);
+        var guest = await Check();
+        Assert.Equal((true, Start.AddSeconds(115)), (guest!.Up, guest.CheckedAt));
+    }
+
     [Theory]
     [InlineData("reachable", 200u, true, "HTTP 200")]
     [InlineData("reachable", 302u, true, "HTTP 302")]
