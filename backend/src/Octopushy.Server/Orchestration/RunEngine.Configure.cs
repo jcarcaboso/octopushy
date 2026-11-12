@@ -70,6 +70,10 @@ public sealed partial class RunEngine
             return true;
         }
 
+        // An agent update a person asked for approves its guest's setup, whatever the approval policy; never a destructive one.
+        if (!ansible.Destructive && step.Name == StepNames.Approval && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
+            return true;
+
         step.Status = StepStatuses.AwaitingApproval;
         step.Detail = destructiveManual && !manual
             ? $"The workflow declares {ansible.Action} destructive and destructive is manual (set by {policy.DestructiveSetBy})."

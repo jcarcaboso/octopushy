@@ -86,6 +86,38 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("tool_runtime");
 
+                    b.Property<DateTimeOffset?>("UpdateAppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("update_applied_at");
+
+                    b.Property<Guid?>("UpdateChangeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("update_change_id");
+
+                    b.Property<string>("UpdateDetail")
+                        .HasColumnType("text")
+                        .HasColumnName("update_detail");
+
+                    b.Property<bool>("UpdatePaused")
+                        .HasColumnType("boolean")
+                        .HasColumnName("update_paused");
+
+                    b.Property<DateTimeOffset?>("UpdateRequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("update_requested_at");
+
+                    b.Property<string>("UpdateRequestedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("update_requested_by");
+
+                    b.Property<string>("UpdateState")
+                        .HasColumnType("text")
+                        .HasColumnName("update_state");
+
+                    b.Property<string>("UpdateTargetVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("update_target_version");
+
                     b.Property<string>("Version")
                         .HasColumnType("text")
                         .HasColumnName("version");

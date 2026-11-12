@@ -644,6 +644,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{id}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["updateAgentVersion"];
+        delete: operations["cancelAgentUpdate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["updateAllAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/{id}": {
         parameters: {
             query?: never;
@@ -1078,11 +1110,20 @@ export interface components {
             certificateExpiresAt: string;
             /** Format: int32 */
             runningAttempts: number;
+            work: components["schemas"]["AgentWork"][];
+            guest: null | components["schemas"]["AgentGuest"];
+            update: components["schemas"]["AgentUpdateState"];
             /** @default false */
             draining: boolean;
             /** @default false */
             reportsReachability: boolean;
             reachability?: null | components["schemas"]["ReachabilityEntry"][];
+        };
+        AgentGuest: {
+            /** Format: uuid */
+            resourceId: string;
+            address: string;
+            declaredVersion: null | string;
         };
         AgentUpdate: {
             labels: null | string[];
@@ -1090,6 +1131,27 @@ export interface components {
             maxConcurrency: null | number;
             disabled: null | boolean;
             draining?: null | boolean;
+        };
+        AgentUpdateState: {
+            state: string;
+            targetVersion: null | string;
+            reason: null | string;
+            /** Format: uuid */
+            changeId: null | string;
+            /** Format: uuid */
+            runId: null | string;
+        };
+        AgentWork: {
+            /** Format: uuid */
+            runId: string;
+            /** Format: int64 */
+            runNumber: number;
+            operation: string;
+            address: string;
+            step: string;
+            status: string;
+            /** Format: date-time */
+            since: string;
         };
         ApprovalDto: {
             required: boolean;
@@ -1833,6 +1895,9 @@ export interface components {
             usable: boolean;
             probing: boolean;
             leafSha256: null | string;
+            name: null | string;
+            /** Format: uuid */
+            resourceId: null | string;
         };
         RepositoryDto: {
             url: null | string;
@@ -2126,11 +2191,11 @@ export interface components {
         };
         TokenRequest: {
             name: null | string;
-            labels: string[];
             /** Format: int32 */
             maxConcurrency: null | number;
             /** Format: int32 */
             expiresInMinutes: null | number;
+            labels?: null | string[];
         };
         TrustInstallationRequest: {
             endpoints: string[];
@@ -4306,6 +4371,152 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentDto"][];
                 };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    updateAgentVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    cancelAgentUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    updateAllAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Bad Request */
             400: {

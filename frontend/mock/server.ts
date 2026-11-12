@@ -2,7 +2,7 @@
 // Run it with `just mock`, or `node mock/server.ts` from frontend/ (MOCK_PORT sets the port).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type {
-  AuthState, Change, ChangePreview, CreatedToken, DraftValidation, InstallationTrust, LogChunk, Problem, Repository, RunDetail,
+  Agent, AuthState, Change, ChangePreview, CreatedToken, DraftValidation, InstallationTrust, LogChunk, Problem, Repository, RunDetail,
   SnippetAccess,
 } from "../src/api/types.ts";
 import * as data from "./data.ts";
@@ -150,11 +150,56 @@ on("DELETE", "/api/agents/{id}", ({ params }) => {
   if (i < 0) return notFound("agent");
   data.agents.splice(i, 1);
 });
+// Updates run one at a time, as on the server: the agent is paused while it updates, the others wait in the queue.
+const updateSeconds = Number(process.env.MOCK_UPDATE_SECONDS ?? 8);
+const pausedBefore = new Map<string, boolean>();
+
+function startUpdate(agent: Agent) {
+  const guest = agent.guest ? resourceById(agent.guest.resourceId) : undefined;
+  const runId = guest ? startRun(guest, "configure") : null;
+  pausedBefore.set(agent.id, agent.draining);
+  Object.assign(agent, { draining: true });
+  agent.update = { state: "updating", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId };
+  setTimeout(() => {
+    const run = runs.find((r) => r.run.id === runId);
+    if (run) Object.assign(run.run, { status: "succeeded", finishedAt: new Date().toISOString(), waiting: null });
+    Object.assign(agent, { version: data.latestAgentVersion, draining: pausedBefore.get(agent.id) ?? false });
+    if (agent.guest) agent.guest.declaredVersion = data.latestAgentVersion;
+    agent.update = { state: "current", targetVersion: null, reason: null, changeId: null, runId: null };
+    const next = data.agents.find((a) => a.update.state === "queued");
+    if (next) startUpdate(next);
+  }, updateSeconds * 1000);
+}
+
+function requestUpdate(agent: Agent): Reply | undefined {
+  if (agent.update.state === "current") return problem(409, `${agent.name} already runs the latest version.`);
+  if (agent.update.state === "unavailable") return problem(409, agent.update.reason ?? `${agent.name} cannot be updated from here.`);
+  if (agent.update.state === "queued" || agent.update.state === "updating") return problem(409, `${agent.name} is already being updated.`);
+  if (data.agents.some((a) => a.update.state === "updating")) {
+    agent.update = { ...agent.update, state: "queued", targetVersion: data.latestAgentVersion, reason: null };
+  } else {
+    startUpdate(agent);
+  }
+}
+
+on("POST", "/api/agents/{id}/update", ({ params }) => {
+  const agent = data.agents.find((a) => a.id === params.id);
+  return agent ? requestUpdate(agent) : notFound("agent");
+});
+on("DELETE", "/api/agents/{id}/update", ({ params }) => {
+  const agent = data.agents.find((a) => a.id === params.id);
+  if (!agent) return notFound("agent");
+  if (agent.update.state !== "queued") return problem(409, `${agent.name} is not waiting for an update.`);
+  agent.update = { state: "available", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId: null };
+});
+on("POST", "/api/agents/update", () => {
+  for (const agent of data.agents.filter((a) => a.update.state === "available" || a.update.state === "failed")) requestUpdate(agent);
+});
 on("GET", "/api/agents/tokens", () => data.tokens);
 on("POST", "/api/agents/tokens", ({ body }) => {
-  const id = `token-${data.tokens.length + 1}`;
+  const id = `token-${Date.now()}`;
   const expiresAt = new Date(Date.now() + Number(body.expiresInMinutes ?? 1440) * 60_000).toISOString();
-  data.tokens.unshift({ id, name: (body.name as string) ?? null, labels: (body.labels as string[]) ?? [], createdAt: new Date().toISOString(), expiresAt, usedAt: null, agentId: null });
+  data.tokens.unshift({ id, name: (body.name as string) ?? null, labels: (body.labels as string[] | undefined) ?? [], createdAt: new Date().toISOString(), expiresAt, usedAt: null, agentId: null });
   const token = `octo_enroll_${hex(id, 32)}`;
   return { id, token, expiresAt, caFingerprint: `SHA256:${hex("agent-ca", 43)}`,
     command: `octopushy agent enroll --server https://octopushy.home.example.org:8443 --token ${token}` } satisfies CreatedToken;

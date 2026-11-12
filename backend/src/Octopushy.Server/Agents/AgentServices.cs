@@ -88,6 +88,7 @@ public sealed class AgentChannelService(
     WorkerReachability reachability,
     Uptime.UptimeMonitor uptime,
     RunEngine engine,
+    AgentUpdates updates,
     AttemptLogStore logs,
     AttemptMasks masks,
     ImageStore images,
@@ -137,6 +138,15 @@ public sealed class AgentChannelService(
                 },
             }, call.Token);
             await engine.OnHelloAsync(agent.Id, hello, call.Token);
+            // Back on the version an update set: the update is done, and its pause lifted.
+            try
+            {
+                await updates.AdvanceAsync(call.Token);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                logger.LogWarning(e, "Settling agent updates after {Name} connected failed; the orchestrator tries again.", agent.Name);
+            }
 
             writer = Task.Run(async () =>
             {

@@ -396,21 +396,73 @@ public static partial class Endpoints
 
     private static void MapAgents(RouteGroupBuilder group)
     {
-        group.MapGet("", async (OctopushyDb db, AgentConnections connections, WorkerReachability reachability, CancellationToken ct) =>
+        group.MapGet("", async (OctopushyDb db, AgentConnections connections, WorkerReachability reachability, AgentUpdates updates, CancellationToken ct) =>
         {
             var agents = await db.Agents.AsNoTracking().OrderBy(a => a.Name).ToListAsync(ct);
+            var work = (await db.Attempts.AsNoTracking()
+                    .Where(a => a.AgentId != null && a.Step != null && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+                    .Select(a => new
+                    {
+                        AgentId = a.AgentId!.Value,
+                        a.Step!.RunId,
+                        a.Step.Run!.Number,
+                        a.Step.Run.Operation,
+                        a.Step.Run.ResourceId,
+                        Step = a.Step.Name,
+                        a.Status,
+                        Since = a.StartedAt ?? a.AssignedAt ?? a.CreatedAt,
+                    })
+                    .ToListAsync(ct))
+                .OrderBy(a => a.Since).ToList();
             var running = await db.Attempts.AsNoTracking()
                 .Where(a => a.AgentId != null && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
                 .GroupBy(a => a.AgentId!.Value)
                 .Select(g => new { g.Key, Count = g.Count() })
                 .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+            var resourceIds = work.Select(w => w.ResourceId).Distinct().ToList();
+            var addresses = await db.Resources.AsNoTracking().Where(r => resourceIds.Contains(r.Id))
+                .ToDictionaryAsync(r => r.Id, r => r.Address, ct);
+            var head = await updates.HeadAsync(db, ct);
+            var assessed = await updates.AssessAsync(db, agents, head, ct);
+            var names = await AgentUpdates.EndpointNamesAsync(db, head, ct);
             return TypedResults.Ok(agents.Select(a => new AgentDto(
                 a.Id, a.Name, a.Labels, a.MaxConcurrency, a.Disabled, connections.IsConnected(a.Id), a.EnrolledAt, a.LastSeenAt,
-                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id), a.Draining,
+                a.Version, a.Executors, a.ToolRuntime, a.CertificateExpiresAt, running.GetValueOrDefault(a.Id),
+                work.Where(w => w.AgentId == a.Id).Select(w => new AgentWork(w.RunId, w.Number, w.Operation,
+                    addresses.GetValueOrDefault(w.ResourceId) ?? "", w.Step, w.Status, w.Since)).ToList(),
+                assessed[a.Id].Guest, assessed[a.Id].Update, a.Draining,
                 connections.Get(a.Id)?.ReportsReachability ?? false,
-                connections.Get(a.Id) is { } session ? reachability.Snapshot(session) : [])).ToList());
+                connections.Get(a.Id) is { } session
+                    ? reachability.Snapshot(session).Select(e => names.TryGetValue((e.Kind, e.Endpoint), out var name)
+                        ? e with { Name = name.Name, ResourceId = name.ResourceId }
+                        : e).ToList()
+                    : [])).ToList());
         })
         .WithName("listAgents");
+
+        // An update to the server's version through the agent's guest: see AgentUpdates and docs/worker-routing.md.
+        group.MapPost("/{id:guid}/update", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (Guid id, HttpContext http, AgentUpdates updates,
+            CancellationToken ct) =>
+        {
+            var outcome = await updates.RequestAsync(id, http.User.Identity?.Name ?? "octopushy", ct);
+            if (!outcome.Found)
+                return TypedResults.NotFound();
+            return outcome.Refused is { } refused ? TypedResults.Problem(title: refused, statusCode: 409) : TypedResults.NoContent();
+        })
+        .WithName("updateAgentVersion");
+
+        group.MapPost("/update", async (HttpContext http, AgentUpdates updates, CancellationToken ct) =>
+        {
+            await updates.RequestAllAsync(http.User.Identity?.Name ?? "octopushy", ct);
+            return TypedResults.NoContent();
+        })
+        .WithName("updateAllAgents");
+
+        group.MapDelete("/{id:guid}/update", async Task<Results<NoContent, ProblemHttpResult>> (Guid id, AgentUpdates updates, CancellationToken ct) =>
+            await updates.CancelAsync(id, ct)
+                ? TypedResults.NoContent()
+                : TypedResults.Problem(title: "The update is under way and cannot be taken back; it ends when the agent is back or the update fails.", statusCode: 409))
+        .WithName("cancelAgentUpdate");
 
         group.MapPatch("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (Guid id, AgentUpdate update, RunEngine engine, AgentConnections connections, OrchestratorSignal signal, CancellationToken ct) =>
         {
@@ -483,12 +535,13 @@ public static partial class Endpoints
 
         group.MapPost("/tokens", async Task<Results<Ok<CreatedToken>, ProblemHttpResult>> (TokenRequest request, OctopushyDb db, AgentCertificateAuthority ca, IOptions<OctopushyOptions> options, TimeProvider clock, CancellationToken ct) =>
         {
-            if (request.Labels.Any(l => !EnrollmentTokens.IsLabel(l)))
+            var labels = request.Labels ?? [];
+            if (labels.Any(l => !EnrollmentTokens.IsLabel(l)))
             {
                 return TypedResults.Problem(title: "Labels are lowercase letters, digits, '.', '_', and '-'.", statusCode: 400);
             }
 
-            var (token, value) = EnrollmentTokens.Create(db, ca, request.Name, request.Labels, request.MaxConcurrency ?? 2,
+            var (token, value) = EnrollmentTokens.Create(db, ca, request.Name, labels, request.MaxConcurrency ?? 2,
                 request.ExpiresInMinutes ?? options.Value.AgentChannel.EnrollmentTokenMinutes, clock.GetUtcNow());
             await db.SaveChangesAsync(ct);
             var server = options.Value.AgentChannel.PublicUrl ?? $"https://{System.Net.Dns.GetHostName()}:{options.Value.AgentChannel.Port}";

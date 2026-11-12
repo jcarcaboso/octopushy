@@ -110,6 +110,27 @@ public sealed partial class RunEngine
         return null;
     }
 
+    /// <summary>
+    /// Approves <paramref name="step"/> as the operator who asked for an agent update, when that update's change covers the run:
+    /// see <see cref="Agents.AgentUpdates.CoveringAsync"/>. Returns whether it did.
+    /// </summary>
+    private async Task<bool> ApprovedByAgentUpdateAsync(OctopushyDb db, Run run, Step step, CancellationToken ct)
+    {
+        var change = await Agents.AgentUpdates.CoveringAsync(db, run,
+            c => ChangeTracker.RefreshAsync(db, mirror, revisions, c, clock.GetUtcNow(), ct), ct);
+        if (change is null)
+            return false;
+        step.Decision = "approved";
+        step.DecidedBy = change.Author;
+        step.DecidedAt = clock.GetUtcNow();
+        step.DecisionNote = $"Approved with the agent update (change {change.Id}).";
+        step.Status = StepStatuses.Succeeded;
+        step.StartedAt ??= clock.GetUtcNow();
+        step.FinishedAt = clock.GetUtcNow();
+        logger.LogInformation("Run {Run} was approved with the agent update by {Author} (change {Change}).", run.Id, change.Author, change.Id);
+        return true;
+    }
+
     /// <summary>Why a provision plan does more than create, or null when it only creates.</summary>
     internal static string? MoreThanCreate(JsonNode? outputs)
     {

@@ -477,7 +477,7 @@ ui:
 | `template` | Starts the template choice there. |
 | `access: { user }` | Starts the setup stage's login there. The host key is a store key the person sets after the first boot, unless the workflow's machine stage has `hostKey: managed`: then the field starts empty, and Octopushy's own key is used where the installation lists the host under `snippets.hosts`. |
 | `secrets.<name>.generate` | Offers to generate the secret instead of naming a store key: `agent-enrollment-token` or `random-password`. |
-| `secrets.<name>.labels`, `.name` | For `agent-enrollment-token`: dotted paths into the form whose values start the token's labels and name. Without `labels`, the lab's agent labels. |
+| `secrets.<name>.labels`, `.name` | For `agent-enrollment-token`: dotted paths into the form whose values start the token's labels and name. Without `labels`, the lab's agent labels. A guest whose inputs set `worker_agent_version`, named by `worker_agent_name` or its own name, is the agent's guest when updating it from **Agents**: see [Updating an agent from Agents](worker-routing.md#updating-an-agent-from-agents). |
 | `secrets.<name>.length` | For `random-password`: 16 to 128 characters, 32 by default. |
 | `secrets.<name>.label`, `.help` | Shown on the secret's choice. |
 | `secrets.<name>.requiredWhen: { pointer, value }` | The secret is required when the value at the JSON pointer into `{ hardware, network, inputs }` is `value`, or is an array that holds it, such as `{ pointer: /inputs/machine_features, value: tailscale }`. Otherwise it is optional. The server enforces it. |

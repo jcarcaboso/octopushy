@@ -32,7 +32,10 @@ public sealed record NetworkTarget(
     public const string AgentContext = "agent";
     public const string ToolContext = "tool";
 
-    public string Endpoint => $"{(Protocol == "tls" ? "https" : "ssh")}://{(Host.Contains(':') ? $"[{Host}]" : Host)}:{Port}";
+    public string Endpoint => EndpointOf(Protocol, Host, Port);
+
+    public static string EndpointOf(string protocol, string host, int port) =>
+        $"{(protocol == "tls" ? "https" : "ssh")}://{(host.Contains(':') ? $"[{host}]" : host)}:{port}";
 
     /// <summary>Whether a container of <see cref="Image"/> makes the connection on an agent with this runtime.</summary>
     public static bool InContainer(string context, string? runtime) => context == ToolContext && runtime is "podman" or "docker";
@@ -86,7 +89,11 @@ public sealed class SessionReachability
 /// <summary>Whether a session may get work that needs some connections, and if not, why, for people.</summary>
 public sealed record ReachabilityVerdict(bool Ready, string? Reason);
 
-/// <summary>One entry of a session's evidence, as the API shows it.</summary>
+/// <summary>
+/// One entry of a session's evidence, as the API shows it. <c>Name</c> is what the endpoint is, when the head revision says:
+/// an installation's address for <c>proxmox-api</c> and <c>snippets-ssh</c>, a guest's for <c>guest-ssh</c>, whose
+/// <c>ResourceId</c> it is too.
+/// </summary>
 public sealed record ReachabilityEntry(
     string Kind,
     string Endpoint,
@@ -98,7 +105,9 @@ public sealed record ReachabilityEntry(
     DateTimeOffset? ExpiresAt,
     bool Usable,
     bool Probing,
-    string? LeafSha256);
+    string? LeafSha256,
+    string? Name,
+    Guid? ResourceId);
 
 /// <summary>
 /// Which connected agent can reach what, from probes the controller sends and the agents answer. The controller stays
@@ -477,7 +486,7 @@ public sealed class WorkerReachability(
                 .Select(e => new ReachabilityEntry(e.Target.Kind, e.Target.Endpoint, e.Target.Context,
                     NetworkTarget.InContainer(e.Target.Context, session.ToolRuntime) ? e.Target.Image : null,
                     e.State, e.Detail, e.CheckedAt, e.State == Reachable ? e.CheckedAt + Expiry : null, Usable(e, now),
-                    e.OutstandingProbeId is not null, e.LeafSha256))
+                    e.OutstandingProbeId is not null, e.LeafSha256, null, null))
                 .ToList();
         }
     }

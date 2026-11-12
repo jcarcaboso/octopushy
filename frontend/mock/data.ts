@@ -3,7 +3,7 @@
 // a run moves its guest on everywhere.
 import type {
   Agent, Change, ChangeForm, DeployTargets, DraftDetail, DraftSummary, EnrollmentToken, GuestConfiguration, GuestDetail,
-  GuestSummary, InstallationDetail, InstallationSummary, Inventory, ManagedAccess, ObservedGuest, ObservedHost, Overview,
+  GuestSummary, InstallationDetail, InstallationSummary, Inventory, ManagedAccess, ObservedGuest, ObservedHost, Overview, ReachabilityEntry,
   Repository, Revision, RunDetail, RunSummary, ServiceDetail, ServiceSummary, Variable, VariableVersion, Variables,
   WorkflowCatalog, WorkflowVersion,
 } from "../src/api/types.ts";
@@ -443,32 +443,74 @@ export function overview(): Overview {
 
 // Agents
 
+const ansible = "docker.io/skorcius/octopushy:ansible-2.21.5-7c1e9a2";
+const korriban = "https://10.15.70.2:8006/";
+
+/** One reachability entry, as the server reports it: checked a few minutes ago and still fresh unless said otherwise. */
+function reach(kind: string, name: string, target: string, state: string, minutes: number, more: Partial<ReachabilityEntry> = {}): ReachabilityEntry {
+  const usable = state === "reachable";
+  return {
+    kind, endpoint: target, context: kind === "guest-ssh" ? "tool" : "agent", image: kind === "guest-ssh" ? ansible : null, state,
+    detail: null, checkedAt: ago(minutes), expiresAt: ago(minutes - 10), usable, probing: false,
+    leafSha256: kind === "proxmox-api" && usable ? hex(`leaf-${name}`) : null, name, resourceId: null, ...more,
+  };
+}
+
+export const latestAgentVersion = "0.8.1";
+
 export const agents: Agent[] = [
   {
     id: "agent-pve01-01", name: "pve01-agent-01", labels: ["home"], maxConcurrency: 2, disabled: false, connected: true, enrolledAt: ago(60000),
-    lastSeenAt: ago(0.05), version: "0.7.1", executors: ["opentofu", "ansible", "proxmox"], toolRuntime: "podman 5.6.2",
-    certificateExpiresAt: ago(-80000), runningAttempts: 1, draining: false, reportsReachability: true,
+    lastSeenAt: ago(0.05), version: "0.8.1", executors: ["opentofu", "ansible", "proxmox"], toolRuntime: "podman 5.6.2",
+    certificateExpiresAt: ago(-120000), runningAttempts: 1, draining: false, reportsReachability: true,
     reachability: [
-      { kind: "proxmox", endpoint, context: "home/pve01", image: null, state: "reachable", detail: null, checkedAt: ago(2), expiresAt: ago(-8),
-        usable: true, probing: false, leafSha256: hex("leaf-pve01") },
-      { kind: "ssh", endpoint: "10.15.60.14:22", context: "home/pve01/pve01-ai", image: "docker.io/skorcius/octopushy:ansible-2.21.5-7c1e9a2",
-        state: "reachable", detail: null, checkedAt: ago(2), expiresAt: ago(-8), usable: true, probing: false, leafSha256: null },
+      reach("proxmox-api", "home/pve01", endpoint, "reachable", 2, { detail: "TLS handshake completed" }),
+      reach("proxmox-api", "home/korriban", korriban, "timeout", 0.7, { detail: "connecting timed out" }),
+      reach("snippets-ssh", "home/pve01", "ssh://10.15.60.2:22", "reachable", 2),
+      reach("guest-ssh", "home/pve01/pve01-ai", "ssh://10.15.60.14:22", "reachable", 2, { resourceId: "pve01-ai" }),
+      reach("guest-ssh", "home/pve01/dns", "ssh://10.15.60.21:22", "reachable", 6, { resourceId: "dns" }),
     ],
+    work: [{ runId: "running", runNumber: 50, operation: "provision", address: "home/pve01/dns", step: "apply", status: "running", since: ago(3) }],
+    guest: { resourceId: "bb", address: "home/pve01/bb", declaredVersion: "0.8.1" },
+    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null },
   },
   {
     id: "agent-pve01-02", name: "pve01-agent-02", labels: ["home", "gpu"], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(20000),
     lastSeenAt: ago(0.1), version: "0.7.1", executors: ["opentofu", "ansible", "proxmox"], toolRuntime: "podman 5.6.2",
-    certificateExpiresAt: ago(-100000), runningAttempts: 0, draining: true, reportsReachability: false, reachability: null,
+    certificateExpiresAt: ago(-88000), runningAttempts: 0, draining: false, reportsReachability: true,
+    reachability: [
+      reach("proxmox-api", "home/korriban", korriban, "reachable", 1, { detail: "TLS handshake completed" }),
+      reach("proxmox-api", "home/pve01", endpoint, "unreachable", 3, { detail: "no route to host" }),
+      reach("guest-ssh", "home/pve01/media", "ssh://10.15.60.15:22", "reachable", 9, { resourceId: "media" }),
+    ],
+    work: [],
+    guest: { resourceId: "dev", address: "home/pve01/dev", declaredVersion: "0.7.1" },
+    update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null },
+  },
+  {
+    id: "agent-media", name: "media-agent", labels: [], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(150000),
+    lastSeenAt: ago(0.2), version: "0.5.2", executors: ["opentofu", "proxmox"], toolRuntime: "local",
+    certificateExpiresAt: ago(-30000), runningAttempts: 0, draining: true, reportsReachability: false, reachability: null,
+    work: [],
+    guest: { resourceId: "media", address: "home/pve01/media", declaredVersion: "0.5.2" },
+    update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null },
   },
   {
     id: "agent-laptop", name: "laptop", labels: ["dev"], maxConcurrency: 1, disabled: false, connected: false, enrolledAt: ago(90000),
-    lastSeenAt: ago(5000), version: "0.6.4", executors: ["opentofu"], toolRuntime: "podman 5.4.0",
-    certificateExpiresAt: ago(-2000), runningAttempts: 0, draining: false, reportsReachability: false, reachability: null,
+    lastSeenAt: ago(4300), version: "0.6.4", executors: ["opentofu"], toolRuntime: "podman 5.4.0",
+    certificateExpiresAt: ago(-1500), runningAttempts: 0, draining: false, reportsReachability: false, reachability: null,
+    work: [],
+    guest: null,
+    update: {
+      state: "unavailable", targetVersion: latestAgentVersion, changeId: null, runId: null,
+      reason: "It does not run on a guest Octopushy manages, so it has to be updated on its own machine.",
+    },
   },
 ];
 
 export const tokens: EnrollmentToken[] = [
-  { id: "token-1", name: "pve02-agent-01", labels: ["home"], createdAt: ago(30), expiresAt: ago(-1410), usedAt: null, agentId: null },
+  { id: "token-2", name: "pve02-agent-01", labels: [], createdAt: ago(30), expiresAt: ago(-1410), usedAt: null, agentId: null },
+  { id: "token-1", name: null, labels: [], createdAt: ago(3000), expiresAt: ago(2940), usedAt: null, agentId: null },
   { id: "token-0", name: "pve01-agent-02", labels: ["home", "gpu"], createdAt: ago(20010), expiresAt: ago(18570), usedAt: ago(20000), agentId: "agent-pve01-02" },
 ];
 

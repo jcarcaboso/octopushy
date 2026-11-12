@@ -299,6 +299,12 @@ A registered execution worker permitted to act on specified targets through the
 appropriate network access; it is not required on every managed machine.
 _Avoid_: Node, runner when naming the Octopushy worker
 
+**Agent update**:
+A change to the guest an agent runs on that sets its agent version to the
+server's, approved when asked for and rolled out by another agent. The agent is
+paused until it is back on that version. One runs at a time; the rest queue.
+_Avoid_: Upgrade, which names a workflow reference moving to a newer major
+
 **Bootstrap image**:
 The immutable base image used to create a guest's boot disk.
 
