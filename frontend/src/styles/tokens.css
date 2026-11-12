@@ -105,6 +105,9 @@
 
   --skeleton: #e6eaef;
   --skeleton-shine: #f2f4f7;
+
+  /* The arrow on every select, in --text-muted. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23556172' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @media (prefers-color-scheme: dark) {
@@ -118,6 +121,7 @@
     --border-strong: #364255;
     --text: #e2e8f0;
     --text-muted: #94a0b3;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a0b3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --text-faint: #8794a8;
     --link: #8db2ff;
     --link-hover: #b3cbff;

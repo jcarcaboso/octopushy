@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it } from "vitest";
 import type { RunSummary } from "../api/types";
-import { mockApi, renderAt } from "../test/utils";
+import { mockApi, problem, renderAt } from "../test/utils";
 import { runProgress } from "../lib/runs";
 import { RunsPage } from "./RunsPage";
 
@@ -66,6 +66,7 @@ const show = (runs: RunSummary[], route = "/runs") => {
   const api = mockApi({
     "GET /api/runs": () => runs,
     "POST /api/runs/run-49/steps/step-approval/approve": () => undefined,
+    "POST /api/runs/run-52/steps/step-approval/approve": () => undefined,
     "POST /api/runs/run-50/cancel": () => undefined,
   });
   renderAt(<RunsPage />, { path: "/runs", route });
@@ -102,6 +103,47 @@ it("approves a waiting run from the list with the step and fingerprint the list 
   expect(post.body).toEqual({ planSha256: sha, note: null });
 });
 
+const waitingToo = run(52, {
+  ...waiting,
+  id: "run-52",
+  number: 52,
+  address: "home/pve01/dns",
+  steps: [step("plan", "succeeded"), step("approval", "awaiting-approval", { planSha256: "b".repeat(64) }), step("apply", "pending")],
+});
+
+it("approves every waiting run shown, each with its own fingerprint, after one confirmation", async () => {
+  const { requests } = show([waiting, waitingToo, running]);
+  await userEvent.click(await screen.findByRole("button", { name: "Approve all 2" }));
+  const dialog = await screen.findByRole("dialog", { name: "Approve 2 runs?" });
+  expect(within(dialog).getByText(/Provision bb/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Provision dns/)).toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Approve 2" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(requests.filter((r) => r.method === "POST").map((r) => [r.path, r.body])).toEqual([
+    ["/api/runs/run-49/steps/step-approval/approve", { planSha256: sha, note: null }],
+    ["/api/runs/run-52/steps/step-approval/approve", { planSha256: "b".repeat(64), note: null }],
+  ]);
+});
+
+it("approves only the waiting runs the filters show, and offers no Approve all for a single one", async () => {
+  show([waiting, waitingToo], "/runs?q=dns");
+  expect(await screen.findByRole("link", { name: "#52 Provision" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Approve all/ })).not.toBeInTheDocument();
+});
+
+it("keeps going when one approval is refused and names the run that was not approved", async () => {
+  const { requests } = mockApi({
+    "GET /api/runs": () => [waiting, waitingToo],
+    "POST /api/runs/run-49/steps/step-approval/approve": () => problem(409, "The plan changed. Plan again."),
+    "POST /api/runs/run-52/steps/step-approval/approve": () => undefined,
+  });
+  renderAt(<RunsPage />, { path: "/runs", route: "/runs" });
+  await userEvent.click(await screen.findByRole("button", { name: "Approve all 2" }));
+  await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Approve 2" }));
+  expect(await screen.findByText(/1 of 2 were not approved\. #49: The plan changed\. Plan again\./)).toBeInTheDocument();
+  expect(requests.filter((r) => r.method === "POST")).toHaveLength(2);
+});
+
 it("cancels a run in progress after a confirmation, and offers nothing for one that cannot be cancelled", async () => {
   const { requests } = show([running, run(51, { status: "running", finishedAt: null, canCancel: false })]);
   const cancel = await screen.findAllByRole("button", { name: "Cancel" });
@@ -110,6 +152,17 @@ it("cancels a run in progress after a confirmation, and offers nothing for one t
   await userEvent.click(await screen.findByRole("button", { name: "Cancel the run" }));
   await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-50/cancel"]);
+});
+
+it("shows only the latest 50 finished runs, and every run that waits", async () => {
+  const finished = Array.from({ length: 60 }, (_, i) => run(200 - i, {}));
+  show([waiting, ...finished]);
+  const earlier = await screen.findByRole("list", { name: "Earlier" });
+  expect(within(earlier).getAllByRole("listitem")).toHaveLength(50);
+  expect(within(earlier).getByRole("link", { name: "#200 Provision" })).toBeInTheDocument();
+  expect(within(earlier).queryByRole("link", { name: "#150 Provision" })).not.toBeInTheDocument();
+  expect(screen.getByText("The latest 50 are shown. Filter to find an older run.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "#49 Provision" })).toBeInTheDocument();
 });
 
 it("filters by type, node and name", async () => {
