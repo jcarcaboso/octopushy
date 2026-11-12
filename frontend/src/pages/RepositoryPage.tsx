@@ -1,56 +1,102 @@
-import { RefreshCw, Save } from "lucide-react";
+import { Check, ChevronDown, GitCommitHorizontal, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useRepository, useRevision, useRevisions, useSyncRepository, useUpdateRepository } from "../api/queries";
 import type { Repository, Revision } from "../api/types";
 import { Badge } from "../components/Badge";
 import { Callout } from "../components/Callout";
-import { Card } from "../components/Card";
 import { IssueList } from "../components/IssueList";
-import { KeyValue } from "../components/KeyValue";
 import { Commit } from "../components/Mono";
 import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton, Skeleton } from "../components/States";
-import { EmptyRow, Table } from "../components/Table";
 import { WorkflowsSource } from "../components/WorkflowsSource";
+import { plural } from "../lib/format";
 
 type Kind = "none" | "token" | "ssh";
 
-function RepositoryForm({ repository, onSaved }: { repository: Repository; onSaved: () => void }) {
+/** How many revisions the history shows before it is asked for the rest. */
+const recent = 15;
+
+const intervals = [
+  { seconds: 10, label: "10 s" },
+  { seconds: 60, label: "60 s" },
+  { seconds: 300, label: "5 min" },
+  { seconds: 3_600, label: "1 h" },
+];
+
+/** The settings as they are saved now, to send back with the one that changes. */
+function saved(repository: Repository) {
+  return {
+    url: repository.url,
+    branch: repository.branch,
+    pollSeconds: repository.pollSeconds,
+    credentialKind: repository.credentialKind,
+    credentialUsername: repository.credentialUsername,
+    credentialSecret: null,
+  };
+}
+
+function credentialSummary(repository: Repository): string {
+  if (repository.credentialKind === "none") return "No credential";
+  const what = repository.credentialKind === "ssh" ? "SSH key" : "Token";
+  return `${what} ${repository.credentialSet ? "set" : "not set"}`;
+}
+
+/** "2 errors, 1 warning", or nothing for a valid revision without warnings. */
+function issueSummary(revision: Revision): string {
+  const parts = [
+    revision.errorCount > 0 ? plural(revision.errorCount, "error") : revision.valid ? null : "Has errors",
+    revision.warningCount > 0 ? plural(revision.warningCount, "warning") : null,
+  ];
+  return parts.filter(Boolean).join(", ");
+}
+
+function FetchStatus({ repository }: { repository: Repository }) {
+  const [tone, label] = !repository.url
+    ? ["muted", "Not connected"]
+    : repository.lastFetchError
+      ? ["danger", "Last fetch failed"]
+      : repository.lastFetchAt
+        ? ["success", "In sync"]
+        : ["muted", "Not fetched yet"];
+  return (
+    <span className="repo-status">
+      <span className="repo-status__label">
+        <span className={`repo-status__dot repo-status__dot--${tone}`} aria-hidden="true" />
+        {label}
+      </span>
+      {repository.lastFetchAt ? (
+        <span>
+          Checked <RelativeTime value={repository.lastFetchAt} />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function SourceForm({ repository, onSaved, onCancel }: { repository: Repository; onSaved: (next: Repository) => void; onCancel?: () => void }) {
   const update = useUpdateRepository();
   const [url, setUrl] = useState(repository.url ?? "");
   const [branch, setBranch] = useState(repository.branch);
-  const [pollSeconds, setPollSeconds] = useState(String(repository.pollSeconds ?? 60));
   const [kind, setKind] = useState<Kind>((["none", "token", "ssh"].includes(repository.credentialKind) ? repository.credentialKind : "none") as Kind);
   const [username, setUsername] = useState(repository.credentialUsername ?? "");
   const [secret, setSecret] = useState("");
-  const [saved, setSaved] = useState(false);
-
-  const poll = Number(pollSeconds);
-  const pollValid = Number.isInteger(poll) && poll >= 10 && poll <= 86_400;
   const credentialSet = repository.credentialSet;
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!pollValid || !branch.trim()) return;
-    setSaved(false);
+    if (!branch.trim()) return;
     update.mutate(
       {
+        ...saved(repository),
         url: url.trim() || null,
         branch: branch.trim(),
-        pollSeconds: poll,
         credentialKind: kind,
         credentialUsername: kind === "token" ? username.trim() || null : null,
         credentialSecret: kind !== "none" && secret ? secret : null,
       },
-      {
-        onSuccess: () => {
-          setSecret("");
-          setSaved(true);
-          onSaved();
-        },
-      },
+      { onSuccess: onSaved },
     );
   }
 
@@ -72,28 +118,9 @@ function RepositoryForm({ repository, onSaved }: { repository: Repository; onSav
           HTTPS, SSH, or a path on the server. Leave empty to disconnect.
         </div>
       </div>
-      <div className="form__row">
-        <div className="field">
-          <label htmlFor="repo-branch">Branch</label>
-          <input id="repo-branch" className="mono" value={branch} onChange={(e) => setBranch(e.target.value)} required spellCheck={false} />
-        </div>
-        <div className="field">
-          <label htmlFor="repo-poll">Poll every (seconds)</label>
-          <input
-            id="repo-poll"
-            type="number"
-            min={10}
-            max={86_400}
-            className="input--narrow num"
-            value={pollSeconds}
-            onChange={(e) => setPollSeconds(e.target.value)}
-            aria-invalid={!pollValid || undefined}
-            aria-describedby="repo-poll-hint"
-          />
-          <div id="repo-poll-hint" className={pollValid ? "field__hint" : "field__error"}>
-            Between 10 seconds and once a day (86400).
-          </div>
-        </div>
+      <div className="field">
+        <label htmlFor="repo-branch">Branch</label>
+        <input id="repo-branch" className="mono" value={branch} onChange={(e) => setBranch(e.target.value)} required spellCheck={false} />
       </div>
       <fieldset className="field">
         <legend>Credential</legend>
@@ -147,155 +174,272 @@ function RepositoryForm({ repository, onSaved }: { repository: Repository; onSav
         </div>
       ) : null}
       <ErrorMessage error={update.error} />
-      {saved && !update.error ? (
-        <Callout kind="success" title="Saved">
-          The repository is fetched now and then every {poll} seconds.
-        </Callout>
-      ) : null}
       <div className="button-row">
-        <button type="submit" className="button button--primary" disabled={update.isPending || !pollValid || !branch.trim()}>
+        <button type="submit" className="button button--primary" disabled={update.isPending || !branch.trim()}>
           <Save size={15} aria-hidden="true" />
           {update.isPending ? "Saving…" : "Save"}
         </button>
+        {onCancel ? (
+          <button type="button" className="button" onClick={onCancel}>
+            Cancel
+          </button>
+        ) : null}
       </div>
     </form>
   );
 }
 
-function RevisionSummary({ revision }: { revision: Revision }) {
+/** Where the lab repository is read from. Once it is set it is a few words; the form opens only to change it. */
+function Source({ repository, onSaved }: { repository: Repository; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
   return (
-    <KeyValue
-      items={[
-        {
-          term: "Commit",
-          value: <Commit commit={revision.commit} length={10} />,
-        },
-        ...(revision.workflowsDigest
-          ? [
-              {
-                term: "Workflows",
-                value: (
-                  <span title={`Resolutions ${revision.workflowsDigest}`}>
-                    from <span className="mono break">{revision.workflowsRepository}</span>
-                  </span>
-                ),
-              },
-            ]
-          : []),
-        { term: "Definition validity", value: revision.valid ? <Badge tone="success">Valid</Badge> : <Badge tone="danger">Has errors</Badge> },
-        { term: "Subject", value: revision.subject ?? <span className="muted">—</span> },
-        { term: "Author", value: revision.author ?? <span className="muted">—</span> },
-        { term: "Committed", value: <RelativeTime value={revision.committedAt} /> },
-        { term: "Loaded", value: <RelativeTime value={revision.loadedAt} /> },
-        {
-          term: "Issues",
-          value: (
-            <span className="num">
-              {revision.errorCount} errors · {revision.warningCount} warnings
+    <section className="repo-side__section" aria-labelledby="repo-source">
+      <h2 id="repo-source" className="repo-side__heading">
+        Source
+      </h2>
+      {editing || !repository.url ? (
+        <SourceForm
+          repository={repository}
+          onSaved={() => {
+            setEditing(false);
+            onSaved();
+          }}
+          onCancel={repository.url ? () => setEditing(false) : undefined}
+        />
+      ) : (
+        <>
+          <span className="mono break">{repository.url}</span>
+          <span className="inline-group">
+            <code className="run-chip run-chip--mono">{repository.branch}</code>
+            <span className="run-chip">{credentialSummary(repository)}</span>
+          </span>
+          <button type="button" className="link-button small repo-side__action" onClick={() => setEditing(true)}>
+            Edit
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** How often the repository is checked: the one setting worth keeping in view. A usual interval saves when it is chosen. */
+function CheckInterval({ repository }: { repository: Repository }) {
+  const update = useUpdateRepository();
+  const [other, setOther] = useState(false);
+  const [seconds, setSeconds] = useState(String(repository.pollSeconds));
+  const custom = other || !intervals.some((interval) => interval.seconds === repository.pollSeconds);
+  const value = Number(seconds);
+  const valid = Number.isInteger(value) && value >= 10 && value <= 86_400;
+  const save = (pollSeconds: number) => update.mutate({ ...saved(repository), pollSeconds }, { onSuccess: () => setOther(false) });
+
+  return (
+    <section className="repo-side__section" aria-labelledby="repo-interval">
+      <h2 id="repo-interval" className="repo-side__heading">
+        Check every
+      </h2>
+      <div className="choice" role="group" aria-labelledby="repo-interval">
+        {intervals.map((interval) => (
+          <button
+            key={interval.seconds}
+            type="button"
+            className="choice__item"
+            aria-pressed={!custom && repository.pollSeconds === interval.seconds}
+            disabled={update.isPending}
+            onClick={() => (interval.seconds === repository.pollSeconds ? setOther(false) : save(interval.seconds))}
+          >
+            {interval.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="choice__item"
+          aria-pressed={custom}
+          disabled={update.isPending}
+          onClick={() => {
+            setSeconds(String(repository.pollSeconds));
+            setOther(true);
+          }}
+        >
+          Other
+        </button>
+      </div>
+      {custom ? (
+        <form
+          className="repo-interval"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (valid) save(value);
+          }}
+        >
+          <input
+            type="number"
+            min={10}
+            max={86_400}
+            className="input--narrow num"
+            value={seconds}
+            onChange={(e) => setSeconds(e.target.value)}
+            aria-label="Seconds between checks"
+            aria-invalid={!valid || undefined}
+            aria-describedby="repo-interval-hint"
+          />
+          <button type="submit" className="button" disabled={update.isPending || !valid || value === repository.pollSeconds}>
+            {update.isPending ? "Saving…" : "Save"}
+          </button>
+          <div id="repo-interval-hint" className={valid ? "field__hint" : "field__error"}>
+            Seconds, from 10 to once a day (86400).
+          </div>
+        </form>
+      ) : null}
+      <ErrorMessage error={update.error} />
+    </section>
+  );
+}
+
+function CurrentRevision({ repository }: { repository: Repository }) {
+  const revision = repository.revision;
+  const issues = revision ? issueSummary(revision) : "";
+  return (
+    <section className="repo-side__section" aria-labelledby="repo-current">
+      <h2 id="repo-current" className="repo-side__heading">
+        Current revision
+      </h2>
+      {revision ? (
+        <>
+          <span className="repo-current__commit">
+            <GitCommitHorizontal size={16} aria-hidden="true" />
+            <Commit commit={revision.commit} length={10} />
+          </span>
+          <span>{revision.subject ?? <span className="muted">(no subject)</span>}</span>
+          <span className="muted small">
+            {revision.author ? `${revision.author}, loaded ` : "Loaded "}
+            <RelativeTime value={revision.loadedAt} />
+          </span>
+          {issues ? (
+            <span className={revision.valid ? "repo-current__issues" : "repo-current__issues repo-current__issues--danger"}>{issues}</span>
+          ) : (
+            <span className="valid-mark">
+              <Check size={14} aria-hidden="true" />
+              Valid
             </span>
-          ),
-        },
-      ]}
-    />
+          )}
+        </>
+      ) : (
+        <span className="muted">{repository.url ? "None yet: the first fetch loads one." : "None yet."}</span>
+      )}
+    </section>
   );
 }
 
-function RevisionIssues({ id, summary = false }: { id: string; summary?: boolean }) {
+function RevisionIssues({ id }: { id: string }) {
   const { data, error, isPending } = useRevision(id);
-  if (isPending) return <Skeleton height={48} />;
+  if (isPending) return <Skeleton height={32} />;
   if (!data) return <ErrorMessage error={error} />;
-  return (
-    <div className="stack">
-      {summary ? <RevisionSummary revision={data.revision} /> : null}
-      <IssueList issues={data.issues} emptyText="This revision has no issues." />
-    </div>
-  );
+  return <IssueList issues={data.issues} emptyText="This revision has no issues." />;
 }
 
-function History({ latestId }: { latestId: string | null }) {
+function History({ latestId, connected }: { latestId: string | null; connected: boolean }) {
   const { data, error, isPending } = useRevisions();
   const [params, setParams] = useSearchParams();
+  const [all, setAll] = useState(false);
   const selected = params.get("revision");
 
   if (isPending) return <Skeleton height={120} />;
   if (!data) return <ErrorMessage error={error} title="The revision history could not be loaded" />;
-  const chosen = data.find((r) => r.id === selected) ?? null;
+  if (data.length === 0) {
+    return (
+      <EmptyState compact title="No revisions loaded yet">
+        {connected ? "The first fetch loads one." : "Save a repository URL under Source to load the first revision."}
+      </EmptyState>
+    );
+  }
+  // A linked revision further back than the recent ones still has to be on the page.
+  const far = data.findIndex((r) => r.id === selected) >= recent;
+  const rows = all || far ? data : data.slice(0, recent);
 
   return (
-    <div className="stack">
-      <Table label="Revision history">
-        <thead>
-          <tr>
-            <th scope="col">Commit</th>
-            <th scope="col">Subject</th>
-            <th scope="col">Author</th>
-            <th scope="col">Loaded</th>
-            <th scope="col">Definition validity</th>
-            <th scope="col">
-              <span className="visually-hidden">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.length === 0 ? <EmptyRow colSpan={6}>No revisions loaded yet.</EmptyRow> : null}
-          {data.map((r) => (
-            <tr key={r.id} className={r.id === selected ? "row--selected" : undefined}>
-              <td>
-                <Commit commit={r.commit} />
-                {r.workflowsDigest ? (
-                  <span className="muted small" title={`A revision is its commit and what its workflow references resolved to (${r.workflowsDigest})`}>
-                    {" "}
-                    + workflows <code className="mono">{r.workflowsDigest.slice(0, 7)}</code>
-                  </span>
-                ) : null}
-                {r.id === latestId ? (
-                  <>
-                    {" "}
-                    <Badge tone="info">Current</Badge>
-                  </>
-                ) : null}
-                {r.isCurrentSource ? null : (
-                  <>
-                    {" "}
-                    <Badge tone="neutral">Previous source</Badge>
-                  </>
-                )}
-              </td>
-              <td>{r.subject ?? <span className="muted">—</span>}</td>
-              <td className="muted">{r.author ?? "—"}</td>
-              <td className="nowrap">
-                <RelativeTime value={r.loadedAt} />
-              </td>
-              <td className="nowrap">
-                {r.valid ? <Badge tone="success">Valid</Badge> : <Badge tone="danger">{r.errorCount} errors</Badge>}
-                {r.warningCount > 0 ? (
-                  <>
-                    {" "}
-                    <Badge tone="warning">{r.warningCount} warnings</Badge>
-                  </>
-                ) : null}
-              </td>
-              <td className="cell-actions">
-                <button
-                  type="button"
-                  className="button button--small"
-                  aria-pressed={r.id === selected}
-                  onClick={() => setParams(r.id === selected ? {} : { revision: r.id }, { replace: true })}
-                >
-                  {r.id === selected ? "Hide issues" : "Show issues"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-      {chosen ? (
-        <section className="revision-issues" aria-label="Selected revision">
-          <h3 className="subhead">
-            Issues in <Commit commit={chosen.commit} /> {chosen.subject}
-          </h3>
-          <RevisionIssues id={chosen.id} summary />
-        </section>
+    <div>
+      <div className="revs">
+        <div className="revs__inner">
+          <div className="revs__head" aria-hidden="true">
+            <span>Commit</span>
+            <span>Change</span>
+            <span>Author</span>
+            <span>Loaded</span>
+            <span>Definition</span>
+          </div>
+          <ul className="revs__list" aria-label="Revision history">
+            {rows.map((r, index) => {
+              const issues = issueSummary(r);
+              const open = r.id === selected && issues !== "";
+              // The same commit twice means its workflows resolved differently; only then does the digest tell them apart.
+              const twin = rows[index - 1]?.commit === r.commit || rows[index + 1]?.commit === r.commit;
+              return (
+                <li key={r.id} className="revs__item">
+                  <div className="revs__row">
+                    <span>
+                      <Commit commit={r.commit} />
+                      {twin && r.workflowsDigest ? (
+                        <span className="muted small" title={`A revision is its commit and what its workflow references resolved to (${r.workflowsDigest})`}>
+                          {" "}
+                          + <code className="mono">{r.workflowsDigest.slice(0, 7)}</code>
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="revs__change">
+                      <span className="revs__subject" title={r.subject ?? undefined}>
+                        {r.subject ?? <span className="muted">—</span>}
+                      </span>
+                      {r.id === latestId ? <span className="run-chip run-chip--service">Current</span> : null}
+                      {r.isCurrentSource ? null : <span className="run-chip">Previous source</span>}
+                    </span>
+                    <span className="muted small">{r.author ?? "—"}</span>
+                    <span className="muted small nowrap">
+                      <RelativeTime value={r.loadedAt} />
+                    </span>
+                    <span>
+                      {issues ? (
+                        <button
+                          type="button"
+                          className={r.valid ? "rev-issues rev-issues--warning" : "rev-issues rev-issues--danger"}
+                          aria-expanded={open}
+                          onClick={() => setParams(open ? {} : { revision: r.id }, { replace: true })}
+                        >
+                          {issues}
+                          <ChevronDown size={12} aria-hidden="true" />
+                        </button>
+                      ) : (
+                        <span className="valid-mark">
+                          <Check size={14} aria-hidden="true" />
+                          Valid
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  {open ? (
+                    <div className="revs__issues">
+                      <RevisionIssues id={r.id} />
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+      {data.length > recent ? (
+        <div className="revs__foot">
+          <span>Showing the last {rows.length} revisions</span>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => {
+              if (far) setParams({}, { replace: true });
+              setAll(rows.length <= recent);
+            }}
+          >
+            {rows.length > recent ? `Show only the last ${recent}` : `Show the last ${data.length}`}
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -305,6 +449,7 @@ export function RepositoryPage() {
   const [watching, setWatching] = useState(false);
   const { data, error, isPending } = useRepository({ fast: watching });
   const sync = useSyncRepository();
+  const [params] = useSearchParams();
 
   useEffect(() => {
     if (!watching) return;
@@ -315,12 +460,13 @@ export function RepositoryPage() {
   if (isPending) return <PageSkeleton rows={2} />;
   if (!data) return <ErrorMessage error={error} title="The repository settings could not be loaded" />;
 
-  const revision = data.revision;
+  const workflows = data.workflows ?? null;
+  const tab = workflows && params.get("tab") === "workflows" ? "workflows" : "history";
   return (
     <>
       <PageHeader
         title="Repository"
-        meta="The lab repository: Octopushy's source of truth for labs, installations, and guests, and where their workflows come from."
+        meta={<FetchStatus repository={data} />}
         actions={
           <button
             type="button"
@@ -335,48 +481,35 @@ export function RepositoryPage() {
       />
       <div className="stack stack--large">
         <ErrorMessage error={sync.error} />
-        <div className="columns columns--halves">
-          <Card title="Settings">
-            <RepositoryForm repository={data} onSaved={() => setWatching(true)} />
-          </Card>
-          <div className="stack stack--large">
-            <Card title="Fetch status">
-              {data.lastFetchError ? (
-                <Callout kind="danger" title="The last fetch failed">
-                  <span className="mono small break">{data.lastFetchError}</span>
-                </Callout>
-              ) : null}
-              <KeyValue
-                items={[
-                  { term: "Last fetch", value: <RelativeTime value={data.lastFetchAt} empty={data.url ? "Not fetched yet" : "No repository"} /> },
-                  { term: "Head commit", value: <Commit commit={data.headCommit} length={10} /> },
-                  { term: "Branch", value: <span className="mono">{data.branch}</span> },
-                ]}
-              />
-            </Card>
-            <Card title="Current revision" id="current-revision">
-              {revision ? (
-                <div className="stack">
-                  <RevisionSummary revision={revision} />
-                  <h3 className="subhead">Issues</h3>
-                  <RevisionIssues id={revision.id} />
-                </div>
-              ) : (
-                <EmptyState compact title="No revision loaded yet">
-                  {data.url ? "The first fetch loads one." : "Save a repository URL to load the first revision."}
-                </EmptyState>
-              )}
-            </Card>
-          </div>
-        </div>
-        {data.workflows ? (
-          <Card title="Workflows" id="workflows">
-            <WorkflowsSource workflows={data.workflows} />
-          </Card>
+        {data.lastFetchError ? (
+          <Callout kind="danger" title="The last fetch failed">
+            <span className="mono small break">{data.lastFetchError}</span>
+          </Callout>
         ) : null}
-        <Card title="History">
-          <History latestId={revision?.id ?? null} />
-        </Card>
+        <div className="repo">
+          <div className="repo__main">
+            <nav className="tabs" aria-label="Repository sections">
+              <Link to={{ search: "" }} replace className="tabs__item" aria-current={tab === "history" ? "page" : undefined}>
+                History
+              </Link>
+              {workflows ? (
+                <Link to={{ search: "?tab=workflows" }} replace className="tabs__item" aria-current={tab === "workflows" ? "page" : undefined}>
+                  Workflows <span className="tabs__count">{workflows.workflows.length}</span>
+                </Link>
+              ) : null}
+            </nav>
+            {tab === "workflows" && workflows ? (
+              <WorkflowsSource workflows={workflows} />
+            ) : (
+              <History latestId={data.revision?.id ?? null} connected={Boolean(data.url)} />
+            )}
+          </div>
+          <aside className="repo-side" aria-label="Repository settings">
+            <Source repository={data} onSaved={() => setWatching(true)} />
+            <CheckInterval repository={data} />
+            <CurrentRevision repository={data} />
+          </aside>
+        </div>
       </div>
     </>
   );

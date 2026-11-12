@@ -273,6 +273,17 @@ const subjects = [
   "Bump ai-server to 2.1",
   "media: grow the data disk",
   "Pin machine-tools to @1",
+  "dev: add the docker role",
+  "web: a VM for the reverse proxy",
+  "korriban: a second installation",
+  "pve01-ai: pass the GPU through",
+  "Default approval to automatic",
+  "media: a VM for Jellyfin",
+  "bb: first definition",
+  "pbs: a datastore for the backups",
+  "dns: reserve the address",
+  "lxc-basic: unprivileged by default",
+  "Add octopushy.yaml",
 ];
 
 export const revisions: Revision[] = subjects.map((subject, i) => ({
@@ -285,7 +296,7 @@ export const revisions: Revision[] = subjects.map((subject, i) => ({
   valid: i !== 4,
   errorCount: i === 4 ? 1 : 0,
   warningCount: i === 2 ? 1 : 0,
-  isCurrentSource: i === 0,
+  isCurrentSource: i < subjects.length - 2,
   workflowsRepository,
   workflowsDigest: hex(`workflows-${i}`),
 }));
