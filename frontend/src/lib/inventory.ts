@@ -195,3 +195,16 @@ export function counts(nodes: NodeEntry[]) {
   const problems = [...nodes, ...machines, ...services].filter((x) => isProblem(x.liveness)).length;
   return { nodes: nodes.length, machines: machines.length, services: services.length, problems };
 }
+
+/** The mean of the checks' daily percentages, oldest day first; null for a day nothing answered. */
+export function dailyMean(checks: UptimeCheck[], days = 30): (number | null)[] {
+  return Array.from({ length: days }, (_, i) => {
+    const values = checks.map((c) => c.daily[30 - days + i]).filter((v): v is number => v !== null && v !== undefined);
+    return values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
+  });
+}
+
+/** A strip bar's state for a percentage: u up, d down, p partly, - no answers. */
+export function barState(value: number | null): "u" | "d" | "p" | "-" {
+  return value === null ? "-" : value === 100 ? "u" : value === 0 ? "d" : "p";
+}

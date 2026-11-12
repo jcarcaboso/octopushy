@@ -1834,6 +1834,20 @@ export interface components {
             attention: components["schemas"]["RunSummaryDto"][];
             observeErrors: components["schemas"]["ObserveErrorDto"][];
             recent: components["schemas"]["RunSummaryDto"][];
+            failed: components["schemas"]["RunSummaryDto"][];
+            week: components["schemas"]["OverviewWeekDto"];
+        };
+        OverviewWeekDto: {
+            /** Format: int32 */
+            total: number;
+            /** Format: int32 */
+            succeeded: number;
+            /** Format: int32 */
+            failed: number;
+            /** Format: int32 */
+            cancelled: number;
+            /** Format: int32 */
+            unfinished: number;
         };
         PlanAttributeDto: {
             name: string;

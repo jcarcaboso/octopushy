@@ -14,6 +14,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
 import { formatBytes, plural } from "../lib/format";
 import {
+  barState,
   buildTree,
   counts,
   filterTree,
@@ -80,7 +81,7 @@ function merged(checks: UptimeCheck[], span: UptimeWindow): { state: "u" | "d" |
     const index = 30 - days + i;
     const values = checks.map((c) => c.daily[index]).filter((v): v is number => v !== null && v !== undefined);
     const value = values.length === 0 ? null : Math.min(...values);
-    const state = value === null ? "-" : value === 100 ? "u" : value === 0 ? "d" : "p";
+    const state = barState(value);
     const ago = days - 1 - i;
     return { state, title: `${ago === 0 ? "Last 24 hours" : `${ago + 1} days ago`}: ${value === null ? "no answers" : `${formatPercent(value)} up`}` };
   });
