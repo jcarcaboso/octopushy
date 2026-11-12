@@ -41,6 +41,9 @@ public sealed class AgentUpdates(
         ? $"{v.Major}.{v.Minor}.{v.Build}"
         : "0.0.0";
 
+    /// <summary>The agents whose update's change this process is committing now: claimed, with no change recorded yet.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> committing = new();
+
     /// <summary>The head revision as read for updates, or why it cannot be used.</summary>
     public sealed record Head(DefinitionRevision? Revision, LabRepository? Repository, string? Unusable);
 
@@ -319,6 +322,15 @@ public sealed class AgentUpdates(
             var agent = await db.Agents.FirstOrDefaultAsync(a => a.UpdateState == AgentUpdateStates.Updating, ct);
             if (agent is null)
                 return (Guid?)null;
+            if (agent.UpdateChangeId is null && !committing.ContainsKey(agent.Id))
+            {
+                // Claimed by a server that stopped before it recorded the change: nothing else would ever end it.
+                logger.LogWarning("The update of agent {Name} was left without its change; it is failed.", agent.Name);
+                await FailAsync(db, agent, "The server stopped before the update's change was recorded. Look for its commit in the lab repository, then ask again.", ct);
+                await db.SaveChangesAsync(ct);
+                return null;
+            }
+
             if (AtLeast(agent.Version, agent.UpdateTargetVersion ?? TargetVersion))
             {
                 logger.LogInformation("Agent {Name} is back on {Version}; its update is done.", agent.Name, agent.Version);
@@ -417,7 +429,17 @@ public sealed class AgentUpdates(
                 next.UpdatePaused = true;
             }
 
-            await db.SaveChangesAsync(ct);
+            committing[next.Id] = 0;
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch
+            {
+                committing.TryRemove(next.Id, out var unclaimed);
+                throw;
+            }
+
             return new { next.Id, Resource = (Guid?)assessment.Guest.ResourceId, Actor = next.UpdateRequestedBy ?? "octopushy", Refused = (string?)null };
         }, ct);
         if (claimed is null)
@@ -425,31 +447,41 @@ public sealed class AgentUpdates(
         if (claimed.Resource is not { } resourceId)
             return (claimed.Id, claimed.Refused);
 
+        // Once claimed, the commit and its record do not stop with the request or the connection that asked: a claim left
+        // without its change would stay "updating" and hold the queue.
         ChangeDto? change = null;
         string? refused;
         try
         {
-            (change, refused) = await CommitAsync(resourceId, claimed.Actor, ct);
+            try
+            {
+                (change, refused) = await CommitAsync(resourceId, claimed.Actor, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                logger.LogError(e, "Committing the update of agent {Agent} failed.", claimed.Id);
+                refused = $"Committing the update failed: {e.Message}";
+            }
+
+            await engine.ExecuteAsync(async (db, _) =>
+            {
+                var agent = await db.Agents.FirstAsync(a => a.Id == claimed.Id, CancellationToken.None);
+                if (change is not null)
+                {
+                    agent.UpdateChangeId = change.Id;
+                    logger.LogInformation("Agent {Name} is being updated to {Version} by change {Change}.", agent.Name, TargetVersion, change.Id);
+                }
+                else
+                    await FailAsync(db, agent, refused!, CancellationToken.None);
+                await db.SaveChangesAsync(CancellationToken.None);
+                return 0;
+            }, CancellationToken.None);
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        finally
         {
-            logger.LogError(e, "Committing the update of agent {Agent} failed.", claimed.Id);
-            refused = $"Committing the update failed: {e.Message}";
+            committing.TryRemove(claimed.Id, out _);
         }
 
-        await engine.ExecuteAsync(async (db, _) =>
-        {
-            var agent = await db.Agents.FirstAsync(a => a.Id == claimed.Id, ct);
-            if (change is not null)
-            {
-                agent.UpdateChangeId = change.Id;
-                logger.LogInformation("Agent {Name} is being updated to {Version} by change {Change}.", agent.Name, TargetVersion, change.Id);
-            }
-            else
-                await FailAsync(db, agent, refused!, ct);
-            await db.SaveChangesAsync(ct);
-            return 0;
-        }, ct);
         // A refusal emptied the queue; a start may still be due when it did not.
         return (claimed.Id, refused);
     }

@@ -178,7 +178,8 @@ version on the guest.
 2. A change to the guest's definition is committed as the operator who asked: `worker_agent_version` becomes the
    server's version and `worker_agent_digest` is removed. The other inputs and the file's comments are kept.
 3. The change is approved in the same click, whatever `policy.approval` says: its setup run, and its provision plan
-   when that changes no resource. A destructive setup under `destructive: manual` still waits for a person.
+   when that changes no resource. A setup the workflow declares destructive is never approved this way:
+   it follows the guest's policy, and waits for a person where that says so.
 4. The guest's setup run rolls the new image out. Another agent runs it, since an agent never configures its own guest.
 5. The update ends when the agent connects reporting the server's version. Its pause is lifted then, unless a person
    had set it.

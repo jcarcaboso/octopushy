@@ -71,7 +71,7 @@ public sealed partial class RunEngine
         }
 
         // An agent update a person asked for approves its guest's setup, whatever the approval policy; never a destructive one.
-        if (!destructiveManual && step.Name == StepNames.Approval && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
+        if (!ansible.Destructive && step.Name == StepNames.Approval && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
             return true;
 
         step.Status = StepStatuses.AwaitingApproval;

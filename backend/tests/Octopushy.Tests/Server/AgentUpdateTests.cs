@@ -35,9 +35,10 @@ public class AgentUpdateTests(PostgresFixture postgres)
     /// The configure fixture's guest as a worker: its inputs pin an old agent version and a digest, with a comment, under a
     /// manual approval policy. With <paramref name="second"/>, a second worker guest, krb-app-02, like it.
     /// </summary>
-    private static TestRepository Lab(string version = "0.0.1", bool second = false, string policy = "policy: { approval: manual }")
+    private static TestRepository Lab(string version = "0.0.1", bool second = false, string policy = "policy: { approval: manual }",
+        string destructive = "false")
     {
-        var test = GuestConfigurationTests.Repository(policy);
+        var test = GuestConfigurationTests.Repository(policy, destructive: destructive);
         var text = File.ReadAllText(Path.Combine(test.Root, GuestFile));
         Assert.Contains("inputs: { greeting: hello }", text);
         text = text.Replace("inputs: { greeting: hello }", $"""
@@ -372,6 +373,51 @@ public class AgentUpdateTests(PostgresFixture postgres)
         await setup.ReportVersionAsync(worker.Id, Target);
         Assert.Equal("current", await setup.StateAsync(worker.Id));
         Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+    }
+
+    [Fact]
+    public async Task An_update_does_not_approve_a_destructive_setup()
+    {
+        await using var setup = await StartAsync(Lab(policy: "policy: { approval: manual, destructive: automatic }", destructive: "true"));
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        var done = await WorkAsync(setup, runner);
+
+        // Its setup waits for a person, as any destructive one under a manual approval policy.
+        Assert.DoesNotContain("ansible:run", done);
+        var configure = await setup.Server.LatestRunAsync(Guest, Operations.Configure);
+        var approval = configure.Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Equal(StepStatuses.AwaitingApproval, approval.Status);
+        Assert.Null(approval.DecidedBy);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+    }
+
+    [Fact]
+    public async Task An_update_left_without_its_change_fails_and_lifts_its_pause()
+    {
+        await using var setup = await StartAsync(Lab());
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        // As a server leaves it when it stops between claiming the update and recording its change.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            await db.Agents.Where(a => a.Id == worker.Id).ExecuteUpdateAsync(u => u
+                .SetProperty(a => a.UpdateState, AgentUpdateStates.Updating)
+                .SetProperty(a => a.UpdateTargetVersion, Target)
+                .SetProperty(a => a.Draining, true)
+                .SetProperty(a => a.UpdatePaused, true));
+        });
+
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        var listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("failed", listed["update"]!["state"]!.GetValue<string>());
+        Assert.Contains("stopped before", listed["update"]!["reason"]!.GetValue<string>());
+        Assert.False((await setup.RecordAsync(worker.Id)).Draining);
     }
 
     [Fact]
