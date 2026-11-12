@@ -180,8 +180,9 @@ setup stage runs `setup` when anything it is built from changes; the workflow's
 _Avoid_: Task, which is a part of a playbook
 
 **Interface**:
-A named slot, such as `dns`, bound to a workflow in the lab, with a schema in the
-repository. Swapping the workflow is one line. Not built yet.
+A named slot, such as `dns`, that a workflow stage declares it fills. An installation names the **binding** that
+fills it there, a file of inputs and secrets under `labs/<lab>/interfaces/<slot>/`; the workflows repository's
+`interfaces/<slot>.schema.json` says what a binding holds. See docs/workflows.md#interfaces.
 
 **Uptime check**:
 Whether a node's Proxmox API, a machine's SSH or a service's link answers, asked of an agent about once a minute and kept

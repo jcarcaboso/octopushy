@@ -158,6 +158,15 @@ public sealed record WorkflowStage(
     /// for each guest, in a cloud-init snippet. See <see cref="ManagedHostKey"/>.
     /// </summary>
     public bool ManagedHostKey { get; init; }
+
+    /// <summary>
+    /// For an Ansible stage of <c>manages: service</c>, the interface slot it fills, such as <c>dns</c>: it runs only where the
+    /// service's installation binds the slot. See docs/workflows.md#interfaces.
+    /// </summary>
+    public string? Interface { get; init; }
+
+    /// <summary>The slot's schema, from <c>interfaces/&lt;slot&gt;.schema.json</c> of the workflow's source, built; null without <see cref="Interface"/>.</summary>
+    public JsonSchema? InterfaceSchema { get; init; }
 }
 
 /// <summary>What an Ansible stage offers: the action that runs on change, any others, the outcomes it may report, and the secrets it needs.</summary>

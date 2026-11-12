@@ -950,6 +950,35 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_stage_that_fills_a_slot_gets_its_bindings_inputs_and_secrets_and_the_others_do_not()
+    {
+        var test = InterfaceTests.Repository();
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        await server.SetSecretAsync("dns/house/token", "a-dns-token");
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        var deployPreview = await agent.NextAsync("preview");
+        Assert.Null(JsonNode.Parse(deployPreview.InputJson)!["vars"]!["dns"]);
+        var (outputs, artifact) = Preview("deploy");
+        await agent.ReportAsync(deployPreview, Outcome.Succeeded, outputs, artifacts: artifact);
+        var dnsPreview = await agent.NextAsync("preview");
+        Assert.Equal("10.1.0.53", JsonNode.Parse(dnsPreview.InputJson)!["vars"]!["dns"]!["primary"]!["address"]!.GetValue<string>());
+        // A preview holds no secrets.
+        Assert.DoesNotContain(SecretNames.AnsibleVar("dns_token"), dnsPreview.Secrets.Keys);
+        (outputs, artifact) = Preview("dns");
+        await agent.ReportAsync(dnsPreview, Outcome.Succeeded, outputs, artifacts: artifact);
+
+        var deploy = await agent.NextAsync("run");
+        Assert.DoesNotContain(SecretNames.AnsibleVar("dns_token"), deploy.Secrets.Keys);
+        Assert.Equal(Password, deploy.Secrets[SecretNames.AnsibleVar("web_password")]);
+        await agent.ReportAsync(deploy, Outcome.Succeeded, ConfigureRunTests.Recap());
+        var dns = await agent.NextAsync("run");
+        Assert.Equal("a-dns-token", dns.Secrets[SecretNames.AnsibleVar("dns_token")]);
+        Assert.Equal("web.example.com", JsonNode.Parse(dns.InputJson)!["vars"]!["records"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_stage_logs_in_with_its_guests_own_key()
     {
         var test = Repository.Repository();

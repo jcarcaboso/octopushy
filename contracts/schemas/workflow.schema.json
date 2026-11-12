@@ -108,14 +108,18 @@
         "playbook": { "description": "Ansible: what runs when the guest, the service or this workflow changes. Relative to root.", "type": "string", "minLength": 1 },
         "prepare": { "description": "Ansible: a playbook run on the agent before approval, with no secrets and no access to the guest. Relative to root.", "type": "string", "minLength": 1 },
         "destructive": { "description": "Ansible: whether the playbook can delete data or a service. False when not set.", "type": "boolean" },
-        "timeoutMinutes": { "description": "Ansible only.", "type": "integer", "minimum": 1, "maximum": 1440 }
+        "timeoutMinutes": { "description": "Ansible only.", "type": "integer", "minimum": 1, "maximum": 1440 },
+        "interface": {
+          "description": "Ansible, in manages: service only: the interface slot this stage fills, such as dns. It runs only where the service's installation binds the slot, and gets the binding's inputs as the extra var named after the slot and its secrets as extra vars. The workflows repository's interfaces/<slot>.schema.json validates the inputs. See docs/workflows.md#interfaces.",
+          "$ref": "common.schema.json#/$defs/extraVar"
+        }
       },
       "required": ["name", "executor", "root"],
       "allOf": [
         {
           "if": { "properties": { "executor": { "const": "ansible" } }, "required": ["executor"] },
           "then": { "required": ["playbook"], "properties": { "verify": false, "hostKey": false } },
-          "else": { "properties": { "playbook": false, "prepare": false, "destructive": false, "timeoutMinutes": false } }
+          "else": { "properties": { "playbook": false, "prepare": false, "destructive": false, "timeoutMinutes": false, "interface": false } }
         }
       ],
       "additionalProperties": false
