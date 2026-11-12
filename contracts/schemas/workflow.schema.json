@@ -112,6 +112,11 @@
         "interface": {
           "description": "Ansible, in manages: service only: the interface slot this stage fills, such as dns. It runs only where the service's installation binds the slot, and gets the binding's inputs as the extra var named after the slot and its secrets as extra vars. The workflows repository's interfaces/<slot>.schema.json validates the inputs. See docs/workflows.md#interfaces.",
           "$ref": "common.schema.json#/$defs/extraVar"
+        },
+        "names": {
+          "description": "In manages: service only: the host names this stage sets, as a path into { inputs } where [] goes through an array, such as inputs.dns_records[].name. Where the stage runs, each name is shown on the service and opened and checked for uptime as https://<name>/, beside its links. It changes nothing a run does. See docs/workflows.md#names-a-stage-sets.",
+          "type": "string",
+          "pattern": "^inputs(\\.[A-Za-z_][A-Za-z0-9_-]*(\\[\\])?)+$"
         }
       },
       "required": ["name", "executor", "root"],

@@ -436,8 +436,16 @@ public sealed record ServiceSummaryDto(
     RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun,
     WorkflowDto? Workflow,
-    /// <summary>Where people open the service, from <c>links</c> in <c>service.yaml</c>.</summary>
-    IReadOnlyList<string> Links);
+    /// <summary>
+    /// Where people open the service and what uptime checks: <c>links</c> in <c>service.yaml</c>, then the URL of each of
+    /// <see cref="Names"/> that no link already opens.
+    /// </summary>
+    IReadOnlyList<string> Links,
+    /// <summary>The host names the service's stages set, from the input each stage names with <c>names</c>.</summary>
+    IReadOnlyList<ServiceNameDto> Names);
+
+/// <summary>A host name a service's stage sets, and the URL it is opened and checked at.</summary>
+public sealed record ServiceNameDto(string Name, string Stage, string Url);
 
 public sealed record ServiceStageDto(string Name, string Executor);
 

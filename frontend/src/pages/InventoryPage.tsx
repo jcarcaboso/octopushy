@@ -384,23 +384,35 @@ function ServiceDetail({ service, span }: { service: ServiceEntry; span: UptimeW
       />
       <section className="inv-section">
         <h3 className="inv-section__title">Links</h3>
-        {s.links.length === 0 ? (
+        {s.links.length === 0 && s.names.length === 0 ? (
           <p className="muted small">
             No links. Add <code>links</code> to its <code>service.yaml</code> to open it from here and check that it answers.
           </p>
         ) : (
           <ul className="link-list">
-            {s.links.map((link) => (
-              <li key={link}>
-                <a href={link} target="_blank" rel="noreferrer" className="mono">
-                  {link}
-                </a>
-              </li>
-            ))}
+            {s.links.map((link) => {
+              const name = s.names.find((n) => n.url === link);
+              return (
+                <li key={link}>
+                  <a href={link} target="_blank" rel="noreferrer" className="mono">
+                    {name ? name.name : link}
+                  </a>
+                  {name ? <span className="muted small"> set by stage {name.stage}</span> : null}
+                </li>
+              );
+            })}
+            {s.names
+              .filter((n) => !s.links.includes(n.url))
+              .map((n) => (
+                <li key={n.name}>
+                  <span className="mono">{n.name}</span>
+                  <span className="muted small"> set by stage {n.stage}</span>
+                </li>
+              ))}
           </ul>
         )}
       </section>
-      <UptimeSection title="Uptime" checks={service.checks} span={span} empty="Nothing is checked without links." />
+      <UptimeSection title="Uptime" checks={service.checks} span={span} empty="Nothing is checked without links or names." />
     </>
   );
 }

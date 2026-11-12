@@ -222,6 +222,10 @@ public sealed class WorkflowReader
                     slotSchema = ReadInterfaceSchema(slot, name, at, Invalid, address, ref errors);
             }
 
+            var names = node["names"]?.GetValue<string>();
+            if (names is not null && manages != WorkflowKinds.Service)
+                Invalid($"{at}/names", $"Stage '{name}' declares names, and only a stage of a workflow with manages: service sets names.");
+
             stages.Add(new WorkflowStage(
                 name,
                 executor,
@@ -233,6 +237,7 @@ public sealed class WorkflowReader
                 ManagedHostKey = makesVm && node["hostKey"]?.GetValue<string>() == "managed",
                 Interface = slot,
                 InterfaceSchema = slotSchema,
+                Names = names,
             });
         }
 

@@ -5,9 +5,9 @@ import type { GuestSummary, InstallationSummary, Inventory, ObservedGuest, Servi
 import { mockApi, renderAt } from "../test/utils";
 import { InventoryPage } from "./InventoryPage";
 
-const service = (guest: string, name: string, links: string[]): ServiceSummary => ({
+const service = (guest: string, name: string, links: string[], names: ServiceSummary["names"] = []): ServiceSummary => ({
   id: `svc-${name}`, address: `${guest}/${name}`, name, status: "in-sync", statusDetail: null, valid: true, activeRun: null, lastRun: null,
-  workflow: null, links,
+  workflow: null, links, names,
 });
 
 const guest = (installation: string, host: string, name: string, vmid: number, services: ServiceSummary[] = []): GuestSummary => ({
@@ -34,6 +34,7 @@ function installation(name: string, endpoint: string, online: boolean, guests: G
 
 const media = guest("home/pve01", "pve01", "media", 115, [
   service("home/pve01/media", "jellyfin", ["https://jellyfin.lab.test/", "https://media.lab.test/"]),
+  service("home/pve01/media", "arcane", ["https://arcane.lab.test/"], [{ name: "arcane.lab.test", stage: "dns", url: "https://arcane.lab.test/" }]),
 ]);
 const dns = guest("home/pve01", "pve01", "dns", 121);
 const nas = guest("home/korriban", "korriban", "nas", 200);
@@ -109,6 +110,16 @@ it("shows the services column only for a machine that has services", async () =>
   expect(within(details).getByText("Degraded")).toBeInTheDocument();
   expect(within(details).getByRole("link", { name: "https://media.lab.test/" })).toHaveAttribute("target", "_blank");
   expect(within(details).getByText(/HTTP 502/)).toBeInTheDocument();
+});
+
+it("shows the names a service's stages set, opens the first and offers it as a link", async () => {
+  show("/inventory?node=home/pve01/pve01&machine=home/pve01/media&service=home/pve01/media/arcane");
+  const details = await screen.findByRole("region", { name: "Details" });
+  expect(within(details).getByRole("heading", { name: "arcane" })).toBeInTheDocument();
+  expect(within(details).getByRole("link", { name: /^Open/ })).toHaveAttribute("href", "https://arcane.lab.test/");
+  expect(within(details).getByRole("link", { name: "arcane.lab.test" })).toHaveAttribute("href", "https://arcane.lab.test/");
+  expect(within(details).getByText(/set by stage/)).toHaveTextContent("set by stage dns");
+  expect(within(details).queryByText(/No links/)).not.toBeInTheDocument();
 });
 
 it("opens a machine in Proxmox in the same tab as its node", async () => {
