@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.0:
+Milestone 1 has shipped, up to release 0.9.1:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,17 @@ Milestone 1 has shipped, up to release 0.9.0:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.1:
+
+- [Uptime](docs/uptime.md#who-checks) checks go to the agents that reach their target, from #76. A check went to one
+  agent, the first by name, and whatever it answered was recorded, so an agent with no route to a guest marked it
+  down for good. Each check now keeps a pool of the agents that reached its target in the last day and asks them
+  first; an agent that cannot connect, does not answer or cannot check passes the check to the next one. Down is
+  recorded only when every connected agent failed and one that used to reach the target is among them, or when no
+  agent has reached it at all. The pool is kept in memory and learned again after the server restarts.
+
+No agent contract or database change: upgrade the backend; agents need no update.
 
 New in 0.9.0:
 
