@@ -132,7 +132,10 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
     let capabilities = tools_available
         .then(|| state::CAPABILITY.to_owned())
         .into_iter()
-        .chain([reachability::CAPABILITY.to_owned()])
+        .chain([
+            reachability::CAPABILITY.to_owned(),
+            reachability::UPTIME_CAPABILITY.to_owned(),
+        ])
         .collect();
     let exec = Arc::new(ExecutorConfig {
         runtime,

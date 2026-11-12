@@ -71,6 +71,7 @@ fn ssh_probe(host: &str, image: &str) -> ReachabilityProbe {
         context: "tool".into(),
         image: image.into(),
         timeout_seconds: 120,
+        ..Default::default()
     }
 }
 

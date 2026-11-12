@@ -29,7 +29,40 @@ fn probe(protocol: &str, host: &str, port: u32, trust: &str, context: &str) -> R
         context: context.into(),
         image: String::new(),
         timeout_seconds: 3,
+        ..Default::default()
     }
+}
+
+fn http_probe(port: u32, path: &str, tls: bool, trust: &str) -> ReachabilityProbe {
+    let mut p = probe("http", "127.0.0.1", port, trust, "agent");
+    p.path = path.into();
+    p.tls = tls;
+    p
+}
+
+/// A plain HTTP listener that answers each request with `response`; returns its port and the
+/// requests it received.
+async fn http_listener(response: &'static [u8]) -> (u32, Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = u32::from(listener.local_addr().unwrap().port());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = stream.write_all(response).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (port, seen)
 }
 
 async fn run(p: ReachabilityProbe) -> Outcome {
@@ -162,9 +195,73 @@ async fn refused_and_dns() {
 }
 
 #[tokio::test]
-async fn nothing_connects_over_ssh_from_the_agent_process() {
-    let o = run(probe("ssh", "127.0.0.1", 22, "", "agent")).await;
-    assert_eq!(o.status, "unsupported", "{o:?}");
+async fn ssh_from_the_agent_process_reads_the_banner() {
+    let port = talker(b"SSH-2.0-OpenSSH_9.6\r\n").await;
+    let o = run(probe("ssh", "127.0.0.1", port, "", "agent")).await;
+    assert_eq!(o.status, "reachable", "{o:?}");
+    assert_eq!(o.http_status, 0);
+}
+
+#[tokio::test]
+async fn http_reports_the_status_code_and_sends_only_a_plain_get() {
+    let (port, seen) =
+        http_listener(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await;
+    let o = run(http_probe(port, "/health?x=1", false, "")).await;
+    assert_eq!(o.status, "reachable", "{o:?}");
+    assert_eq!(o.http_status, 503);
+    assert_eq!(o.detail, "HTTP 503");
+    let request = seen.lock().unwrap()[0].clone();
+    assert!(
+        request.starts_with(&format!(
+            "GET /health?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+        )),
+        "{request}"
+    );
+    assert!(!request.to_ascii_lowercase().contains("authorization"));
+    assert!(!request.to_ascii_lowercase().contains("cookie"));
+}
+
+#[tokio::test]
+async fn http_over_tls_checks_the_certificate_as_trusted() {
+    let (port, _) = tls_listener().await;
+    let mut p = http_probe(port, "/", true, "system");
+    p.server_name = "localhost".into();
+    let o = run(p).await;
+    assert_eq!(o.status, "tls-untrusted", "{o:?}");
+    assert_eq!(o.http_status, 0);
+}
+
+#[tokio::test]
+async fn http_against_something_else_is_the_wrong_protocol() {
+    let port = talker(b"SSH-2.0-OpenSSH_9.6\r\n").await;
+    let o = run(http_probe(port, "/", false, "")).await;
+    assert_eq!(o.status, "protocol", "{o:?}");
+    let (port, _) = http_listener(b"").await;
+    let o = run(http_probe(port, "/", false, "")).await;
+    assert_eq!(o.status, "protocol", "{o:?}");
+}
+
+#[tokio::test]
+async fn http_paths_that_could_change_the_request_are_errors() {
+    for path in [
+        "",
+        "health",
+        "/a b",
+        "/a\r\nX-Evil: 1",
+        &format!("/{}", "a".repeat(MAX_PATH)),
+    ] {
+        let o = run(http_probe(80, path, false, "")).await;
+        assert_eq!(o.status, "error", "{path:?}: {o:?}");
+    }
+}
+
+#[test]
+fn status_lines() {
+    assert_eq!(status_line(b"HTTP/1.1 200 OK\r").http_status, 200);
+    assert_eq!(status_line(b"HTTP/1.0 404").http_status, 404);
+    assert_eq!(status_line(b"HTTP/2 200").status, "protocol");
+    assert_eq!(status_line(b"HTTP/1.1 abc").status, "protocol");
+    assert_eq!(status_line(b"HTTP/1.1 999 Weird").status, "protocol");
 }
 
 #[tokio::test]

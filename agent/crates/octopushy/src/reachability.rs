@@ -9,6 +9,10 @@
 //! identification line and nothing else: it does not check the host key, which the step's
 //! own connection still pins.
 //!
+//! Uptime checks (`uptime-v1`) use the same probes from the agent process: an SSH banner, and
+//! `http`, one HTTP/1.1 GET whose status line alone is read and reported. They hold no
+//! credential either, and the server decides what the answer means. See docs/uptime.md.
+//!
 //! Contexts, matched to how the step connects:
 //! - `agent`: the agent process, as the `proxmox` executor's reqwest client. If the process
 //!   environment would send the endpoint through a proxy, the answer is `unsupported`.
@@ -43,6 +47,12 @@ use crate::tools::{RuntimeKind, ToolRuntime};
 
 /// Announced in `Hello` by agents that answer probes.
 pub const CAPABILITY: &str = "reachability-v1";
+/// Announced in `Hello` by agents that also answer `http` probes and SSH from the agent process.
+pub const UPTIME_CAPABILITY: &str = "uptime-v1";
+/// The longest request target an `http` probe sends.
+pub const MAX_PATH: usize = 1024;
+/// The most of a response read while looking for its status line.
+const MAX_STATUS_LINE: usize = 1024;
 
 /// Probes running at once.
 const CONCURRENT: usize = 4;
@@ -113,6 +123,7 @@ while True:
 enum Protocol {
     Tls,
     Ssh,
+    Http,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +149,9 @@ struct Spec {
     context: Context,
     image: String,
     timeout: Duration,
+    /// `http` only: the request target, and whether it goes over TLS.
+    path: String,
+    tls: bool,
 }
 
 /// What a probe found.
@@ -146,6 +160,8 @@ pub struct Outcome {
     pub status: &'static str,
     pub detail: String,
     pub certificates: Vec<Vec<u8>>,
+    /// `http` only: the status code of the response, when its status line was read.
+    pub http_status: u32,
 }
 
 impl Outcome {
@@ -154,6 +170,7 @@ impl Outcome {
             status,
             detail: detail.into(),
             certificates: Vec::new(),
+            http_status: 0,
         }
     }
 }
@@ -173,6 +190,12 @@ fn valid_host(host: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'_'))
 }
 
+/// An HTTP request target: an absolute path, printable ASCII without spaces, so it cannot end
+/// the request line or add a header.
+fn valid_path(path: &str) -> bool {
+    path.starts_with('/') && path.len() <= MAX_PATH && path.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// An image reference as a positional argument: nothing that reads as an option.
 fn valid_image(image: &str) -> bool {
     !image.is_empty()
@@ -187,7 +210,18 @@ fn spec(p: &ReachabilityProbe) -> Result<Spec, String> {
     let protocol = match p.protocol.as_str() {
         "tls" => Protocol::Tls,
         "ssh" => Protocol::Ssh,
+        "http" => Protocol::Http,
         other => return Err(format!("unknown protocol {:?}", truncate(other, 16))),
+    };
+    let tls = match protocol {
+        Protocol::Tls => true,
+        Protocol::Ssh => false,
+        Protocol::Http => p.tls,
+    };
+    let path = match protocol {
+        Protocol::Http if valid_path(&p.path) => p.path.clone(),
+        Protocol::Http => return Err("the HTTP path is not an absolute, printable path".into()),
+        _ => String::new(),
     };
     if !valid_host(&p.host) {
         return Err("the host is not a DNS name or an IP address".into());
@@ -203,8 +237,8 @@ fn spec(p: &ReachabilityProbe) -> Result<Spec, String> {
     } else {
         return Err("the TLS server name is not a DNS name or an IP address".into());
     };
-    let trust = match (protocol, p.tls_trust.as_str()) {
-        (Protocol::Ssh, _) | (_, "system") => Trust::System,
+    let trust = match (tls, p.tls_trust.as_str()) {
+        (false, _) | (_, "system") => Trust::System,
         (_, "collect") => Trust::Collect,
         (_, other) => return Err(format!("unknown TLS trust {:?}", truncate(other, 16))),
     };
@@ -226,6 +260,8 @@ fn spec(p: &ReachabilityProbe) -> Result<Spec, String> {
         context,
         image: p.image.clone(),
         timeout,
+        path,
+        tls,
     })
 }
 
@@ -393,18 +429,18 @@ fn report(id: &str, mut outcome: Outcome, elapsed_ms: u128) -> ReachabilityRepor
         detail: truncate(&redact(&outcome.detail), MAX_DETAIL),
         certificates: outcome.certificates,
         elapsed_ms: u32::try_from(elapsed_ms).unwrap_or(u32::MAX),
+        http_status: outcome.http_status,
     }
 }
 
-/// The agent process: as the `proxmox` executor's client connects.
+/// The agent process: as the `proxmox` executor's client connects. SSH there is an uptime
+/// check's banner read: no proxy carries it.
 async fn agent_process(spec: &Spec) -> Outcome {
-    if spec.protocol != Protocol::Tls {
-        return Outcome::new(
-            "unsupported",
-            "nothing connects over SSH from the agent process",
-        );
+    if spec.protocol == Protocol::Ssh {
+        return direct(spec).await;
     }
-    let endpoint = format!("https://{}:{}/", url_host(&spec.host), spec.port);
+    let scheme = if spec.tls { "https" } else { "http" };
+    let endpoint = format!("{scheme}://{}:{}/", url_host(&spec.host), spec.port);
     match octopushy_proxmox::proxied(&endpoint) {
         Ok(false) => direct(spec).await,
         Ok(true) => Outcome::new(
@@ -460,6 +496,11 @@ async fn speak<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, stream: S) -> Out
     match spec.protocol {
         Protocol::Tls => tls(spec, stream).await,
         Protocol::Ssh => ssh(stream).await,
+        Protocol::Http if spec.tls => match handshake(spec, stream).await {
+            Ok(conn) => http(spec, conn).await,
+            Err(o) => o,
+        },
+        Protocol::Http => http(spec, stream).await,
     }
 }
 
@@ -484,24 +525,37 @@ fn tls_config(trust: Trust) -> Result<ClientConfig, String> {
     }
 }
 
-async fn tls<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, stream: S) -> Outcome {
-    let config = match tls_config(spec.trust) {
-        Ok(c) => c,
-        Err(e) => return Outcome::new("error", e),
-    };
+/// A TLS handshake as the probe's trust says. An `http` probe offers only HTTP/1.1, the
+/// protocol it then speaks.
+async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(
+    spec: &Spec,
+    stream: S,
+) -> Result<tokio_rustls::client::TlsStream<S>, Outcome> {
+    let mut config = tls_config(spec.trust).map_err(|e| Outcome::new("error", e))?;
+    if spec.protocol == Protocol::Http {
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    }
     let Ok(name) = ServerName::try_from(spec.server_name.clone()) else {
-        return Outcome::new("error", "the TLS server name is not usable");
+        return Err(Outcome::new("error", "the TLS server name is not usable"));
     };
     let connector = TlsConnector::from(Arc::new(config));
     match tokio::time::timeout(ANSWER_TIMEOUT, connector.connect(name, stream)).await {
-        Err(_) => Outcome::new(
+        Err(_) => Err(Outcome::new(
             "timeout",
             format!(
                 "connected, but the TLS handshake did not finish within {}s",
                 ANSWER_TIMEOUT.as_secs()
             ),
-        ),
-        Ok(Ok(conn)) => {
+        )),
+        Ok(Ok(conn)) => Ok(conn),
+        Ok(Err(e)) => Err(tls_error(&e)),
+    }
+}
+
+async fn tls<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, stream: S) -> Outcome {
+    match handshake(spec, stream).await {
+        Err(o) => o,
+        Ok(conn) => {
             let certificates = match spec.trust {
                 Trust::Collect => conn
                     .get_ref()
@@ -522,9 +576,88 @@ async fn tls<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, stream: S) -> Outco
                     Trust::Collect => "TLS handshake completed".into(),
                 },
                 certificates,
+                http_status: 0,
             }
         }
-        Ok(Err(e)) => tls_error(&e),
+    }
+}
+
+/// One `GET` of the probe's path, reading only the status line. Nothing identifies the agent
+/// beyond its user agent, and no credential, cookie or body is sent.
+async fn http<S: AsyncRead + AsyncWrite + Unpin>(spec: &Spec, mut stream: S) -> Outcome {
+    use tokio::io::AsyncWriteExt;
+    let default_port = if spec.tls { 443 } else { 80 };
+    let authority = if spec.port == default_port {
+        url_host(&spec.server_name)
+    } else {
+        format!("{}:{}", url_host(&spec.server_name), spec.port)
+    };
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: octopushy-agent uptime\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        spec.path
+    );
+    let sent = async {
+        stream.write_all(request.as_bytes()).await?;
+        stream.flush().await
+    };
+    match tokio::time::timeout(ANSWER_TIMEOUT, sent).await {
+        Err(_) => return Outcome::new("timeout", "connected, but the request could not be sent"),
+        Ok(Err(_)) => {
+            return Outcome::new(
+                "protocol",
+                "the connection closed before the request was sent",
+            );
+        }
+        Ok(Ok(())) => {}
+    }
+    let mut buf = Vec::with_capacity(128);
+    let mut chunk = [0u8; 256];
+    loop {
+        if let Some(end) = buf.iter().position(|&b| b == b'\n') {
+            return status_line(&buf[..end]);
+        }
+        if buf.len() >= MAX_STATUS_LINE {
+            return Outcome::new(
+                "protocol",
+                "something answered, but not with an HTTP status line",
+            );
+        }
+        match tokio::time::timeout(ANSWER_TIMEOUT, stream.read(&mut chunk)).await {
+            Err(_) => {
+                return Outcome::new(
+                    "timeout",
+                    format!(
+                        "no HTTP response arrived within {}s",
+                        ANSWER_TIMEOUT.as_secs()
+                    ),
+                );
+            }
+            Ok(Ok(0)) | Ok(Err(_)) if buf.is_empty() => {
+                return Outcome::new("protocol", "the connection closed without an HTTP response");
+            }
+            Ok(Ok(0)) | Ok(Err(_)) => return status_line(&buf),
+            Ok(Ok(n)) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+}
+
+/// `HTTP/1.1 200 OK`: reachable, with the code; anything else is the wrong protocol.
+fn status_line(line: &[u8]) -> Outcome {
+    let line = String::from_utf8_lossy(line);
+    let mut parts = line.trim_end().splitn(3, ' ');
+    let version = parts.next().unwrap_or_default();
+    let code = parts.next().and_then(|c| c.parse::<u32>().ok());
+    match code {
+        Some(code) if version.starts_with("HTTP/1.") && (100..600).contains(&code) => Outcome {
+            status: "reachable",
+            detail: format!("HTTP {code}"),
+            certificates: Vec::new(),
+            http_status: code,
+        },
+        _ => Outcome::new(
+            "protocol",
+            "something answered, but not with an HTTP status line",
+        ),
     }
 }
 
