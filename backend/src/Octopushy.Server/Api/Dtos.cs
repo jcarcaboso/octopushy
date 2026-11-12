@@ -245,7 +245,9 @@ public sealed record ObservedHostDto(
     long? MemoryBytes,
     long? MaxMemoryBytes,
     long? UptimeSeconds,
-    int? ConcurrentOperations);
+    int? ConcurrentOperations,
+    /// <summary>The Proxmox API endpoint the definition gives this host: its own, or else the installation's.</summary>
+    string? Endpoint);
 
 public sealed record GuestSummaryDto(
     Guid Id,
@@ -262,7 +264,11 @@ public sealed record GuestSummaryDto(
     RunSummaryDto? LastRun,
     WorkflowDto? Workflow,
     /// <summary>The definition's <c>type</c>: <c>vm</c> or <c>container</c>; null when it has none that can be read.</summary>
-    string? Type);
+    string? Type,
+    /// <summary>Where a configure run connects: <c>access.address</c>, or the static or reserved address; null when unknown.</summary>
+    string? AccessAddress,
+    /// <summary>The services the repository shows on the guest.</summary>
+    IReadOnlyList<ServiceSummaryDto> Services);
 
 /// <summary>
 /// The workflow a guest or service names, as written (<c>fedora-vm@2</c>), and the version the latest revision resolved
@@ -304,7 +310,9 @@ public sealed record InstallationSummaryDto(
     IReadOnlyList<ObservedHostDto> Hosts,
     IReadOnlyList<GuestSummaryDto> Guests,
     int UnmanagedCount,
-    InstallationTrustDto Trust);
+    InstallationTrustDto Trust,
+    /// <summary>Guests Proxmox lists that no definition manages, templates included, from the latest observation.</summary>
+    IReadOnlyList<ObservedGuestDto> UnmanagedGuests);
 
 public sealed record LabDto(
     Guid Id,
@@ -427,7 +435,9 @@ public sealed record ServiceSummaryDto(
     bool Valid,
     RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun,
-    WorkflowDto? Workflow);
+    WorkflowDto? Workflow,
+    /// <summary>Where people open the service, from <c>links</c> in <c>service.yaml</c>.</summary>
+    IReadOnlyList<string> Links);
 
 public sealed record ServiceStageDto(string Name, string Executor);
 
@@ -597,3 +607,41 @@ public sealed record TemplateBuildDto(
     string? Error,
     DateTimeOffset? BuiltAt,
     DateTimeOffset? LastUsedAt);
+
+/// <summary>
+/// The uptime checks and what agents answered, from <c>GET /api/uptime</c>. <c>Checking</c> is whether a connected agent
+/// answers uptime probes; without one, nothing is checked and the history has a gap. See docs/uptime.md.
+/// </summary>
+public sealed record UptimeDto(bool Checking, int IntervalSeconds, DateTimeOffset GeneratedAt, IReadOnlyList<UptimeCheckDto> Checks);
+
+/// <summary>
+/// One uptime check. <c>Kind</c> is <c>proxmox-api</c>, <c>guest-ssh</c> or <c>service-http</c>; <c>Host</c> the Proxmox host,
+/// null for an API endpoint several hosts share; <c>Resource</c> the guest or service address. <c>Status</c> is <c>up</c>,
+/// <c>down</c>, or <c>pending</c> until a first answer.
+/// <para>
+/// <c>Beats</c> is the last 24 hours in 96 quarter hours, oldest first, one character each: <c>u</c> all answers up,
+/// <c>d</c> all down, <c>p</c> some of each, <c>-</c> none. <c>Latency</c> is the average response time of the up answers in
+/// each of those, in milliseconds. <c>Daily</c> is the last 30 days, oldest first, each the percentage of answers that said
+/// up in that day, counting back from now; null without answers.
+/// </para>
+/// </summary>
+public sealed record UptimeCheckDto(
+    string Key,
+    string Kind,
+    string Installation,
+    string? Host,
+    string? Resource,
+    string Url,
+    string Status,
+    string? Detail,
+    DateTimeOffset? Since,
+    DateTimeOffset? CheckedAt,
+    int? ElapsedMs,
+    string? Agent,
+    UptimePercentagesDto Uptime,
+    string Beats,
+    IReadOnlyList<int?> Latency,
+    IReadOnlyList<double?> Daily);
+
+/// <summary>The percentage of answers that said up over the last day, 7 days and 30 days; null without answers.</summary>
+public sealed record UptimePercentagesDto(double? Day, double? Week, double? Month);

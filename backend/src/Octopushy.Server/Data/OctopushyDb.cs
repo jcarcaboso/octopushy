@@ -64,6 +64,10 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<OperatorToken> OperatorTokens => Set<OperatorToken>();
 
+    public DbSet<UptimeCheck> UptimeChecks => Set<UptimeCheck>();
+
+    public DbSet<UptimeBucket> UptimeBuckets => Set<UptimeBucket>();
+
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<RepositorySettings>(e =>
@@ -266,6 +270,23 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Name).HasMaxLength(80);
             e.Property(x => x.TokenHash).HasMaxLength(64);
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        model.Entity<UptimeCheck>(e =>
+        {
+            e.ToTable("uptime_checks");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(2600);
+            e.Property(x => x.Detail).HasMaxLength(300);
+            e.Property(x => x.Agent).HasMaxLength(200);
+        });
+
+        model.Entity<UptimeBucket>(e =>
+        {
+            e.ToTable("uptime_buckets");
+            e.HasKey(x => new { x.CheckKey, x.StartsAt });
+            e.Property(x => x.CheckKey).HasMaxLength(2600);
+            e.HasIndex(x => x.StartsAt);
         });
     }
 }

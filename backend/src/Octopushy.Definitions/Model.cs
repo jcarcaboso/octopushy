@@ -149,6 +149,21 @@ public sealed record ServiceDefinition(
     IReadOnlyList<string>? AgentLabels)
 {
     public string Address => $"{GuestAddress}/{Id}";
+
+    /// <inheritdoc cref="LinksOf"/>
+    public IReadOnlyList<string> Links => LinksOf(Json);
+
+    /// <summary>
+    /// Where people open the service, from <c>links</c> in <c>service.yaml</c>: shown in the Inventory and checked for uptime,
+    /// never part of what a run does. Only absolute http and https URLs with a host are kept.
+    /// </summary>
+    public static IReadOnlyList<string> LinksOf(JsonNode? definition) =>
+        (definition?["links"] as JsonArray)?
+            .Select(l => l is JsonValue v && v.TryGetValue<string>(out var text) ? text : null)
+            .Where(l => Uri.TryCreate(l, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.Host.Length > 0)
+            .Select(l => l!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList() ?? [];
 }
 
 /// <summary>

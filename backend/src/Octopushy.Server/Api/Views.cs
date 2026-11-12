@@ -366,6 +366,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var observations = await LatestObservationsAsync(cancellationToken);
         var observing = await ObservingAsync(cancellationToken);
         var trusts = await db.InstallationTrusts.AsNoTracking().ToDictionaryAsync(t => t.Address, cancellationToken);
+        var services = await ServicesByGuestAsync(resources.Where(r => r.Kind == ResourceKinds.Guest), cancellationToken);
         var labs = resources.Where(r => r.Kind == ResourceKinds.Lab && r.RetiredAt == null).OrderBy(r => r.Address)
             .Select(lab => new LabDto(
                 lab.Id,
@@ -375,7 +376,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
                 Issues(lab.Issues),
                 resources.Where(r => r.Kind == ResourceKinds.Installation && r.ParentAddress == lab.Address && r.RetiredAt == null)
                     .OrderBy(r => r.Address)
-                    .Select(i => InstallationSummary(i, resources, runs, observations, observing, trusts.GetValueOrDefault(i.Address)))
+                    .Select(i => InstallationSummary(i, resources, runs, observations, observing, trusts.GetValueOrDefault(i.Address), services))
                     .ToList()))
             .ToList();
         return new InventoryDto(await LatestRevisionAsync(cancellationToken), labs);
@@ -397,9 +398,10 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var installation = await db.Resources.AsNoTracking()
             .FirstOrDefaultAsync(r => r.Address == resource.ParentAddress && r.RetiredAt == null, cancellationToken);
         var observations = await LatestObservationsAsync(cancellationToken);
-        var summary = GuestSummary(resource, runs, installation is null ? null : observations.GetValueOrDefault(installation.Id));
-
         var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        var services = await ServicesOfAsync(resource, latest, cancellationToken);
+        var summary = GuestSummary(resource, runs, installation is null ? null : observations.GetValueOrDefault(installation.Id), services);
+
         PolicyDto? policy = null;
         ResolvedSetting<IReadOnlyList<string>>? labels = null;
         string? text = null;
@@ -462,7 +464,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             runs.Select(r => Summary(r, resource.Address, ResourceKinds.Guest)).ToList(),
             configure,
             await ManagedAccessAsync(id, cancellationToken),
-            await ServicesOfAsync(resource, latest, cancellationToken),
+            services,
             await ManagedHostKeyAsync(id, cancellationToken));
     }
 
@@ -525,6 +527,17 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             key is null ? null : SnippetsCommand(key.PublicKey, user, datastore));
     }
 
+    /// <summary><see cref="ServicesOfAsync"/> for each of <paramref name="guests"/>, by guest address.</summary>
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<ServiceSummaryDto>>> ServicesByGuestAsync(IEnumerable<Resource> guests,
+        CancellationToken cancellationToken)
+    {
+        var latest = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
+        var byGuest = new Dictionary<string, IReadOnlyList<ServiceSummaryDto>>(StringComparer.Ordinal);
+        foreach (var guest in guests.Where(g => g.RetiredAt == null))
+            byGuest[guest.Address] = await ServicesOfAsync(guest, latest, cancellationToken);
+        return byGuest;
+    }
+
     /// <summary>The services the repository shows on a guest, and those it no longer does until they are dealt with.</summary>
     private async Task<IReadOnlyList<ServiceSummaryDto>> ServicesOfAsync(Resource guest, DefinitionRevision? latest, CancellationToken cancellationToken)
     {
@@ -562,7 +575,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         return new ServiceSummaryDto(resource.Id, resource.Address, resource.Address.Split('/')[^1], status, detail, resource.Valid,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
-            Workflow(resource));
+            Workflow(resource),
+            ServiceDefinition.LinksOf(resource.Definition is null ? null : JsonNode.Parse(resource.Definition)));
     }
 
     /// <summary>What a guest or service names in its definition, and what the latest revision resolved that to.</summary>
@@ -707,7 +721,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var runs = await LatestRunsAsync(resources.Select(r => r.Id).ToList(), cancellationToken);
         var observations = await LatestObservationsAsync(cancellationToken);
         var trust = await db.InstallationTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == resource.Address, cancellationToken);
-        var summary = InstallationSummary(resource, resources, runs, observations, await ObservingAsync(cancellationToken), trust);
+        var services = await ServicesByGuestAsync(resources.Where(r => r.Kind == ResourceKinds.Guest), cancellationToken);
+        var summary = InstallationSummary(resource, resources, runs, observations, await ObservingAsync(cancellationToken), trust, services);
         var observation = observations.GetValueOrDefault(id);
         var guests = resources.Where(r => r.Kind == ResourceKinds.Guest && r.RetiredAt == null).ToList();
         var observedGuests = observation?["guests"] is JsonArray observed
@@ -782,7 +797,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         IReadOnlyDictionary<Guid, (Run? Active, Run? Last)> runs,
         IReadOnlyDictionary<Guid, JsonObject> observations,
         IReadOnlyDictionary<Guid, string?> observing,
-        InstallationTrust? trust)
+        InstallationTrust? trust,
+        IReadOnlyDictionary<string, IReadOnlyList<ServiceSummaryDto>> services)
     {
         var definition = installation.Definition is null ? null : JsonNode.Parse(installation.Definition);
         var observation = observations.GetValueOrDefault(installation.Id);
@@ -796,22 +812,28 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var guestSummaries = guests.Select(g =>
         {
             var (active, last) = runs.GetValueOrDefault(g.Id);
-            return GuestSummary(g, [.. new[] { active, last }.OfType<Run>()], observation);
+            return GuestSummary(g, [.. new[] { active, last }.OfType<Run>()], observation, services.GetValueOrDefault(g.Address) ?? []);
         }).ToList();
 
-        var declaredHosts = (definition?["hosts"] as JsonObject)?.Select(p => (p.Key, Limit: p.Value?["limits"]?["concurrentOperations"]?.GetValue<int>())).ToList() ?? [];
+        var installationEndpoint = definition?["connection"]?["endpoint"]?.GetValue<string>();
+        var declaredHosts = (definition?["hosts"] as JsonObject)?.Select(p => (p.Key, Limit: p.Value?["limits"]?["concurrentOperations"]?.GetValue<int>(),
+            Endpoint: p.Value?["endpoint"]?.GetValue<string>() ?? installationEndpoint)).ToList() ?? [];
         var observedHosts = (observation?["hosts"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
         var hosts = declaredHosts.Select(h =>
             {
                 var o = observedHosts.FirstOrDefault(x => x["name"]?.GetValue<string>() == h.Key);
-                return Host(h.Key, true, o, h.Limit);
+                return Host(h.Key, true, o, h.Limit, h.Endpoint);
             })
             .Concat(observedHosts.Where(o => declaredHosts.All(h => h.Key != o["name"]?.GetValue<string>()))
-                .Select(o => Host(o["name"]?.GetValue<string>() ?? "?", false, o, null)))
+                .Select(o => Host(o["name"]?.GetValue<string>() ?? "?", false, o, null, installationEndpoint)))
             .ToList();
         var managedVmids = guests.Where(g => g.RetiredAt == null).Select(g => Vmid(g)).OfType<int>().ToHashSet();
-        var unmanaged = (observation?["guests"] as JsonArray)?.OfType<JsonObject>()
-            .Count(g => g["vmid"]?.GetValue<int>() is { } vmid && !managedVmids.Contains(vmid) && g["template"]?.GetValue<bool>() != true) ?? 0;
+        var unmanagedGuests = (observation?["guests"] as JsonArray)?.OfType<JsonObject>()
+            .Where(g => g["vmid"]?.GetValue<int>() is { } vmid && !managedVmids.Contains(vmid))
+            .Select(g => ObservedGuest(g, []))
+            .OrderBy(g => g.Vmid)
+            .ToList() ?? [];
+        var unmanaged = unmanagedGuests.Count(g => !g.Template);
         return new InstallationSummaryDto(
             installation.Id,
             installation.Address,
@@ -830,10 +852,12 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             hosts,
             guestSummaries,
             unmanaged,
-            Trust(installation, trust));
+            Trust(installation, trust),
+            unmanagedGuests);
     }
 
-    private static GuestSummaryDto GuestSummary(Resource resource, IReadOnlyList<Run> runs, JsonObject? observation)
+    private static GuestSummaryDto GuestSummary(Resource resource, IReadOnlyList<Run> runs, JsonObject? observation,
+        IReadOnlyList<ServiceSummaryDto> services)
     {
         var ordered = runs.OrderByDescending(r => r.CreatedAt).ToList();
         var active = ordered.FirstOrDefault(r => !RunStatuses.IsTerminal(r.Status));
@@ -858,7 +882,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
             Workflow(resource),
-            definition?["type"] is JsonValue type && type.TryGetValue<string>(out var typeText) ? typeText : null);
+            definition?["type"] is JsonValue type && type.TryGetValue<string>(out var typeText) ? typeText : null,
+            definition is JsonObject guestJson ? ConfigureInputs.AddressOf(guestJson) : null,
+            services);
     }
 
     private static int? Vmid(Resource resource) =>
@@ -883,7 +909,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             g["kind"]?.GetValue<string>());
     }
 
-    private static ObservedHostDto Host(string name, bool declared, JsonObject? o, int? limit) => new(
+    private static ObservedHostDto Host(string name, bool declared, JsonObject? o, int? limit, string? endpoint) => new(
         name,
         declared,
         o?["online"]?.GetValue<bool>(),
@@ -892,7 +918,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         o?["memoryBytes"]?.GetValue<long>(),
         o?["maxMemoryBytes"]?.GetValue<long>(),
         o?["uptimeSeconds"]?.GetValue<long>(),
-        limit);
+        limit,
+        endpoint);
 
     private static string InstallationName(Resource installation) =>
         (installation.Definition is null ? null : JsonNode.Parse(installation.Definition)?["name"]?.GetValue<string>()) ?? installation.Address.Split('/')[^1];

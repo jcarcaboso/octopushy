@@ -86,6 +86,7 @@ public sealed class AgentChannelService(
     AgentCertificateAuthority ca,
     AgentConnections connections,
     WorkerReachability reachability,
+    Uptime.UptimeMonitor uptime,
     RunEngine engine,
     AttemptLogStore logs,
     AttemptMasks masks,
@@ -184,7 +185,9 @@ public sealed class AgentChannelService(
                         break;
                     case AgentMessage.KindOneofCase.Reachability:
                         // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
-                        await reachability.AcceptAsync(session, message.Reachability, call.Token);
+                        // An uptime probe's answer is never reachability evidence.
+                        if (!await uptime.AcceptAsync(session, message.Reachability, call.Token))
+                            await reachability.AcceptAsync(session, message.Reachability, call.Token);
                         break;
                     case AgentMessage.KindOneofCase.Result:
                         if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))

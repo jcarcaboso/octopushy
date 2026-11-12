@@ -220,17 +220,7 @@ public sealed class ServerHarness : IAsyncDisposable
     public async Task SyncAndTrustAsync(HttpClient? client = null)
     {
         await SyncAsync();
-        if (client is null)
-        {
-            if (_trustClient is null)
-            {
-                _trustClient = CreateClient();
-                var code = (await File.ReadAllTextAsync(Path.Combine(DataDirectory, "setup-code"))).Trim();
-                (await _trustClient.PostAsJsonAsync("/api/auth/setup",
-                    new { setupCode = code, username = "fixture-trust", password = "synthetic trust password" })).EnsureSuccessStatusCode();
-            }
-            client = _trustClient;
-        }
+        client ??= await SignedInClientAsync();
         var inventory = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!;
         foreach (var installation in inventory["labs"]!.AsArray().SelectMany(l => l!["installations"]!.AsArray()))
         {
@@ -242,6 +232,20 @@ public sealed class ServerHarness : IAsyncDisposable
     }
 
     public Task TickAsync() => Engine.TickAsync(CancellationToken.None);
+
+    /// <summary>A client signed in as the operator setup created; the same one each time. Owned by the harness.</summary>
+    public async Task<HttpClient> SignedInClientAsync()
+    {
+        if (_trustClient is null)
+        {
+            _trustClient = CreateClient();
+            var code = (await File.ReadAllTextAsync(Path.Combine(DataDirectory, "setup-code"))).Trim();
+            (await _trustClient.PostAsJsonAsync("/api/auth/setup",
+                new { setupCode = code, username = "fixture-trust", password = "synthetic trust password" })).EnsureSuccessStatusCode();
+        }
+
+        return _trustClient;
+    }
 
     /// <summary>Restarts only this disposable in-process test server, retaining its fixture DB/files.</summary>
     public async Task RestartFixtureAsync()
@@ -321,6 +325,11 @@ public sealed class ServerHarness : IAsyncDisposable
     /// <summary>An agent whose probes the test answers, from <see cref="FakeAgent.TakeProbes"/>.</summary>
     public Task<FakeAgent> ConnectProbedAgentAsync(string name, string runtime = "local", params string[] labels) =>
         ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], runtime, null);
+
+    /// <summary>An agent that also answers uptime probes, each as <paramref name="responder"/> says, at once.</summary>
+    public Task<FakeAgent> ConnectUptimeAgentAsync(string name, Func<ReachabilityProbe, ReachabilityReport> responder) =>
+        ConnectAsync(name, [], [TofuStateStore.AgentCapability, WorkerReachability.Capability, Octopushy.Server.Uptime.UptimeMonitor.Capability],
+            "podman", responder);
 
     /// <summary>
     /// An agent that advertises only <c>nix</c>, with no labels and no reachability reports, as one that builds templates' images

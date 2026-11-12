@@ -335,6 +335,30 @@ public class ServiceDefinitionTests
     }
 
     [Fact]
+    public void Links_are_read_and_change_nothing_a_run_does()
+    {
+        using var test = Repository();
+        var before = Hash(test);
+        test.Write(ServiceFile, Service + "\nlinks: [\"https://web.lab.test/\", \"http://10.1.0.31:8080/status\"]\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Address), Errors(test));
+        Assert.Equal(["https://web.lab.test/", "http://10.1.0.31:8080/status"], repository.Service(Address)!.Links);
+        Assert.Equal(before, Hash(test));
+    }
+
+    [Theory]
+    [InlineData("ftp://web.lab.test/")]
+    [InlineData("https://web.lab.test/a b")]
+    [InlineData("web.lab.test")]
+    [InlineData("https://user:pass@web.lab.test/")]
+    public void A_link_must_be_an_http_url(string link)
+    {
+        using var test = Repository();
+        test.Write(ServiceFile, Service + $"\nlinks: [\"{link}\"]\n");
+        Assert.Contains("links", Errors(test));
+    }
+
+    [Fact]
     public void A_file_in_the_services_folder_changes_its_hash_and_another_module_does_not()
     {
         using var test = Repository();

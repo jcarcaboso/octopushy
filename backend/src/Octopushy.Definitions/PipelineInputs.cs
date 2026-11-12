@@ -11,8 +11,11 @@ namespace Octopushy.Definitions;
 /// </summary>
 public sealed record PipelineInputs(ServiceDefinition Service, GuestDefinition Guest, WorkflowDefinition Workflow, IReadOnlyList<StageDefinition> Stages, string Hash)
 {
-    /// <summary>Service fields that change nothing a run does. The reference is replaced by what it resolved to.</summary>
-    private static readonly string[] NotRun = ["description", "policy", "execution", "workflow"];
+    /// <summary>
+    /// Service fields that change nothing a run does: <c>links</c> are only shown and checked. The reference is replaced by
+    /// what it resolved to.
+    /// </summary>
+    private static readonly string[] NotRun = ["description", "links", "policy", "execution", "workflow"];
 
     /// <summary>Builds the inputs of a valid service; the repository must have validated it.</summary>
     public static PipelineInputs Build(LabRepository repository, ServiceDefinition service)

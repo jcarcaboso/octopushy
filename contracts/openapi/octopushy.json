@@ -446,6 +446,56 @@
         }
       }
     },
+    "/api/uptime": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getUptime",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/guests/{id}": {
       "get": {
         "tags": [
@@ -6486,7 +6536,9 @@
           "activeRun",
           "lastRun",
           "workflow",
-          "type"
+          "type",
+          "accessAddress",
+          "services"
         ],
         "type": "object",
         "properties": {
@@ -6573,6 +6625,18 @@
               "null",
               "string"
             ]
+          },
+          "accessAddress": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSummaryDto"
+            }
           }
         }
       },
@@ -6665,7 +6729,8 @@
           "hosts",
           "guests",
           "unmanagedCount",
-          "trust"
+          "trust",
+          "unmanagedGuests"
         ],
         "type": "object",
         "properties": {
@@ -6754,6 +6819,12 @@
           },
           "trust": {
             "$ref": "#/components/schemas/InstallationTrustDto"
+          },
+          "unmanagedGuests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedGuestDto"
+            }
           }
         }
       },
@@ -7312,7 +7383,8 @@
           "memoryBytes",
           "maxMemoryBytes",
           "uptimeSeconds",
-          "concurrentOperations"
+          "concurrentOperations",
+          "endpoint"
         ],
         "type": "object",
         "properties": {
@@ -7369,6 +7441,12 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "endpoint": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -8480,7 +8558,8 @@
           "valid",
           "activeRun",
           "lastRun",
-          "workflow"
+          "workflow",
+          "links"
         ],
         "type": "object",
         "properties": {
@@ -8535,6 +8614,12 @@
                 "$ref": "#/components/schemas/WorkflowDto"
               }
             ]
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -9141,6 +9226,174 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UptimeCheckDto": {
+        "required": [
+          "key",
+          "kind",
+          "installation",
+          "host",
+          "resource",
+          "url",
+          "status",
+          "detail",
+          "since",
+          "checkedAt",
+          "elapsedMs",
+          "agent",
+          "uptime",
+          "beats",
+          "latency",
+          "daily"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "string"
+          },
+          "host": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "resource": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "since": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "checkedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "elapsedMs": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "agent": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "uptime": {
+            "$ref": "#/components/schemas/UptimePercentagesDto"
+          },
+          "beats": {
+            "type": "string"
+          },
+          "latency": {
+            "type": "array",
+            "items": {
+              "type": [
+                "null",
+                "integer"
+              ],
+              "format": "int32"
+            }
+          },
+          "daily": {
+            "type": "array",
+            "items": {
+              "type": [
+                "null",
+                "number"
+              ],
+              "format": "double"
+            }
+          }
+        }
+      },
+      "UptimeDto": {
+        "required": [
+          "checking",
+          "intervalSeconds",
+          "generatedAt",
+          "checks"
+        ],
+        "type": "object",
+        "properties": {
+          "checking": {
+            "type": "boolean"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimeCheckDto"
+            }
+          }
+        }
+      },
+      "UptimePercentagesDto": {
+        "required": [
+          "day",
+          "week",
+          "month"
+        ],
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "week": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "month": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
           }
         }
       },
