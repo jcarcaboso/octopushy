@@ -1,35 +1,66 @@
 import { Bot, Plus } from "lucide-react";
 import { useState } from "react";
-import { useAgents } from "../api/queries";
+import { useAgents, useCreateToken, useUpdateAllAgents } from "../api/queries";
 import { Card } from "../components/Card";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState, ErrorMessage, PageSkeleton } from "../components/States";
-import { Table } from "../components/Table";
+import { plural } from "../lib/format";
 import { AgentRow } from "./agents/AgentRow";
 import { EnrollDialog } from "./agents/EnrollDialog";
-import { ReachabilityTable } from "./agents/ReachabilityTable";
-import { TokenTable } from "./agents/TokenTable";
+import { newToken } from "./agents/newToken";
+import { WaitingTokens } from "./agents/WaitingTokens";
 
 export function AgentsPage() {
   const { data, error, isPending } = useAgents();
+  const create = useCreateToken();
+  const updateAll = useUpdateAllAgents();
   const [enrolling, setEnrolling] = useState(false);
   const enroll = (
-    <button type="button" className="button button--primary" onClick={() => setEnrolling(true)}>
+    <button
+      type="button"
+      className="button button--primary"
+      onClick={() => {
+        create.mutate(newToken());
+        setEnrolling(true);
+      }}
+    >
       <Plus size={15} aria-hidden="true" />
       Enroll an agent
     </button>
   );
-  const connected = data?.filter((a) => a.connected).length ?? 0;
-  const running = data?.reduce((sum, a) => sum + a.runningAttempts, 0) ?? 0;
+  const agents = data ?? [];
+  const connected = agents.filter((a) => a.connected).length;
+  const runs = agents.reduce((sum, a) => sum + a.work.length, 0);
+  const updates = agents.filter((a) => a.update.state === "available").length;
+  const meta =
+    agents.length === 0
+      ? "Agents that observe Proxmox and run plans and applies."
+      : [
+          `${connected} of ${agents.length} connected`,
+          runs > 0 ? `${plural(runs, "run")} in progress` : null,
+          updates > 0 ? `${plural(updates, "update")} available` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
 
   return (
     <>
       <PageHeader
         title="Agents"
-        meta={data && data.length > 0 ? `${connected} of ${data.length} connected · ${running} running ${running === 1 ? "attempt" : "attempts"}` : "Agents that observe Proxmox and run plans and applies."}
-        actions={enroll}
+        meta={meta}
+        actions={
+          <>
+            {updates >= 2 ? (
+              <button type="button" className="button" disabled={updateAll.isPending} onClick={() => updateAll.mutate()}>
+                Update all
+              </button>
+            ) : null}
+            {enroll}
+          </>
+        }
       />
       <div className="stack stack--large">
+        <ErrorMessage error={updateAll.error} />
         {isPending ? (
           <PageSkeleton rows={1} />
         ) : !data ? (
@@ -42,40 +73,24 @@ export function AgentsPage() {
             </EmptyState>
           </Card>
         ) : (
-          <Card flush>
-            <Table label="Agents" className="table--agents">
-              <thead>
-                <tr>
-                  <th scope="col">Agent</th>
-                  <th scope="col">Labels</th>
-                  <th scope="col">Max concurrency</th>
-                  <th scope="col">Executors / tool runtime</th>
-                  <th scope="col">Last seen</th>
-                  <th scope="col">Certificate expires</th>
-                  <th scope="col">Running</th>
-                  <th scope="col">
-                    <span className="visually-hidden">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((agent) => (
-                  <AgentRow key={agent.id} agent={agent} />
-                ))}
-              </tbody>
-            </Table>
-          </Card>
+          <section className="agents" aria-label="Agents">
+            <div className="agents__head" aria-hidden="true">
+              <span>Agent</span>
+              <span>Version</span>
+              <span>Reaches</span>
+              <span>Work</span>
+              <span />
+            </div>
+            <ul className="agents__list">
+              {data.map((agent) => (
+                <AgentRow key={agent.id} agent={agent} />
+              ))}
+            </ul>
+          </section>
         )}
-        {data && data.length > 0 ? (
-          <Card title="Reachability">
-            <ReachabilityTable agents={data} />
-          </Card>
-        ) : null}
-        <Card title="Enrollment tokens" flush>
-          <TokenTable agents={data ?? []} />
-        </Card>
+        <WaitingTokens agents={agents} />
       </div>
-      <EnrollDialog open={enrolling} onClose={() => setEnrolling(false)} />
+      <EnrollDialog open={enrolling} onClose={() => setEnrolling(false)} create={create} />
     </>
   );
 }

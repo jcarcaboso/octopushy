@@ -14,13 +14,15 @@ memory: approving, rejecting or cancelling changes it until the server restarts.
 - Approve: the step records the decision and every later step succeeds at once, so the run succeeds.
 - Reject: the step is cancelled with "Rejected.", and the run ends as cancelled ("Rejected by ops."), as on the server.
 - Plan now, Configure, Deploy, Run again: a new run starts and stays queued, since nothing executes it.
+- Updating an agent: it shows as updating for 8 seconds (`MOCK_UPDATE_SECONDS`), with a configure run on its guest, then
+  runs the latest version. A second update waits in the queue until the first is done, and Cancel takes it out.
 - Other changes (variables, agents, drafts, forms) answer with a plausible body and are kept in memory.
 - An unknown route answers 404 with problem+json, and the console names the route.
 
 ## Scenarios
 
 One lab, `home`, with the Proxmox installation `home/pve01`, seven guests, the service `home/pve01/web/app` and five
-more services with links, three agents, variables and a lab repository with revisions and drafts. A second installation,
+more services with links, four agents, variables and a lab repository with revisions and drafts. A second installation,
 `home/korriban`, has been offline for two days, with its one machine, `nas`.
 
 [/inventory](http://127.0.0.1:5176/inventory) shows uptime from `GET /api/uptime` (mock/uptime.ts): korriban and nas are

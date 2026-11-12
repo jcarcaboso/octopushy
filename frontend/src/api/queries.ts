@@ -394,6 +394,33 @@ export function useDeleteAgent() {
   });
 }
 
+/** Updates one agent to the latest version; the server queues it behind an update already going. */
+export function useUpdateAgentVersion() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/agents/{id}/update", { params: { path: { id } } })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+  });
+}
+
+/** Takes a queued agent out of the update queue. */
+export function useCancelAgentUpdate() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.DELETE("/api/agents/{id}/update", { params: { path: { id } } })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+  });
+}
+
+/** Updates every agent that can be, one after another. */
+export function useUpdateAllAgents() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/agents/update")),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+  });
+}
+
 export function useCreateToken() {
   const client = useQueryClient();
   return useMutation({
