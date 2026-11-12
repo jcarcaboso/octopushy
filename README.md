@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.8.1:
+Milestone 1 has shipped, up to release 0.9.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,34 @@ Milestone 1 has shipped, up to release 0.8.1:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.0:
+
+- [Interfaces bound per installation](docs/workflows.md#interfaces), from #74. A binding is a file,
+  `labs/<lab>/interfaces/<slot>/<name>.yaml`, with `inputs` and `secrets`; an installation names one per slot
+  (`interfaces: { dns: moraband }`), and a service stage of an Ansible workflow declares the slot it fills
+  (`interface: dns`). That stage gets the binding's inputs as an extra var named after the slot and its secrets as extra
+  vars, and is not run on an installation that binds no such slot. The workflows repository's
+  `interfaces/<slot>.schema.json` validates a binding. See [ADR 0006](docs/adr/0006-interfaces-bound-per-installation.md).
+- [Uptime](docs/uptime.md), from #72. Every minute an agent checks each trusted installation's Proxmox API, each active
+  guest's SSH and each service link, and the server keeps the current state and quarter hours for 30 days:
+  `GET /api/uptime` returns 24h, 7d and 30d percentages. A service lists its `links` in `service.yaml`; they are shown and
+  checked, and are not part of its hash, so changing them runs nothing. Nothing is checked while no connected agent
+  announces the new `uptime-v1` capability.
+- **Update an agent from Agents**, from #73. An agent on a guest that sets `inputs.worker_agent_version` gets
+  **Update to `<version>`**, or **Update all**: the server commits the guest's new version, approves the change's setup,
+  and pauses the agent until it is back on that version. One at a time, the rest queued, and a failure empties the queue.
+  See [Updating an agent from Agents](docs/worker-routing.md#updating-an-agent-from-agents). `POST /api/agents/{id}/update`,
+  `POST /api/agents/update` and `DELETE /api/agents/{id}/update`. Enrollment tokens no longer need labels.
+- A new web interface, from #69 to #73: the sidebar in named groups with the logo blue as the accent and no top bar,
+  **Runs** as an inbox (waiting for you, in progress, earlier) with each run's steps and Approve, Reject and Cancel from
+  the list, **Repository** as tabs beside a settings column, **Inventory** as columns with uptime and service links, and
+  **Agents** as a list whose rows open in place.
+
+Upgrade the backend first, then the agents. The agent contract gained an `http` probe protocol and the `uptime-v1`
+capability, which only uptime checks use, so 0.8 agents keep working but are not asked to check anything. The database
+gains the `uptime_checks` and `uptime_buckets` tables and the update columns of `agents`. Validate a lab that uses
+interfaces or service links with the 0.9.0 validator; older ones refuse them.
 
 New in 0.8.1:
 
