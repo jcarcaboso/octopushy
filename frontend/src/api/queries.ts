@@ -309,6 +309,35 @@ export function useApproveStep() {
   });
 }
 
+/**
+ * Approves several runs one after the other, each with the fingerprint the operator saw.
+ * One refusal does not stop the others; the error names every run that was not approved.
+ */
+export function useApproveSteps() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: async (decisions: (Decision & { label: string })[]) => {
+      const failed: string[] = [];
+      for (const { runId, stepId, planSha256, note, label } of decisions) {
+        try {
+          await unwrap(
+            api.POST("/api/runs/{id}/steps/{stepId}/approve", {
+              params: { path: { id: runId, stepId } },
+              body: { planSha256, note },
+            }),
+          );
+        } catch (error) {
+          failed.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (failed.length > 0) {
+        throw new Error(`${failed.length} of ${decisions.length} were not approved. ${failed.join(" ")}`);
+      }
+    },
+    onSettled: () => refresh(),
+  });
+}
+
 export function useRejectStep() {
   const refresh = useRefreshRuns();
   return useMutation({

@@ -177,6 +177,22 @@ textarea {
   font-size: var(--text-md);
 }
 
+/* Selects drop the browser's own arrow, which ignores the theme, for one drawn in the muted text color. */
+select {
+  appearance: none;
+  padding-right: 1.75rem;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+  background-size: 0.75rem;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+select:disabled {
+  cursor: not-allowed;
+}
+
 textarea {
   resize: vertical;
   line-height: 1.45;
@@ -185,7 +201,7 @@ textarea {
 input:disabled,
 select:disabled,
 textarea:disabled {
-  background: var(--surface-3);
+  background-color: var(--surface-3);
   color: var(--text-muted);
 }
 

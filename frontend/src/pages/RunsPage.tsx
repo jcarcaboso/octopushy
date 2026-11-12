@@ -1,7 +1,7 @@
 import { ChevronRight, HardDrive, Layers, Server, type LucideIcon } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { useApproveStep, useCancelRun, useRejectStep, useRuns } from "../api/queries";
+import { useApproveStep, useApproveSteps, useCancelRun, useRejectStep, useRuns } from "../api/queries";
 import type { RunSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
@@ -25,6 +25,9 @@ const types: { value: string | null; label: string; type?: RunTarget["type"] }[]
 ];
 
 const typeIcons: Record<RunTarget["type"], LucideIcon | null> = { Machine: Server, Service: Layers, Node: HardDrive, Other: null };
+
+/** Finished runs shown at most; the list comes newest first, so these are the latest. */
+const earlierLimit = 50;
 
 type Decision = { kind: "approve" | "reject" | "cancel"; run: RunSummary; progress: RunProgress };
 
@@ -131,6 +134,8 @@ export function RunsPage() {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const cancel = useCancelRun();
+  const approveAll = useApproveSteps();
+  const [approvingAll, setApprovingAll] = useState(false);
   const mutation = decision ? { approve, reject, cancel }[decision.kind] : null;
 
   const set = (key: string, value: string | null) =>
@@ -159,6 +164,26 @@ export function RunsPage() {
     return (!wanted || target.type === wanted) && (!node || target.node === node) && (!text || run.address.toLowerCase().includes(text));
   });
   const filtered = Boolean(status || wanted || node || text);
+  // Every run shown that waits on an approval it can take now; the filters narrow it like the list.
+  const approvable = shown
+    .map((run) => ({ run, progress: runProgress(run, now) }))
+    .filter(({ progress }) => progress.approval?.planSha256);
+
+  const closeApproveAll = () => {
+    setApprovingAll(false);
+    approveAll.reset();
+  };
+  const confirmApproveAll = () =>
+    approveAll.mutate(
+      approvable.map(({ run, progress }) => ({
+        runId: run.id,
+        stepId: progress.approval!.id,
+        planSha256: progress.approval!.planSha256,
+        note: null,
+        label: `#${run.number}`,
+      })),
+      { onSuccess: () => setApprovingAll(false) },
+    );
 
   const close = () => {
     setDecision(null);
@@ -253,8 +278,10 @@ export function RunsPage() {
               <span>Created</span>
             </div>
             {sections.map((section) => {
-              const rows = shown.filter((run) => runSection(run.status) === section.id);
-              if (rows.length === 0) return null;
+              const all = shown.filter((run) => runSection(run.status) === section.id);
+              if (all.length === 0) return null;
+              // Runs that need the operator or are still moving are always all shown; only the finished ones are cut.
+              const rows = section.id === "earlier" ? all.slice(0, earlierLimit) : all;
               return (
                 <details
                   key={section.id}
@@ -271,12 +298,28 @@ export function RunsPage() {
                     <span className={section.id === "waiting" ? "runs-section__count runs-section__count--waiting" : "runs-section__count"}>
                       {rows.length}
                     </span>
+                    {section.id === "waiting" && approvable.length > 1 ? (
+                      <button
+                        type="button"
+                        className="button button--small runs-section__action"
+                        onClick={(e) => {
+                          // A click inside the summary would fold the section too.
+                          e.preventDefault();
+                          setApprovingAll(true);
+                        }}
+                      >
+                        Approve all {approvable.length}
+                      </button>
+                    ) : null}
                   </summary>
                   <ul className="runs-list" aria-label={section.title}>
                     {rows.map((run) => (
                       <RunRow key={run.id} run={run} now={now} onDecide={setDecision} />
                     ))}
                   </ul>
+                  {all.length > rows.length ? (
+                    <p className="runs-section__more muted small">The latest {rows.length} are shown. Filter to find an older run.</p>
+                  ) : null}
                 </details>
               );
             })}
@@ -284,6 +327,30 @@ export function RunsPage() {
         </div>
       )}
       {data && error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
+      {approvingAll && approvable.length > 0 ? (
+        <ConfirmDialog
+          open
+          title={`Approve ${approvable.length} runs?`}
+          confirmLabel={`Approve ${approvable.length}`}
+          pending={approveAll.isPending}
+          error={approveAll.error}
+          onClose={closeApproveAll}
+          onConfirm={confirmApproveAll}
+        >
+          <ul className="approve-all">
+            {approvable.map(({ run, progress }) => (
+              <li key={run.id}>
+                <Link to={`/runs/${run.id}`}>#{run.number}</Link>{" "}
+                <strong>
+                  {operationLabel(run.operation)} {runTarget(run).name}
+                </strong>
+                {progress.note ? <span className="muted">: {progress.note}</span> : null}
+              </li>
+            ))}
+          </ul>
+          <p>Each run applies what it planned or previewed, exactly as recorded. A run whose approval is refused stays waiting.</p>
+        </ConfirmDialog>
+      ) : null}
       {decision ? (
         <ConfirmDialog
           open
