@@ -199,7 +199,8 @@ function UptimeSection({ title, checks, span, empty }: { title: string; checks: 
 
 function ProxmoxLink({ node, href, children }: { node: NodeEntry; href: string; children: ReactNode }) {
   return (
-    <a className="button button--small" href={href} target={proxmoxTab(node)} rel="noreferrer">
+    // No rel: noopener, which noreferrer implies, would open a new tab each time instead of going back to the named one.
+    <a className="button button--small" href={href} target={proxmoxTab(node)} referrerPolicy="no-referrer">
       {children} <ExternalLink size={13} aria-hidden="true" />
     </a>
   );

@@ -89,6 +89,8 @@ it("starts on the first node with a problem and opens Proxmox in that node's own
   const proxmox = within(details).getByRole("link", { name: /Open Proxmox/ });
   expect(proxmox).toHaveAttribute("href", "https://10.0.0.3:8006/");
   expect(proxmox).toHaveAttribute("target", "proxmox-home-korriban-korriban");
+  // noopener would make every click a new tab.
+  expect(proxmox).not.toHaveAttribute("rel");
   expect(screen.getByText(/3 problems/)).toBeInTheDocument();
 });
 
