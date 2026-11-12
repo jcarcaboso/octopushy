@@ -148,6 +148,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/uptime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getUptime"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/guests/{id}": {
         parameters: {
             query?: never;
@@ -1517,6 +1533,8 @@ export interface components {
             lastRun: null | components["schemas"]["RunSummaryDto"];
             workflow: null | components["schemas"]["WorkflowDto"];
             type: null | string;
+            accessAddress: null | string;
+            services: components["schemas"]["ServiceSummaryDto"][];
         };
         InstallationDetailDto: {
             installation: components["schemas"]["InstallationSummaryDto"];
@@ -1553,6 +1571,7 @@ export interface components {
             /** Format: int32 */
             unmanagedCount: number;
             trust: components["schemas"]["InstallationTrustDto"];
+            unmanagedGuests: components["schemas"]["ObservedGuestDto"][];
         };
         InstallationTrustDto: {
             endpoints: string[];
@@ -1700,6 +1719,7 @@ export interface components {
             uptimeSeconds: null | number;
             /** Format: int32 */
             concurrentOperations: null | number;
+            endpoint: null | string;
         };
         OperatorTokenRequest: {
             name: string;
@@ -1969,6 +1989,7 @@ export interface components {
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
             workflow: null | components["schemas"]["WorkflowDto"];
+            links: string[];
         };
         SetupRequest: {
             setupCode: string;
@@ -2113,6 +2134,43 @@ export interface components {
         };
         TrustInstallationRequest: {
             endpoints: string[];
+        };
+        UptimeCheckDto: {
+            key: string;
+            kind: string;
+            installation: string;
+            host: null | string;
+            resource: null | string;
+            url: string;
+            status: string;
+            detail: null | string;
+            /** Format: date-time */
+            since: null | string;
+            /** Format: date-time */
+            checkedAt: null | string;
+            /** Format: int32 */
+            elapsedMs: null | number;
+            agent: null | string;
+            uptime: components["schemas"]["UptimePercentagesDto"];
+            beats: string;
+            latency: (null | number)[];
+            daily: (null | number)[];
+        };
+        UptimeDto: {
+            checking: boolean;
+            /** Format: int32 */
+            intervalSeconds: number;
+            /** Format: date-time */
+            generatedAt: string;
+            checks: components["schemas"]["UptimeCheckDto"][];
+        };
+        UptimePercentagesDto: {
+            /** Format: double */
+            day: null | number;
+            /** Format: double */
+            week: null | number;
+            /** Format: double */
+            month: null | number;
         };
         VariableCandidateDto: {
             /** Format: int32 */
@@ -2632,6 +2690,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InventoryDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getUptime: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UptimeDto"];
                 };
             };
             /** @description Bad Request */

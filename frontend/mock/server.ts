@@ -7,6 +7,7 @@ import type {
 } from "../src/api/types.ts";
 import * as data from "./data.ts";
 import { Refused, approve, cancel, forceStop, headCommit, hex, logChunk, reject, resources, runs, startRun, summary, type Resource } from "./runs.ts";
+import { uptime } from "./uptime.ts";
 
 const port = Number(process.env.MOCK_PORT ?? 18280);
 let user: string | null = "ops";
@@ -80,6 +81,7 @@ on("DELETE", "/api/auth/operator-tokens/{id}", ({ params }) => {
 
 on("GET", "/api/overview", data.overview);
 on("GET", "/api/inventory", data.inventory);
+on("GET", "/api/uptime", () => uptime(data.inventory()));
 on("GET", "/api/guests/{id}", ({ params }) => data.guestDetail(params.id) ?? notFound("guest"));
 on("GET", "/api/services/{id}", ({ params }) => data.serviceDetail(params.id) ?? notFound("service"));
 on("GET", "/api/installations/{id}", ({ params }) => data.installationDetail(params.id) ?? notFound("installation"));

@@ -177,7 +177,8 @@ message ServerMessage {
     Assignment assignment = 2;
     CancelAttempt cancel = 3;
     ResultAck result_ack = 4;
-    // Sent only to an agent whose Hello lists the capability "reachability-v1".
+    // Sent only to an agent whose Hello lists the capability "reachability-v1"; the "http"
+    // protocol and "ssh" from the "agent" context only to one that also lists "uptime-v1".
     ReachabilityProbe probe = 5;
   }
 }
@@ -223,13 +224,15 @@ message ReachabilityProbe {
   string probe_id = 1;
   // "tls": a TLS handshake. "ssh": the server's SSH identification line. Nothing is
   // authenticated and nothing is sent after the handshake or the banner.
+  // "http" (uptime-v1): one HTTP/1.1 GET of path, over TLS when tls is set, and only its
+  // status line is read. No credential, cookie or body is sent.
   string protocol = 2;
   // A DNS name or an IP address, without brackets.
   string host = 3;
   uint32 port = 4;
   // TLS only: the name presented and verified. Empty: host.
   string server_name = 5;
-  // TLS only. "system": verified with the agent's trust store, as the proxmox executor
+  // TLS, and "http" with tls. "system": verified with the agent's trust store, as the proxmox executor
   // does with verifyTls and no CA. "collect": any certificate, but the handshake
   // signature is still verified; the presented chain goes back for the server to judge.
   string tls_trust = 6;
@@ -241,6 +244,10 @@ message ReachabilityProbe {
   string image = 8;
   // The whole probe, including starting a container. The agent caps it.
   uint32 timeout_seconds = 9;
+  // "http" only: the request target, starting with '/', printable ASCII, at most 1024 bytes.
+  string path = 10;
+  // "http" only: whether the request goes over TLS (an https:// URL).
+  bool tls = 11;
 }
 
 message ReachabilityReport {
@@ -255,4 +262,7 @@ message ReachabilityReport {
   // "collect" only: the presented chain, leaf first, DER. At most 8, each at most 16 KiB.
   repeated bytes certificates = 4;
   uint32 elapsed_ms = 5;
+  // "http" only, when a status line was read: its status code. The status is then
+  // "reachable" whatever the code; the server judges it.
+  uint32 http_status = 6;
 }

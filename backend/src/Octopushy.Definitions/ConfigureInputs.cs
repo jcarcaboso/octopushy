@@ -46,8 +46,14 @@ public sealed record ConfigureInputs(
             .Select(r => r.Key).Distinct().Order(StringComparer.Ordinal).ToList();
 
     /// <summary>Where a configure run connects: the declared address, or the guest's own.</summary>
-    public static string? AddressOf(GuestDefinition guest) =>
-        guest.Json["access"]?["address"]?.GetValue<string>() ?? ProvisionInputs.ExpectedIpv4(guest);
+    public static string? AddressOf(GuestDefinition guest) => AddressOf(guest.Json);
+
+    /// <inheritdoc cref="AddressOf(GuestDefinition)"/>
+    public static string? AddressOf(JsonObject guest) =>
+        guest["access"]?["address"]?.GetValue<string>() ?? ProvisionInputs.ExpectedIpv4(guest);
+
+    /// <summary>The SSH port a configure run connects to: the declared one, or 22.</summary>
+    public static int PortOf(JsonObject guest) => guest["access"]?["port"]?.GetValue<int>() ?? 22;
 
     /// <summary>A store reference in <c>access</c>.</summary>
     public static StoreReference? Reference(GuestDefinition guest, string field) =>
@@ -84,7 +90,7 @@ public sealed record ConfigureInputs(
             stage,
             stage.Configure!,
             AddressOf(guest)!,
-            guest.Json["access"]?["port"]?.GetValue<int>() ?? 22,
+            PortOf(guest.Json),
             guest.Json["access"]!["user"]!.GetValue<string>(),
             Reference(guest, "sshKey"),
             Reference(guest, "hostKey"),

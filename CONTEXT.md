@@ -183,6 +183,11 @@ _Avoid_: Task, which is a part of a playbook
 A named slot, such as `dns`, bound to a workflow in the lab, with a schema in the
 repository. Swapping the workflow is one line. Not built yet.
 
+**Uptime check**:
+Whether a node's Proxmox API, a machine's SSH or a service's link answers, asked of an agent about once a minute and kept
+for 30 days. It is liveness from one agent's place in the network, not proof that anything works.
+_Avoid_: Health or verification, which a workflow establishes; reachability, which decides where work may go
+
 **Deployment instance**:
 A service's installation on a particular target, with its own desired release,
 last applied release, and observed health.

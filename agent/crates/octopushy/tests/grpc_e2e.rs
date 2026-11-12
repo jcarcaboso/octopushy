@@ -168,9 +168,9 @@ async fn hello_only_advertises_usable_tool_capabilities() {
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
         // Probes need no tool: an unusable runtime is the probe's own answer.
         let capabilities: &[&str] = if available {
-            &["opentofu-builtin-state", "reachability-v1"]
+            &["opentofu-builtin-state", "reachability-v1", "uptime-v1"]
         } else {
-            &["reachability-v1"]
+            &["reachability-v1", "uptime-v1"]
         };
         assert_eq!(hello.capabilities, capabilities, "{kind:?}: {binary}");
         shutdown.cancel();
@@ -638,6 +638,7 @@ async fn a_probe_over_the_channel_is_answered_with_a_report() {
             context: "agent".into(),
             image: String::new(),
             timeout_seconds: 10,
+            ..Default::default()
         }))
         .await;
     let report = server

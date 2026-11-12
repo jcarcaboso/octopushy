@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Inventory prototypes</title>
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --bg: #f4f6f8; --surface: #fff; --border: #dde2e8; --text: #19212c; --muted: #556172;
+    --accent: #2f5bd3; --accent-soft: #e7eefc; --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+    --shadow-hover: 0 12px 32px rgb(16 24 40 / 14%);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1218; --surface: #131922; --border: #1f2835; --text: #e2e8f0; --muted: #94a0b3;
+      --accent: #8db2ff; --accent-soft: #172340; --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+      --shadow-hover: 0 16px 40px rgb(0 0 0 / 55%);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { max-width: 1280px; margin: 0 auto; padding: 48px 24px 24px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .facts span { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  main { max-width: 1280px; margin: 0 auto; padding: 8px 24px 64px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+  a.card { display: flex; flex-direction: column; text-decoration: none; color: inherit; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); transition: box-shadow .15s, transform .15s; }
+  a.card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
+  a.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thumb { position: relative; aspect-ratio: 1440 / 900; overflow: hidden; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .thumb iframe { position: absolute; top: 0; left: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  .body { padding: 14px 16px 16px; }
+  .num { font: 600 12px/1 ui-monospace, monospace; color: var(--muted); }
+  h2 { font-size: 17px; margin: 4px 0 6px; }
+  .body p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+  .good { font-size: 13px; }
+  .good b { font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventory prototypes</h1>
+  <p>Ten different ways to show the lab: Proxmox hosts with their resources and a link to Proxmox, the guests on each host, and the services on each guest, with uptime for all of them, service links through DNS, unmanaged guests collapsed, and search and filters. All ten read the same data, so they can be compared directly.</p>
+  <div class="facts">
+    <span>Real inventory, 2026-11-11</span>
+    <span>Uptime history and resources are sample data</span>
+    <span>Use ‹ › bottom-right to flip between them</span>
+  </div>
+</header>
+<main id="grid"></main>
+<script src="nav.js"></script>
+<script>
+  const notes = {
+    "01-tree.html": ["An explorer-style tree with aligned uptime columns, a filter rail and a detail drawer.", "Closest to the current page; dense and familiar."],
+    "02-status-page.html": ["A public-status-page layout: overall banner, heartbeat bars per row, recent incidents.", "Answering “is everything OK?” at a glance."],
+    "03-rack.html": ["Each host is a server chassis; guests are blades with LEDs, services are ports.", "A physical mental model; spotting a dark chassis."],
+    "04-launchpad.html": ["Service tiles as the hero, with search that launches on Enter.", "Using it as the browser home page."],
+    "05-treemap.html": ["Hosts and guests as areas sized by memory, cores or disk, colored by health.", "Capacity planning and where resources go."],
+    "06-columns.html": ["Finder-style columns from host to guest to service, with a large detail pane.", "Keyboard drilling and a single entity in depth."],
+    "07-topology.html": ["A graph from DNS name to service, guest and host, with path highlighting.", "Understanding what breaks when something goes down."],
+    "08-grid.html": ["One flat sortable table of everything, with group-by, facets and bulk actions.", "Power users, comparing and sorting across the lab."],
+    "09-terminal.html": ["An htop/k9s-style text interface, fully keyboard driven.", "Fast operation without the mouse."],
+    "10-timeline.html": ["Every row on a shared time axis, so outages line up across hosts, guests and services.", "Finding out what was down, when, and why."],
+  };
+  const grid = document.getElementById("grid");
+  for (const [i, [file, title]] of window.PROTOTYPES.entries()) {
+    const [what, good] = notes[file];
+    const a = document.createElement("a");
+    a.className = "card";
+    a.href = file;
+    a.innerHTML = `
+      <div class="thumb"><iframe src="${file}" loading="lazy" tabindex="-1" aria-hidden="true" title=""></iframe></div>
+      <div class="body">
+        <span class="num">${String(i + 1).padStart(2, "0")}</span>
+        <h2>${title}</h2>
+        <p>${what}</p>
+        <div class="good"><b>Good for:</b> ${good}</div>
+      </div>`;
+    grid.appendChild(a);
+  }
+  // Scale each 1440×900 iframe to its thumbnail box.
+  const fit = () => {
+    for (const t of document.querySelectorAll(".thumb")) t.firstElementChild.style.transform = `scale(${t.clientWidth / 1440})`;
+  };
+  new ResizeObserver(fit).observe(grid);
+</script>
+</body>
+</html>

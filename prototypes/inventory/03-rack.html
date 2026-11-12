@@ -1,0 +1,672 @@
+<!doctype html>
+<!--
+  03 · Rack. The inventory as a physical 19" rack: each Proxmox host is a server chassis,
+  managed guests are drive sleds (VM = double width, container = single width), services
+  are network ports with their own LED. Clicking a sled pulls it out into a detail tray.
+
+  Intrinsically dark: a rack lives in a dim server closet, the LEDs only read against dark
+  metal. There is no light theme by design.
+
+  URL hash for testing: #q=fleet&live=down,warn&kind=lxc&win=d7&select=mrb-crt-01&unmanaged=moraband
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inventory · Rack</title>
+<style>
+:root {
+  color-scheme: dark;
+  --room: #0a0b0d;
+  --frame: #121417;
+  --rail: #1a1c20;
+  --hole: #050607;
+  --m1: #40454d; --m2: #30343a; --m3: #25282d; --m4: #1c1e22;
+  --edge: #555b64;
+  --ink: #e2e6eb; --ink-2: #a3abb5; --ink-3: #737b86;
+  --silk: #c3c9d1;
+  --up: #3ddc84; --warn: #ffb238; --down: #ff5252; --none: #8a929d; --off: #2b2f34;
+  --accent: #2f5bd3; --accent-hi: #7a9cff;
+  --lcd: #0a1020; --lcd-ink: #b9cdff; --lcd-dim: #4a5a80;
+  --tray: #15181c;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --rail-w: 28px;
+}
+* { box-sizing: border-box; }
+html { background: var(--room); }
+body {
+  margin: 0; min-height: 100vh; color: var(--ink); font: 13px/1.4 var(--sans);
+  background: radial-gradient(1200px 600px at 50% -10%, #1a1d22 0%, var(--room) 70%) fixed, var(--room);
+}
+a { color: var(--accent-hi); }
+:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; border-radius: 3px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- rack frame ---------- */
+.wrap { padding: 20px 16px 80px; }
+.rack {
+  position: relative; max-width: 1260px; margin: 0 auto; padding: 14px var(--rail-w) 22px;
+  background: linear-gradient(90deg, #070809, #0e1012 8%, #0e1012 92%, #070809);
+  border: 8px solid var(--frame); border-top-width: 14px; border-bottom-width: 18px; border-radius: 6px;
+  box-shadow: 0 30px 80px #000c, inset 0 0 40px #000;
+}
+.rail {
+  position: absolute; top: 0; bottom: 0; width: var(--rail-w);
+  background-image: linear-gradient(to bottom, var(--hole) 0 9px, transparent 9px 16px), linear-gradient(90deg, #26292e, #1a1c20 45%, #131518);
+  background-size: 9px 16px, 100% 100%; background-repeat: repeat-y, no-repeat; background-position: center 4px, 0 0;
+}
+.rail.l { left: 0; } .rail.r { right: 0; }
+.unit { position: relative; margin: 0 calc(-1 * var(--rail-w)) 10px; display: grid; grid-template-columns: var(--rail-w) 1fr var(--rail-w); }
+.ear {
+  background: linear-gradient(90deg, #2c3036, #3a3e45 50%, #2a2d33); border: 1px solid #0008;
+  display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: 8px 0;
+}
+.ear.l { border-radius: 3px 0 0 3px; } .ear.r { border-radius: 0 3px 3px 0; }
+.screw {
+  width: 11px; height: 11px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 35% 30%, #c9ced5, #7c838c 55%, #4a4f56);
+  box-shadow: 0 1px 1px #000a, inset 0 0 0 1px #0004;
+}
+.screw::before, .screw::after { content: ""; position: absolute; left: 50%; top: 50%; width: 7px; height: 1.5px; background: #3a3e44; transform: translate(-50%, -50%) rotate(35deg); }
+.screw::after { transform: translate(-50%, -50%) rotate(125deg); }
+.face {
+  position: relative; border-top: 1px solid #ffffff1a; border-bottom: 1px solid #000;
+  background:
+    repeating-linear-gradient(90deg, #ffffff06 0 1px, #00000008 1px 2px, transparent 2px 5px),
+    linear-gradient(180deg, var(--m1) 0%, var(--m2) 40%, var(--m3) 100%);
+  box-shadow: inset 0 1px 0 #ffffff14, inset 0 -2px 0 #0006, 0 6px 14px #0009;
+}
+.silk { font: 600 9px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--silk); opacity: .75; }
+
+/* ---------- LEDs ---------- */
+.led { --c: var(--off); display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px #0008, 0 0 7px var(--c); }
+.led.s-up { --c: var(--up); }
+.led.s-warn { --c: var(--warn); border-radius: 1px; transform: rotate(45deg) scale(.9); }
+.led.s-down { --c: var(--down); border-radius: 1px; animation: blink 1.4s steps(2, jump-none) infinite; }
+.led.s-unknown { --c: transparent; box-shadow: 0 0 0 1px #0008, inset 0 0 0 2px var(--none); }
+.led.s-off { --c: var(--off); box-shadow: 0 0 0 1px #0008, inset 0 1px 1px #0008; }
+@keyframes blink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .led.s-down { animation: none; } * { transition: none !important; } }
+.c-up { color: var(--up); } .c-warn { color: var(--warn); } .c-down { color: var(--down); } .c-unknown { color: var(--none); }
+
+/* ---------- LCD / segmented controls ---------- */
+.lcd {
+  font: 600 12px/1 var(--mono); color: var(--lcd-ink); background: var(--lcd); border-radius: 3px; padding: 6px 8px;
+  box-shadow: inset 0 2px 4px #000c, 0 1px 0 #ffffff14; text-shadow: 0 0 6px #6d8cff66; white-space: nowrap;
+}
+.lcd small { font-size: 9px; color: var(--lcd-dim); letter-spacing: .1em; margin-right: 6px; text-shadow: none; }
+.seg { display: inline-flex; background: var(--m4); border-radius: 4px; padding: 2px; box-shadow: inset 0 1px 3px #000c, 0 1px 0 #ffffff12; }
+.seg button {
+  border: 0; background: transparent; padding: 5px 9px; border-radius: 3px; display: inline-flex; align-items: center; gap: 6px;
+  font: 600 10px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2);
+}
+.seg button[aria-pressed="true"] { background: linear-gradient(#4a5059, #3a3f46); color: #fff; box-shadow: 0 1px 2px #000a, inset 0 1px 0 #ffffff22; }
+.seg button:hover { color: #fff; }
+
+/* ---------- control panel ---------- */
+.ctlpanel .face { padding: 12px 16px; display: grid; gap: 10px 18px; grid-template-columns: auto 1fr; align-items: center; }
+.brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.brand h1 { margin: 0; font: 700 20px/1 var(--sans); letter-spacing: .02em; color: #eef1f5; text-shadow: 0 -1px 0 #000, 0 1px 0 #ffffff18; }
+.brand .rev { font: 11px/1.3 var(--mono); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand .rev b { color: var(--ink); font-weight: 600; }
+.counters { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.counters .lcd { display: inline-flex; align-items: center; gap: 5px; }
+.counters .lcd .k { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.counters .led { width: 7px; height: 7px; }
+.filters { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid #0007; box-shadow: 0 -1px 0 #ffffff0d; }
+.search { position: relative; flex: 1 1 200px; max-width: 380px; }
+.search input {
+  width: 100%; border: 0; padding: 8px 34px 8px 10px; font: 600 13px/1 var(--mono); color: var(--lcd-ink); background: var(--lcd);
+  border-radius: 3px; box-shadow: inset 0 2px 4px #000c, 0 1px 0 #ffffff14; caret-color: var(--accent-hi);
+}
+.search input::placeholder { color: var(--lcd-dim); }
+.search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 600 10px/1 var(--mono); color: var(--lcd-dim); border: 1px solid var(--lcd-dim); border-radius: 3px; padding: 2px 5px; }
+.fgroup { display: inline-flex; align-items: center; gap: 8px; }
+.livebtns button .led { width: 7px; height: 7px; }
+.livebtns button[aria-pressed="false"] .led { opacity: .45; box-shadow: 0 0 0 1px #0008; }
+
+/* ---------- host chassis ---------- */
+.chassis .face { display: grid; grid-template-columns: 228px 214px 1fr; min-height: 150px; }
+.chassis .face > * { padding: 12px 14px; }
+.chassis .face > * + * { border-left: 1px solid #0008; box-shadow: inset 1px 0 0 #ffffff0d; }
+.ctl { display: flex; flex-direction: column; gap: 9px; }
+.plate {
+  background: linear-gradient(180deg, #d5dadf, #aab1b9); color: #1b1f24; border-radius: 3px; padding: 6px 10px 7px;
+  box-shadow: inset 0 1px 0 #fffc, inset 0 -1px 0 #0003, 0 1px 3px #000c; position: relative;
+}
+.plate::before, .plate::after { content: ""; position: absolute; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #f2f4f6, #6e757e); box-shadow: 0 0 0 1px #0004; }
+.plate::before { left: 4px; } .plate::after { right: 4px; }
+.plate .silk { color: #3e454e; opacity: 1; font-size: 8px; padding-left: 4px; }
+.plate h2 { margin: 2px 0 0 4px; font: 700 18px/1.1 var(--mono); letter-spacing: .03em; text-shadow: 0 1px 0 #fff8; }
+.indic { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.indic > span { display: inline-flex; align-items: center; gap: 5px; }
+.indic .state { font: 700 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.spec { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font: 11px/1.3 var(--mono); }
+.spec dt { font: 600 9px/1.5 var(--sans); letter-spacing: .12em; color: var(--silk); opacity: .7; }
+.spec dd { margin: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: auto; }
+.pmx {
+  display: inline-flex; align-items: center; gap: 7px; text-decoration: none; color: #fff; font: 700 10px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase;
+  padding: 7px 11px; border-radius: 4px; background: linear-gradient(#3d6ae6, var(--accent) 60%, #2449ad);
+  box-shadow: 0 2px 0 #142a66, 0 3px 6px #0009, inset 0 1px 0 #ffffff40;
+}
+.pmx:hover { filter: brightness(1.12); }
+.pmx:active { transform: translateY(1px); box-shadow: 0 1px 0 #142a66, inset 0 1px 0 #ffffff40; }
+.umtoggle { display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; padding: 4px 2px; font: 600 9px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--silk); }
+.umtoggle .sw { width: 24px; height: 12px; border-radius: 6px; background: var(--m4); box-shadow: inset 0 1px 3px #000c; position: relative; }
+.umtoggle .sw::after { content: ""; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(#cfd4da, #8d949d); transition: left .15s; }
+.umtoggle[aria-pressed="true"] .sw { background: #22396f; }
+.umtoggle[aria-pressed="true"] .sw::after { left: 13px; }
+.umtoggle .hits { color: var(--accent-hi); letter-spacing: .04em; }
+
+.meters { display: flex; flex-direction: column; gap: 8px; }
+.meter { display: grid; grid-template-columns: 30px 1fr; gap: 2px 8px; align-items: center; }
+.meter .ml { grid-row: span 2; }
+.segs { display: flex; gap: 2px; height: 9px; }
+.segs i { flex: 1; border-radius: 1px; background: #15171a; box-shadow: inset 0 1px 1px #000c; }
+.segs i.on.g { background: var(--up); box-shadow: 0 0 4px #3ddc8466; }
+.segs i.on.a { background: var(--warn); box-shadow: 0 0 4px #ffb23866; }
+.segs i.on.r { background: var(--down); box-shadow: 0 0 4px #ff525266; }
+.off .segs i.on { background: #4e555e; box-shadow: none; }
+.mv { font: 11px/1 var(--mono); color: var(--ink-2); display: flex; justify-content: space-between; }
+.mv b { color: var(--ink); font-weight: 600; }
+.avail { margin-top: 2px; display: flex; flex-direction: column; gap: 6px; }
+.avail .lcd { display: flex; justify-content: space-between; align-items: center; }
+.beats { display: block; width: 100%; height: 14px; }
+.beats .b-up { fill: var(--up); opacity: .75; } .beats .b-warn { fill: var(--warn); } .beats .b-down { fill: var(--down); }
+.beats.big { height: 28px; }
+
+/* ---------- bays ---------- */
+.bays {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); grid-auto-rows: minmax(112px, auto); gap: 6px; align-content: start;
+  background: linear-gradient(#0c0d0f, #121418); box-shadow: inset 0 3px 10px #000, inset 0 0 0 1px #000; margin: 8px; padding: 6px !important; border-radius: 3px;
+  border-left: 0 !important;
+}
+.bay {
+  position: relative; border-radius: 3px; display: flex; flex-direction: column; transition: transform .25s cubic-bezier(.2,.8,.3,1), box-shadow .25s, opacity .2s, filter .2s;
+  background: repeating-linear-gradient(90deg, #ffffff05 0 1px, transparent 1px 4px), linear-gradient(180deg, #3b4047, #2a2e34 55%, #24272c);
+  box-shadow: inset 0 1px 0 #ffffff1c, inset 0 0 0 1px #0009, 0 1px 2px #000;
+  padding-right: 14px;
+}
+.bay.qemu { grid-column: span 2; }
+.bay .grip {
+  position: absolute; right: 3px; top: 8px; bottom: 8px; width: 7px; border-radius: 2px;
+  background: repeating-linear-gradient(180deg, #0b0c0e 0 2px, transparent 2px 5px); opacity: .8;
+}
+.bay-face { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 5px; padding: 7px 4px 4px 8px; border-radius: 3px 0 0 0; }
+.bay-face:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: -2px; }
+.bay-top { display: flex; align-items: center; gap: 6px; }
+.bay-top .st { font: 700 9px/1 var(--mono); letter-spacing: .08em; }
+.bay-top .vmid { margin-left: auto; font: 600 10px/1 var(--mono); color: var(--lcd-ink); background: var(--lcd); padding: 3px 5px; border-radius: 2px; box-shadow: inset 0 1px 2px #000; }
+.label {
+  display: block; font: 600 11.5px/1 var(--mono); color: #1b1e22; background: linear-gradient(#f1efe6, #dcd9cd); padding: 4px 6px; border-radius: 2px;
+  box-shadow: 0 1px 1px #0009; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bay-meta { display: flex; justify-content: space-between; font: 10px/1 var(--mono); color: var(--ink-2); }
+.bay-meta .kind { font: 700 9px/1 var(--sans); letter-spacing: .14em; color: var(--silk); opacity: .8; }
+.bay:hover { box-shadow: inset 0 1px 0 #ffffff26, inset 0 0 0 1px #000a, 0 2px 6px #000; }
+.bay.out { transform: translateY(-3px) scale(1.04); z-index: 2; box-shadow: 0 0 0 2px var(--accent-hi), 0 14px 28px #000e; }
+.bay.dim, .plateu.dim { opacity: .2; filter: grayscale(.8); }
+.ports { display: flex; flex-wrap: wrap; gap: 1px; padding: 2px 4px 6px 8px; margin-top: auto; }
+.noports { font: 600 8px/1 var(--sans); letter-spacing: .14em; color: var(--ink-3); padding: 4px 0; }
+.port { all: unset; box-sizing: border-box; cursor: pointer; width: 24px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 2px 0; border-radius: 3px; transition: opacity .2s; }
+.port .pled { width: 5px; height: 5px; }
+.port .sock { width: 17px; height: 12px; background: #050506; box-shadow: inset 0 0 0 1px #2d3137, 0 1px 0 #ffffff14; clip-path: polygon(0 0, 100% 0, 100% 70%, 72% 70%, 72% 100%, 28% 100%, 28% 70%, 0 70%); }
+.port .pl { font: 600 7.5px/1 var(--mono); color: var(--silk); opacity: .8; letter-spacing: .02em; }
+.port:hover { background: #ffffff12; }
+.port:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 0; }
+.port.hit { background: #2f5bd355; box-shadow: 0 0 0 1px var(--accent-hi), 0 0 10px #7a9cff88; }
+.port.hit .pl { color: #fff; opacity: 1; }
+.port.dim { opacity: .25; }
+.plateu {
+  border-radius: 3px; display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; color: var(--ink-3); position: relative; transition: opacity .2s;
+  background: radial-gradient(circle, #0c0d0f 1.2px, transparent 1.6px) 0 0 / 6px 6px, linear-gradient(#2a2c30, #222427);
+  box-shadow: inset 0 0 0 1px #000, inset 0 1px 0 #ffffff10;
+}
+.plateu.qemu { grid-column: span 2; }
+.plateu .pn { font: 600 11px/1.2 var(--mono); color: var(--ink-2); background: #1c1e21; padding: 3px 5px; border-radius: 2px; align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plateu .pm { font: 10px/1.3 var(--mono); background: #1c1e21; padding: 2px 5px; border-radius: 2px; align-self: flex-start; }
+.plateu .tpl { position: absolute; right: 8px; top: 8px; font: 700 8px/1 var(--sans); letter-spacing: .16em; color: #c9b47a; border: 1px solid #c9b47a88; padding: 3px 4px; border-radius: 2px; background: #1c1e21; }
+.um-sep { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 14px; align-self: center; }
+.um-sep::after { content: ""; flex: 1; height: 1px; background: repeating-linear-gradient(90deg, #3a3e44 0 4px, transparent 4px 8px); }
+.bays:has(.um-sep) { grid-auto-rows: auto; }
+.bays:has(.um-sep) .bay { min-height: 112px; }
+.bays .plateu { min-height: 72px; }
+
+/* offline host: dark front */
+.chassis.off .face { background: repeating-linear-gradient(90deg, #ffffff04 0 1px, transparent 1px 5px), linear-gradient(180deg, #24272c, #1b1d21); }
+.chassis.off .plate { background: linear-gradient(#8f969e, #6f767e); }
+.chassis.off .spec dd, .chassis.off .mv { color: var(--ink-3); }
+.chassis.off .bay { filter: brightness(.7); }
+.chassis.off .bay.dim { filter: grayscale(.8) brightness(.7); }
+.offnote { font: 600 10px/1.3 var(--mono); color: var(--down); }
+.chassis.dim .face > :not(.bays) { opacity: .35; }
+
+.empty { display: none; margin: 0 0 10px; padding: 18px; text-align: center; border-radius: 4px; background: #111317; border: 1px dashed #3a3f46; color: var(--ink-2); font: 13px/1.5 var(--mono); }
+.empty.show { display: block; }
+.empty button { margin-left: 8px; border: 1px solid #4a5059; background: var(--m3); border-radius: 3px; padding: 4px 10px; font: 600 11px var(--sans); }
+.legend { display: flex; gap: 14px; justify-content: center; margin-top: 12px; font: 11px/1 var(--mono); color: var(--ink-3); flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- pulled-out sled (detail) ---------- */
+.scrim { position: fixed; inset: 0; background: #0006; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 20; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.sled {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); z-index: 30; display: flex; flex-direction: column;
+  transform: translateX(105%); transition: transform .32s cubic-bezier(.2,.8,.3,1); background: var(--tray);
+  box-shadow: -20px 0 50px #000c; border-left: 1px solid #000;
+}
+.sled.show { transform: none; }
+.sled-front {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; padding: 14px 16px 12px 18px; position: relative;
+  background: repeating-linear-gradient(90deg, #ffffff06 0 1px, transparent 1px 4px), linear-gradient(180deg, #43484f, #2c3036);
+  box-shadow: inset 0 -1px 0 #000, 0 4px 12px #0009;
+}
+.sled-front::after { content: ""; position: absolute; left: 6px; top: 12px; bottom: 12px; width: 6px; border-radius: 2px; background: repeating-linear-gradient(180deg, #0b0c0e 0 2px, transparent 2px 5px); }
+.sled-front .label { font-size: 16px; padding: 6px 8px; grid-column: 1 / -1; }
+.sled-front .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font: 11px/1 var(--mono); color: var(--ink-2); }
+.close { border: 1px solid #0009; background: linear-gradient(#4a5058, #363a41); border-radius: 4px; padding: 6px 10px; font: 700 10px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; box-shadow: inset 0 1px 0 #ffffff22, 0 1px 2px #000; }
+.sled-body { overflow: auto; padding: 14px 16px 80px 18px; display: flex; flex-direction: column; gap: 16px; background: linear-gradient(90deg, #0f1114, var(--tray) 30px); }
+.sec h3 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.sec h3::after { content: ""; flex: 1; height: 1px; background: #2a2e34; }
+.facts { margin: 0; display: grid; grid-template-columns: 96px 1fr; gap: 5px 12px; font: 12px/1.35 var(--mono); }
+.facts dt { font: 600 9px/1.6 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.tag { display: inline-block; font: 700 9px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; padding: 3px 6px; border-radius: 2px; border: 1px solid currentColor; }
+.t-success { color: var(--up); } .t-danger { color: var(--down); } .t-attention { color: var(--warn); } .t-neutral, .t-uncertain { color: var(--ink-2); }
+.wins { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+.wins .lcd { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.wins .lcd.cur { box-shadow: inset 0 2px 4px #000c, 0 0 0 1px var(--accent-hi); }
+.events { list-style: none; margin: 8px 0 0; padding: 0; font: 11px/1.6 var(--mono); color: var(--ink-2); }
+.svc { border-radius: 4px; background: #1b1e23; box-shadow: inset 0 0 0 1px #2a2e34; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
+.svc.focus { box-shadow: inset 0 0 0 1px var(--accent-hi); }
+.svc-head { display: flex; align-items: center; gap: 8px; }
+.svc-head b { font: 700 13px/1.2 var(--mono); }
+.svc-head .cat { font: 600 9px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.svc-head .pc { margin-left: auto; font: 600 11px/1 var(--mono); color: var(--ink-2); }
+.svc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font: 12px/1.3 var(--mono); }
+.svc li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.svc li a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc li .ms { margin-left: auto; color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.svc .dns li { color: var(--ink-2); font-size: 11px; }
+.svc .dns .rt { color: var(--lcd-ink); font-weight: 700; width: 44px; flex: none; }
+.svc .note { font: 11px/1.4 var(--sans); color: var(--ink-2); border-left: 2px solid var(--none); padding-left: 8px; }
+.svc .desc { font: 12px/1.3 var(--sans); color: var(--ink-2); }
+
+@media (max-width: 1200px) {
+  .chassis .face { grid-template-columns: 236px 1fr; }
+  .chassis .face > .meters { grid-column: 1; grid-row: 2; border-left: 0; box-shadow: inset 0 1px 0 #ffffff0d; border-top: 1px solid #0008; }
+  .chassis .face > .bays { grid-column: 2; grid-row: 1 / span 2; }
+  .ctlpanel .face { grid-template-columns: 1fr; }
+  .counters { justify-content: flex-start; }
+}
+@media (max-width: 760px) {
+  :root { --rail-w: 14px; }
+  .wrap { padding: 8px 4px 80px; }
+  .chassis .face { grid-template-columns: 1fr; }
+  .chassis .face > .meters, .chassis .face > .bays { grid-column: 1; grid-row: auto; }
+  .ear .screw { width: 8px; height: 8px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="rack" id="rack">
+    <div class="rail l" aria-hidden="true"></div><div class="rail r" aria-hidden="true"></div>
+    <header class="unit ctlpanel">
+      <div class="ear l"><i class="screw"></i><i class="screw"></i></div>
+      <div class="face">
+        <div class="brand">
+          <h1>Inventory</h1>
+          <span class="rev" id="rev"></span>
+        </div>
+        <div class="counters" id="counters" aria-label="Summary"></div>
+        <div class="filters" role="search">
+          <label class="search"><span class="sr">Search hosts, guests and services</span>
+            <input id="q" type="search" placeholder="search…" autocomplete="off" spellcheck="false"><kbd>/</kbd></label>
+          <div class="fgroup"><span class="silk" id="lv-l">Liveness</span>
+            <div class="seg livebtns" id="live" role="group" aria-labelledby="lv-l"></div></div>
+          <div class="fgroup"><span class="silk" id="kd-l">Kind</span>
+            <div class="seg" id="kind" role="group" aria-labelledby="kd-l"></div></div>
+          <div class="fgroup"><span class="silk" id="wn-l">Window</span>
+            <div class="seg" id="win" role="group" aria-labelledby="wn-l"></div></div>
+        </div>
+      </div>
+      <div class="ear r"><i class="screw"></i><i class="screw"></i></div>
+    </header>
+    <div class="empty" id="empty" role="status"></div>
+    <main id="hosts"></main>
+    <div class="legend" aria-label="Legend">
+      <span><i class="led s-up"></i>Up</span><span><i class="led s-warn"></i>Degraded</span>
+      <span><i class="led s-down" style="animation:none"></i>Down</span><span><i class="led s-unknown"></i>No check</span>
+      <span>Wide sled = VM · narrow sled = container · port = service</span>
+    </div>
+  </div>
+</div>
+<div class="scrim" id="scrim"></div>
+<aside class="sled" id="sled" role="dialog" aria-modal="false" aria-labelledby="sled-title" aria-hidden="true"></aside>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+  const F = INV.fmt;
+  const ST = { up: ["UP", "Up"], warn: ["DEG", "Degraded"], down: ["DOWN", "Down"], unknown: ["N/C", "No check"] };
+  const WIN = { h24: "24h", d7: "7d", d30: "30d" };
+  const S = { q: "", live: new Set(), kind: "all", win: "h24", sel: null, focusSvc: null, um: new Set() };
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const led = (st, extra = "") => `<i class="led s-${st} ${extra}" aria-hidden="true"></i>`;
+  const pct = (c, w = S.win) => (c ? F.pct(c.uptime[w], c.uptime[w] >= 99.995 ? 0 : 2) : "—");
+  const kindName = (k) => (k === "qemu" ? "VM" : "container");
+  const kindTag = (k) => (k === "qemu" ? "VM" : "CT");
+
+  function beats(arr, cls = "") {
+    const down = arr.filter((b) => b === "down").length, warn = arr.filter((b) => b === "warn").length;
+    const h = { up: [0, 14], warn: [4, 10], down: [9, 5] };
+    const rects = arr.map((b, i) => `<rect class="b-${b}" x="${i * 3}" y="${h[b][0]}" width="2" height="${h[b][1]}"/>`).join("");
+    return `<svg class="beats ${cls}" viewBox="0 0 287 14" preserveAspectRatio="none" role="img" aria-label="Last 24 hours: ${down} down and ${warn} degraded of 96 checks">${rects}</svg>`;
+  }
+  function meter(label, frac, valueHtml) {
+    const n = frac == null ? 0 : Math.max(frac > 0 ? 1 : 0, Math.round(frac * 20));
+    let segs = "";
+    for (let i = 0; i < 20; i++) segs += `<i class="${i < n ? "on " : ""}${i < 13 ? "g" : i < 17 ? "a" : "r"}"></i>`;
+    const aria = frac == null ? `aria-valuetext="unknown"` : `aria-valuenow="${Math.round(frac * 100)}"`;
+    return `<div class="meter" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" ${aria}>
+      <span class="silk ml">${label}</span><span class="segs">${segs}</span><span class="mv">${valueHtml}</span></div>`;
+  }
+  const ratio = (r) => (r.used == null ? null : r.used / r.total);
+
+  // ---------- header ----------
+  function header() {
+    $("#rev").innerHTML = `rev <b>${esc(INV.revision.commit)}</b> · ${esc(INV.revision.subject)} · observed ${esc(F.ago(INV.observedAt))}`;
+    const t = INV.totals();
+    $("#counters").innerHTML = `
+      <span class="lcd"><small>HOSTS</small>${t.nodes.up}/${t.nodes.total}</span>
+      <span class="lcd"><small>GUESTS</small>${t.guests.up}/${t.guests.total}</span>
+      <span class="lcd" aria-label="Services: ${t.services.up} up, ${t.services.warn} degraded, ${t.services.down} down, ${t.services.unknown} no check"><small>SERVICES</small>
+        <span class="k">${led("up")}${t.services.up}</span><span class="k">${led("warn")}${t.services.warn}</span>
+        <span class="k">${led("down")}${t.services.down}</span><span class="k">${led("unknown")}${t.services.unknown}</span></span>
+      <span class="lcd"><small>UNMANAGED</small>${t.unmanaged}</span>
+      <span class="lcd" id="matchlcd" hidden></span>`;
+    $("#live").innerHTML = Object.entries(ST).map(([k, [, l]]) => `<button data-live="${k}" aria-pressed="false">${led(k)}${l}</button>`).join("");
+    $("#kind").innerHTML = [["all", "All"], ["qemu", "VM"], ["lxc", "CT"]].map(([k, l]) => `<button data-kind="${k}" aria-pressed="${S.kind === k}">${l}</button>`).join("");
+    $("#win").innerHTML = Object.entries(WIN).map(([k, l]) => `<button data-win="${k}" aria-pressed="${S.win === k}">${l}</button>`).join("");
+  }
+  function syncControls() {
+    for (const b of document.querySelectorAll("[data-live]")) b.setAttribute("aria-pressed", S.live.has(b.dataset.live));
+    for (const b of document.querySelectorAll("[data-kind]")) b.setAttribute("aria-pressed", S.kind === b.dataset.kind);
+    for (const b of document.querySelectorAll("[data-win]")) b.setAttribute("aria-pressed", S.win === b.dataset.win);
+    $("#q").value = S.q;
+  }
+
+  // ---------- chassis ----------
+  function port(s) {
+    const u = s.urls[0];
+    const lbl = s.name.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase();
+    const what = `${s.name}, ${ST[s.status][1]}`;
+    const inner = `${led(s.status, "pled")}<span class="sock"></span><span class="pl">${esc(lbl)}</span>`;
+    return u
+      ? `<a class="port" data-svc="${esc(s.id)}" href="${esc(u.url)}" target="_blank" rel="noopener" title="${esc(`${s.name} · ${ST[s.status][1]} · ${u.host}`)}" aria-label="${esc(`${what}. Open ${u.host}`)}">${inner}</a>`
+      : `<button class="port" data-svc="${esc(s.id)}" data-open="${esc(s.guest)}" data-focus="${esc(s.id)}" title="${esc(`${s.name} · ${ST[s.status][1]} · no URL`)}" aria-label="${esc(`${what}. No URL; show details`)}">${inner}</button>`;
+  }
+  function bay(g) {
+    const svcs = INV.servicesOf(g.id);
+    const [short, long] = ST[g.status];
+    return `<div class="bay ${g.kind}" data-guest="${esc(g.id)}">
+      <button class="bay-face" data-open="${esc(g.id)}" aria-label="${esc(`${g.id}, ${kindName(g.kind)} ${g.vmid}, ${long}. Pull out for details`)}">
+        <span class="bay-top">${led(g.status)}<span class="st c-${g.status}">${short}</span><span class="vmid">${g.vmid}</span></span>
+        <span class="label">${esc(g.id)}</span>
+        <span class="bay-meta"><span class="kind">${kindTag(g.kind)}</span><span>${pct(g.check)} · ${F.ms(g.check.ms)}</span></span>
+      </button>
+      <div class="ports" aria-label="Services">${svcs.map(port).join("") || `<span class="noports">NO SERVICES</span>`}</div>
+      <span class="grip" aria-hidden="true"></span></div>`;
+  }
+  function plateU(u) {
+    return `<div class="plateu ${u.kind}" data-um="${esc(u.vmid)}" aria-label="${esc(`Unmanaged ${kindName(u.kind)} ${u.vmid} ${u.name}, ${u.status}${u.template ? ", template" : ""}`)}" role="group">
+      ${u.template ? `<span class="tpl">TEMPLATE</span>` : ""}
+      <span class="pn">${u.vmid} · ${esc(u.name)}</span>
+      <span class="pm">${kindTag(u.kind)} · ${esc(u.status)} · ${u.cores}c · ${F.bytes(u.memory)}</span></div>`;
+  }
+  function chassis(n) {
+    const off = !n.online;
+    const gs = INV.guestsOf(n.id);
+    const open = S.um.has(n.id);
+    const memTxt = `<b>${F.bytes(n.memory.used)}</b><span>/ ${F.bytes(n.memory.total)}</span>`;
+    const dskTxt = `<b>${F.bytes(n.disk.used)}</b><span>/ ${F.bytes(n.disk.total)}</span>`;
+    const cpuTxt = `<b>${n.cpu.used == null ? "—" : Math.round(n.cpu.used * 100) + "%"}</b><span>${n.cpu.cores} cores</span>`;
+    const screws = `<i class="screw"></i><i class="screw"></i>`;
+    return `<section class="unit chassis ${off ? "off" : ""}" id="h-${n.id}" aria-label="Proxmox host ${esc(n.name)}">
+      <div class="ear l">${screws}</div>
+      <div class="face">
+        <div class="ctl">
+          <div class="plate"><span class="silk">Proxmox host</span><h2>${esc(n.name)}</h2></div>
+          <div class="indic">
+            <span>${led(off ? "off" : "up")}<span class="silk">PWR</span></span>
+            <span>${led(n.status)}<span class="silk">HLTH</span></span>
+            <span class="state c-${n.status}">${off ? "Offline" : ST[n.status][1]}</span>
+          </div>
+          ${off ? `<div class="offnote">${esc(n.offlineReason)} · since ${esc(F.ago(n.check.since))}</div>` : ""}
+          <dl class="spec">
+            <dt>PVE</dt><dd>${esc(n.version)}</dd>
+            <dt>UPTIME</dt><dd>${F.duration(n.uptimeSeconds)}</dd>
+            <dt>ADDR</dt><dd>${esc(n.address)}</dd>
+            <dt>CPU</dt><dd title="${esc(n.cpu.model)}">${esc(n.cpu.model)}</dd>
+          </dl>
+          <div class="ctl-row">
+            <a class="pmx" href="${esc(n.proxmoxUrl)}" target="_blank" rel="noopener" aria-label="Open Proxmox web UI for ${esc(n.name)}">Proxmox ↗</a>
+            <button class="umtoggle" data-um-toggle="${n.id}" aria-pressed="${open}" aria-controls="bays-${n.id}"><span class="sw"></span>Unmanaged ${n.unmanaged.length}<span class="hits"></span></button>
+          </div>
+        </div>
+        <div class="meters">
+          ${meter("CPU", n.cpu.used, cpuTxt)}
+          ${meter("MEM", ratio(n.memory), memTxt)}
+          ${meter("DSK", ratio(n.disk), dskTxt)}
+          ${off ? `<span class="silk" style="color:var(--down)">Last known values</span>` : ""}
+          <div class="avail">
+            <span class="lcd" aria-label="Host uptime ${WIN[S.win]}: ${pct(n.check)}"><small>AVAIL ${WIN[S.win].toUpperCase()}</small>${pct(n.check)}</span>
+            ${beats(n.check.beats)}
+          </div>
+        </div>
+        <div class="bays" id="bays-${n.id}">
+          ${gs.map(bay).join("")}
+          ${open ? `<div class="um-sep"><span class="silk">Unmanaged · no checks</span></div>${n.unmanaged.map(plateU).join("")}` : ""}
+        </div>
+      </div>
+      <div class="ear r">${screws}</div></section>`;
+  }
+  function renderRack() {
+    $("#hosts").innerHTML = INV.nodes.map(chassis).join("");
+    applyFilters();
+    if (S.sel) $(`.bay[data-guest="${CSS.escape(S.sel)}"]`)?.classList.add("out");
+  }
+
+  // ---------- filters: dim, never remove ----------
+  function applyFilters() {
+    const q = S.q.trim().toLowerCase();
+    const L = S.live;
+    let shown = 0, total = 0;
+    for (const n of INV.nodes) {
+      const el = $(`#h-${n.id}`);
+      const hostText = !!q && INV.haystack("node", n).includes(q);
+      let hostAny = false;
+      for (const g of INV.guestsOf(n.id)) {
+        total++;
+        const svcs = INV.servicesOf(g.id);
+        const hits = svcs.map((s) => !!q && INV.haystack("service", s).includes(q));
+        const textOk = !q || hostText || INV.haystack("guest", g).includes(q) || hits.some(Boolean);
+        const liveOk = !L.size || L.has(g.status) || svcs.some((s) => L.has(s.status));
+        const ok = textOk && liveOk && (S.kind === "all" || S.kind === g.kind);
+        const bayEl = $(`.bay[data-guest="${CSS.escape(g.id)}"]`, el);
+        bayEl.classList.toggle("dim", !ok);
+        svcs.forEach((s, i) => {
+          const p = $(`.port[data-svc="${CSS.escape(s.id)}"]`, bayEl);
+          p.classList.toggle("hit", ok && hits[i]);
+          p.classList.toggle("dim", ok && L.size > 0 && !L.has(s.status));
+        });
+        if (ok) { shown++; hostAny = true; }
+      }
+      let umHits = 0;
+      for (const u of n.unmanaged) {
+        const ok = (!q || hostText || INV.haystack("unmanaged", u).includes(q)) && (!L.size || L.has("unknown")) && (S.kind === "all" || S.kind === u.kind);
+        if (ok && (q || L.size || S.kind !== "all")) umHits++;
+        $(`.plateu[data-um="${u.vmid}"]`, el)?.classList.toggle("dim", !ok);
+      }
+      const filtering = !!(q || L.size || S.kind !== "all");
+      $(".umtoggle .hits", el).textContent = filtering && umHits ? ` · ${umHits} match` : "";
+      const hostSelf = filtering && (!q || hostText) && (!L.size || L.has(n.status)) && S.kind === "all";
+      el.classList.toggle("dim", filtering && !hostAny && !hostSelf && !umHits);
+      if (hostSelf || umHits) shown += hostAny ? 0 : 1;
+    }
+    const filtering = !!(S.q.trim() || L.size || S.kind !== "all");
+    const m = $("#matchlcd");
+    m.hidden = !filtering;
+    m.innerHTML = `<small>MATCH</small>${shown}`;
+    const empty = $("#empty");
+    empty.classList.toggle("show", filtering && shown === 0);
+    if (filtering && shown === 0) {
+      const parts = [S.q.trim() && `“${esc(S.q.trim())}”`, L.size && [...L].map((k) => ST[k][1]).join(" or "), S.kind !== "all" && kindName(S.kind) + "s"].filter(Boolean);
+      empty.innerHTML = `NO SIGNAL · nothing in the rack matches ${parts.join(" · ")}<button data-clear>Clear filters</button>`;
+    }
+  }
+
+  // ---------- sled (detail) ----------
+  function wins(c) {
+    return `<div class="wins">${Object.entries(WIN).map(([k, l]) => `<span class="lcd ${k === S.win ? "cur" : ""}"><small>${l.toUpperCase()}</small>${pct(c, k)}</span>`).join("")}</div>`;
+  }
+  function svcBlock(s) {
+    const c = s.check;
+    const urls = s.urls.map((u) => `<li>${led(u.check.status)}<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url.replace(/^https?:\/\//, ""))}</a><span class="ms">${ST[u.check.status][1]} · ${F.ms(u.check.ms)}</span></li>`).join("");
+    const dns = s.dns.map((d) => `<li><span class="rt">${esc(d.type)}</span><span>${esc(d.name)} → ${esc(d.expected)}</span></li>`).join("");
+    const run = INV.runLabels[s.runStatus];
+    return `<div class="svc ${S.focusSvc === s.id ? "focus" : ""}" id="svc-${esc(s.id.replace("/", "-"))}">
+      <div class="svc-head">${led(s.status)}<b>${esc(s.name)}</b><span class="cat">${esc(s.category)}</span>
+        <span class="pc">${c ? `${pct(c)} · ${WIN[S.win]}` : `<span class="c-unknown">No check</span>`}</span></div>
+      <div class="desc">${esc(s.description)} · <span class="c-${s.status}">${ST[s.status][1]}</span> · run <span class="tag t-${run.tone}">${run.label}</span></div>
+      ${urls ? `<ul>${urls}</ul>` : ""}
+      ${c ? beats(c.beats) : ""}
+      ${dns ? `<ul class="dns" aria-label="DNS records">${dns}</ul>` : ""}
+      ${s.health ? `<div class="desc">health <code>${esc(s.health.url)}</code>${s.health.probed ? "" : " · not probed"}</div>` : ""}
+      ${s.notes.map((x) => `<div class="note">${esc(x)}</div>`).join("")}
+    </div>`;
+  }
+  function renderSled() {
+    const sled = $("#sled");
+    const g = INV.guestById[S.sel];
+    if (!g) return;
+    const n = INV.nodeById[g.node];
+    const c = g.check;
+    const run = INV.runLabels[g.runStatus];
+    const lr = INV.runLabels[g.lastRun.status];
+    const svcs = INV.servicesOf(g.id);
+    sled.innerHTML = `
+      <div class="sled-front">
+        <div class="row">${led(g.status)}<b class="c-${g.status}">${ST[g.status][1]}</b><span>since ${esc(F.ago(c.since))}</span>
+          <span class="vmid lcd" style="padding:3px 6px">${g.vmid}</span><span class="silk">${kindName(g.kind)} on ${esc(n.name)}</span></div>
+        <button class="close" id="close" aria-label="Push the sled back in (close details)">Push in ✕</button>
+        <h2 class="label" id="sled-title">${esc(g.id)}</h2>
+        <div class="row"><a class="pmx" href="${esc(INV.proxmoxGuestUrl(g))}" target="_blank" rel="noopener">Proxmox ↗</a><span>${esc(g.description)}</span></div>
+      </div>
+      <div class="sled-body">
+        <section class="sec"><h3 class="silk">Guest</h3>
+          <dl class="facts">
+            <dt>Address</dt><dd>${esc(g.address ?? "—")}</dd>
+            <dt>Hostname</dt><dd>${esc(g.hostname)}</dd>
+            <dt>Power</dt><dd>${esc(g.power)}${g.uptimeSeconds ? ` · up ${F.duration(g.uptimeSeconds)}` : ""}</dd>
+            <dt>Run status</dt><dd><span class="tag t-${run.tone}">${run.label}</span></dd>
+            <dt>Last run</dt><dd><span class="tag t-${lr.tone}">${lr.label}</span> ${esc(F.ago(g.lastRun.at))}</dd>
+            <dt>Workflow</dt><dd>${esc(g.workflow)}</dd>
+            <dt>Resources</dt><dd>${g.cores} cores · ${F.bytes(g.memory)} · ${F.bytes(g.disk)} disk</dd>
+            ${g.tags.length ? `<dt>Tags</dt><dd>${g.tags.map(esc).join(", ")}</dd>` : ""}
+          </dl></section>
+        <section class="sec"><h3 class="silk">Uptime · SSH check</h3>
+          ${wins(c)}${beats(c.beats, "big")}
+          <ul class="events">${c.events.slice(0, 4).map((e) => `<li>${esc(F.time(e.at))} · ${ST[e.from][1]} → <span class="c-${e.to}">${ST[e.to][1]}</span></li>`).join("") || "<li>No status changes in 30 days</li>"}</ul>
+        </section>
+        <section class="sec"><h3 class="silk">Services · ${svcs.length}</h3>
+          <div style="display:flex;flex-direction:column;gap:8px">${svcs.map(svcBlock).join("") || `<div class="desc">No services on this guest.</div>`}</div>
+        </section>
+      </div>`;
+  }
+  let lastFocus = null;
+  function openSled(id, svcId = null) {
+    lastFocus = document.activeElement;
+    S.sel = id; S.focusSvc = svcId;
+    document.querySelectorAll(".bay.out").forEach((b) => b.classList.remove("out"));
+    $(`.bay[data-guest="${CSS.escape(id)}"]`)?.classList.add("out");
+    renderSled();
+    const sled = $("#sled");
+    sled.classList.add("show"); sled.setAttribute("aria-hidden", "false");
+    $("#scrim").classList.add("show");
+    $("#close").focus({ preventScroll: true });
+    if (svcId) document.getElementById("svc-" + svcId.replace("/", "-"))?.scrollIntoView({ block: "center" });
+    writeHash();
+  }
+  function closeSled() {
+    if (!S.sel) return;
+    const id = S.sel;
+    S.sel = null;
+    $("#sled").classList.remove("show"); $("#sled").setAttribute("aria-hidden", "true");
+    $("#scrim").classList.remove("show");
+    $(`.bay[data-guest="${CSS.escape(id)}"]`)?.classList.remove("out");
+    (lastFocus && document.contains(lastFocus) ? lastFocus : $(`.bay[data-guest="${CSS.escape(id)}"] .bay-face`))?.focus();
+    writeHash();
+  }
+
+  // ---------- state in the URL hash ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    S.q = p.get("q") || "";
+    S.live = new Set((p.get("live") || "").split(",").filter((k) => ST[k]));
+    S.kind = ["qemu", "lxc"].includes(p.get("kind")) ? p.get("kind") : p.get("kind") === "vm" ? "qemu" : p.get("kind") === "ct" ? "lxc" : "all";
+    S.win = WIN[p.get("win")] ? p.get("win") : "h24";
+    S.um = new Set((p.get("unmanaged") || "").split(",").filter(Boolean));
+    return p.get("select");
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if (S.q) p.set("q", S.q);
+    if (S.live.size) p.set("live", [...S.live].join(","));
+    if (S.kind !== "all") p.set("kind", S.kind);
+    if (S.win !== "h24") p.set("win", S.win);
+    if (S.um.size) p.set("unmanaged", [...S.um].join(","));
+    if (S.sel) p.set("select", S.sel);
+    history.replaceState(null, "", p.toString() ? "#" + p : location.pathname);
+  }
+
+  // ---------- events ----------
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("button, a");
+    if (!t) { if (e.target.id === "scrim") closeSled(); return; }
+    if (t.dataset.open) { openSled(t.dataset.open, t.dataset.focus || null); return; }
+    if (t.id === "close") return closeSled();
+    if (t.dataset.live) { S.live.has(t.dataset.live) ? S.live.delete(t.dataset.live) : S.live.add(t.dataset.live); syncControls(); applyFilters(); writeHash(); }
+    if (t.dataset.kind) { S.kind = t.dataset.kind; syncControls(); applyFilters(); writeHash(); }
+    if (t.dataset.win) { S.win = t.dataset.win; syncControls(); renderRack(); if (S.sel) renderSled(); writeHash(); }
+    if (t.dataset.umToggle) {
+      const id = t.dataset.umToggle;
+      S.um.has(id) ? S.um.delete(id) : S.um.add(id);
+      renderRack(); $(`[data-um-toggle="${id}"]`).focus(); writeHash();
+    }
+    if (t.hasAttribute("data-clear")) { S.q = ""; S.live.clear(); S.kind = "all"; syncControls(); applyFilters(); writeHash(); $("#q").focus(); }
+  });
+  $("#q").addEventListener("input", (e) => { S.q = e.target.value; applyFilters(); writeHash(); });
+  document.addEventListener("keydown", (e) => {
+    const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName);
+    if (e.key === "/" && !typing) { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+    else if (e.key === "Escape") {
+      if (S.sel) closeSled();
+      else if (document.activeElement === $("#q")) { S.q = ""; $("#q").value = ""; applyFilters(); writeHash(); $("#q").blur(); }
+    }
+  });
+
+  const sel = readHash();
+  header(); syncControls(); renderRack();
+  if (sel && INV.guestById[sel]) openSled(sel);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,716 @@
+<!doctype html>
+<!--
+  09 · Terminal. The inventory as an htop / k9s style TUI: the whole page is a character grid,
+  rendered from a model into exact-width lines, so every column lines up on the cell grid.
+  Fully keyboard operable (press ? for keys); mouse clicks and the wheel work too.
+
+  Intrinsically dark: it is a terminal. There is no light theme by design.
+
+  URL hash for testing: #q=fleet&f=down&t=vm&w=d7&s=beats&u=1&sel=mrb-crt-01/fleet&help=1
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inventory · Terminal</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0a0d12; --fg: #c9d1db; --hi: #f2f5f9; --dim: #7d8797; --faint: #4a5363;
+  --green: #5fd38d; --amber: #f2c14e; --red: #ff6b6b; --gray: #98a2b0; --blue: #8aa8ff; --cyan: #6fd3df; --mag: #d59cf5;
+  --bar: #151c27; --sel: #1d3470; --sel-fg: #ffffff; --accent: #2f5bd3; --match: #f2c14e;
+  --font: "JetBrains Mono", "SF Mono", ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs: 13px; --lh: 18px;
+}
+html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+body { color: var(--fg); font: var(--fs)/var(--lh) var(--font); font-variant-ligatures: none; }
+#term { position: relative; height: 100%; outline: none; padding: 0; }
+#screen > div { height: var(--lh); white-space: pre; overflow: hidden; }
+#screen span, #screen a, #screen button { white-space: pre; }
+i.w { display: inline-block; width: 1ch; text-align: center; font-style: normal; overflow: hidden; vertical-align: top; }
+a { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: #8aa8ff66; }
+a:hover { color: var(--hi); text-decoration-color: currentColor; }
+button { all: unset; cursor: pointer; white-space: pre; }
+a:focus-visible, button:focus-visible { outline: none; background: var(--hi); color: var(--bg); }
+.r { cursor: default; }
+.r:hover { background: #ffffff08; }
+.sel, .sel:hover { background: var(--sel); color: var(--sel-fg); }
+.sel .d { color: #b8c6e8; } .sel .f { color: #8796b8; }
+.fg { color: var(--fg); } .hi { color: var(--hi); font-weight: 700; } .d { color: var(--dim); } .f { color: var(--faint); }
+.g { color: var(--green); } .a { color: var(--amber); } .x { color: var(--red); } .n { color: var(--gray); }
+.b { color: var(--blue); } .c { color: var(--cyan); } .m { color: var(--mag); } .bold { font-weight: 700; }
+.inv { background: var(--bar); }
+.title { background: var(--accent); color: #fff; font-weight: 700; }
+.key { background: #2a3445; color: var(--hi); }
+.key:hover { background: var(--accent); }
+.mt { background: var(--match); color: #111; }
+.sel .mt { background: var(--match); color: #111; }
+#cmd {
+  position: absolute; left: 0; height: var(--lh); border: 0; padding: 0; margin: 0; outline: none; background: transparent;
+  color: var(--hi); font: inherit; caret-color: var(--amber);
+}
+#help { position: absolute; z-index: 5; background: var(--bg); box-shadow: 0 0 0 9999px #0a0d12aa; }
+#help > div { height: var(--lh); white-space: pre; }
+#measure { position: absolute; visibility: hidden; white-space: pre; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<div id="term" tabindex="0" role="application" aria-roledescription="terminal" aria-label="Inventory. Press question mark for keys.">
+  <div id="screen" aria-hidden="false"></div>
+  <input id="cmd" type="text" autocomplete="off" spellcheck="false" aria-label="Command or search" hidden>
+  <div id="help" hidden role="dialog" aria-label="Keys"></div>
+  <div class="sr" aria-live="polite" id="live"></div>
+</div>
+<span id="measure">MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM</span>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+  const F = INV.fmt;
+  const GLYPH = { up: ["●", "g"], warn: ["▲", "a"], down: ["✕", "x"], unknown: ["○", "n"] };
+  const LABEL = { up: "Up", warn: "Degraded", down: "Down", unknown: "No check" };
+  const LIVE = ["all", "down", "warn", "up", "unknown"];
+  const KINDS = ["all", "qemu", "lxc"];
+  const WINS = ["h24", "d7", "d30"];
+  const WL = { h24: "24h", d7: "7d", d30: "30d" };
+  const KL = { all: "all", qemu: "VM", lxc: "CT" };
+  const SPARK = "▁▂▃▄▅▆▇█";
+  const S = { sel: null, scroll: 0, dscroll: 0, collapsed: new Set(), um: new Set(), q: "", live: "all", kind: "all", win: "h24", spark: "lat", mode: null, msg: "", help: false };
+  let COLS = 120, ROWS = 40, CW = 8, LH = 18, rows = [], layout = {};
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  // ---------- line builder: every line is an exact number of cells ----------
+  class L {
+    constructor(attrs, cls) { this.s = []; this.n = 0; this.attrs = attrs; this.cls = cls; }
+    add(t, c, x) { t = String(t ?? ""); if (t) { this.s.push({ t, c, x }); this.n += t.length; } return this; }
+    pad(w, c) { return this.add(" ".repeat(Math.max(0, w - this.n)), c); }
+    fit(w) {
+      if (this.n > w) {
+        let left = w; const out = [];
+        for (const sg of this.s) {
+          if (left <= 0) break;
+          if (sg.t.length <= left) { out.push(sg); left -= sg.t.length; }
+          else { out.push({ ...sg, t: sg.t.slice(0, Math.max(0, left - 1)) + "…" }); left = 0; }
+        }
+        this.s = out; this.n = w;
+      } else this.pad(w);
+      return this;
+    }
+  }
+  const col = (t, w, right) => { t = String(t ?? ""); if (t.length > w) return t.slice(0, w - 1) + "…"; return right ? t.padStart(w) : t.padEnd(w); };
+  const cells = (t) => esc(t).replace(/[^\x00-\x7f─-╿]/g, (ch) => `<i class="w">${ch}</i>`);
+  function segHtml(sg) {
+    const c = sg.c ? ` class="${sg.c}"` : "";
+    const t = cells(sg.t);
+    if (sg.x?.href) return `<a href="${esc(sg.x.href)}" target="_blank" rel="noopener"${c}${sg.x.label ? ` aria-label="${esc(sg.x.label)}"` : ""}>${t}</a>`;
+    if (sg.x?.key) return `<button data-key="${esc(sg.x.key)}"${c} aria-label="${esc(sg.x.label || sg.x.key)}">${t}</button>`;
+    if (sg.x?.id) return `<span id="${sg.x.id}"${c}>${t}</span>`;
+    return sg.c ? `<span${c}>${t}</span>` : t;
+  }
+  function lineHtml(parts) {
+    return parts.map((l) => {
+      const inner = l.s.map(segHtml).join("");
+      if (!l.attrs && !l.cls) return inner;
+      const a = Object.entries(l.attrs || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join("");
+      return `<span class="${l.cls || ""}"${a}>${inner}</span>`;
+    }).join("");
+  }
+
+  // ---------- helpers ----------
+  const glyph = (st) => GLYPH[st] || GLYPH.unknown;
+  const pct = (c, w = S.win) => (c ? F.pct(c.uptime[w]) : "—");
+  const short = (b) => (b == null ? "—" : F.bytes(b).replace(" GiB", "G").replace(" TiB", "T").replace(" MiB", "M"));
+  const ms = (c) => (c && c.ms != null ? c.ms + "ms" : "—");
+  const kindTag = (k) => (k === "qemu" ? "vm" : "ct");
+  const hay = (k, x) => INV.haystack(k, x);
+  function bucket(arr, n, pick) {
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(pick(arr.slice(Math.floor((i * arr.length) / n), Math.floor(((i + 1) * arr.length) / n) || 1)));
+    return out;
+  }
+  const worst = (xs) => (xs.includes("down") ? "down" : xs.includes("warn") ? "warn" : "up");
+  /** Sparkline segments: latency (▁..█, scaled per row) or beats (█ up, ▄ degraded, ▁ down). */
+  function spark(line, c, w, mode = S.spark) {
+    if (!c) return line.add(col("no check", w), "n");
+    const n = Math.min(w, 96);
+    const states = bucket(c.beats, n, worst);
+    if (mode === "beats") {
+      states.forEach((s) => line.add(s === "down" ? "▁" : s === "warn" ? "▄" : "█", s === "down" ? "x" : s === "warn" ? "a" : "g"));
+    } else {
+      const lat = bucket(c.latency, n, (xs) => (xs.some((v) => v == null) ? null : Math.max(...xs)));
+      const vals = lat.filter((v) => v != null);
+      const lo = Math.min(...vals), hi = Math.max(...vals);
+      lat.forEach((v, i) => {
+        if (v == null) return line.add("·", "x");
+        const lvl = hi === lo ? 1 : Math.round(((v - lo) / (hi - lo)) * 7);
+        line.add(SPARK[lvl], states[i] === "warn" ? "a" : "g");
+      });
+    }
+    return line.add(" ".repeat(Math.max(0, w - n)));
+  }
+  function meter(line, label, frac, text, w, dimmed) {
+    line.add(label, "c").add("[", "bold");
+    const inner = w - 2 - label.length;
+    const fill = frac == null ? 0 : Math.max(frac > 0 ? 1 : 0, Math.round(frac * inner));
+    const room = inner - text.length;
+    for (let i = 0; i < room; i++) {
+      if (i >= fill) { line.add(" "); continue; }
+      const p = i / inner;
+      line.add("|", dimmed ? "f" : p < 0.6 ? "g" : p < 0.85 ? "a" : "x");
+    }
+    line.add(text, dimmed ? "d" : "fg").add("]", "bold");
+    return line;
+  }
+
+  // ---------- model: filter and flatten the tree ----------
+  function filtering() { return !!(S.q || S.live !== "all" || S.kind !== "all"); }
+  function buildRows() {
+    const q = S.q.toLowerCase();
+    const liveOk = (st) => S.live === "all" || st === S.live;
+    const kindOk = (k) => S.kind === "all" || S.kind === k;
+    const on = filtering();
+    const out = [];
+    for (const n of INV.nodes) {
+      const hText = !!q && hay("node", n).includes(q);
+      const gl = [];
+      for (const g of INV.guestsOf(n.id)) {
+        const gText = !q || hText || hay("guest", g).includes(q);
+        const svcs = INV.servicesOf(g.id).filter((s) => (gText || hay("service", s).includes(q)) && liveOk(s.status) && kindOk(g.kind));
+        const self = gText && liveOk(g.status) && kindOk(g.kind);
+        if (!on || self || svcs.length) gl.push({ g, svcs: on ? svcs : INV.servicesOf(g.id) });
+      }
+      const ums = n.unmanaged.filter((u) => !on || ((!q || hText || hay("unmanaged", u).includes(q)) && (S.live === "all" || S.live === "unknown") && kindOk(u.kind)));
+      const hSelf = (!q || hText) && liveOk(n.status) && S.kind === "all";
+      if (on && !hSelf && !gl.length && !ums.length) continue;
+      const hOpen = on || !S.collapsed.has(n.id);
+      out.push({ key: n.id, type: "host", obj: n, host: n, kids: gl.length + (ums.length ? 1 : 0), open: hOpen, depth: 0 });
+      if (!hOpen) continue;
+      gl.forEach(({ g, svcs }, gi) => {
+        const gLast = gi === gl.length - 1 && !ums.length;
+        const gOpen = on || !S.collapsed.has(g.id);
+        out.push({ key: g.id, type: "guest", obj: g, host: n, kids: svcs.length, open: gOpen, last: gLast, parent: n.id, depth: 1 });
+        if (!gOpen) return;
+        svcs.forEach((s, si) => out.push({ key: s.id, type: "svc", obj: s, host: n, guest: g, last: si === svcs.length - 1, gLast, parent: g.id, depth: 2 }));
+      });
+      if (ums.length) {
+        const key = n.id + ":um";
+        const uOpen = S.um.has(n.id) || (on && !!q);
+        out.push({ key, type: "umg", obj: ums, host: n, kids: ums.length, open: uOpen, last: true, parent: n.id, depth: 1 });
+        if (uOpen) ums.forEach((u, i) => out.push({ key: `${n.id}:um:${u.vmid}`, type: "um", obj: u, host: n, last: i === ums.length - 1, parent: key, depth: 2 }));
+      }
+    }
+    return out;
+  }
+
+  // ---------- layout ----------
+  function measure() {
+    const m = $("#measure").getBoundingClientRect();
+    CW = m.width / 100;
+    LH = parseFloat(getComputedStyle(document.body).lineHeight) || 18;
+    COLS = Math.max(60, Math.floor(innerWidth / CW));
+    ROWS = Math.max(20, Math.floor(innerHeight / LH));
+    const dw = Math.max(40, Math.min(66, Math.floor(COLS * 0.38)));
+    layout = { dw, lw: COLS - dw, top: 2 + INV.nodes.length + 1 };
+    layout.bodyH = ROWS - layout.top - 2; // pane height incl. borders
+    layout.listH = layout.bodyH - 3; // minus top border, column header, bottom border
+  }
+  function listCols(inner) {
+    const c = { name: inner >= 100 ? 38 : 32, type: 9, st: 9, up: 8, lat: 6, addr: 0 };
+    let used = c.name + 1 + c.type + 1 + c.st + 1 + c.up + 1 + c.lat + 1;
+    if (inner - used >= 16 + 1 + 16) { c.addr = 15; used += 16; }
+    c.spark = Math.max(8, Math.min(48, inner - used - 1));
+    return c;
+  }
+
+  // ---------- painting ----------
+  function header() {
+    const out = [];
+    const t = INV.totals();
+    const l0 = new L();
+    l0.add(" octopushy ", "title").add(" Inventory ", "inv hi").add(" rev ", "inv d").add(INV.revision.commit, "inv m").add(" " + INV.revision.subject + " ", "inv fg");
+    const right = ` observed ${F.ago(INV.observedAt)}  `;
+    const clock = new Date().toLocaleTimeString([], { hour12: false });
+    l0.add(" ".repeat(Math.max(1, COLS - l0.n - right.length - clock.length - 1)), "inv").add(right, "inv d").add(clock, "inv hi", { id: "clock" }).add(" ", "inv");
+    out.push([l0.fit(COLS)]);
+    const l1 = new L();
+    const [gu] = glyph("up"), [gw] = glyph("warn"), [gd] = glyph("down"), [gn] = glyph("unknown");
+    l1.add(" Hosts ", "d").add(`${t.nodes.up}/${t.nodes.total}`, "hi").add(" up   Guests ", "d").add(`${t.guests.up}/${t.guests.total}`, "hi").add(" up   Services ", "d")
+      .add(gu, "g").add(` ${t.services.up} `, "fg").add(gw, "a").add(` ${t.services.warn} `, "fg").add(gd, "x").add(` ${t.services.down} `, "fg").add(gn, "n").add(` ${t.services.unknown}`, "fg")
+      .add("   Unmanaged ", "d").add(t.unmanaged, "fg");
+    const state = new L();
+    state.add("window ", "d").add(WL[S.win], "c").add("  filter ", "d").add(S.live === "all" ? "all" : LABEL[S.live], S.live === "all" ? "fg" : "a")
+      .add("  kind ", "d").add(KL[S.kind], S.kind === "all" ? "fg" : "a").add("  spark ", "d").add(S.spark === "lat" ? "latency" : "beats", "fg").add(" ");
+    l1.add(" ".repeat(Math.max(2, COLS - l1.n - state.n))); for (const sg of state.s) l1.add(sg.t, sg.c);
+    out.push([l1.fit(COLS)]);
+    const bw = Math.max(16, Math.floor((COLS - 46) / 3));
+    for (const n of INV.nodes) {
+      const l = new L();
+      const [gch, gc] = glyph(n.status);
+      const off = !n.online;
+      l.add(" ").add(col(n.name, 10), "hi").add(gch, gc).add(" " + col(off ? "offline" : "up " + F.duration(n.uptimeSeconds), 12), off ? "x" : "d");
+      meter(l, "CPU", n.cpu.used, n.cpu.used == null ? `—/${n.cpu.cores}c` : `${(n.cpu.used * 100).toFixed(0)}% ${n.cpu.cores}c`, bw, off).add(" ");
+      meter(l, "MEM", n.memory.used == null ? null : n.memory.used / n.memory.total, `${short(n.memory.used)}/${short(n.memory.total)}`, bw, off).add(" ");
+      meter(l, "DSK", n.disk.used == null ? null : n.disk.used / n.disk.total, `${short(n.disk.used)}/${short(n.disk.total)}`, bw, off);
+      l.add(off ? "  last known" : `  PVE ${n.version}`, off ? "x" : "d");
+      out.push([l.fit(COLS)]);
+    }
+    out.push([new L().fit(COLS)]);
+    return out;
+  }
+  function boxTop(title, w, right = "", focus) {
+    const l = new L();
+    l.add("┌─", "f").add(` ${title} `, focus ? "hi" : "fg");
+    const r = right ? ` ${right} ` : "";
+    l.add("─".repeat(Math.max(0, w - l.n - r.length - 2)), "f").add(r, "d").add("─┐", "f");
+    return l;
+  }
+  const boxBottom = (w, hint = "") => new L().add("└─", "f").add(hint, "d").add("─".repeat(Math.max(0, w - 3 - hint.length)), "f").add("┘", "f");
+  function hl(line, text, cls) {
+    const q = S.q.toLowerCase();
+    const i = q ? text.toLowerCase().indexOf(q) : -1;
+    if (i < 0) return line.add(text, cls);
+    return line.add(text.slice(0, i), cls).add(text.slice(i, i + q.length), "mt").add(text.slice(i + q.length), cls);
+  }
+  function rowLine(r, c, inner) {
+    const l = new L({ row: r.key }, "r" + (r.key === S.sel ? " sel" : ""));
+    const caret = r.kids ? (r.open ? "▾" : "▸") : "─";
+    let pre, name, st = null, type = "", stat = "", up = "", lat = "", addr = "", check = null;
+    if (r.type === "host") {
+      pre = (r.kids ? caret : " ") + " "; name = r.obj.name; st = r.obj.status; type = "host"; check = r.obj.check; addr = r.obj.address;
+      stat = r.obj.online ? LABEL[st] : "Offline";
+    } else if (r.type === "guest") {
+      pre = "  " + (r.last ? "└─" : "├─") + caret + " "; name = r.obj.id; st = r.obj.status; check = r.obj.check;
+      type = `${kindTag(r.obj.kind)} ${r.obj.vmid}`; stat = LABEL[st]; addr = r.obj.address ?? "—";
+    } else if (r.type === "svc") {
+      pre = "  " + (r.gLast ? "  " : "│ ") + (r.last ? "└─" : "├─") + "─ "; name = r.obj.name; st = r.obj.status; check = r.obj.check;
+      type = r.obj.category; stat = LABEL[st]; addr = r.obj.urls[0]?.host ?? "";
+    } else if (r.type === "umg") {
+      pre = "  └─" + (r.open ? "▾" : "+") + " "; name = `${r.obj.length} unmanaged`;
+      const run = r.obj.filter((u) => u.status === "running").length;
+      l.add(pre, "f").add(col(name, c.name - pre.length), "d").add(" ").add(col(`${run} running · no checks`, inner - c.name - 1), "f");
+      return l.fit(inner);
+    } else {
+      pre = "    " + (r.last ? "└─" : "├─") + "─ "; name = `${r.obj.vmid} ${r.obj.name}`; type = `${kindTag(r.obj.kind)} ${r.obj.vmid}`;
+      stat = r.obj.template ? "template" : r.obj.status;
+      l.add(pre, "f").add("· ", "f");
+      hl(l, col(name, c.name - pre.length - 2), "d");
+      l.add(" " + col(type, c.type) + " " + col(stat, c.st) + " " + col("—", c.up, 1) + " " + col("—", c.lat, 1), "d");
+      if (c.addr) l.add(" " + col("", c.addr));
+      l.add(" ").add(col(r.obj.tags.join(", ") || "unmanaged", c.spark), "f");
+      return l.fit(inner);
+    }
+    const [g, gc] = glyph(st);
+    l.add(pre, "f").add(g, gc).add(" ");
+    hl(l, col(name, c.name - pre.length - 2), r.type === "host" ? "hi" : r.type === "guest" ? "fg bold" : "fg");
+    l.add(" ").add(col(type, c.type), "d").add(" ").add(col(stat, c.st), gc).add(" ").add(col(pct(check), c.up, 1), "fg").add(" ").add(col(ms(check), c.lat, 1), "d");
+    if (c.addr) l.add(" ").add(col(addr, c.addr), "d");
+    l.add(" ");
+    if (r.type === "host" && !r.obj.online) l.add(col(`${r.obj.offlineReason} · ${F.ago(r.obj.check.since)}`, c.spark), "x");
+    else spark(l, check, c.spark);
+    return l.fit(inner);
+  }
+  function listPane() {
+    const { lw, bodyH, listH } = layout;
+    const inner = lw - 2, c = listCols(inner);
+    const idx = rows.findIndex((r) => r.key === S.sel);
+    const lines = [];
+    lines.push([boxTop("Inventory", lw, `${idx + 1}/${rows.length}${S.q ? "  /" + S.q : ""}`, true)]);
+    const h = new L();
+    h.add(col("  NAME", c.name) + " " + col("TYPE", c.type) + " " + col("STATUS", c.st) + " " + col("UP " + WL[S.win], c.up, 1) + " " + col("LAT", c.lat, 1) + (c.addr ? " " + col("ADDRESS", c.addr) : "") + " " + col(S.spark === "lat" ? "LATENCY 24h" : "CHECKS 24h", c.spark), "d bold");
+    lines.push(wrapBox(h.fit(inner)));
+    if (!rows.length) {
+      const msg = [["No matches", "hi"], [[S.q && `/${S.q}`, S.live !== "all" && `filter ${LABEL[S.live]}`, S.kind !== "all" && `kind ${KL[S.kind]}`].filter(Boolean).join(" · "), "a"], ["Esc clears the search and filters", "d"]];
+      const top = Math.max(0, Math.floor(listH / 2) - 2);
+      for (let i = 0; i < listH; i++) {
+        const m = msg[i - top];
+        lines.push(wrapBox(m ? new L().add(" ".repeat(Math.max(0, Math.floor((inner - m[0].length) / 2)))).add(m[0], m[1]).fit(inner) : new L().fit(inner)));
+      }
+    } else {
+      for (let i = 0; i < listH; i++) {
+        const r = rows[S.scroll + i];
+        lines.push(wrapBox(r ? rowLine(r, c, inner) : new L().fit(inner)));
+      }
+    }
+    const more = rows.length > listH ? ` ${S.scroll + 1}-${Math.min(rows.length, S.scroll + listH)} ` : "";
+    lines.push([boxBottom(lw, more)]);
+    while (lines.length < bodyH) lines.push([new L().fit(lw)]);
+    return lines;
+  }
+  const wrapBox = (inner) => [new L().add("│", "f"), inner, new L().add("│", "f")];
+  function wrapText(text, w) {
+    const words = String(text).split(/\s+/), out = [];
+    let cur = "";
+    for (const wd of words) {
+      if ((cur + " " + wd).trim().length > w) { if (cur) out.push(cur); cur = wd; } else cur = (cur + " " + wd).trim();
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  // ---------- detail pane ----------
+  function detailLines(w) {
+    const r = rows.find((x) => x.key === S.sel);
+    const out = [];
+    const L1 = () => { const l = new L(); out.push(l); return l; };
+    const kv = (k, v, c = "fg") => L1().add(" " + col(k, 11), "d").add(v, c);
+    const blank = () => L1();
+    const uptimeLines = (c) => {
+      const l = L1().add(" " + col("Uptime", 11), "d");
+      for (const k of WINS) l.add(WL[k] + " ", k === S.win ? "c bold" : "d").add(pct(c, k), k === S.win ? "hi" : "fg").add("  ");
+      const sw = Math.min(96, w - 14);
+      spark(L1().add(" " + col("checks 24h", 12), "d"), c, sw, "beats");
+      spark(L1().add(" " + col("latency", 12), "d"), c, sw, "lat");
+      const dl = L1().add(" " + col("daily 30d", 12), "d");
+      for (const v of c.daily) dl.add(SPARK[Math.max(0, Math.min(7, Math.round(((v - 90) / 10) * 7)))], v < 99 ? "x" : v < 99.9 ? "a" : "g");
+      const ok = c.latency.filter((v) => v != null);
+      if (ok.length) L1().add(" " + col("", 12)).add(`min ${Math.min(...ok)}ms · max ${Math.max(...ok)}ms · now ${ms(c)}`, "d");
+    };
+    const events = (c, n = 5) => {
+      blank(); L1().add(" Events", "c bold");
+      if (!c.events.length) L1().add("   no status changes in 30 days", "d");
+      for (const e of c.events.slice(0, n)) {
+        const [g1, c1] = glyph(e.from), [g2, c2] = glyph(e.to);
+        L1().add("   " + col(F.time(e.at), 18), "d").add(g1, c1).add(" " + col(LABEL[e.from], 9)).add("→ ", "d").add(g2, c2).add(" " + LABEL[e.to]);
+      }
+    };
+    const head = (st, name, sub) => { const [g, c] = glyph(st); L1().add(" ").add(g, c).add(" " + name + "  ", "hi").add(sub, "d"); };
+    if (!r) { L1().add(" Nothing selected", "d"); return out; }
+    const o = r.obj;
+    if (r.type === "host") {
+      head(o.status, o.name, "Proxmox host");
+      if (!o.online) L1().add(` ${o.offlineReason} · since ${F.ago(o.check.since)}`, "x");
+      blank();
+      kv("Status", o.online ? LABEL[o.status] : "Offline", glyph(o.status)[1]);
+      kv("PVE", o.version); kv("Address", o.address); kv("Uptime", F.duration(o.uptimeSeconds));
+      kv("CPU", `${o.cpu.cores} cores · ${o.cpu.model}`);
+      kv("CPU used", o.cpu.used == null ? "—" : F.pct(o.cpu.used * 100, 0));
+      kv("Memory", `${F.bytes(o.memory.used)} / ${F.bytes(o.memory.total)}`);
+      kv("Disk", `${F.bytes(o.disk.used)} / ${F.bytes(o.disk.total)}${o.online ? "" : "  (last known)"}`);
+      kv("Guests", `${INV.guestsOf(o.id).length} managed · ${o.unmanaged.length} unmanaged`);
+      blank(); uptimeLines(o.check); events(o.check, 4);
+      blank(); L1().add(" ").add("p", "key").add(" ").add("Proxmox ↗ " + o.proxmoxUrl, "", { href: o.proxmoxUrl, label: `Open Proxmox for ${o.name}` });
+    } else if (r.type === "guest") {
+      head(o.status, o.id, `${o.kind === "qemu" ? "VM" : "container"} ${o.vmid} on ${o.node}`);
+      for (const t of wrapText(o.description, w - 2)) L1().add(" " + t, "d");
+      blank();
+      kv("Status", `${LABEL[o.status]} since ${F.ago(o.check.since)}`, glyph(o.status)[1]);
+      kv("Address", o.address ?? "—"); kv("Hostname", o.hostname);
+      kv("Power", o.power + (o.uptimeSeconds ? ` · up ${F.duration(o.uptimeSeconds)}` : ""), o.power === "running" ? "fg" : "a");
+      const run = INV.runLabels[o.runStatus], lr = INV.runLabels[o.lastRun.status];
+      const tone = (t) => ({ success: "g", danger: "x", attention: "a" })[t] || "n";
+      kv("Run status", run.label, tone(run.tone));
+      L1().add(" " + col("Last run", 11), "d").add(lr.label, tone(lr.tone)).add(" " + F.ago(o.lastRun.at), "d");
+      kv("Workflow", o.workflow);
+      kv("Resources", `${o.cores} cores · ${F.bytes(o.memory)} · ${F.bytes(o.disk)} disk`);
+      if (o.tags.length) kv("Tags", o.tags.join(", "));
+      blank(); uptimeLines(o.check);
+      const svcs = INV.servicesOf(o.id);
+      blank(); L1().add(` Services (${svcs.length})`, "c bold");
+      for (const s of svcs) { const [g, c] = glyph(s.status); L1().add("   ").add(g, c).add(" " + col(s.name, 24)).add(col(s.check ? pct(s.check) : "no check", 9, 1), "d"); }
+      events(o.check, 3);
+      blank(); L1().add(" ").add("p", "key").add(" ").add("Proxmox ↗ " + o.kind + "/" + o.vmid, "", { href: INV.proxmoxGuestUrl(o), label: `Open ${o.id} in Proxmox` });
+    } else if (r.type === "svc") {
+      head(o.status, o.name, `service on ${o.guest}`);
+      for (const t of wrapText(o.description, w - 2)) L1().add(" " + t, "d");
+      blank();
+      kv("Status", o.check ? `${LABEL[o.status]} since ${F.ago(o.check.since)}` : "No check", glyph(o.status)[1]);
+      kv("Category", o.category); kv("Workflow", o.workflow);
+      const run = INV.runLabels[o.runStatus];
+      kv("Run status", run.label, ({ success: "g", danger: "x", attention: "a" })[run.tone] || "n");
+      blank();
+      L1().add(` URLs (${o.urls.length})`, "c bold").add(o.urls.length ? "  ⏎ or 1-9 opens" : "", "d");
+      if (!o.urls.length) L1().add("   none declared", "d");
+      o.urls.forEach((u, i) => {
+        const [g, c] = glyph(u.check.status);
+        const t = u.url.replace(/^https?:\/\//, "");
+        const l = L1().add("   ").add(String(i + 1), "key").add(" ").add(g, c).add(" ");
+        l.add(col(t, Math.max(10, w - 18)), "", { href: u.url, label: `Open ${u.url}` }).add(col(ms(u.check), 7, 1), "d");
+      });
+      if (o.dns.length) {
+        blank(); L1().add(` DNS (${o.dns.length})`, "c bold");
+        for (const d of o.dns) { L1().add("   " + col(d.type, 6), "m").add(d.name); L1().add("   " + col("", 6) + "→ ", "d").add(d.expected, "d"); }
+      }
+      if (o.health) { blank(); kv("Health", o.health.probed ? "probed" : "not probed", o.health.probed ? "g" : "n"); L1().add("   " + o.health.url, "d"); }
+      if (o.notes.length) { blank(); for (const n of o.notes) wrapText(n, w - 5).forEach((t, i) => L1().add(i ? "   " : " ! ", "a").add(t, "fg")); }
+      if (o.check) { blank(); uptimeLines(o.check); events(o.check, 3); }
+    } else if (r.type === "umg") {
+      L1().add(` ${o.length} unmanaged guests on ${r.host.name}`, "hi");
+      L1().add(" Not managed by Octopushy; no checks.", "d"); blank();
+      for (const u of o) L1().add("   " + col(u.vmid, 6) + col(u.name, 18) + col(kindTag(u.kind), 4) + col(u.template ? "template" : u.status, 10), u.status === "running" ? "fg" : "d");
+      blank(); L1().add(" ").add("l", "key").add(" or ", "d").add("⏎", "key").add(" expands the list", "d");
+    } else {
+      L1().add(" · ", "n").add(o.name + "  ", "hi").add(`unmanaged ${o.kind === "qemu" ? "VM" : "container"} ${o.vmid} on ${r.host.name}`, "d");
+      blank();
+      kv("Status", o.status, o.status === "running" ? "g" : "d");
+      if (o.template) kv("Template", "yes", "m");
+      kv("Resources", `${o.cores} cores · ${F.bytes(o.memory)}`);
+      kv("Uptime", o.uptimeSeconds ? F.duration(o.uptimeSeconds) : "—");
+      kv("Tags", o.tags.join(", ") || "—");
+      kv("Liveness", "No check", "n");
+      blank(); L1().add(" Octopushy does not manage this guest.", "d");
+      const url = INV.proxmoxGuestUrl({ node: r.host.id, kind: o.kind, vmid: o.vmid });
+      blank(); L1().add(" ").add("p", "key").add(" ").add("Proxmox ↗ " + o.kind + "/" + o.vmid, "", { href: url, label: `Open ${o.name} in Proxmox` });
+    }
+    return out;
+  }
+  function detailPane() {
+    const { dw, bodyH } = layout;
+    const inner = dw - 2, h = bodyH - 2;
+    const all = detailLines(inner).map((l) => l.fit(inner));
+    S.dscroll = Math.max(0, Math.min(S.dscroll, all.length - h));
+    const r = rows.find((x) => x.key === S.sel);
+    const title = r ? (r.type === "host" ? "Host" : r.type === "guest" ? "Guest" : r.type === "svc" ? "Service" : "Unmanaged") : "Detail";
+    const lines = [[boxTop(title, dw, all.length > h ? `${S.dscroll + 1}/${all.length} J/K` : "")]];
+    for (let i = 0; i < h; i++) lines.push(wrapBox(all[S.dscroll + i] || new L().fit(inner)));
+    lines.push([boxBottom(dw)]);
+    return lines;
+  }
+  function footer() {
+    const reserve = 34; // nav.js switcher lives in the bottom-right corner
+    const keys = [["j/k", "move"], ["h/l", "fold"], ["/", "search"], ["f", "filter"], ["t", "kind"], ["u", "unmanaged"], ["w", WL[S.win]], ["s", "spark"], ["⏎", "open"], ["p", "proxmox"], ["?", "help"]];
+    const l = new L();
+    for (const [k, v] of keys) {
+      if (l.n + k.length + v.length + 4 > COLS - reserve) break;
+      l.add(" ").add(` ${k} `, "key", { key: k === "⏎" ? "Enter" : k === "j/k" ? "j" : k === "h/l" ? "l" : k, label: `${k}: ${v}` }).add(" " + v, "d");
+    }
+    const c = new L();
+    if (S.mode) c.add(S.mode, "a bold");
+    else if (S.msg) c.add(" " + S.msg, "d");
+    else c.add(" press ", "d").add("?", "a").add(" for keys, ", "d").add(":", "a").add(" for commands", "d");
+    return [[l.fit(COLS)], [c.fit(COLS - reserve)]];
+  }
+  function paint() {
+    rows = buildRows();
+    if (!rows.find((r) => r.key === S.sel)) S.sel = rows[0]?.key ?? null;
+    const idx = rows.findIndex((r) => r.key === S.sel);
+    const { listH } = layout;
+    if (idx >= 0) {
+      if (idx < S.scroll) S.scroll = idx;
+      if (idx >= S.scroll + listH) S.scroll = idx - listH + 1;
+    }
+    S.scroll = Math.max(0, Math.min(S.scroll, Math.max(0, rows.length - listH)));
+    const lp = listPane(), dp = detailPane();
+    const screen = [...header()];
+    for (let i = 0; i < layout.bodyH; i++) screen.push([...(lp[i] || []), ...(dp[i] || [])]);
+    screen.push(...footer());
+    $("#screen").innerHTML = screen.slice(0, ROWS).map((parts) => `<div>${lineHtml(parts)}</div>`).join("");
+    const cmd = $("#cmd");
+    cmd.hidden = !S.mode;
+    cmd.style.top = (ROWS - 1) * LH + "px"; cmd.style.left = CW + "px"; cmd.style.width = (COLS - 36) * CW + "px";
+    paintHelp();
+    writeHash();
+  }
+  function paintHelp() {
+    const el = $("#help");
+    el.hidden = !S.help;
+    if (!S.help) return;
+    const keys = [
+      ["j k ↓ ↑", "move selection"], ["g G", "first / last row"], ["h l ← →", "collapse / expand (h jumps to parent)"], ["space", "toggle the row"],
+      ["/", "search all levels (Enter keeps, Esc clears)"], ["n N", "next / previous match"], ["f", "cycle liveness: all, Down, Degraded, Up, No check"],
+      ["t", "cycle kind: all, VM, container"], ["u", "show / hide unmanaged guests"], ["w", "cycle uptime window 24h / 7d / 30d"], ["s", "sparkline: latency / checks"],
+      ["⏎", "open the service URL (1-9 picks one)"], ["p", "open in Proxmox"], ["J K", "scroll the detail pane"], [":", "command: host <name>, kind vm|ct|all,"], ["", "filter up|down|degraded|nocheck|all, w 7d, clear"], ["Esc", "clear search and filters, close help"],
+    ];
+    const w = 64, lines = [];
+    lines.push(new L().add("┌─", "f").add(" Keys ", "hi").add("─".repeat(w - 10), "f").add("─┐", "f"));
+    for (const [k, v] of keys) lines.push(new L().add("│ ", "f").add(col(k, 9), "a").add(col(v, w - 13)).add(" │", "f"));
+    lines.push(new L().add("│ ", "f").add(col("", w - 4)).add(" │", "f"));
+    lines.push(new L().add("│ ", "f").add(col("Mouse: click a row to select, double-click to open.", w - 4), "d").add(" │", "f"));
+    lines.push(new L().add("└", "f").add("─".repeat(w - 13), "f").add(" ? or Esc ", "d").add("─┘", "f"));
+    el.innerHTML = lines.map((l) => `<div>${lineHtml([l])}</div>`).join("");
+    const top = Math.max(1, Math.floor((ROWS - lines.length) / 2));
+    el.style.top = top * LH + "px"; el.style.left = Math.max(0, Math.floor((COLS - w) / 2)) * CW + "px";
+  }
+
+  // ---------- actions ----------
+  const cur = () => rows.find((r) => r.key === S.sel);
+  function move(d) {
+    const i = rows.findIndex((r) => r.key === S.sel);
+    const j = Math.max(0, Math.min(rows.length - 1, (i < 0 ? 0 : i) + d));
+    if (rows[j]) { S.sel = rows[j].key; S.dscroll = 0; }
+  }
+  function setOpen(r, open) {
+    if (r.type === "umg") open ? S.um.add(r.host.id) : S.um.delete(r.host.id);
+    else open ? S.collapsed.delete(r.key) : S.collapsed.add(r.key);
+  }
+  function openUrl(url, what) { window.open(url, "_blank", "noopener"); S.msg = `opened ${what}`; }
+  function enter(r, n = 0) {
+    if (!r) return;
+    if (r.type === "svc") {
+      const u = r.obj.urls[n];
+      if (u) openUrl(u.url, u.url); else S.msg = r.obj.urls.length ? `no URL #${n + 1}` : `${r.obj.name} declares no URL`;
+    } else if (r.kids) setOpen(r, !r.open);
+  }
+  function proxmox(r) {
+    if (!r) return;
+    if (r.type === "host" || r.type === "umg") return openUrl(r.host.proxmoxUrl, `Proxmox ${r.host.name}`);
+    if (r.type === "guest") return openUrl(INV.proxmoxGuestUrl(r.obj), `Proxmox ${r.obj.id}`);
+    if (r.type === "svc") return openUrl(INV.proxmoxGuestUrl(r.guest), `Proxmox ${r.guest.id}`);
+    openUrl(INV.proxmoxGuestUrl({ node: r.host.id, kind: r.obj.kind, vmid: r.obj.vmid }), `Proxmox ${r.obj.name}`);
+  }
+  function nextMatch(d) {
+    if (!S.q) return;
+    const i = S.sel == null ? -1 : rows.findIndex((r) => r.key === S.sel);
+    for (let k = 1; k <= rows.length; k++) {
+      const r = rows[(((i + d * k) % rows.length) + rows.length) % rows.length];
+      const name = r.type === "host" ? r.obj.name : r.type === "guest" ? r.obj.id : r.type === "svc" ? r.obj.name : r.type === "um" ? r.obj.name : "";
+      if (name.toLowerCase().includes(S.q.toLowerCase())) { S.sel = r.key; return; }
+    }
+  }
+  const cycle = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
+  function command(text) {
+    const [cmd, ...args] = text.trim().split(/\s+/);
+    const a = (args[0] || "").toLowerCase();
+    const liveMap = { all: "all", up: "up", down: "down", degraded: "warn", warn: "warn", nocheck: "unknown", none: "unknown" };
+    if (cmd === "host" && INV.nodeById[a]) { S.collapsed.delete(a); S.sel = a; S.msg = `jumped to ${a}`; }
+    else if (cmd === "kind" && { vm: 1, ct: 1, all: 1 }[a]) { S.kind = { vm: "qemu", ct: "lxc", all: "all" }[a]; S.msg = `kind ${KL[S.kind]}`; }
+    else if ((cmd === "filter" || cmd === "f") && liveMap[a]) { S.live = liveMap[a]; S.msg = `filter ${S.live === "all" ? "all" : LABEL[S.live]}`; }
+    else if (cmd === "w" && ["24h", "7d", "30d"].includes(a)) { S.win = { "24h": "h24", "7d": "d7", "30d": "d30" }[a]; S.msg = `window ${a}`; }
+    else if (cmd === "clear") { S.q = ""; S.live = "all"; S.kind = "all"; S.msg = "cleared"; }
+    else if (cmd === "q" || cmd === "q!" || cmd === "wq") S.msg = "this is a web page; close the tab to quit";
+    else if (cmd === "help") S.help = true;
+    else S.msg = `unknown command: ${text}`;
+  }
+  function startMode(m) {
+    S.mode = m; S.msg = "";
+    paint();
+    const c = $("#cmd");
+    c.value = m === "/" ? S.q : "";
+    c.focus();
+  }
+  function endMode() { S.mode = null; $("#term").focus(); paint(); }
+
+  // ---------- input ----------
+  document.addEventListener("keydown", (e) => {
+    if (e.target.id === "cmd") return;
+    const ae = document.activeElement;
+    if ((e.key === "Enter" || e.key === " ") && ae && (ae.tagName === "A" || ae.tagName === "BUTTON")) return;
+    if (e.metaKey || e.altKey || (e.ctrlKey && !["d", "u"].includes(e.key))) return;
+    const r = cur();
+    const half = Math.max(1, Math.floor(layout.listH / 2));
+    const k = e.key;
+    let handled = true;
+    S.msg = "";
+    if (S.help && k !== "?" && k !== "Escape") { S.help = false; }
+    else if (k === "j" || k === "ArrowDown") move(1);
+    else if (k === "k" || k === "ArrowUp") move(-1);
+    else if ((e.ctrlKey && k === "d") || k === "PageDown") move(half);
+    else if ((e.ctrlKey && k === "u") || k === "PageUp") move(-half);
+    else if (k === "g" || k === "Home") move(-1e6);
+    else if (k === "G" || k === "End") move(1e6);
+    else if (k === "h" || k === "ArrowLeft") { if (r?.kids && r.open && !filtering()) setOpen(r, false); else if (r?.parent) S.sel = r.parent; }
+    else if (k === "l" || k === "ArrowRight") { if (r?.kids && !r.open) setOpen(r, true); else if (r?.kids) move(1); }
+    else if (k === " ") { if (r?.kids) setOpen(r, !r.open); }
+    else if (k === "Enter") enter(r);
+    else if (/^[1-9]$/.test(k)) enter(r?.type === "svc" ? r : null, +k - 1);
+    else if (k === "p") proxmox(r);
+    else if (k === "/") { e.preventDefault(); return startMode("/"); }
+    else if (k === ":") { e.preventDefault(); return startMode(":"); }
+    else if (k === "n") nextMatch(1);
+    else if (k === "N") nextMatch(-1);
+    else if (k === "f") { S.live = cycle(LIVE, S.live); S.msg = `filter ${S.live === "all" ? "all" : LABEL[S.live]}`; }
+    else if (k === "t") { S.kind = cycle(KINDS, S.kind); S.msg = `kind ${KL[S.kind]}`; }
+    else if (k === "w") { S.win = cycle(WINS, S.win); S.msg = `uptime window ${WL[S.win]}`; }
+    else if (k === "s") S.spark = S.spark === "lat" ? "beats" : "lat";
+    else if (k === "u") {
+      const all = INV.nodes.every((n) => S.um.has(n.id));
+      for (const n of INV.nodes) all ? S.um.delete(n.id) : S.um.add(n.id);
+      S.msg = all ? "unmanaged hidden" : "unmanaged shown";
+    }
+    else if (k === "J") S.dscroll += 3;
+    else if (k === "K") S.dscroll = Math.max(0, S.dscroll - 3);
+    else if (k === "?") S.help = !S.help;
+    else if (k === "Escape") { if (S.help) S.help = false; else { S.q = ""; S.live = "all"; S.kind = "all"; S.msg = "search and filters cleared"; } }
+    else handled = false;
+    if (handled) { e.preventDefault(); paint(); announce(); }
+  });
+  const cmdEl = $("#cmd");
+  cmdEl.addEventListener("input", () => { if (S.mode === "/") { S.q = cmdEl.value; paint(); } });
+  cmdEl.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { if (S.mode === "/") S.q = ""; e.preventDefault(); endMode(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (S.mode === ":") command(cmdEl.value);
+      else {
+        S.q = cmdEl.value.trim();
+        rows = buildRows(); S.sel = null; nextMatch(1);
+        S.msg = S.q ? `/${S.q} · ${rows.length} rows · n/N next match` : "";
+      }
+      endMode(); announce();
+    } else if (e.key === "Backspace" && !cmdEl.value) { e.preventDefault(); if (S.mode === "/") S.q = ""; endMode(); }
+  });
+  function keyFromButton(k) { document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); }
+  $("#screen").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-key]");
+    if (b) { if (b.dataset.key === "/") return startMode("/"); $("#term").focus(); return keyFromButton(b.dataset.key); }
+    if (e.target.closest("a")) return;
+    const row = e.target.closest("[data-row]");
+    if (!row) return;
+    const r = rows.find((x) => x.key === row.dataset.row);
+    const x = Math.floor((e.clientX - row.getBoundingClientRect().left) / CW);
+    if (S.sel === r.key && r.kids && x < 6) setOpen(r, !r.open);
+    S.sel = r.key; S.dscroll = 0; S.msg = "";
+    $("#term").focus({ preventScroll: true });
+    paint(); announce();
+  });
+  $("#screen").addEventListener("dblclick", (e) => {
+    const row = e.target.closest("[data-row]");
+    if (!row || e.target.closest("a")) return;
+    enter(cur()); paint();
+  });
+  $("#screen").addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const inDetail = e.clientX > layout.lw * CW;
+    const d = Math.sign(e.deltaY) * 3;
+    if (inDetail) S.dscroll = Math.max(0, S.dscroll + d);
+    else {
+      S.scroll = Math.max(0, S.scroll + d);
+      const i = rows.findIndex((r) => r.key === S.sel);
+      if (i < S.scroll) S.sel = rows[S.scroll]?.key ?? S.sel;
+      if (i >= S.scroll + layout.listH) S.sel = rows[S.scroll + layout.listH - 1]?.key ?? S.sel;
+    }
+    paint();
+  }, { passive: false });
+  function announce() {
+    const r = cur();
+    if (!r) { $("#live").textContent = "No matches"; return; }
+    const st = r.obj.status ? LABEL[r.obj.status] || r.obj.status : "";
+    const name = r.type === "host" ? `host ${r.obj.name}` : r.type === "guest" ? `guest ${r.obj.id}` : r.type === "svc" ? `service ${r.obj.name}` : r.type === "umg" ? `${r.obj.length} unmanaged guests` : `unmanaged ${r.obj.name}`;
+    $("#live").textContent = `${name}${st ? ", " + st : ""}${S.msg ? ". " + S.msg : ""}`;
+  }
+
+  // ---------- hash state ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    S.q = p.get("q") || "";
+    S.live = { down: "down", degraded: "warn", warn: "warn", up: "up", nocheck: "unknown", unknown: "unknown" }[p.get("f")] || "all";
+    S.kind = { vm: "qemu", ct: "lxc", qemu: "qemu", lxc: "lxc" }[p.get("t")] || "all";
+    S.win = WINS.includes(p.get("w")) ? p.get("w") : "h24";
+    S.spark = p.get("s") === "beats" ? "beats" : "lat";
+    if (p.get("u")) for (const n of INV.nodes) S.um.add(n.id);
+    S.help = p.has("help");
+    S.sel = p.get("sel");
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if (S.q) p.set("q", S.q);
+    if (S.live !== "all") p.set("f", S.live === "warn" ? "degraded" : S.live === "unknown" ? "nocheck" : S.live);
+    if (S.kind !== "all") p.set("t", S.kind === "qemu" ? "vm" : "ct");
+    if (S.win !== "h24") p.set("w", S.win);
+    if (S.spark !== "lat") p.set("s", S.spark);
+    if (S.sel) p.set("sel", S.sel);
+    history.replaceState(null, "", "#" + p.toString());
+  }
+
+  readHash();
+  measure();
+  paint();
+  $("#term").focus();
+  addEventListener("resize", () => { measure(); paint(); });
+  setInterval(() => { const c = $("#clock"); if (c) c.textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
+})();
+</script>
+</body>
+</html>

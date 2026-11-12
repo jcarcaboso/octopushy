@@ -201,9 +201,12 @@ public sealed record ProvisionInputs(
         host.Endpoint ?? installation.Connection.Endpoint;
 
     /// <summary>The expected static or reserved DHCP address, without a prefix; null for plain DHCP.</summary>
-    public static string? ExpectedIpv4(GuestDefinition guest)
+    public static string? ExpectedIpv4(GuestDefinition guest) => ExpectedIpv4(guest.Json);
+
+    /// <inheritdoc cref="ExpectedIpv4(GuestDefinition)"/>
+    public static string? ExpectedIpv4(JsonObject guest)
     {
-        var network = guest.Json["network"] as JsonObject;
+        var network = guest["network"] as JsonObject;
         if (network?["mode"]?.GetValue<string>() is "dhcp")
         {
             return network["reservedAddress"]?.GetValue<string>();

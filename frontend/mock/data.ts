@@ -51,6 +51,8 @@ interface GuestBase {
   configuration?: GuestConfiguration;
   access?: boolean;
   approval?: "manual";
+  /** The installation and its one node; pve01 unless said. */
+  node?: string;
 }
 
 const configuration = (workflow: string, actions: [string, string | null][], schedules: GuestConfiguration["schedules"] = []): GuestConfiguration => ({
@@ -97,14 +99,21 @@ const guests: GuestBase[] = [
     memory: 1024, disks: [8], tags: ["homelab", "dns"], uptimeHours: 0 },
 ];
 
-const address = (g: GuestBase) => `home/pve01/${g.name}`;
-const guestFile = (g: GuestBase) => `labs/home/proxmox/pve01/guests/${g.name}/guest.yaml`;
+// korriban is a second, smaller installation, offline for two days: its node and machine show as down on the Inventory.
+const otherGuests: GuestBase[] = [
+  { id: "nas", name: "nas", vmid: 200, type: "vm", workflow: "proxmox-vm@1", resolved: "proxmox-vm@1.3", ip: "10.15.60.30", cores: 2,
+    memory: 4096, disks: [32, 2000], tags: ["homelab", "storage"], uptimeHours: 0, node: "korriban" },
+];
+
+const nodeOf = (g: GuestBase) => g.node ?? "pve01";
+const address = (g: GuestBase) => `home/${nodeOf(g)}/${g.name}`;
+const guestFile = (g: GuestBase) => `labs/home/proxmox/${nodeOf(g)}/guests/${g.name}/guest.yaml`;
 
 function observed(g: GuestBase): ObservedGuest | null {
   // dns is being created by the running run, so Proxmox does not list it yet.
   if (g.id === "dns") return null;
   return {
-    vmid: g.vmid, name: g.name, host: "pve01", status: "running", template: false, tags: g.tags, maxCpu: g.cores,
+    vmid: g.vmid, name: g.name, host: nodeOf(g), status: "running", template: false, tags: g.tags, maxCpu: g.cores,
     maxMemoryBytes: g.memory * 1024 ** 2, uptimeSeconds: g.uptimeHours * 3600, managedBy: address(g), managedById: g.id,
     kind: g.type === "container" ? "lxc" : "qemu",
   };
@@ -114,7 +123,7 @@ function guestYaml(g: GuestBase) {
   return [
     "schemaVersion: 1",
     `type: ${g.type}`,
-    "host: pve01",
+    `host: ${nodeOf(g)}`,
     `vmid: ${g.vmid}`,
     `template: ${g.type === "vm" ? "fedora-44" : "debian-13-standard"}`,
     "hardware:",
@@ -139,9 +148,9 @@ function guestYaml(g: GuestBase) {
 function guestSummary(g: GuestBase): GuestSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(g.id);
   return {
-    id: g.id, address: address(g), name: g.name, host: "pve01", vmid: g.vmid, lifecycle: "active", status: state, statusDetail,
-    valid: true, observed: observed(g), activeRun, lastRun, workflow: { reference: g.workflow, resolved: g.resolved },
-    type: g.type,
+    id: g.id, address: address(g), name: g.name, host: nodeOf(g), vmid: g.vmid, lifecycle: "active", status: state, statusDetail,
+    valid: true, observed: g.node === "korriban" ? null : observed(g), activeRun, lastRun, workflow: { reference: g.workflow, resolved: g.resolved },
+    type: g.type, accessAddress: g.ip, services: servicesOf(g.id),
   };
 }
 
@@ -156,7 +165,7 @@ const access = (g: GuestBase): ManagedAccess => ({
 });
 
 export function guestDetail(id: string): GuestDetail | null {
-  const g = guests.find((x) => x.id === id);
+  const g = [...guests, ...otherGuests].find((x) => x.id === id);
   if (!g) return null;
   const summaryNow = guestSummary(g);
   const applied = summaryNow.lastRun?.status === "succeeded" ? summaryNow.lastRun : null;
@@ -170,7 +179,7 @@ export function guestDetail(id: string): GuestDetail | null {
       : { approval: "automatic", approvalSetBy: "octopushy.yaml", destructive: "manual", destructiveSetBy: "octopushy.yaml" },
     agentLabels: ["home"],
     agentLabelsSetBy: "labs/home/lab.yaml",
-    binding: g.id === "dns" ? null : { installation: "home/pve01", vmid: g.vmid, boundAt: ago(20000) },
+    binding: g.id === "dns" ? null : { installation: `home/${nodeOf(g)}`, vmid: g.vmid, boundAt: ago(20000) },
     desiredCommit: headCommit,
     checkedCommit: headCommit,
     checkedAt: ago(1),
@@ -184,29 +193,64 @@ export function guestDetail(id: string): GuestDetail | null {
     runs: runsOf(g.id),
     configuration: g.configuration ?? null,
     managedAccess: g.access ? access(g) : null,
-    services: g.id === "web" ? [serviceSummary()] : [],
+    services: servicesOf(g.id),
     hostKey: null,
   };
 }
 
-// The service
+// Services: app has runs; the others are in sync and only show on the Inventory and their own page.
+
+export const appLinks = ["https://app.home.example.org/"];
+
+export const otherServices: { id: string; guest: string; name: string; workflow: string; links: string[] }[] = [
+  { id: "svc-traefik", guest: "web", name: "traefik", workflow: "traefik@2", links: ["https://traefik.home.example.org/dashboard/"] },
+  { id: "svc-jellyfin", guest: "media", name: "jellyfin", workflow: "compose-app@1", links: ["https://jellyfin.home.example.org/", "https://media.home.example.org/"] },
+  { id: "svc-technitium", guest: "dns", name: "technitium", workflow: "compose-app@1", links: ["http://10.15.60.21:5380/"] },
+  { id: "svc-pbs", guest: "pbs", name: "proxmox-backup", workflow: "pbs@1", links: ["https://pbs.home.example.org:8007/"] },
+  { id: "svc-samba", guest: "nas", name: "samba", workflow: "samba@1", links: [] },
+];
+
+const guestAddressOf = (id: string) => {
+  const g = [...guests, ...otherGuests].find((x) => x.id === id)!;
+  return address(g);
+};
 
 function serviceSummary(): ServiceSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(resources.app.id);
   return { id: resources.app.id, address: resources.app.address, name: "app", status: state, statusDetail, valid: true, activeRun, lastRun,
-    workflow: { reference: "web@1", resolved: "web@1.2" } };
+    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks };
+}
+
+function otherSummary(s: (typeof otherServices)[number]): ServiceSummary {
+  return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: "in-sync", statusDetail: null, valid: true,
+    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links };
+}
+
+function servicesOf(guestId: string): ServiceSummary[] {
+  return [...(guestId === "web" ? [serviceSummary()] : []), ...otherServices.filter((s) => s.guest === guestId).map(otherSummary)];
 }
 
 const serviceFile = "labs/home/proxmox/pve01/guests/web/services/app/service.yaml";
 
 export function serviceDetail(id: string): ServiceDetail | null {
+  const other = otherServices.find((s) => s.id === id);
+  if (other) {
+    const file = `labs/home/proxmox/${guestAddressOf(other.guest).split("/")[1]}/guests/${other.guest}/services/${other.name}/service.yaml`;
+    return {
+      service: otherSummary(other), guestId: other.guest, guestAddress: guestAddressOf(other.guest), definitionFile: file,
+      definitionText: `schemaVersion: 1\nworkflow: ${other.workflow}\n${other.links.length ? `links:\n${other.links.map((l) => `  - ${l}\n`).join("")}` : ""}`,
+      issues: [], policy: { approval: "automatic", approvalSetBy: "octopushy.yaml", destructive: "manual", destructiveSetBy: "octopushy.yaml" },
+      agentLabels: ["home"], agentLabelsSetBy: "labs/home/lab.yaml", stages: [{ name: "deploy", executor: "ansible" }],
+      appliedCommit: hex("revision-7", 40), appliedAt: ago(9000), missingSince: null, retiredAt: null, runs: [],
+    };
+  }
   if (id !== resources.app.id) return null;
   return {
     service: serviceSummary(),
     guestId: "web",
     guestAddress: "home/pve01/web",
     definitionFile: serviceFile,
-    definitionText: "schemaVersion: 1\nworkflow: web@1\ninputs:\n  app_hostname: app.home.example.org\n  app_port: 8443\nsecrets:\n  web_password: { store: home/pve01/web/app/web_password }\npolicy:\n  approval: manual\n",
+    definitionText: "schemaVersion: 1\nworkflow: web@1\nlinks:\n  - https://app.home.example.org/\ninputs:\n  app_hostname: app.home.example.org\n  app_port: 8443\nsecrets:\n  web_password: { store: home/pve01/web/app/web_password }\npolicy:\n  approval: manual\n",
     issues: [],
     policy: { approval: "manual", approvalSetBy: serviceFile, destructive: "manual", destructiveSetBy: "octopushy.yaml" },
     agentLabels: ["home"],
@@ -224,7 +268,14 @@ export function serviceDetail(id: string): ServiceDetail | null {
 
 const host: ObservedHost = {
   name: "pve01", declared: true, online: true, cpu: 0.23, maxCpu: 16, memoryBytes: 41 * gib, maxMemoryBytes: 128 * gib,
-  uptimeSeconds: 38 * 86400, concurrentOperations: 2,
+  uptimeSeconds: 38 * 86400, concurrentOperations: 2, endpoint,
+};
+
+export const korribanEndpoint = "https://10.15.60.3:8006/";
+
+const korribanHost: ObservedHost = {
+  name: "korriban", declared: true, online: false, cpu: null, maxCpu: 12, memoryBytes: null, maxMemoryBytes: 48 * gib,
+  uptimeSeconds: null, concurrentOperations: 1, endpoint: korribanEndpoint,
 };
 
 const unmanaged: ObservedGuest[] = [
@@ -238,12 +289,30 @@ function installationSummary(): InstallationSummary {
   return {
     id: "pve01", address: "home/pve01", name: "pve01", type: "standalone", endpoint, valid: true, managed: true, issueCount: 0,
     observedAt: ago(0.5), observeError: null, observeErrorAt: null, observing: false, observeWaiting: null, proxmoxVersion: "9.0.11",
-    hosts: [host], guests: guests.map(guestSummary), unmanagedCount: unmanaged.length,
+    hosts: [host], guests: guests.map(guestSummary), unmanagedCount: unmanaged.filter((u) => !u.template).length,
     trust: { endpoints: [endpoint], untrusted: [], trustedAt: ago(30000), trustedBy: "ops", managementChanged: false },
+    unmanagedGuests: unmanaged,
+  };
+}
+
+function korribanSummary(): InstallationSummary {
+  return {
+    id: "korriban", address: "home/korriban", name: "korriban", type: "standalone", endpoint: korribanEndpoint, valid: true, managed: true,
+    issueCount: 0, observedAt: ago(2900), observeError: "Cannot reach https://10.15.60.3:8006/: no route to host", observeErrorAt: ago(1),
+    observing: false, observeWaiting: null, proxmoxVersion: "8.4.1", hosts: [korribanHost], guests: otherGuests.map(guestSummary),
+    unmanagedCount: 0,
+    trust: { endpoints: [korribanEndpoint], untrusted: [], trustedAt: ago(40000), trustedBy: "ops", managementChanged: false },
+    unmanagedGuests: [],
   };
 }
 
 export function installationDetail(id: string): InstallationDetail | null {
+  if (id === "korriban") {
+    return {
+      installation: korribanSummary(), definitionFile: "labs/home/proxmox/korriban/installation.yaml", definitionText: null, issues: [],
+      tokenKey: null, verifyTls: false, observedGuests: [], clusterName: null, snippets: null,
+    };
+  }
   if (id !== "pve01") return null;
   return {
     installation: installationSummary(),
@@ -349,7 +418,7 @@ export const repository: Repository = {
 export function inventory(): Inventory {
   return {
     revision: revisions[0],
-    labs: [{ id: "lab-home", address: "home", name: "Home", valid: true, issues: [], installations: [installationSummary()] }],
+    labs: [{ id: "lab-home", address: "home", name: "Home", valid: true, issues: [], installations: [korribanSummary(), installationSummary()] }],
   };
 }
 

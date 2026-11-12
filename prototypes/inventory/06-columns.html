@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory · Columns</title>
+<!--
+  06 · Miller columns. A Finder-style column browser: Hosts | Guests | Services | Detail.
+  Selecting fills the next column; the Services column appears only when the selected guest has
+  services. The wide right column previews whatever is deepest. Proxmox opens in one tab per host.
+  Keyboard: ↑↓ within a column, ←→ between columns, Enter opens the main link, / searches.
+  URL hash for testing: #select=mrb-crt-01  #select=korriban  #q=dns  #live=down  #win=d30  #um=moraband
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --bg: #e7eaef;
+  --window: #ffffff;
+  --chrome: #f3f4f7;
+  --col: #ffffff;
+  --col-alt: #fafbfc;
+  --border: #dadde3;
+  --border-soft: #ebedf1;
+  --text: #1b2230;
+  --muted: #5a6475;
+  --faint: #737d8e;
+  --accent: #2f5bd3;
+  --accent-text: #2350c4;
+  --accent-soft: #e6edfc;
+  --sel-inactive: #dfe3ea;
+  --up: #1d8a4a; --warn: #a96500; --down: #cf2f2c; --none: #7c8698;
+  --up-soft: #e3f3e9; --warn-soft: #fcf0d8; --down-soft: #fde8e7; --none-soft: #eceff3;
+  --chart-line: #2f5bd3; --chart-fill: rgb(47 91 211 / 12%); --grid: #e9ecf1;
+  --shadow: 0 0 0 .5px rgb(0 0 0 / 12%), 0 10px 30px rgb(20 30 50 / 12%), 0 2px 6px rgb(20 30 50 / 6%);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0e14;
+    --window: #1b1f27;
+    --chrome: #22262f;
+    --col: #1b1f27;
+    --col-alt: #1f232c;
+    --border: #333946;
+    --border-soft: #2a2f3a;
+    --text: #e6eaf1;
+    --muted: #a7b0bf;
+    --faint: #8a94a6;
+    --accent: #3d68dc;
+    --accent-text: #8eaaf6;
+    --accent-soft: #1f2c4f;
+    --sel-inactive: #363c49;
+    --up: #3ccf78; --warn: #f0b03c; --down: #ff6b66; --none: #8d97a8;
+    --up-soft: #133020; --warn-soft: #36290d; --down-soft: #3b1717; --none-soft: #2a303b;
+    --chart-line: #7b9cf2; --chart-fill: rgb(123 156 242 / 14%); --grid: #2b313c;
+    --shadow: 0 0 0 .5px rgb(255 255 255 / 8%), 0 14px 40px rgb(0 0 0 / 55%);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font: 13px/1.4 var(--font); color: var(--text); background: var(--bg); overflow: hidden; }
+a { color: var(--accent-text); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.win { position: fixed; inset: 14px 14px 14px 14px; background: var(--window); border-radius: 12px; box-shadow: var(--shadow); display: grid; grid-template-rows: auto auto 1fr auto; overflow: hidden; }
+/* title bar */
+.title { display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: var(--chrome); border-bottom: 1px solid var(--border-soft); }
+.title h1 { margin: 0; font-size: 14px; font-weight: 650; display: flex; gap: 8px; align-items: center; }
+.logo { width: 20px; height: 20px; border-radius: 6px; background: linear-gradient(135deg, #4b74e6, #2f5bd3 60%, #2445a8); display: grid; place-items: center; }
+.rev { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; min-width: 0; }
+.rev code { font: 11.5px var(--mono); padding: 1px 6px; border-radius: 5px; background: var(--window); border: 1px solid var(--border); color: var(--text); }
+.rev span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.counts { margin-left: auto; display: flex; gap: 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.counts b { color: var(--text); font-weight: 600; }
+/* toolbar */
+.tools { display: flex; align-items: center; gap: 14px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--chrome); flex-wrap: wrap; }
+.search { position: relative; width: 260px; }
+.search svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--faint); }
+.search input { width: 100%; font: inherit; color: var(--text); background: var(--window); border: 1px solid var(--border); border-radius: 7px; padding: 5px 28px 5px 28px; outline: none; }
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.search kbd { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font: 10.5px var(--mono); color: var(--faint); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; background: var(--window); overflow: hidden; }
+.seg button { border: 0; background: none; padding: 4px 10px; cursor: pointer; display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 12px; border-left: 1px solid var(--border-soft); }
+.seg button:first-child { border-left: 0; }
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.seg .n { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.lbl { font-size: 11px; color: var(--faint); margin-right: 6px; }
+
+/* status glyphs */
+.gl { flex: none; }
+.s-up { color: var(--up); } .s-warn { color: var(--warn); } .s-down { color: var(--down); } .s-unknown { color: var(--none); }
+.f-up { fill: var(--up); } .f-warn { fill: var(--warn); } .f-down { fill: var(--down); } .f-unknown { fill: var(--border); }
+
+/* the browser */
+.main { position: relative; min-height: 0; }
+.browser { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(170px, 215px) minmax(190px, 250px) minmax(190px, 250px) minmax(0, 1fr); }
+.browser.nosvc { grid-template-columns: minmax(170px, 215px) minmax(190px, 250px) minmax(0, 1fr); }
+.browser.nosvc .col[data-col="2"] { display: none; }
+.col { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--col); }
+.col > header { display: flex; justify-content: space-between; padding: 9px 12px 6px; font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .04em; text-transform: uppercase; }
+.list { overflow-y: auto; padding: 0 6px 10px; flex: 1; }
+.row { display: flex; align-items: center; gap: 7px; width: 100%; border: 0; background: none; text-align: left; padding: 4px 6px 4px 8px; border-radius: 6px; cursor: default; min-height: 28px; }
+.row:hover { background: var(--col-alt); }
+.row .ic { color: var(--faint); flex: none; }
+.row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .pc { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.row .chev { color: var(--faint); width: 8px; flex: none; }
+.row.dim { opacity: .55; }
+.row.sel { background: var(--sel-inactive); }
+.col.active .row.sel { background: var(--accent); color: #fff; }
+.col.active .row.sel .ic, .col.active .row.sel .pc, .col.active .row.sel .chev, .col.active .row.sel .gl { color: #fff; }
+.col.active .row.sel .badge { color: #fff; border-color: rgb(255 255 255 / 50%); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.col.active .row.sel:focus-visible { outline-color: color-mix(in srgb, var(--accent) 50%, #fff); }
+.badge { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent-text); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); padding: 0 4px; border-radius: 4px; }
+.group { margin-top: 10px; border-top: 1px solid var(--border-soft); padding-top: 6px; }
+.group .row.tog { color: var(--muted); font-size: 12px; }
+.group .row.tog .car { display: inline-block; transition: transform .12s; width: 10px; }
+.group .row.tog[aria-expanded="true"] .car { transform: rotate(90deg); }
+.group .row.um { font-size: 12px; color: var(--muted); padding-left: 18px; }
+.colempty { color: var(--faint); text-align: center; padding: 40px 14px; font-size: 12px; }
+
+/* detail */
+.detail { overflow-y: auto; min-width: 0; background: var(--window); }
+.dwrap { padding: 16px 22px 70px; max-width: 900px; }
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; color: var(--faint); margin-bottom: 14px; }
+.crumbs button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; cursor: pointer; color: var(--accent-text); }
+.crumbs button:hover { background: var(--accent-soft); }
+.crumbs span.cur { color: var(--text); font-weight: 600; padding: 2px 4px; }
+.dhead { display: flex; gap: 14px; align-items: center; }
+.bigic { position: relative; width: 54px; height: 54px; border-radius: 14px; display: grid; place-items: center; color: var(--accent-text); background: linear-gradient(160deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, var(--window))); border: 1px solid var(--border-soft); flex: none; }
+.bigic .gl { position: absolute; right: -4px; bottom: -4px; background: var(--window); border-radius: 50%; padding: 2px; box-sizing: content-box; }
+.dhead h2 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+.dhead p { margin: 2px 0 0; color: var(--muted); }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.pill { display: inline-flex; gap: 5px; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; }
+.pill.up { background: var(--up-soft); color: var(--up); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.down { background: var(--down-soft); color: var(--down); } .pill.unknown { background: var(--none-soft); color: var(--muted); }
+.pill.plain { background: var(--none-soft); color: var(--muted); font-weight: 500; }
+.pill.t-danger { background: var(--down-soft); color: var(--down); } .pill.t-attention { background: #f1ebfd; color: #6a3bbd; }
+.pill.t-uncertain { background: var(--warn-soft); color: var(--warn); } .pill.t-success { background: var(--up-soft); color: var(--up); }
+@media (prefers-color-scheme: dark) { .pill.t-attention { background: #2a1f44; color: #c3a8f5; } }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 4px; }
+.act { display: inline-flex; gap: 6px; align-items: center; text-decoration: none; border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; font-size: 12px; color: var(--text); background: var(--col-alt); max-width: 100%; }
+.act span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act:hover { border-color: var(--accent); color: var(--accent-text); }
+.act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.act.primary:hover { filter: brightness(1.08); color: #fff; }
+.act.dns { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.sec { margin-top: 20px; }
+.sec h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); display: flex; justify-content: space-between; align-items: baseline; }
+.sec h3 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.chart { position: relative; border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 10px 6px; background: var(--col); }
+.chart svg { display: block; overflow: visible; }
+.chart text { font: 10.5px var(--font); fill: var(--faint); }
+.tip { position: absolute; pointer-events: none; background: var(--text); color: var(--window); font-size: 11px; padding: 3px 7px; border-radius: 5px; white-space: nowrap; transform: translate(-50%, -100%); display: none; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.stat { border: 1px solid var(--border-soft); border-radius: 9px; padding: 7px 10px; background: var(--col); }
+.stat.on { border-color: var(--accent); }
+.stat small { display: block; font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+.stat b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.days { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; align-items: end; height: 16px; margin-top: 12px; }
+.daysax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+.days i { display: block; border-radius: 2px; min-height: 3px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 18px; margin: 0; }
+.kv dt { color: var(--faint); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kv code, .mono { font: 11.5px var(--mono); }
+.meters { display: grid; gap: 9px; }
+.meter { display: grid; grid-template-columns: 64px 1fr 190px; gap: 12px; align-items: center; }
+.meter .tr { height: 7px; border-radius: 4px; background: var(--border-soft); overflow: hidden; }
+.meter .tr span { display: block; height: 100%; background: var(--accent); }
+.meter .tr.na { background: repeating-linear-gradient(-45deg, var(--border-soft) 0 4px, var(--border) 4px 7px); }
+.meter .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 600; font-size: 11px; color: var(--faint); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+td { padding: 5px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.note { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin-top: 14px; }
+.events { list-style: none; margin: 0; padding: 0; }
+.events li { display: flex; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border-soft); color: var(--muted); }
+.events li time { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* search results */
+.results { position: absolute; inset: 0; overflow-y: auto; padding: 14px 18px 60px; display: none; }
+.results > * { max-width: 1000px; }
+.rhint { font-size: 12px; color: var(--faint); margin: 0 0 4px 10px; }
+.rhint kbd { font: 10.5px var(--mono); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.results.on { display: block; }
+.rgroup h3 { margin: 14px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.res { display: grid; grid-template-columns: 14px 16px minmax(140px, 260px) 1fr auto; gap: 9px; align-items: center; width: 100%; border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 7px; cursor: pointer; }
+.res:hover { background: var(--col-alt); }
+.res.hi { background: var(--accent); color: #fff; }
+.res.hi .ic, .res.hi .path, .res.hi .pc, .res.hi .gl { color: #fff; }
+.res .path { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.res .pc { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.res.hi mark { background: rgb(255 255 255 / 28%); }
+.res mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: inherit; border-radius: 2px; }
+.res .ic { color: var(--faint); }
+.rempty { text-align: center; color: var(--muted); padding: 80px 20px; }
+.rempty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+
+/* path bar */
+.pathbar { display: flex; align-items: center; gap: 6px; padding: 6px 16px; border-top: 1px solid var(--border); background: var(--chrome); font-size: 12px; color: var(--muted); padding-right: 250px; min-height: 30px; white-space: nowrap; overflow: hidden; }
+.pathbar .sep { color: var(--faint); }
+.pathbar .k { color: var(--faint); margin-left: auto; }
+.pathbar kbd { font: 10.5px var(--mono); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+
+@media (max-width: 1240px) { .browser { grid-template-columns: 158px 184px 184px minmax(0, 1fr); } .browser.nosvc { grid-template-columns: 158px 184px minmax(0, 1fr); } .row .ic { display: none; } .row { gap: 6px; padding: 4px 4px 4px 7px; } .list { padding: 0 4px 10px; } .search { width: 190px; } .tools { gap: 10px; } .lbl { display: none; } .dwrap { padding: 14px 16px 60px; } }
+@media (max-width: 1180px) { .rev span { display: none; } .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .meter { grid-template-columns: 56px 1fr; } .meter .v { grid-column: 1 / -1; text-align: left; } }
+@media (max-width: 760px) {
+  body { overflow: auto; }
+  .win { position: static; margin: 8px; min-height: calc(100vh - 16px); grid-template-rows: auto auto auto auto; }
+  .main { min-height: 70vh; }
+  .browser, .browser.nosvc { position: static; grid-template-columns: 1fr; }
+  .col { border-right: 0; border-bottom: 1px solid var(--border); max-height: 220px; }
+  .counts { display: none; } .search { width: 100%; }
+  .pathbar { padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="win">
+  <header class="title">
+    <h1><span class="logo" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="7" r="4.6" fill="#fff"/><path d="M3.6 9.5 2 14M6 11l-.6 4M10 11l.6 4M12.4 9.5 14 14" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg></span>Inventory</h1>
+    <div class="rev" id="rev"></div>
+    <div class="counts" id="counts"></div>
+  </header>
+  <div class="tools" role="toolbar" aria-label="Filters">
+    <div class="search" role="search">
+      <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="m13 13 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <label class="sr" for="q">Search hosts, guests and services</label>
+      <input id="q" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+    </div>
+    <div><span class="lbl">Liveness</span><span class="seg" id="live"></span></div>
+    <div><span class="lbl">Guests</span><span class="seg" id="kind"><button data-v="all">All</button><button data-v="qemu">VMs</button><button data-v="lxc">Containers</button></span></div>
+    <div><span class="lbl">Uptime</span><span class="seg" id="win"><button data-v="h24">24h</button><button data-v="d7">7d</button><button data-v="d30">30d</button></span></div>
+  </div>
+  <div class="main">
+    <div class="browser" id="browser">
+      <section class="col" data-col="0" aria-label="Hosts"><header>Hosts <span id="c0n"></span></header><div class="list" id="c0"></div></section>
+      <section class="col" data-col="1" aria-label="Guests"><header>Guests <span id="c1n"></span></header><div class="list" id="c1"></div></section>
+      <section class="col" data-col="2" aria-label="Services"><header>Services <span id="c2n"></span></header><div class="list" id="c2"></div></section>
+      <section class="detail" id="detail" aria-label="Detail" aria-live="polite"></section>
+    </div>
+    <div class="results" id="results" role="listbox" aria-label="Search results"></div>
+  </div>
+  <footer class="pathbar" id="pathbar"></footer>
+</div>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+const { fmt, liveness: LV, runLabels } = INV;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const WL = { h24: "24h", d7: "7d", d30: "30d" };
+const S = { q: "", live: new Set(), kind: "all", win: "h24", h: null, g: null, s: null, col: 0, um: new Set(), ri: 0 };
+
+// ---------- glyphs and icons ----------
+function glyph(st, size = 10) {
+  const shape = {
+    up: '<circle cx="5" cy="5" r="4.5" fill="currentColor"/>',
+    warn: '<path d="M5 .4 9.8 9.3H.2Z" fill="currentColor"/>',
+    down: '<rect x=".8" y=".8" width="8.4" height="8.4" rx="1.4" fill="currentColor"/><path d="M3.3 3.3l3.4 3.4M6.7 3.3 3.3 6.7" stroke="var(--window)" stroke-width="1.3"/>',
+    unknown: '<circle cx="5" cy="5" r="3.9" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  }[st];
+  return `<svg class="gl s-${st}" width="${size}" height="${size}" viewBox="0 0 10 10" role="img" aria-label="${LV[st].label}">${shape}</svg>`;
+}
+const ICONS = {
+  host: '<rect x="2.5" y="3" width="15" height="6" rx="1.5"/><rect x="2.5" y="11" width="15" height="6" rx="1.5"/><path d="M5.5 6h.01M5.5 14h.01"/>',
+  qemu: '<rect x="2.5" y="3" width="15" height="10.5" rx="1.5"/><path d="M7 17h6M10 13.5V17"/>',
+  lxc: '<path d="M10 2.5 17.5 6v8L10 17.5 2.5 14V6Z"/><path d="M2.5 6 10 9.5 17.5 6M10 9.5v8"/>',
+  svc: '<circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5c2.8 3 2.8 12 0 15M10 2.5c-2.8 3-2.8 12 0 15"/>',
+};
+const icon = (k, size = 14) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`;
+const ext = '<svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+const pct = (c, k = S.win) => (c ? fmt.pct(c.uptime[k], c.uptime[k] >= 99.95 || c.uptime[k] === 0 ? 2 : 1) : "—");
+const kindLabel = (k) => (k === "lxc" ? "Container" : "VM");
+const runPill = (rs) => (runLabels[rs] ? `<span class="pill t-${runLabels[rs].tone}" title="Run status: matches its definition?">${esc(runLabels[rs].label)}</span>` : "");
+const umKey = (n, u) => `um:${n.id}:${u.vmid}`;
+const umUrl = (n, u) => `${n.proxmoxUrl}#v1:0:=${u.kind}%2F${u.vmid}:4:::::::`;
+// Proxmox opens in one tab per host: the links target a named tab, so opening one again
+// navigates that tab and brings it to the front. Browsers switch tabs for a link the person
+// clicked; they ignore window.focus() on a tab, so this has to be a real link navigation.
+const pveTab = (hostId) => `proxmox-${hostId}`;
+function openTab(url, name) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+function findUm(key) { const [, nid, vmid] = key.split(":"); const n = INV.nodeById[nid]; return { n, u: n.unmanaged.find((x) => String(x.vmid) === vmid) }; }
+
+// ---------- filtering ----------
+const lv = (st) => !S.live.size || S.live.has(st);
+const kindOk = (g) => S.kind === "all" || g.kind === S.kind;
+const svcOk = (s) => lv(s.status);
+const guestOk = (g) => kindOk(g) && (lv(g.status) || INV.servicesOf(g.id).some(svcOk));
+const hostOk = (n) => lv(n.status) || INV.guestsOf(n.id).some(guestOk) || umShown(n).length > 0;
+const umShown = (n) => (lv("unknown") ? n.unmanaged.filter((u) => S.kind === "all" || u.kind === S.kind) : []);
+const visHosts = () => INV.nodes.filter(hostOk);
+const visGuests = (h) => (h ? INV.guestsOf(h).filter(guestOk) : []);
+const visSvcs = (g) => (g && !g.startsWith("um:") ? INV.servicesOf(g).filter(svcOk) : []);
+
+function fixSelection() {
+  const hs = visHosts();
+  if (!hs.find((n) => n.id === S.h)) { S.h = hs[0]?.id ?? null; S.g = S.s = null; }
+  if (S.g && !S.g.startsWith("um:") && !visGuests(S.h).find((g) => g.id === S.g)) { S.g = S.s = null; }
+  if (S.g && S.g.startsWith("um:") && (!lv("unknown") || !S.g.startsWith(`um:${S.h}:`))) S.g = null;
+  if (S.s && !visSvcs(S.g).find((s) => s.id === S.s)) S.s = null;
+  if (S.col === 2 && !S.g) S.col = S.h ? 1 : 0;
+}
+
+// ---------- columns ----------
+function row(col, id, { st, ic, name, pc, chev, dim, sel, extra = "" }) {
+  return `<button class="row${sel ? " sel" : ""}${dim ? " dim" : ""}" data-col="${col}" data-id="${esc(id)}" tabindex="${sel ? 0 : -1}" aria-current="${sel ? "true" : "false"}">
+    ${st ? glyph(st) : '<span style="width:10px"></span>'}${icon(ic)}<span class="nm">${esc(name)}</span>${extra}<span class="pc">${pc}</span><span class="chev" aria-hidden="true">${chev ? "›" : ""}</span></button>`;
+}
+function renderColumns() {
+  const hs = visHosts();
+  $("#c0n").textContent = hs.length;
+  $("#c0").innerHTML = hs.map((n) => row(0, n.id, { st: n.status, ic: "host", name: n.name, pc: n.online ? pct(n.check) : "Offline", chev: true, dim: !lv(n.status), sel: S.h === n.id })).join("")
+    || `<div class="colempty">No host matches the filters.</div>`;
+
+  const n = INV.nodeById[S.h];
+  const gs = visGuests(S.h), ums = n ? umShown(n) : [];
+  $("#c1n").textContent = n ? gs.length : "";
+  let g1 = gs.map((g) => row(1, g.id, { st: g.status, ic: g.kind, name: g.id, pc: pct(g.check), chev: INV.servicesOf(g.id).length > 0, dim: !lv(g.status), sel: S.g === g.id })).join("");
+  if (!n) g1 = `<div class="colempty">Select a host</div>`;
+  else if (!gs.length) g1 = `<div class="colempty">No managed guests match.</div>`;
+  if (ums.length) {
+    const open = S.um.has(n.id) || (S.g || "").startsWith("um:");
+    g1 += `<div class="group"><button class="row tog" data-col="1" data-tog="${n.id}" tabindex="-1" aria-expanded="${open}"><span class="car" aria-hidden="true">›</span><span class="nm">Unmanaged (${ums.length})</span></button>
+      ${open ? ums.map((u) => row(1, umKey(n, u), { st: null, ic: u.kind, name: u.name, pc: u.template ? '<span class="badge">Template</span>' : esc(u.status), sel: S.g === umKey(n, u) }).replace('class="row', 'class="row um')).join("") : ""}</div>`;
+  }
+  $("#c1").innerHTML = g1;
+
+  const hasSvc = !!S.g && !S.g.startsWith("um:") && INV.servicesOf(S.g).length > 0;
+  $("#browser").classList.toggle("nosvc", !hasSvc);
+  const ss = visSvcs(S.g);
+  $("#c2n").textContent = S.g && !S.g.startsWith("um:") ? ss.length : "";
+  let s2;
+  if (!S.g) s2 = `<div class="colempty">${n ? "Select a guest" : ""}</div>`;
+  else if (S.g.startsWith("um:")) s2 = `<div class="colempty">Unmanaged guests have no services or checks.</div>`;
+  else if (!INV.servicesOf(S.g).length) s2 = `<div class="colempty">No services on this guest.</div>`;
+  else if (!ss.length) s2 = `<div class="colempty">No services match the liveness filter.</div>`;
+  else s2 = ss.map((s) => row(2, s.id, { st: s.status, ic: "svc", name: s.name, pc: s.check ? pct(s.check) : "No check", sel: S.s === s.id })).join("");
+  $("#c2").innerHTML = s2;
+
+  document.querySelectorAll(".col").forEach((c) => c.classList.toggle("active", +c.dataset.col === S.col));
+}
+
+// ---------- chart ----------
+function niceMax(v) { const p = 10 ** Math.floor(Math.log10(v || 1)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function drawChart(el, c) {
+  const W = Math.max(220, el.clientWidth - 20), H = 130, padL = 40, padR = 6, beatY = H + 10, beatH = 12, axisY = beatY + beatH + 14;
+  const n = c.latency.length, x = (i) => padL + (i * (W - padL - padR)) / (n - 1);
+  const vals = c.latency.filter((v) => v != null), max = niceMax(Math.max(10, ...vals));
+  const y = (v) => H - (v / max) * (H - 8);
+  const bw = (W - padL - padR) / n;
+  let bands = "", line = "", area = "", seg = [];
+  c.beats.forEach((b, i) => { if (b !== "up") bands += `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H}" fill="var(--${b === "down" ? "down" : "warn"})" opacity=".1"/>`; });
+  const flush = () => { if (seg.length) { line += "M" + seg.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join("L"); area += `M${seg[0][0].toFixed(1)},${H}L` + seg.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join("L") + `L${seg[seg.length - 1][0].toFixed(1)},${H}Z`; } seg = []; };
+  c.latency.forEach((v, i) => { if (v == null) flush(); else seg.push([x(i), y(v)]); });
+  flush();
+  const grid = [0, max / 2, max].map((v) => `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/><text x="${padL - 6}" y="${y(v) + 3.5}" text-anchor="end">${v} ms</text>`).join("");
+  const beats = c.beats.map((b, i) => `<rect class="f-${b}" x="${(x(i) - bw / 2 + 0.6).toFixed(1)}" y="${beatY}" width="${Math.max(1, bw - 1.2).toFixed(1)}" height="${beatH}" rx="1.2"/>`).join("");
+  const ticks = [[0, "24h ago"], [24, "18h"], [48, "12h"], [72, "6h"], [95, "now"]].map(([i, t]) => `<line x1="${x(i)}" x2="${x(i)}" y1="${beatY + beatH + 2}" y2="${beatY + beatH + 5}" stroke="var(--border)"/><text x="${x(i)}" y="${axisY}" text-anchor="${i === 0 ? "start" : i === 95 ? "end" : "middle"}">${t}</text>`).join("");
+  el.innerHTML = `<svg width="${W}" height="${axisY + 4}" role="img" aria-label="Latency and liveness over the last 24 hours">
+    ${grid}${bands}<path d="${area}" fill="var(--chart-fill)"/><path d="${line}" fill="none" stroke="var(--chart-line)" stroke-width="1.6" stroke-linejoin="round"/>
+    <text x="${padL - 6}" y="${beatY + 9}" text-anchor="end">beats</text>${beats}${ticks}
+    <line class="cur" x1="0" x2="0" y1="0" y2="${beatY + beatH}" stroke="var(--muted)" stroke-dasharray="2 2" visibility="hidden"/></svg><div class="tip"></div>`;
+  const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), cur = el.querySelector(".cur");
+  svg.addEventListener("mousemove", (e) => {
+    const r = svg.getBoundingClientRect(), px = e.clientX - r.left;
+    const i = Math.max(0, Math.min(n - 1, Math.round(((px - padL) / (W - padL - padR)) * (n - 1))));
+    const at = INV.now - (n - 1 - i) * 15 * 60_000;
+    cur.setAttribute("x1", x(i)); cur.setAttribute("x2", x(i)); cur.setAttribute("visibility", "visible");
+    tip.style.display = "block"; tip.style.left = `${x(i) + 10}px`; tip.style.top = `${(c.latency[i] == null ? 20 : y(c.latency[i])) + 6}px`;
+    tip.textContent = `${fmt.time(at)} · ${LV[c.beats[i]].label} · ${fmt.ms(c.latency[i])}`;
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; cur.setAttribute("visibility", "hidden"); });
+}
+function uptimeBlock(c, title) {
+  if (!c) return `<div class="sec"><h3>Uptime</h3><div class="pill unknown">${glyph("unknown")}No check: nothing measures this, so there is no uptime.</div></div>`;
+  const avg = c.latency.filter((v) => v != null);
+  const days = c.daily.map((v, i) => `<i title="${30 - i} days ago: ${v}%" style="height:${Math.max(12, ((v - 80) / 20) * 100)}%;background:var(--${v >= 99.9 ? "up" : v >= 95 ? "warn" : "down"})"></i>`).join("");
+  return `<div class="sec"><h3>${title} <small>latency line, liveness beats every 15 min</small></h3><div class="chart" data-chart></div>
+    <div class="stats">${["h24", "d7", "d30"].map((k) => `<div class="stat${k === S.win ? " on" : ""}"><small>Uptime ${WL[k]}</small><b>${fmt.pct(c.uptime[k], 2)}</b></div>`).join("")}
+      <div class="stat"><small>Latency now</small><b>${fmt.ms(c.ms)}</b></div><div class="stat"><small>Avg 24h</small><b>${avg.length ? fmt.ms(Math.round(avg.reduce((a, b) => a + b, 0) / avg.length)) : "—"}</b></div></div>
+    <div class="days" aria-label="Daily uptime, last 30 days">${days}</div><div class="daysax"><span>30 days ago</span><span>daily uptime</span><span>today</span></div></div>`;
+}
+const eventsBlock = (c) => (!c || !c.events.length ? "" : `<div class="sec"><h3>Events <small>${c.events.length} status changes</small></h3><ul class="events">${c.events.slice(0, 8).map((e) =>
+  `<li>${glyph(e.from)}<span aria-hidden="true">→</span>${glyph(e.to)}<span>${LV[e.from].label} → <b style="color:var(--text)">${LV[e.to].label}</b></span><time>${esc(fmt.time(e.at))} · ${esc(fmt.ago(e.at))}</time></li>`).join("")}</ul></div>`);
+const statusPill = (st, c) => `<span class="pill ${st}">${glyph(st)}${LV[st].label}${c?.since ? ` · since ${esc(fmt.ago(c.since))}` : ""}</span>`;
+const meter = (label, v, txt) => `<div class="meter"><span>${label}</span><div class="tr ${v == null ? "na" : ""}">${v == null ? "" : `<span style="width:${Math.round(v * 100)}%"></span>`}</div><span class="v">${txt}</span></div>`;
+const pctTxt = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+
+// ---------- detail ----------
+function crumbs(parts) {
+  return `<nav class="crumbs" aria-label="Breadcrumb">${parts.map(([label, jump], i) => (i === parts.length - 1 ? `<span class="cur" aria-current="page">${esc(label)}</span>` : `<button data-jump="${esc(jump)}">${esc(label)}</button><span aria-hidden="true">›</span>`)).join("")}</nav>`;
+}
+function head(ic, st, title, sub, pills) {
+  return `<div class="dhead"><div class="bigic">${icon(ic, 28)}${st ? glyph(st, 14) : ""}</div><div><h2>${esc(title)}</h2><p>${sub}</p><div class="pills">${pills}</div></div></div>`;
+}
+function renderDetail() {
+  const el = $("#detail");
+  let h = "", chartCheck = null;
+  const n = INV.nodeById[S.h];
+  if (!n) { el.innerHTML = `<div class="colempty">Nothing selected.</div>`; return; }
+  if (S.s) {
+    const s = INV.services.find((x) => x.id === S.s), g = INV.guestById[s.guest];
+    chartCheck = s.check;
+    h = crumbs([[n.name, n.id], [g.id, g.id], [s.name]]) +
+      head("svc", s.status, s.name, `${esc(s.description)} · ${esc(s.category)} · on ${esc(g.id)}`, statusPill(s.status, s.check) + runPill(s.runStatus)) +
+      `<div class="actions">${s.urls.map((u, i) => `<a class="act${i === 0 ? " primary" : ""}" href="${esc(u.url)}" target="_blank" rel="noopener">${glyph(u.check.status)}<span>${esc(u.host)}</span>${ext}</a>`).join("")}
+        ${s.dns.map((d) => `<span class="act dns" title="${d.type} → ${esc(d.expected)} (zone ${esc(d.zone)})">${d.type} ${esc(d.name)}</span>`).join("")}</div>
+      ${s.notes.map((x) => `<div class="note">${glyph("unknown")} ${esc(x)}</div>`).join("")}
+      ${uptimeBlock(s.check, "Last 24 hours")}
+      ${s.urls.length ? `<div class="sec"><h3>URLs</h3><table><thead><tr><th></th><th>URL</th><th style="text-align:right">Uptime ${WL[S.win]}</th><th style="text-align:right">Latency</th></tr></thead><tbody>${s.urls.map((u) => `<tr><td style="width:18px">${glyph(u.check.status)}</td><td><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a></td><td class="n">${pct(u.check)}</td><td class="n">${fmt.ms(u.check.ms)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      <div class="sec"><h3>DNS records</h3>${s.dns.length ? `<table><thead><tr><th>Type</th><th>Name</th><th>Points to</th><th>Zone</th></tr></thead><tbody>${s.dns.map((d) => `<tr><td class="mono">${d.type}</td><td class="mono">${esc(d.name)}</td><td class="mono">${esc(d.expected)}</td><td class="mono">${esc(d.zone)}</td></tr>`).join("")}</tbody></table>` : `<span style="color:var(--faint)">No DNS records declared.</span>`}</div>
+      <div class="sec"><h3>Information</h3><dl class="kv"><dt>Health check</dt><dd>${s.health ? `<code>${esc(s.health.url)}</code> · ${s.health.probed ? "probed" : "not probed from here"}` : "none declared"}</dd>
+        <dt>Workflow</dt><dd><code>${esc(s.workflow)}</code></dd><dt>Run status</dt><dd>${esc(runLabels[s.runStatus]?.label)}</dd>
+        <dt>Guest</dt><dd>${esc(g.id)} · ${kindLabel(g.kind)} ${g.vmid} · ${esc(g.address || "no address")}</dd></dl></div>
+      ${eventsBlock(s.check)}`;
+  } else if (S.g && S.g.startsWith("um:")) {
+    const { u } = findUm(S.g);
+    h = crumbs([[n.name, n.id], [`Unmanaged`, n.id], [u.name]]) +
+      head(u.kind, null, u.name, `Unmanaged ${u.kind === "lxc" ? "container" : "VM"} on ${esc(n.name)} · not managed by Octopushy`, `<span class="pill plain">${kindLabel(u.kind)} ${u.vmid}</span>${u.template ? '<span class="pill t-attention">Template</span>' : ""}<span class="pill plain">${esc(u.status)}</span>`) +
+      `<div class="actions"><a class="act primary" href="${esc(umUrl(n, u))}" target="${pveTab(n.id)}">Open in Proxmox ${ext}</a></div>
+      <div class="note">On the Proxmox host but not managed by Octopushy, so it has no definition and no checks.</div>
+      <div class="sec"><h3>Information</h3><dl class="kv"><dt>VMID</dt><dd>${u.vmid}</dd><dt>Kind</dt><dd>${kindLabel(u.kind)}</dd><dt>Status</dt><dd>${esc(u.status)}</dd>
+        <dt>Size</dt><dd>${u.cores} cores · ${fmt.bytes(u.memory)}</dd><dt>Uptime</dt><dd>${fmt.duration(u.uptimeSeconds)}</dd><dt>Tags</dt><dd>${esc(u.tags.join(", ") || "—")}</dd></dl></div>`;
+  } else if (S.g) {
+    const g = INV.guestById[S.g], svcs = INV.servicesOf(g.id);
+    chartCheck = g.check;
+    h = crumbs([[n.name, n.id], [g.id]]) +
+      head(g.kind, g.status, g.id, `${esc(g.description)} · ${kindLabel(g.kind)} ${g.vmid}`, statusPill(g.status, g.check) + runPill(g.runStatus) + `<span class="pill plain">Power: ${esc(g.power)}</span>`) +
+      `<div class="actions"><a class="act primary" href="${esc(INV.proxmoxGuestUrl(g))}" target="${pveTab(n.id)}">Open in Proxmox ${ext}</a>
+        <span class="act dns" title="Hostname">${esc(g.hostname)}</span>${g.address ? `<span class="act dns" title="Address">${esc(g.address)}</span>` : ""}</div>
+      ${svcs.length ? "" : `<div class="note">${glyph("unknown")} No services declared on this guest.</div>`}
+      ${uptimeBlock(g.check, "Reachability, last 24 hours")}
+      <div class="sec"><h3>Information</h3><dl class="kv"><dt>VMID</dt><dd>${g.vmid} · ${kindLabel(g.kind)}</dd><dt>Hostname</dt><dd><code>${esc(g.hostname)}</code></dd><dt>Address</dt><dd>${esc(g.address || "—")}</dd>
+        <dt>Power</dt><dd>${esc(g.power)}${g.uptimeSeconds ? ` · up for ${fmt.duration(g.uptimeSeconds)}` : ""}</dd><dt>Size</dt><dd>${g.cores} cores · ${fmt.bytes(g.memory)} memory · ${fmt.bytes(g.disk)} disk</dd>
+        <dt>Run status</dt><dd>${esc(runLabels[g.runStatus]?.label)} · last run ${esc(runLabels[g.lastRun.status]?.label || g.lastRun.status)} ${esc(fmt.ago(g.lastRun.at))}</dd><dt>Workflow</dt><dd><code>${esc(g.workflow)}</code></dd>
+        <dt>Services</dt><dd>${svcs.length ? svcs.map((s) => `${glyph(s.status)} ${esc(s.name)}`).join(" &nbsp; ") : "none"}</dd></dl></div>
+      ${eventsBlock(g.check)}`;
+  } else {
+    chartCheck = n.check;
+    h = crumbs([[n.name]]) +
+      head("host", n.status, n.name, `Proxmox host · PVE ${esc(n.version)} · ${esc(n.address)}`, statusPill(n.status, n.check) + `<span class="pill plain">${n.online ? "Online" : "Offline"}</span>`) +
+      `<div class="actions"><a class="act primary" href="${esc(n.proxmoxUrl)}" target="${pveTab(n.id)}">Open Proxmox web UI ${ext}</a></div>
+      ${n.online ? "" : `<div class="note">${glyph("down")} Offline: ${esc(n.offlineReason)}. Values below are the last ones seen; usage that was not reported shows as —.</div>`}
+      <div class="sec"><h3>Resources</h3><div class="meters">
+        ${meter("CPU", n.cpu.used, `${pctTxt(n.cpu.used)} of ${n.cpu.cores} cores`)}
+        ${meter("Memory", n.memory.used == null ? null : n.memory.used / n.memory.total, `${fmt.bytes(n.memory.used)} / ${fmt.bytes(n.memory.total)}`)}
+        ${meter("Disk", n.disk.used == null ? null : n.disk.used / n.disk.total, `${fmt.bytes(n.disk.used)} / ${fmt.bytes(n.disk.total)}`)}</div></div>
+      ${uptimeBlock(n.check, "Proxmox API, last 24 hours")}
+      <div class="sec"><h3>Information</h3><dl class="kv"><dt>Host uptime</dt><dd>${fmt.duration(n.uptimeSeconds)}</dd><dt>PVE version</dt><dd>${esc(n.version)}</dd><dt>CPU</dt><dd>${esc(n.cpu.model)} · ${n.cpu.cores} cores</dd>
+        <dt>Guests</dt><dd>${INV.guestsOf(n.id).length} managed · ${n.unmanaged.length} unmanaged</dd><dt>Services</dt><dd>${INV.servicesOfNode(n.id).length}</dd></dl></div>
+      ${eventsBlock(n.check)}`;
+  }
+  el.innerHTML = `<div class="dwrap">${h}</div>`;
+  const ch = el.querySelector("[data-chart]");
+  if (ch && chartCheck) { drawChart(ch, chartCheck); ch._check = chartCheck; }
+}
+new ResizeObserver(() => { const ch = $("#detail [data-chart]"); if (ch?._check) drawChart(ch, ch._check); }).observe($("#detail"));
+
+// ---------- path bar, header, filters ----------
+function renderPath() {
+  const n = INV.nodeById[S.h], parts = [];
+  if (n) parts.push(icon("host", 12) + esc(n.name));
+  if (S.g) parts.push(S.g.startsWith("um:") ? icon(findUm(S.g).u.kind, 12) + esc(findUm(S.g).u.name) : icon(INV.guestById[S.g].kind, 12) + esc(S.g));
+  if (S.s) parts.push(icon("svc", 12) + esc(INV.services.find((x) => x.id === S.s).name));
+  $("#pathbar").innerHTML = parts.join('<span class="sep">›</span>') + `<span class="k"><kbd>↑↓</kbd> move <kbd>←→</kbd> columns <kbd>Enter</kbd> open <kbd>/</kbd> search</span>`;
+}
+function renderChrome() {
+  const t = INV.totals();
+  $("#rev").innerHTML = `<code title="Revision">${esc(INV.revision.commit)}</code><span>${esc(INV.revision.subject)}</span>`;
+  $("#counts").innerHTML = `<span><b>${t.nodes.total}</b> hosts</span><span><b>${t.guests.total}</b> guests</span><span><b>${t.services.total}</b> services · ${t.services.up} up · ${t.services.warn} degraded · ${t.services.down} down</span><span><b>${t.unmanaged}</b> unmanaged</span><span>Observed ${esc(fmt.ago(INV.observedAt))}</span>`;
+  const all = [...INV.nodes, ...INV.guests, ...INV.services];
+  const cnt = (k) => all.filter((x) => x.status === k).length + (k === "unknown" ? t.unmanaged : 0);
+  $("#live").innerHTML = ["down", "warn", "up", "unknown"].map((k) => `<button data-v="${k}" aria-pressed="${S.live.has(k)}">${glyph(k)}${LV[k].label}<span class="n">${cnt(k)}</span></button>`).join("");
+  for (const b of document.querySelectorAll("#kind button")) b.setAttribute("aria-pressed", b.dataset.v === S.kind);
+  for (const b of document.querySelectorAll("#win button")) b.setAttribute("aria-pressed", b.dataset.v === S.win);
+}
+
+// ---------- search ----------
+function mark(text) {
+  let out = esc(text);
+  for (const t of S.q.trim().toLowerCase().split(/\s+/).filter(Boolean)) out = out.replace(new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"), "<mark>$1</mark>");
+  return out;
+}
+function results() {
+  const ts = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const m = (kind, x) => ts.every((t) => INV.haystack(kind, x).includes(t));
+  const out = [];
+  INV.nodes.filter((n) => m("node", n) && lv(n.status)).forEach((n) => out.push({ type: "Hosts", sel: { h: n.id }, st: n.status, ic: "host", name: n.name, path: `Proxmox host · PVE ${n.version}`, pc: pct(n.check) }));
+  INV.guests.filter((g) => m("guest", g) && lv(g.status) && kindOk(g)).forEach((g) => out.push({ type: "Guests", sel: { h: g.node, g: g.id }, st: g.status, ic: g.kind, name: g.id, path: `${g.node} › ${kindLabel(g.kind)} ${g.vmid}${g.address ? ` · ${g.address}` : ""}`, pc: pct(g.check) }));
+  INV.services.filter((s) => m("service", s) && lv(s.status)).forEach((s) => { const g = INV.guestById[s.guest]; out.push({ type: "Services", sel: { h: g.node, g: g.id, s: s.id }, st: s.status, ic: "svc", name: s.name, path: `${g.node} › ${g.id}${s.urls[0] ? ` · ${s.urls[0].host}` : ""}`, pc: s.check ? pct(s.check) : "No check" }); });
+  if (lv("unknown")) INV.nodes.forEach((n) => n.unmanaged.filter((u) => m("unmanaged", u) && (S.kind === "all" || u.kind === S.kind)).forEach((u) => out.push({ type: "Unmanaged guests", sel: { h: n.id, g: umKey(n, u) }, st: null, ic: u.kind, name: u.name, path: `${n.name} › ${kindLabel(u.kind)} ${u.vmid}${u.template ? " · template" : ""}`, pc: u.status })));
+  return out;
+}
+let RES = [];
+function renderResults() {
+  RES = results();
+  S.ri = Math.min(S.ri, Math.max(0, RES.length - 1));
+  if (!RES.length) { $("#results").innerHTML = `<div class="rempty"><b>No matches for “${esc(S.q)}”</b>Nothing in hosts, guests, services or unmanaged guests${S.live.size || S.kind !== "all" ? " with the current filters" : ""}. <kbd>Esc</kbd> clears.</div>`; return; }
+  let html = "", last = "";
+  RES.forEach((r, i) => {
+    if (r.type !== last) { html += `${last ? "</div>" : ""}<div class="rgroup"><h3>${r.type} (${RES.filter((x) => x.type === r.type).length})</h3>`; last = r.type; }
+    html += `<button class="res${i === S.ri ? " hi" : ""}" role="option" aria-selected="${i === S.ri}" data-ri="${i}">${r.st ? glyph(r.st) : "<span></span>"}${icon(r.ic)}<span>${mark(r.name)}</span><span class="path">${esc(r.path)}</span><span class="pc">${esc(r.pc)}</span></button>`;
+  });
+  $("#results").innerHTML = `<p class="rhint">${RES.length} result${RES.length === 1 ? "" : "s"} · <kbd>↑↓</kbd> choose · <kbd>Enter</kbd> show it in the columns · <kbd>Esc</kbd> back</p>` + html + "</div>";
+  $("#results .res.hi")?.scrollIntoView({ block: "nearest" });
+}
+function pick(i) {
+  const r = RES[i]; if (!r) return;
+  S.h = r.sel.h; S.g = r.sel.g || null; S.s = r.sel.s || null;
+  S.col = r.sel.s ? 2 : r.sel.g ? 1 : 0;
+  S.q = ""; $("#q").value = ""; S.ri = 0;
+  render(true);
+}
+
+// ---------- render + hash ----------
+function render(focus) {
+  renderChrome();
+  const searching = S.q.trim() !== "";
+  $("#browser").style.visibility = searching ? "hidden" : "";
+  $("#results").classList.toggle("on", searching);
+  if (searching) renderResults();
+  fixSelection();
+  renderColumns(); renderDetail(); renderPath();
+  if (focus && !searching) document.querySelector(`.col[data-col="${S.col}"] .row.sel`)?.focus();
+  const p = new URLSearchParams();
+  const selId = S.s || S.g || S.h;
+  if (selId) p.set("select", selId);
+  if (S.q) p.set("q", S.q);
+  if (S.live.size) p.set("live", [...S.live].join(","));
+  if (S.win !== "h24") p.set("win", S.win);
+  if (S.kind !== "all") p.set("kind", S.kind);
+  try { window.history.replaceState(null, "", `#${p}`); } catch {}
+}
+function selectId(id) {
+  const svc = INV.services.find((s) => s.id === id), g = INV.guestById[id], n = INV.nodeById[id];
+  if (svc) { S.s = svc.id; S.g = svc.guest; S.h = INV.guestById[svc.guest].node; S.col = 2; }
+  else if (g) { S.g = g.id; S.h = g.node; S.s = null; S.col = 1; }
+  else if (n) { S.h = n.id; S.g = S.s = null; S.col = 0; }
+  else if (id.startsWith("um:")) { const [, nid] = id.split(":"); S.h = nid; S.g = id; S.s = null; S.col = 1; }
+}
+function defaultSelection() {
+  // The first thing with a problem: a broken service shows the whole chain; else a broken guest or host.
+  const bad = (x) => x.status === "down" || x.status === "warn";
+  const s = INV.services.find((x) => x.status === "down") || INV.services.find(bad);
+  const pickId = s?.id || INV.guests.find(bad)?.id || INV.nodes.find(bad)?.id || INV.nodes[0].id;
+  selectId(pickId);
+}
+
+// ---------- events ----------
+function selectRow(btn, focus = true) {
+  const col = +btn.dataset.col, id = btn.dataset.id;
+  if (btn.dataset.tog) { const k = btn.dataset.tog; S.um.has(k) ? S.um.delete(k) : S.um.add(k); if (!S.um.has(k) && (S.g || "").startsWith("um:")) S.g = null; S.col = 1; render(); document.querySelector(`[data-tog="${k}"]`)?.focus(); return; }
+  if (col === 0) { if (S.h !== id) { S.h = id; S.g = S.s = null; } }
+  else if (col === 1) { if (S.g !== id) { S.g = id; S.s = null; } }
+  else S.s = id;
+  S.col = col;
+  render(focus);
+}
+function mainLink() {
+  const col = S.col;
+  if (col === 2 && S.s) { const url = INV.services.find((x) => x.id === S.s).urls[0]?.url; return url && { url }; }
+  const tab = pveTab(S.h);
+  if (col >= 1 && S.g) { if (S.g.startsWith("um:")) { const { n, u } = findUm(S.g); return { url: umUrl(n, u), tab }; } return { url: INV.proxmoxGuestUrl(INV.guestById[S.g]), tab }; }
+  const n = INV.nodeById[S.h]; return n && { url: n.proxmoxUrl, tab };
+}
+document.addEventListener("click", (e) => {
+  const r = e.target.closest(".row"); if (r) return selectRow(r);
+  const j = e.target.closest("[data-jump]"); if (j) { selectId(j.dataset.jump); return render(true); }
+  const res = e.target.closest(".res"); if (res) return pick(+res.dataset.ri);
+  const seg = e.target.closest(".seg button");
+  if (seg) {
+    const box = seg.parentElement.id, v = seg.dataset.v;
+    if (box === "live") S.live.has(v) ? S.live.delete(v) : S.live.add(v);
+    else if (box === "kind") S.kind = v; else S.win = v;
+    render();
+  }
+});
+$("#browser").addEventListener("keydown", (e) => {
+  const btn = document.activeElement.closest?.(".row"); if (!btn) return;
+  const col = +btn.dataset.col;
+  const rows = [...document.querySelectorAll(`.col[data-col="${col}"] .row`)];
+  const i = rows.indexOf(btn);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const nx = rows[i + (e.key === "ArrowDown" ? 1 : -1)]; if (!nx) return;
+    if (nx.dataset.tog) { S.col = col; nx.focus(); } else selectRow(nx);
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    if (btn.dataset.tog) { if (btn.getAttribute("aria-expanded") === "false") selectRow(btn); return; }
+    if (col === 2 || (col === 1 && $("#browser").classList.contains("nosvc"))) return $("#detail .act")?.focus();
+    const next = [...document.querySelectorAll(`.col[data-col="${col + 1}"] .row:not(.tog)`)];
+    if (!next.length) return;
+    selectRow(next.find((x) => x.classList.contains("sel")) || next[0]);
+  } else if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    if (btn.dataset.tog && btn.getAttribute("aria-expanded") === "true") return selectRow(btn);
+    if (col === 0) return;
+    S.col = col - 1; render(true);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (btn.dataset.tog) return selectRow(btn);
+    S.col = col; const l = mainLink(); if (l) l.tab ? openTab(l.url, l.tab) : window.open(l.url, "_blank", "noopener");
+  } else if (e.key === "Home" || e.key === "End") { e.preventDefault(); const t = rows.filter((r) => !r.dataset.tog)[e.key === "Home" ? 0 : rows.length - 1] || rows[rows.length - 1]; if (t) selectRow(t); }
+});
+$("#detail").addEventListener("keydown", (e) => { if (e.key === "ArrowLeft" && e.target.closest(".act")) { e.preventDefault(); e.stopPropagation(); S.col = $("#browser").classList.contains("nosvc") ? (S.g ? 1 : 0) : 2; render(true); } });
+const q = $("#q");
+q.addEventListener("input", () => { S.q = q.value; S.ri = 0; render(); });
+q.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); S.ri = Math.max(0, Math.min(RES.length - 1, S.ri + (e.key === "ArrowDown" ? 1 : -1))); renderResults(); }
+  else if (e.key === "Enter") { e.preventDefault(); if (S.q.trim()) pick(S.ri); }
+  else if (e.key === "Escape") { if (q.value) { q.value = ""; S.q = ""; render(true); } else document.querySelector(`.col[data-col="${S.col}"] .row.sel`)?.focus(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); q.select(); }
+});
+
+// ---------- boot ----------
+const p = new URLSearchParams(location.hash.slice(1));
+if (p.get("live")) S.live = new Set(p.get("live").split(","));
+if (p.get("win")) S.win = p.get("win");
+if (p.get("kind")) S.kind = p.get("kind");
+if (p.get("um")) S.um.add(p.get("um"));
+if (p.get("select")) selectId(p.get("select")); else defaultSelection();
+if (p.get("q")) { S.q = p.get("q"); q.value = S.q; }
+render(!S.q);
+})();
+</script>
+</body>
+</html>

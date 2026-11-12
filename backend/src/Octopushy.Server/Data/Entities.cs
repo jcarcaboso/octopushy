@@ -1317,3 +1317,45 @@ public sealed class OperatorToken
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
 }
+
+/// <summary>
+/// Where one uptime check stands: the last answer an agent gave about it. See docs/uptime.md. Rows are written only by
+/// <see cref="Uptime.UptimeMonitor"/>.
+/// </summary>
+public sealed class UptimeCheck
+{
+    /// <summary>What is checked and how, <see cref="Uptime.UptimeTarget.Key"/>: a new address or link is a new check.</summary>
+    public required string Key { get; set; }
+
+    public bool Up { get; set; }
+
+    /// <summary>Since when <see cref="Up"/> has held, as this server saw it.</summary>
+    public DateTimeOffset Since { get; set; }
+
+    public DateTimeOffset CheckedAt { get; set; }
+
+    public int? ElapsedMs { get; set; }
+
+    /// <summary>What the agent found, for people: an HTTP status, or why it could not connect.</summary>
+    public string? Detail { get; set; }
+
+    /// <summary>The name of the agent that checked it last.</summary>
+    public string? Agent { get; set; }
+}
+
+/// <summary>
+/// The answers about one uptime check in one 15-minute bucket: how many said up and down, and the response time of those
+/// that said up. Kept for 30 days.
+/// </summary>
+public sealed class UptimeBucket
+{
+    public required string CheckKey { get; set; }
+
+    public DateTimeOffset StartsAt { get; set; }
+
+    public int Up { get; set; }
+
+    public int Down { get; set; }
+
+    public long LatencyMsTotal { get; set; }
+}

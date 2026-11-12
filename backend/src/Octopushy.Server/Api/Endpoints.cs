@@ -12,6 +12,7 @@ using Octopushy.Server.Inventory;
 using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
+using Octopushy.Server.Uptime;
 
 namespace Octopushy.Server.Api;
 
@@ -134,6 +135,11 @@ public static partial class Endpoints
         api.MapGet("/inventory", async (Views views, CancellationToken ct) => TypedResults.Ok(await views.InventoryAsync(ct)))
             .WithTags("Inventory")
             .WithName("getInventory");
+
+        api.MapGet("/uptime", async (OctopushyDb db, UptimeMonitor monitor, TimeProvider clock, CancellationToken ct) =>
+                TypedResults.Ok(await UptimeReport.BuildAsync(db, monitor, clock.GetUtcNow(), ct)))
+            .WithTags("Inventory")
+            .WithName("getUptime");
 
         api.MapGet("/guests/{id:guid}", async Task<Results<Ok<GuestDetailDto>, NotFound>> (Guid id, Views views, CancellationToken ct) =>
             await views.GuestAsync(id, ct) is { } guest ? TypedResults.Ok(guest) : TypedResults.NotFound())

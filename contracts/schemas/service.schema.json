@@ -7,6 +7,13 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
+    "links": {
+      "description": "Where people open the service, such as https://vault.example.com/. The Inventory shows them, and an agent checks each one answers. Changing them runs nothing. See docs/uptime.md.",
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "maxLength": 2048, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[!-~]*)?(?![\\s\\S])" }
+    },
     "workflow": { "$ref": "common.schema.json#/$defs/workflowRef" },
     "inputs": {
       "description": "Given to every stage: as variables to an OpenTofu stage, as extra vars to an Ansible one. Validated by the workflow's inputs schema, as { inputs }.",

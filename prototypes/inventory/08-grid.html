@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory · Data grid</title>
+<!--
+  08 · Data grid. Every host, guest and service as one flat, sortable, groupable table
+  (Airtable / Linear feel), with a faceted sidebar, column menu, row selection + bulk actions,
+  and an expanded-record panel. URL state for testing:
+  #group=liveness  #q=fleet  #select=s:mrb-crt-01/fleet  #unmanaged=1  #sort=h24:asc  #sel=s:mrb-crt-01/fleet,g:mrb-crt-01
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --bg: #f4f6f8; --surface: #fff; --surface-2: #f8f9fb; --surface-3: #eef1f4; --side: #f7f8fa;
+  --line: #e6e9ee; --line-strong: #cfd6df; --border-strong: #c3cbd5;
+  --text: #19212c; --muted: #556172; --faint: #6b7686; --link: #1f4fbf;
+  --accent: #2f5bd3; --accent-soft: #e7eefc; --accent-text: #fff; --hover: #f4f7fb; --selrow: #edf2fd; --focus: #2f5bd3;
+  --up: #1f9d55; --warn: #d99a0b; --down: #d64541; --none: #c3cad4;
+  --up-fg: #1a6a37; --up-bg: #e5f4ea; --warn-fg: #835400; --warn-bg: #fcf2db;
+  --down-fg: #b0211f; --down-bg: #fdeaea; --none-fg: #5d6878; --none-bg: #eef1f4;
+  --att-fg: #5b30ad; --att-bg: #f1ebfd; --unc-fg: #a23f00; --unc-bg: #fdeedf;
+  --meter: #3a7bd5; --track: #e3e7ec;
+  --shadow: 0 16px 40px rgb(16 24 40 / 18%), 0 2px 6px rgb(16 24 40 / 8%);
+  --bar: #1b2330; --bar-text: #eef2f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1218; --surface: #121821; --surface-2: #161d27; --surface-3: #1d2531; --side: #0f141b;
+    --line: #1f2834; --line-strong: #2f3a4a; --border-strong: #364255;
+    --text: #e2e8f0; --muted: #98a3b5; --faint: #8794a8; --link: #8db2ff;
+    --accent: #2f5bd3; --accent-soft: #172340; --hover: #171f2a; --selrow: #18233a; --focus: #8db2ff;
+    --up: #3fbf74; --warn: #e8b23a; --down: #f0645e; --none: #3a4556;
+    --up-fg: #82d6a0; --up-bg: #15291e; --warn-fg: #f0c463; --warn-bg: #2c2412;
+    --down-fg: #ff9e9a; --down-bg: #331a1b; --none-fg: #a7b1bf; --none-bg: #1f2732;
+    --att-fg: #c8b0ff; --att-bg: #251d3d; --unc-fg: #ffb57a; --unc-bg: #33210f;
+    --meter: #5b8ff0; --track: #273243;
+    --shadow: 0 16px 40px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 35%);
+    --bar: #e9eef5; --bar-text: #121821;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 4px; }
+.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.dim { color: var(--muted); }
+mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; }
+input[type="checkbox"] { accent-color: var(--accent); margin: 0; width: 14px; height: 14px; cursor: pointer; }
+
+header.top { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--surface); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+.rev { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rev code { font-family: var(--mono); background: var(--surface-3); color: var(--text); padding: 1px 5px; border-radius: 4px; }
+.stats { margin-left: auto; display: flex; gap: 6px; }
+.stat { display: flex; flex-direction: column; padding: 3px 12px; border-left: 1px solid var(--line); }
+.stat small { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; }
+.stat span { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: baseline; white-space: nowrap; }
+.stat b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.stat .i { width: 11px; height: 11px; }
+.stat em { font-style: normal; display: inline-flex; align-items: center; gap: 2px; }
+
+.app { flex: 1; display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 0; }
+aside.facets { background: var(--side); border-right: 1px solid var(--line); overflow: auto; padding: 12px 10px 70px; }
+.search { position: relative; margin-bottom: 12px; }
+.search .i { position: absolute; left: 8px; top: 8px; color: var(--faint); }
+.search input { width: 100%; height: 30px; padding: 0 28px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.search kbd { position: absolute; right: 7px; top: 6px; font: 11px var(--mono); color: var(--faint); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; }
+.facet { border: 0; margin: 0 0 12px; padding: 0; }
+.facet legend { display: flex; width: 100%; padding: 0 6px 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.facet legend button { margin-left: auto; border: 0; background: none; color: var(--link); font-size: 11px; cursor: pointer; text-transform: none; letter-spacing: 0; padding: 0; }
+.fv { position: relative; display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 5px; cursor: pointer; user-select: none; isolation: isolate; }
+.fb { width: 28px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; flex: none; }
+.fb i { display: block; height: 100%; width: var(--w); background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.fv .fb { margin-left: auto; }
+.fv .fb + .n { margin-left: 0; min-width: 18px; text-align: right; }
+.fv:hover { background: var(--hover); }
+.fv .n { margin-left: auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fv .only { display: none; border: 0; background: none; color: var(--link); font-size: 11px; padding: 0 2px; cursor: pointer; }
+.fv:hover .only, .fv:focus-within .only { display: inline; }
+.fv.zero { color: var(--faint); }
+.fv .i { width: 13px; height: 13px; }
+
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.toolbar .lbl { font-size: 12px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--muted); font-weight: 550; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--link); }
+.btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 6px; padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.btn:hover { background: var(--hover); }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); background: var(--surface-3); border-radius: 999px; padding: 2px 4px 2px 10px; }
+.chip button { border: 0; background: var(--surface); border-radius: 999px; padding: 1px 8px; cursor: pointer; color: var(--link); font-size: 12px; }
+.toolbar .count { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.menuwrap { position: relative; }
+.menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); padding: 6px; width: 220px; display: none; }
+.menu.open { display: block; }
+.menu label { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px; }
+.menu label:hover { background: var(--hover); }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
+.menu .hint { font-size: 11px; color: var(--faint); padding: 2px 6px; }
+
+.gridwrap { flex: 1; overflow: auto; min-height: 0; background: var(--surface); }
+table.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.5px; }
+.grid th, .grid td { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--surface); text-align: left; }
+.grid thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); font-weight: 600; font-size: 11.5px; color: var(--muted); height: 32px; border-bottom-color: var(--line-strong); }
+.grid th.stk, .grid td.stk { position: sticky; z-index: 2; }
+.grid thead th.stk { z-index: 4; }
+.grid .lastStk { box-shadow: 1px 0 0 var(--line-strong), 6px 0 8px -6px rgb(0 0 0 / 18%); }
+.grid th .sort { display: flex; align-items: center; gap: 4px; width: 100%; border: 0; background: none; padding: 0; cursor: pointer; color: inherit; font-weight: 600; font-size: 11.5px; text-align: left; }
+.grid th.num .sort { justify-content: flex-end; }
+.grid th .sort .i { width: 11px; height: 11px; opacity: 0; }
+.grid th[aria-sort] .sort { color: var(--link); }
+.grid th[aria-sort] .sort .i, .grid th .sort:hover .i { opacity: 1; }
+.grid th[aria-sort="descending"] .sort .i { transform: rotate(180deg); }
+.grid td.num, .grid th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.grid .sel { width: 36px; text-align: center; padding: 0; }
+.grid tbody tr:hover td { background: var(--hover); }
+.grid tbody tr.picked td { background: var(--selrow); }
+.grid tbody tr.open td { background: var(--accent-soft); }
+.grid tbody tr.open td.stk:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.grid tr.ctx td { color: var(--faint); }
+.grid tr.ctx td > * { opacity: 0.7; }
+.grid tr.unm td { color: var(--muted); }
+.grid tr.grp td { height: 36px; background: var(--surface-2); border-bottom-color: var(--line-strong); padding: 0; }
+.grid tr.grp:hover td { background: var(--surface-3); }
+.gh { position: sticky; left: 0; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 11px; width: max-content; max-width: calc(100vw - 260px); }
+.gh .tg { width: 20px; height: 20px; border: 0; background: none; display: grid; place-items: center; cursor: pointer; border-radius: 4px; color: var(--muted); }
+.gh .tg:hover { background: var(--line); }
+.gh .tg .i { width: 12px; transition: transform 0.12s; }
+.gh .tg[aria-expanded="true"] .i { transform: rotate(90deg); }
+.gh .gt { font-weight: 650; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.gh .ga { color: var(--muted); font-size: 12px; display: flex; gap: 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.gh .cnt { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; font-size: 11.5px; color: var(--muted); }
+.dist { display: inline-flex; width: 64px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--track); }
+.dist i { display: block; height: 100%; }
+
+.nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.nm button.open { border: 0; background: none; padding: 0; font-weight: 600; color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; text-align: left; min-width: 0; }
+.nm button.open:hover { color: var(--link); text-decoration: underline; }
+.unm .nm button.open { font-weight: 500; font-style: italic; color: var(--muted); }
+.nm .lk { margin-left: auto; }
+.lk { display: inline-grid; place-items: center; height: 20px; min-width: 20px; padding: 0 3px; border-radius: 4px; color: var(--muted); flex: none; }
+.lk:hover { background: var(--accent-soft); color: var(--link); text-decoration: none; }
+.lk .i { width: 13px; height: 13px; }
+.pve { font: 700 8.5px/1 var(--mono); border: 1.3px solid currentColor; border-radius: 3px; padding: 2px 2px 1px; }
+.ty { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.ty .i { color: var(--faint); }
+.ty.host .i { color: var(--accent); }
+.path { color: var(--muted); }
+.path .sep { color: var(--faint); margin: 0 3px; }
+.tag { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 17px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-weight: 500; }
+.tag.up { background: var(--up-bg); color: var(--up-fg); } .tag.down { background: var(--down-bg); color: var(--down-fg); }
+.tag.warn { background: var(--warn-bg); color: var(--warn-fg); } .tag.att { background: var(--att-bg); color: var(--att-fg); }
+.tag.unc { background: var(--unc-bg); color: var(--unc-fg); } .tag.outline { background: none; border: 1px dashed var(--border-strong); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; line-height: 19px; padding: 0 8px 0 5px; border-radius: 5px; }
+.pill .i { width: 12px; height: 12px; stroke-width: 1.8; }
+.pill.up { background: var(--up-bg); color: var(--up-fg); } .pill.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.pill.down { background: var(--down-bg); color: var(--down-fg); } .pill.unknown { background: var(--none-bg); color: var(--none-fg); }
+.u-warn { color: var(--warn-fg); font-weight: 600; } .u-down { color: var(--down-fg); font-weight: 600; }
+.spark { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.spark svg { width: 84px; height: 18px; flex: none; }
+.spark .v { color: var(--muted); font-variant-numeric: tabular-nums; }
+.sl { fill: none; stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.sa { fill: color-mix(in srgb, var(--accent) 13%, transparent); }
+.sd { fill: var(--down); }
+.meters { display: flex; gap: 9px; }
+.m { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.m b { font-size: 9.5px; color: var(--faint); font-weight: 600; }
+.m .bar { width: 22px; height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.m .bar i { display: block; height: 100%; background: var(--meter); }
+.m.stale { opacity: 0.6; font-style: italic; }
+.more { font-size: 11px; color: var(--muted); background: var(--surface-3); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.empty { padding: 70px 20px; text-align: center; color: var(--muted); }
+.empty h2 { margin: 0 0 6px; font-size: 15px; color: var(--text); }
+
+/* bulk bar + toast: bottom centre, clear of the prototype switcher */
+.bulk { position: fixed; left: calc(50% + 118px); bottom: 18px; transform: translate(-50%, 150%); transition: transform 0.18s; z-index: 50; background: var(--bar); color: var(--bar-text); border-radius: 10px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 14px; font-size: 12.5px; }
+.bulk.on { transform: translate(-50%, 0); }
+.bulk b { margin-right: 8px; font-variant-numeric: tabular-nums; }
+.bulk button { border: 0; background: none; color: inherit; padding: 6px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; font-weight: 550; }
+.bulk button:hover { background: color-mix(in srgb, var(--bar-text) 14%, transparent); }
+.bulk button:disabled { opacity: 0.45; cursor: default; background: none; }
+.bulk .sepv { width: 1px; height: 18px; background: color-mix(in srgb, var(--bar-text) 25%, transparent); margin: 0 4px; }
+.toast { position: fixed; left: calc(50% + 118px); bottom: 70px; transform: translateX(-50%); z-index: 51; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow); border-radius: 8px; padding: 9px 14px; font-size: 12.5px; max-width: 520px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+.toast.on { opacity: 1; }
+.toast ul { margin: 4px 0 0; padding-left: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+/* expanded record */
+.panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(500px, 100vw); background: var(--surface); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow); z-index: 60; transform: translateX(105%); transition: transform 0.18s; display: flex; flex-direction: column; }
+.panel.open { transform: none; }
+.panel.instant { transition: none; }
+.ph { padding: 14px 18px 12px; border-bottom: 1px solid var(--line); position: relative; }
+.ph .crumb { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
+.ph .crumb button, .pb button.go { border: 0; background: none; color: var(--link); padding: 0; cursor: pointer; font-size: inherit; }
+.ph h2 { margin: 4px 0 2px; font-size: 18px; display: flex; gap: 8px; align-items: center; }
+.ph .close { position: absolute; right: 10px; top: 10px; border: 0; background: none; border-radius: 6px; padding: 6px; cursor: pointer; color: var(--muted); }
+.ph .close:hover { background: var(--hover); }
+.ph .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ph .acts a { display: inline-flex; gap: 5px; align-items: center; padding: 5px 10px; background: var(--accent); color: var(--accent-text); border-radius: 6px; font-size: 12px; font-weight: 550; }
+.ph .acts a.sec { background: var(--surface-3); color: var(--text); }
+.pb { flex: 1; overflow: auto; padding: 0 18px 80px; }
+.pb section { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.pb h3 { margin: 0 0 9px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; display: flex; }
+.pb h3 span { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 450; }
+.props { display: grid; grid-template-columns: 128px 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.props > div { padding: 6px 10px; border-bottom: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+.props > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.props .k { color: var(--muted); background: var(--surface-2); display: flex; gap: 6px; align-items: center; }
+.ups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.ups div { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+.ups small { display: block; font-size: 11px; color: var(--muted); }
+.ups b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.chart { margin-bottom: 12px; }
+.chart .lb { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.chart svg { display: block; width: 100%; }
+.chart .ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+.b-up { fill: var(--up); } .b-warn { fill: var(--warn); } .b-down { fill: var(--down); }
+.lst { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; }
+.lst li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; min-width: 0; }
+.lst li:last-child { border-bottom: 0; }
+.lst .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.callout { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--none-bg); font-size: 12.5px; margin-bottom: 6px; }
+.big { height: 7px; border-radius: 4px; background: var(--track); overflow: hidden; margin-top: 3px; }
+.big i { display: block; height: 100%; background: var(--meter); }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 208px minmax(0, 1fr); }
+  .stat:nth-child(n+3) { display: none; }
+  .bulk, .toast { left: calc(50% + 104px); }
+}
+@media (max-width: 760px) {
+  body { overflow: auto; height: auto; }
+  .app { grid-template-columns: 1fr; }
+  aside.facets { max-height: 40vh; }
+  .stats { display: none; }
+  .bulk, .toast { left: 50%; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Inventory</h1>
+  <span class="rev" id="rev"></span>
+  <div class="stats" id="stats"></div>
+</header>
+<div class="app">
+  <aside class="facets" aria-label="Filters">
+    <div class="search">
+      <svg class="i" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+      <input id="q" type="search" placeholder="Search all rows" aria-label="Search hosts, guests and services" autocomplete="off">
+      <kbd aria-hidden="true">/</kbd>
+    </div>
+    <div id="facets"></div>
+  </aside>
+  <main>
+    <div class="toolbar">
+      <span class="lbl" id="groupLbl">Group by</span>
+      <div class="seg" role="group" aria-labelledby="groupLbl" id="group"></div>
+      <div class="menuwrap">
+        <button class="btn" id="colBtn" aria-haspopup="true" aria-expanded="false"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11M10 2.5v11"/></svg>Columns <span class="dim" id="colCount"></span></button>
+        <div class="menu" id="colMenu" role="group" aria-label="Visible columns"></div>
+      </div>
+      <span id="unmChip"></span>
+      <span class="count" id="count" aria-live="polite"></span>
+    </div>
+    <div class="gridwrap" id="wrap"></div>
+  </main>
+</div>
+<div class="bulk" id="bulk" role="toolbar" aria-label="Bulk actions"></div>
+<div class="toast" id="toast" role="status"></div>
+<aside class="panel" id="panel" aria-label="Record details" aria-hidden="true"></aside>
+
+<script src="data.js"></script>
+<script src="nav.js"></script>
+<script>
+(() => {
+const INV = window.INV, F = INV.fmt;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const P = {
+  chev: '<path d="M6 3.5L10.5 8 6 12.5"/>',
+  arrow: '<path d="M8 13V3M4 7l4-4 4 4"/>',
+  host: '<rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.75h.01M5 11.25h.01M8 4.75h3M8 11.25h3"/>',
+  qemu: '<rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M5.5 13.5h5M8 11v2.5"/>',
+  lxc: '<path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z"/><path d="M2.5 4.8L8 7.8l5.5-3M8 7.8v6.4"/>',
+  service: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="2.25"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="2.25"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
+  ext: '<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5"/><path d="M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3"/>',
+  link: '<path d="M6.5 9.5l3-3"/><path d="M7.2 4.3l1-1a2.6 2.6 0 013.6 3.6l-1 1M8.8 11.7l-1 1a2.6 2.6 0 01-3.6-3.6l1-1"/>',
+  copy: '<rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M11 5V3.5A1 1 0 0010 2.5H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/>',
+  up: '<circle cx="8" cy="8" r="6"/><path d="M5.3 8.2l1.8 1.8 3.6-3.8"/>',
+  warn: '<path d="M8 2.2l6.2 11H1.8z"/><path d="M8 6.5v3M8 11.4h.01"/>',
+  down: '<rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.5"/><path d="M5.7 5.7l4.6 4.6M10.3 5.7l-4.6 4.6"/>',
+  unknown: '<circle cx="8" cy="8" r="6" stroke-dasharray="2.4 1.9"/><path d="M5.5 8h5"/>',
+  x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 5.2h.01"/>',
+};
+const ic = (k, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${P[k]}</svg>`;
+const LIVE = ["down", "warn", "unknown", "up"];
+const SEV = { down: 0, warn: 1, unknown: 2, up: 3 };
+const pill = (st) => `<span class="pill ${st}">${ic(st)}${INV.liveness[st].label}</span>`;
+const RT = { success: "up", danger: "down", attention: "att", uncertain: "unc", neutral: "" };
+const runTag = (rs) => { const r = INV.runLabels[rs]; return `<span class="tag ${RT[r.tone] ?? ""}">${esc(r.label)}</span>`; };
+const uCls = (p) => (p == null ? "" : p >= 99.9 ? "" : p >= 99 ? "u-warn" : "u-down");
+const pveGuest = (n, kind, vmid) => `${n.proxmoxUrl}#v1:0:=${kind}%2F${vmid}:4:::::::`;
+
+// ---- rows: one per host, guest, service and unmanaged guest ----
+const ROWS = [];
+for (const n of INV.nodes) {
+  ROWS.push({ id: "h:" + n.id, type: "host", d: n, node: n, name: n.name, status: n.status, check: n.check, kind: null, cat: null, managed: true, hay: INV.haystack("node", n), parent: null });
+  for (const g of INV.guestsOf(n.id)) {
+    ROWS.push({ id: "g:" + g.id, type: "guest", d: g, node: n, guest: g, name: g.id, status: g.status, check: g.check, kind: g.kind, cat: null, managed: true, hay: INV.haystack("guest", g), parent: "h:" + n.id });
+    for (const s of INV.servicesOf(g.id)) ROWS.push({ id: "s:" + s.id, type: "service", d: s, node: n, guest: g, name: s.name, status: s.status, check: s.check, kind: null, cat: s.category, managed: true, hay: INV.haystack("service", s), parent: "g:" + g.id });
+  }
+  for (const x of n.unmanaged) ROWS.push({ id: `x:${n.id}:${x.vmid}`, type: "guest", d: x, node: n, name: x.name, status: "unknown", check: null, kind: x.kind, cat: null, managed: false, hay: INV.haystack("unmanaged", x) + (x.template ? " template" : "") + " unmanaged", parent: "h:" + n.id });
+}
+ROWS.forEach((r, i) => (r.ord = i));
+const byId = new Map(ROWS.map((r) => [r.id, r]));
+const cats = [...new Set(INV.services.map((s) => s.category))].sort();
+const typeLabel = (r) => (r.type === "host" ? "Host" : r.type === "service" ? "Service" : r.kind === "lxc" ? "Container" : "VM");
+const typeIcon = (r) => ic(r.type === "guest" ? r.kind : r.type);
+const pathOf = (r) => (r.type === "host" ? [] : r.type === "service" ? [r.node.name, r.guest.id] : [r.node.name]);
+const addrOf = (r) => (r.type === "host" ? r.d.address : r.type === "guest" && r.managed ? r.d.address : null);
+const urlsOf = (r) => (r.type === "service" ? r.d.urls.map((u) => u.url) : r.type === "host" ? [r.d.proxmoxUrl] : []);
+
+// ---- facets ----
+const FACETS = [
+  { id: "type", label: "Type", get: (r) => r.type, values: [["host", "Host", ic("host")], ["guest", "Guest", ic("qemu")], ["service", "Service", ic("service")]] },
+  { id: "live", label: "Liveness", get: (r) => r.status, values: LIVE.map((s) => [s, INV.liveness[s].label, `<span class="pill ${s}" style="padding:0 3px">${ic(s)}</span>`]) },
+  { id: "host", label: "Proxmox host", get: (r) => r.node.id, values: INV.nodes.map((n) => [n.id, n.name, `<span class="pill ${n.status}" style="padding:0 3px">${ic(n.status)}</span>`]) },
+  { id: "kind", label: "Guest kind", get: (r) => r.kind || "-", values: [["qemu", "VM", ic("qemu")], ["lxc", "Container", ic("lxc")], ["-", "Not a guest", ""]] },
+  { id: "cat", label: "Service category", get: (r) => r.cat || "-", values: [...cats.map((c) => [c, c, ""]), ["-", "Not a service", ""]] },
+  { id: "managed", label: "Management", get: (r) => (r.managed ? "managed" : "unmanaged"), values: [["managed", "Managed", ""], ["unmanaged", "Unmanaged", ""]] },
+];
+const allOf = (f) => new Set(f.values.map((v) => v[0]));
+
+// ---- columns ----
+const sevOf = (r) => SEV[r.status];
+const COLS = [
+  { id: "type", label: "Type", w: 100, stk: true, sort: (r) => ({ host: 0, guest: 1, service: 2 })[r.type] * 10 + (r.kind === "lxc" ? 1 : 0) },
+  { id: "name", label: "Name", w: 214, stk: true, lock: true, sort: (r) => r.name },
+  { id: "path", label: "Parent", w: 164, sort: (r) => pathOf(r).join("/") || null },
+  { id: "live", label: "Liveness", w: 102, sort: sevOf },
+  { id: "h24", label: "24h", w: 66, num: true, sort: (r) => r.check?.uptime.h24 ?? null },
+  { id: "d7", label: "7d", w: 66, num: true, sort: (r) => r.check?.uptime.d7 ?? null },
+  { id: "d30", label: "30d", w: 66, num: true, sort: (r) => r.check?.uptime.d30 ?? null },
+  { id: "lat", label: "Latency, 24h", w: 140, sort: (r) => r.check?.ms ?? null },
+  { id: "since", label: "Last change", w: 98, sort: (r) => r.check?.since ?? null },
+  { id: "addr", label: "Address / URL", w: 220, sort: (r) => addrOf(r) ?? urlsOf(r)[0] ?? null },
+  { id: "run", label: "Run status", w: 136, sort: (r) => (r.type === "host" || !r.managed ? null : INV.runLabels[r.d.runStatus].label) },
+  { id: "res", label: "Resources", w: 206, sort: (r) => (r.type === "host" ? (r.d.memory.used ?? 0) / r.d.memory.total : r.type === "guest" ? r.d.memory : null) },
+  { id: "cat", label: "Category", w: 100, hidden: true, sort: (r) => r.cat },
+  { id: "vmid", label: "VMID", w: 70, num: true, hidden: true, sort: (r) => (r.type === "guest" ? r.d.vmid : null) },
+  { id: "hostname", label: "Hostname", w: 190, hidden: true, sort: (r) => (r.type === "guest" && r.managed ? r.d.hostname : null) },
+  { id: "uptime", label: "Machine uptime", w: 120, hidden: true, sort: (r) => (r.type === "service" ? null : r.d.uptimeSeconds) },
+  { id: "version", label: "PVE version", w: 100, hidden: true, sort: (r) => (r.type === "host" ? r.d.version : null) },
+  { id: "workflow", label: "Workflow", w: 150, hidden: true, sort: (r) => r.d.workflow ?? null },
+];
+
+// ---- state ----
+const S = {
+  q: "", f: Object.fromEntries(FACETS.map((f) => [f.id, allOf(f)])), group: "host", sort: null, dir: 1,
+  cols: new Set(COLS.filter((c) => !c.hidden).map((c) => c.id)), collapsed: new Set(), picked: new Set(), open: null, anchor: null,
+};
+S.f.managed = new Set(["managed"]);
+try { const saved = JSON.parse(localStorage.getItem("inv-grid-cols")); if (Array.isArray(saved)) S.cols = new Set(saved.filter((c) => COLS.some((x) => x.id === c))); } catch {}
+S.cols.add("name");
+
+const passes = (r, except) => FACETS.every((f) => f.id === except || S.f[f.id].has(f.get(r)));
+const textOk = (r) => !S.q || r.hay.includes(S.q) || r.name.toLowerCase().includes(S.q);
+function visibleRows() {
+  const hit = ROWS.filter((r) => passes(r) && textOk(r));
+  const ids = new Set(hit.map((r) => r.id));
+  const ctx = new Set();
+  if (S.q) for (const r of hit) for (let p = r.parent && byId.get(r.parent); p; p = p.parent && byId.get(p.parent)) if (!ids.has(p.id)) ctx.add(p.id);
+  return { rows: ROWS.filter((r) => ids.has(r.id) || ctx.has(r.id)), ctx, hits: hit.length };
+}
+
+// ---- grouping ----
+const GROUPS = {
+  host: { label: "Host", key: (r) => [r.node.id, INV.nodes.indexOf(r.node)], title: (k) => { const n = INV.nodeById[k]; return `${ic("host")}${esc(n.name)} <span class="dim" style="font-weight:400">PVE ${esc(n.version)} · ${n.online ? "online" : "offline"}</span>`; }, statusOf: (k) => INV.nodeById[k].status },
+  guest: { label: "Guest", key: (r) => (r.type === "host" ? ["~hosts", -1] : !r.managed ? ["~unmanaged", 999] : [(r.guest || r.d).id, INV.guests.indexOf(r.guest || r.d)]),
+    title: (k) => (k === "~hosts" ? `${ic("host")}Proxmox hosts` : k === "~unmanaged" ? `<span class="dim">Unmanaged guests</span>` : `${ic(INV.guestById[k].kind)}${esc(k)} <span class="dim" style="font-weight:400">on ${esc(INV.guestById[k].node)}</span>`),
+    statusOf: (k) => INV.guestById[k]?.status },
+  live: { label: "Liveness", key: (r) => [r.status, SEV[r.status]], title: (k) => `${INV.liveness[k].label}`, statusOf: (k) => k },
+  cat: { label: "Category", key: (r) => (r.cat ? [r.cat, 0] : [r.type === "host" ? "~Hosts" : "~Guests", r.type === "host" ? 1 : 2]), title: (k) => (k.startsWith("~") ? `<span class="dim">${k.slice(1)} (not a service)</span>` : esc(k)) },
+  none: { label: "None", key: () => ["all", 0] },
+};
+function aggregates(rows) {
+  const real = rows.filter((r) => !r.ctx);
+  const worst = real.reduce((w, r) => (SEV[r.status] < SEV[w] && r.status !== "unknown" ? r.status : w), "up");
+  const checked = real.filter((r) => r.check);
+  const avg = checked.length ? checked.reduce((a, r) => a + r.check.uptime.h24, 0) / checked.length : null;
+  const dist = Object.fromEntries(LIVE.map((s) => [s, real.filter((r) => r.status === s).length]));
+  return { n: real.length, worst: checked.length ? worst : "unknown", avg, dist };
+}
+
+// ---- cells ----
+function spark(c) {
+  if (!c) return `<span class="dim">—</span>`;
+  const vals = c.latency.filter((v) => v != null), H = 18;
+  const max = Math.max(1, ...vals) * 1.08;
+  let line = "", area = "", seg = [], downs = "";
+  const flush = () => { if (seg.length > 1) { line += "M" + seg.join("L"); area += `M${seg[0].split(",")[0]},${H}L${seg.join("L")}L${seg.at(-1).split(",")[0]},${H}Z`; } seg = []; };
+  c.latency.forEach((v, i) => { if (v == null) { flush(); downs += `<rect x="${i}" y="${H - 2.5}" width="1" height="2.5" class="sd"/>`; } else seg.push(`${i},${(H - 1 - (v / max) * (H - 3)).toFixed(1)}`); });
+  flush();
+  return `<span class="spark"><svg viewBox="0 0 95 ${H}" preserveAspectRatio="none" role="img" aria-label="Latency, last 24 hours"><path class="sa" d="${area}"/><path class="sl" d="${line}"/>${downs}</svg><span class="v">${F.ms(c.ms)}</span></span>`;
+}
+function meter(label, frac, title, stale) {
+  return `<span class="m${stale ? " stale" : ""}" title="${esc(title)}"><b>${label}</b><span class="bar"><i style="width:${frac == null ? 0 : Math.max(3, frac * 100)}%"></i></span>${frac == null ? "—" : Math.round(frac * 100) + "%"}</span>`;
+}
+const hl = (t) => { const s = String(t); if (!S.q) return esc(s); const i = s.toLowerCase().indexOf(S.q); return i < 0 ? esc(s) : esc(s.slice(0, i)) + "<mark>" + esc(s.slice(i, i + S.q.length)) + "</mark>" + esc(s.slice(i + S.q.length)); };
+const pveA = (href, what) => `<a class="lk" href="${esc(href)}" target="_blank" rel="noopener" title="Open in Proxmox" aria-label="Open ${esc(what)} in Proxmox"><span class="pve">PVE</span></a>`;
+const extA = (u) => `<a class="lk" href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}" aria-label="Open ${esc(u)}">${ic("ext")}</a>`;
+function cell(col, r) {
+  const d = r.d, c = r.check;
+  switch (col.id) {
+    case "type": return `<span class="ty ${r.type}">${typeIcon(r)}${typeLabel(r)}</span>`;
+    case "name": {
+      const link = r.type === "host" ? pveA(d.proxmoxUrl, d.name) : r.type === "guest" ? pveA(r.managed ? INV.proxmoxGuestUrl(d) : pveGuest(r.node, d.kind, d.vmid), r.name) : d.urls[0] ? extA(d.urls[0].url) : "";
+      const tags = !r.managed ? `<span class="tag outline">${d.template ? "template" : "unmanaged"}</span>` : "";
+      return `<span class="nm"><button class="open" data-open="${esc(r.id)}">${hl(r.name)}</button>${tags}${link}</span>`;
+    }
+    case "path": { const p = pathOf(r); return p.length ? `<span class="path">${p.map(esc).join('<span class="sep">›</span>')}</span>` : `<span class="dim">—</span>`; }
+    case "live": return r.managed ? pill(r.status) : `<span class="dim" title="Unmanaged guests have no checks">not monitored</span>`;
+    case "h24": case "d7": case "d30": { const p = c?.uptime[col.id]; return p == null ? `<span class="dim">—</span>` : `<span class="${uCls(p)}">${F.pct(p)}</span>`; }
+    case "lat": return spark(c);
+    case "since": return c ? `<span title="${esc(INV.liveness[c.status].label)} since ${esc(F.time(c.since))}">${esc(F.ago(c.since).replace(" ago", ""))}</span>` : `<span class="dim">—</span>`;
+    case "addr":
+      if (r.type === "host") return `<a href="${esc(d.proxmoxUrl)}" target="_blank" rel="noopener" class="mono">${esc(d.proxmoxUrl.replace(/^https?:\/\//, "").replace(/\/$/, ""))}</a>`;
+      if (r.type === "service") return d.urls.length ? `<a href="${esc(d.urls[0].url)}" target="_blank" rel="noopener">${esc(d.urls[0].host)}</a>${d.urls.length > 1 ? `<span class="more" title="${esc(d.urls.slice(1).map((u) => u.host).join("\n"))}">+${d.urls.length - 1}</span>` : ""}` : `<span class="dim">no URL</span>`;
+      return r.managed && d.address ? `<span class="mono">${esc(d.address)}</span>` : `<span class="dim">${r.managed ? "no address" : "—"}</span>`;
+    case "run": return r.type === "host" ? (d.online ? `<span class="dim">—</span>` : `<span class="tag down">offline</span>`) : r.managed ? runTag(d.runStatus) : `<span class="dim">${esc(d.status)}</span>`;
+    case "res":
+      if (r.type === "host") { const st = !d.online, lk = st ? " (last known)" : ""; return `<span class="meters">${meter("CPU", d.cpu.used, `${d.cpu.cores} cores${lk}`, st)}${meter("MEM", d.memory.used == null ? null : d.memory.used / d.memory.total, `${F.bytes(d.memory.used)} / ${F.bytes(d.memory.total)}${lk}`, st)}${meter("DISK", d.disk.used == null ? null : d.disk.used / d.disk.total, `${F.bytes(d.disk.used)} / ${F.bytes(d.disk.total)}${lk}`, st)}</span>`; }
+      if (r.type === "guest") return `<span class="dim">${d.cores} vCPU · ${F.bytes(d.memory)}${d.disk ? " · " + F.bytes(d.disk) : ""}</span>`;
+      return `<span class="dim">—</span>`;
+    case "cat": return r.cat ? `<span class="tag">${esc(r.cat)}</span>` : `<span class="dim">—</span>`;
+    case "vmid": return r.type === "guest" ? `<span class="mono">${d.vmid}</span>` : `<span class="dim">—</span>`;
+    case "hostname": return r.type === "guest" && r.managed ? `<span class="mono">${esc(d.hostname)}</span>` : `<span class="dim">—</span>`;
+    case "uptime": return r.type === "service" ? `<span class="dim">—</span>` : esc(F.duration(d.uptimeSeconds));
+    case "version": return r.type === "host" ? esc(d.version) : `<span class="dim">—</span>`;
+    case "workflow": return d.workflow ? `<span class="mono">${esc(d.workflow)}</span>` : `<span class="dim">—</span>`;
+  }
+  return "";
+}
+
+// ---- render ----
+let ORDER = []; // ids of selectable rows in display order
+function render() {
+  const { rows, ctx, hits } = visibleRows();
+  rows.forEach((r) => (r.ctx = ctx.has(r.id)));
+  const cols = COLS.filter((c) => S.cols.has(c.id));
+  // sticky offsets
+  let left = 36, lastStk = null;
+  for (const c of cols) { if (c.stk && cols.slice(0, cols.indexOf(c)).every((x) => x.stk)) { c.left = left; left += c.w; lastStk = c.id; } else c.left = null; }
+  const total = 36 + cols.reduce((a, c) => a + c.w, 0);
+  const sc = S.sort && COLS.find((c) => c.id === S.sort);
+  const cmp = (a, b) => {
+    if (sc) {
+      const x = sc.sort(a), y = sc.sort(b);
+      if (x == null || y == null) { if (x != null) return -1; if (y != null) return 1; }
+      else if (x !== y) return (typeof x === "string" ? x.localeCompare(y) : x - y) * S.dir;
+    }
+    return a.ord - b.ord;
+  };
+  // groups
+  const G = GROUPS[S.group], gm = new Map();
+  for (const r of rows) { const [k, o] = G.key(r); if (!gm.has(k)) gm.set(k, { k, o, rows: [] }); gm.get(k).rows.push(r); }
+  const groups = [...gm.values()].sort((a, b) => a.o - b.o || a.k.localeCompare(b.k));
+  groups.forEach((g) => g.rows.sort(cmp));
+  ORDER = [];
+  const stkStyle = (c) => (c.left != null ? ` stk${c.id === lastStk ? " lastStk" : ""}" style="left:${c.left}px` : "");
+  const head = `<thead><tr><th class="sel stk" style="left:0"><input type="checkbox" id="pickAll" aria-label="Select all visible rows"></th>${cols.map((c) => `<th class="${c.num ? "num" : ""}${stkStyle(c)}"${S.sort === c.id ? ` aria-sort="${S.dir > 0 ? "ascending" : "descending"}"` : ""} scope="col"><button class="sort" data-sort="${c.id}">${esc(c.label)}${ic("arrow")}</button></th>`).join("")}</tr></thead>`;
+  let body = "";
+  for (const g of groups) {
+    if (S.group !== "none") {
+      const a = aggregates(g.rows), gid = S.group + ":" + g.k, shut = S.collapsed.has(gid);
+      const ids = g.rows.filter((r) => !r.ctx).map((r) => r.id), np = ids.filter((id) => S.picked.has(id)).length;
+      const dist = a.n ? LIVE.filter((s) => a.dist[s]).map((s) => `<i style="width:${(a.dist[s] / a.n) * 100}%;background:var(--${s === "unknown" ? "none" : s})" title="${INV.liveness[s].label}: ${a.dist[s]}"></i>`).join("") : "";
+      body += `<tr class="grp"><td colspan="${cols.length + 1}"><div class="gh">
+        <input type="checkbox" data-pickgroup="${esc(g.k)}" aria-label="Select group" ${np && np === ids.length ? "checked" : ""} data-ind="${np && np < ids.length ? 1 : 0}">
+        <button class="tg" data-grp="${esc(gid)}" aria-expanded="${!shut}" aria-label="${shut ? "Expand" : "Collapse"} group">${ic("chev")}</button>
+        <span class="gt">${G.title(g.k)}</span>
+        <span class="ga"><span class="cnt">${a.n}</span>${pill(a.worst)}<span title="Average 24 h uptime across checked rows">avg ${a.avg == null ? "—" : F.pct(a.avg)} <span class="dim">24h</span></span><span class="dist" aria-hidden="true">${dist}</span></span></div></td></tr>`;
+      if (shut) continue;
+    }
+    for (const r of g.rows) {
+      if (!r.ctx) ORDER.push(r.id);
+      const cls = [r.ctx ? "ctx" : "", r.managed ? "" : "unm", S.picked.has(r.id) ? "picked" : "", S.open === r.id ? "open" : ""].join(" ");
+      body += `<tr class="${cls}" data-id="${esc(r.id)}"${r.ctx ? ' title="Shown as the parent of a match"' : ""}><td class="sel stk" style="left:0">${r.ctx ? "" : `<input type="checkbox" data-pick="${esc(r.id)}" aria-label="Select ${esc(r.name)}"${S.picked.has(r.id) ? " checked" : ""}>`}</td>${cols.map((c) => `<td class="${c.num ? "num" : ""}${stkStyle(c)}">${cell(c, r)}</td>`).join("")}</tr>`;
+    }
+  }
+  const wrap = document.getElementById("wrap"), y = wrap.scrollTop, x = wrap.scrollLeft;
+  wrap.innerHTML = rows.length
+    ? `<table class="grid" style="width:${total}px"><colgroup><col style="width:36px">${cols.map((c) => `<col style="width:${c.w}px">`).join("")}</colgroup>${head}<tbody>${body}</tbody></table>`
+    : `<div class="empty"><h2>No rows match${S.q ? ` “${esc(S.q)}”` : ""}</h2><p>Loosen a filter or clear the search.</p><button class="btn" data-clearall>Clear all filters</button></div>`;
+  wrap.scrollTop = y; wrap.scrollLeft = x;
+  for (const el of wrap.querySelectorAll("[data-ind='1']")) el.indeterminate = true;
+  const pa = document.getElementById("pickAll");
+  if (pa) { const n = ORDER.filter((id) => S.picked.has(id)).length; pa.checked = n > 0 && n === ORDER.length; pa.indeterminate = n > 0 && n < ORDER.length; }
+  const unmanagedN = ROWS.filter((r) => !r.managed).length;
+  document.getElementById("count").textContent = `${hits} of ${ROWS.length} rows${ctx.size ? ` · ${ctx.size} parents for context` : ""}`;
+  document.getElementById("unmChip").innerHTML = S.f.managed.has("unmanaged") ? "" : `<span class="chip">${unmanagedN} unmanaged hidden<button data-showunm>Show</button></span>`;
+  renderFacets(); renderToolbar(); renderBulk(); writeHash();
+}
+function renderFacets() {
+  document.getElementById("facets").innerHTML = FACETS.map((f) => {
+    const all = S.f[f.id].size === f.values.length;
+    const counts = f.values.map(([v]) => ROWS.filter((r) => textOk(r) && passes(r, f.id) && f.get(r) === v).length);
+    const max = Math.max(1, ...counts);
+    return `<fieldset class="facet"><legend>${esc(f.label)}${f.id === "managed" ? "" : all ? "" : `<button data-fall="${f.id}">All</button>`}</legend>${f.values.map(([v, l, icon], i) => `<label class="fv${counts[i] ? "" : " zero"}" style="--w:${(counts[i] / max) * 100}%"><input type="checkbox" data-f="${f.id}" value="${esc(v)}"${S.f[f.id].has(v) ? " checked" : ""}>${icon}<span>${esc(l)}</span><button class="only" data-only="${f.id}" data-v="${esc(v)}" tabindex="-1">only</button><span class="fb" aria-hidden="true"><i></i></span><span class="n">${counts[i]}</span></label>`).join("")}</fieldset>`;
+  }).join("") + `<p class="dim" style="font-size:11.5px;margin:6px">Counts update with the other filters. Unmanaged guests have no checks.</p>`;
+}
+function renderToolbar() {
+  document.getElementById("group").innerHTML = Object.entries(GROUPS).map(([k, g]) => `<button data-group="${k}" aria-pressed="${S.group === k}">${g.label}</button>`).join("");
+  document.getElementById("colCount").textContent = `${S.cols.size}/${COLS.length}`;
+  document.getElementById("colMenu").innerHTML = COLS.map((c) => `<label><input type="checkbox" data-col="${c.id}"${S.cols.has(c.id) ? " checked" : ""}${c.lock ? " disabled" : ""}>${esc(c.label)}${c.lock ? ' <span class="dim">(always)</span>' : ""}</label>${c.id === "res" ? "<hr><div class=hint>More fields</div>" : ""}`).join("") + `<hr><label><button class="btn" data-colreset style="width:100%;justify-content:center">Reset to default</button></label>`;
+}
+function selectedRows() { return [...S.picked].map((id) => byId.get(id)).filter(Boolean); }
+function renderBulk() {
+  const rows = selectedRows(), urls = rows.flatMap(urlsOf), addrs = rows.map(addrOf).filter(Boolean).concat(rows.filter((r) => r.type === "service").flatMap((r) => r.d.urls.map((u) => u.host)));
+  const b = document.getElementById("bulk");
+  b.classList.toggle("on", rows.length > 0);
+  b.innerHTML = `<b>${rows.length} selected</b><button data-bulk="open"${urls.length ? "" : " disabled"}>${ic("ext")}Open URLs (${urls.length})</button><button data-bulk="copy"${addrs.length ? "" : " disabled"}>${ic("copy")}Copy addresses (${addrs.length})</button><span class="sepv"></span><button data-bulk="clear" aria-label="Clear selection">${ic("x")}</button>`;
+  b._urls = urls; b._addrs = addrs;
+}
+let tt;
+function toast(html) { const t = document.getElementById("toast"); t.innerHTML = html; t.classList.add("on"); clearTimeout(tt); tt = setTimeout(() => t.classList.remove("on"), 3200); }
+
+// ---- expanded record ----
+const panel = document.getElementById("panel");
+const props = (rows) => `<div class="props">${rows.filter(Boolean).map(([k, v]) => `<div class="k">${k}</div><div>${v}</div>`).join("")}</div>`;
+const go = (id, label) => `<button class="go" data-open="${esc(id)}">${esc(label)}</button>`;
+function strip(c, h = 24) {
+  const r = c.beats.map((b, i) => `<rect x="${i + 0.14}" width="0.72" height="${h}" rx="0.25" class="b-${b}"><title>${esc(F.time(INV.now - (96 - i) * 900000))} · ${INV.liveness[b].label}</title></rect>`).join("");
+  const dd = c.daily.map((p, i) => { const hh = Math.max(3, h * (p >= 99.9 ? 1 : 0.35 + 0.65 * Math.max(0, (p - 80) / 20))); return `<rect x="${i + 0.15}" y="${h - hh}" width="0.7" height="${hh}" rx="0.1" class="b-${p >= 99.9 ? "up" : p >= 99 ? "warn" : "down"}"><title>${29 - i} days ago · ${F.pct(p, 1)}</title></rect>`; }).join("");
+  const vals = c.latency.filter((v) => v != null), H = 44, max = Math.max(1, ...vals) * 1.1;
+  let line = "", seg = [];
+  const flush = () => { if (seg.length > 1) line += "M" + seg.join("L"); seg = []; };
+  c.latency.forEach((v, i) => (v == null ? flush() : seg.push(`${i},${(H - (v / max) * H).toFixed(1)}`)));
+  flush();
+  const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  return `<div class="chart"><div class="lb"><span>Last 24 h · 15 min beats</span><span>${c.beats.filter((b) => b !== "up").length} of 96 not up</span></div><svg viewBox="0 0 96 ${h}" preserveAspectRatio="none" style="height:${h}px">${r}</svg><div class="ax"><span>24 h ago</span><span>12 h</span><span>now</span></div></div>
+    <div class="chart"><div class="lb"><span>Last 30 days · daily uptime</span></div><svg viewBox="0 0 30 ${h}" preserveAspectRatio="none" style="height:${h}px">${dd}</svg><div class="ax"><span>30 d ago</span><span>15 d</span><span>today</span></div></div>
+    ${vals.length ? `<div class="chart"><div class="lb"><span>Response time, 24 h</span><span>min ${Math.min(...vals)} · avg ${avg} · max ${Math.max(...vals)} ms</span></div><svg viewBox="0 0 95 ${H}" preserveAspectRatio="none" style="height:${H}px"><path class="sl" d="${line}"/></svg></div>` : ""}`;
+}
+function uptimeBlock(c) {
+  if (!c) return "";
+  return `<section><h3>Uptime<span>${pill(c.status)} since ${esc(F.ago(c.since))}</span></h3><div class="ups">${["h24", "d7", "d30"].map((k) => `<div><small>${{ h24: "24 hours", d7: "7 days", d30: "30 days" }[k]}</small><b class="${uCls(c.uptime[k])}">${F.pct(c.uptime[k])}</b></div>`).join("")}</div>${strip(c)}</section>
+  <section><h3>Status changes<span>${c.events.length}</span></h3>${c.events.length ? `<ul class="lst">${c.events.map((e) => `<li>${pill(e.from)}<span class="dim">→</span>${pill(e.to)}<span class="grow"></span><span class="dim" title="${esc(F.time(e.at))}">${esc(F.ago(e.at))}</span></li>`).join("")}</ul>` : '<p class="dim" style="margin:0">No changes in 30 days.</p>'}</section>`;
+}
+function openRecord(id) {
+  S.open = id;
+  if (!id) { panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true"); return render(); }
+  const r = byId.get(id), d = r.d;
+  let acts = "", body = "";
+  const crumbs = [];
+  for (let p = r.parent && byId.get(r.parent); p; p = p.parent && byId.get(p.parent)) crumbs.unshift(go(p.id, p.name));
+  if (r.type === "host") {
+    acts = `<a href="${esc(d.proxmoxUrl)}" target="_blank" rel="noopener">${ic("ext")}Open Proxmox</a>`;
+    const lk = d.online ? "" : " (last known)";
+    body = `<section><h3>Fields</h3>${props([["State", d.online ? '<span class="tag up">online</span>' : `<span class="tag down">offline</span> ${esc(d.offlineReason)}`], ["PVE version", esc(d.version)], ["Address", `<span class="mono">${esc(d.address)}</span>`], ["Web UI", `<a href="${esc(d.proxmoxUrl)}" target="_blank" rel="noopener">${esc(d.proxmoxUrl)}</a>`], ["Host uptime", esc(F.duration(d.uptimeSeconds))], ["CPU", `${d.cpu.cores} cores · ${esc(d.cpu.model)}`]])}</section>
+      <section><h3>Resources<span>${lk}</span></h3>${[["CPU", d.cpu.used, d.cpu.used == null ? "—" : `${Math.round(d.cpu.used * 100)}% of ${d.cpu.cores} cores`], ["Memory", d.memory.used == null ? null : d.memory.used / d.memory.total, `${F.bytes(d.memory.used)} / ${F.bytes(d.memory.total)}`], ["Disk", d.disk.used == null ? null : d.disk.used / d.disk.total, `${F.bytes(d.disk.used)} / ${F.bytes(d.disk.total)}`]].map(([l, f, t]) => `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between"><span class="dim">${l}</span><span>${t}</span></div><div class="big"><i style="width:${(f ?? 0) * 100}%"></i></div></div>`).join("")}</section>
+      <section><h3>Guests<span>${INV.guestsOf(d.id).length} managed · ${d.unmanaged.length} unmanaged</span></h3><ul class="lst">${ROWS.filter((x) => x.parent === r.id).map((x) => `<li>${typeIcon(x)}<span class="grow">${go(x.id, x.name)}${x.managed ? "" : ` <span class="tag outline">${x.d.template ? "template" : "unmanaged"}</span>`}</span><span class="mono dim">#${x.d.vmid}</span>${x.managed ? pill(x.status) : `<span class="dim">${esc(x.d.status)}</span>`}</li>`).join("")}</ul></section>`;
+  } else if (r.type === "guest" && r.managed) {
+    acts = `<a href="${esc(INV.proxmoxGuestUrl(d))}" target="_blank" rel="noopener">${ic("ext")}Open in Proxmox</a>`;
+    const svcs = INV.servicesOf(d.id);
+    body = `<section><h3>Fields</h3>${props([["VMID", `<span class="mono">${d.vmid}</span>`], ["Kind", d.kind === "lxc" ? "Container (LXC)" : "VM (QEMU)"], ["Address", d.address ? `<span class="mono">${esc(d.address)}</span>` : '<span class="dim">none</span>'], ["Hostname", `<span class="mono">${esc(d.hostname)}</span>`], ["Power", esc(d.power)], ["Run status", runTag(d.runStatus)], ["Last run", `${esc(INV.runLabels[d.lastRun.status].label)} · ${esc(F.ago(d.lastRun.at))}`], ["Workflow", `<span class="mono">${esc(d.workflow)}</span>`], ["Resources", `${d.cores} vCPU · ${F.bytes(d.memory)} RAM · ${F.bytes(d.disk)} disk`], ["Guest uptime", esc(F.duration(d.uptimeSeconds))], d.tags.length && ["Tags", d.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")], ["Description", esc(d.description)]])}</section>
+      ${svcs.length ? `<section><h3>Services<span>${svcs.length}</span></h3><ul class="lst">${svcs.map((s) => `<li>${ic("service")}<span class="grow">${go("s:" + s.id, s.name)}</span>${s.urls[0] ? extA(s.urls[0].url) : ""}${pill(s.status)}</li>`).join("")}</ul></section>` : ""}`;
+  } else if (r.type === "guest") {
+    acts = `<a href="${esc(pveGuest(r.node, d.kind, d.vmid))}" target="_blank" rel="noopener">${ic("ext")}Open in Proxmox</a>`;
+    body = `<section><div class="callout">${ic("info")}<span>Found on ${esc(r.node.name)} but not managed by Octopushy, so nothing checks it.</span></div>${props([["VMID", `<span class="mono">${d.vmid}</span>`], ["Kind", d.kind === "lxc" ? "Container (LXC)" : "VM (QEMU)"], ["Proxmox status", esc(d.status)], ["Template", d.template ? "yes" : "no"], ["Resources", `${d.cores} vCPU · ${F.bytes(d.memory)}`], ["Uptime", esc(F.duration(d.uptimeSeconds))], d.tags.length && ["Tags", d.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")]])}</section>`;
+  } else {
+    acts = d.urls.map((u, k) => `<a class="${k ? "sec" : ""}" href="${esc(u.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(u.host)}</a>`).join("");
+    body = `${d.notes.length ? `<section>${d.notes.map((n) => `<div class="callout">${ic("info")}<span>${esc(n)}</span></div>`).join("")}</section>` : ""}
+      <section><h3>Fields</h3>${props([["Category", `<span class="tag">${esc(d.category)}</span>`], ["Run status", runTag(d.runStatus)], ["Workflow", `<span class="mono">${esc(d.workflow)}</span>`], ["Description", esc(d.description)], ["Health check", d.health ? `<span class="mono">${esc(d.health.url)}</span><br><span class="dim">${d.health.probed ? "probed from here" : "not probed: answers only on the guest"}</span>` : '<span class="dim">none declared</span>']])}</section>
+      <section><h3>URLs<span>${d.urls.length}</span></h3>${d.urls.length ? `<ul class="lst">${d.urls.map((u) => `<li>${ic("link")}<a class="grow" href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a><span class="${uCls(u.check.uptime.h24)}" style="font-variant-numeric:tabular-nums">${F.pct(u.check.uptime.h24)}</span>${pill(u.check.status)}</li>`).join("")}</ul>` : '<p class="dim" style="margin:0">No URLs declared, so nothing is probed.</p>'}</section>
+      <section><h3>DNS records<span>${d.dns.length}</span></h3>${d.dns.length ? `<ul class="lst">${d.dns.map((x) => `<li><span class="tag" style="font-family:var(--mono)">${esc(x.type)}</span><span class="grow mono" title="zone ${esc(x.zone)}">${esc(x.name)}</span><span class="dim mono">→ ${esc(x.expected)}</span></li>`).join("")}</ul>` : '<p class="dim" style="margin:0">None declared.</p>'}</section>`;
+  }
+  const st = r.check ? pill(r.status) : r.managed ? pill("unknown") : "";
+  panel.innerHTML = `<div class="ph"><div class="crumb">${crumbs.join('<span class="dim">›</span>') || "&nbsp;"}</div><h2>${typeIcon(r)}${esc(r.name)} ${st}</h2><div class="dim" style="font-size:12px">${typeLabel(r)}${r.managed ? "" : " · unmanaged"}</div><button class="close" data-close aria-label="Close record">${ic("x")}</button>${acts ? `<div class="acts">${acts}</div>` : ""}</div><div class="pb">${body}${uptimeBlock(r.check)}</div>`;
+  panel.classList.add("open"); panel.setAttribute("aria-hidden", "false");
+  render();
+}
+
+// ---- header ----
+(function header() {
+  const t = INV.totals();
+  document.getElementById("rev").innerHTML = `<code>${esc(INV.revision.commit)}</code><span>${esc(INV.revision.subject)}</span><span>·</span><span>observed ${esc(F.ago(INV.observedAt))}</span>`;
+  const br = (pairs) => pairs.filter(([, n]) => n).map(([s, n]) => `<em class="pill ${s}" style="background:none;padding:0">${ic(s)}${n}</em>`).join("");
+  document.getElementById("stats").innerHTML = [["Hosts", t.nodes.total, [["up", t.nodes.up], ["down", t.nodes.down]]], ["Guests", t.guests.total, [["up", t.guests.up], ["down", t.guests.down]]], ["Services", t.services.total, [["up", t.services.up], ["warn", t.services.warn], ["down", t.services.down], ["unknown", t.services.unknown]]], ["Unmanaged", t.unmanaged, []]].map(([l, n, p]) => `<div class="stat"><small>${l}</small><span><b>${n}</b>${br(p)}</span></div>`).join("");
+})();
+
+// ---- events ----
+const wrap = document.getElementById("wrap");
+wrap.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.closest("[data-clearall]")) return clearAll();
+  const s = t.closest("[data-sort]");
+  if (s) { // click: default direction → reversed → off
+    const id = s.dataset.sort, def = id === "since" ? -1 : 1;
+    if (S.sort !== id) { S.sort = id; S.dir = def; } else if (S.dir === def) S.dir = -def; else S.sort = null;
+    return render();
+  }
+  const g = t.closest("[data-grp]");
+  if (g) { S.collapsed.has(g.dataset.grp) ? S.collapsed.delete(g.dataset.grp) : S.collapsed.add(g.dataset.grp); return render(); }
+  const o = t.closest("[data-open]");
+  if (o) return openRecord(S.open === o.dataset.open ? null : o.dataset.open);
+  const p = t.closest("[data-pick]");
+  if (p) {
+    const id = p.dataset.pick;
+    if (e.shiftKey && S.anchor && ORDER.includes(S.anchor)) { const [a, b] = [ORDER.indexOf(S.anchor), ORDER.indexOf(id)].sort((x, y) => x - y); ORDER.slice(a, b + 1).forEach((x) => (p.checked ? S.picked.add(x) : S.picked.delete(x))); }
+    else p.checked ? S.picked.add(id) : S.picked.delete(id);
+    S.anchor = id; return render();
+  }
+  if (t.id === "pickAll") { t.checked ? ORDER.forEach((id) => S.picked.add(id)) : ORDER.forEach((id) => S.picked.delete(id)); return render(); }
+  const pg = t.closest("[data-pickgroup]");
+  if (pg) { const k = pg.dataset.pickgroup; const ids = visibleRows().rows.filter((r) => !r.ctx && GROUPS[S.group].key(r)[0] === k).map((r) => r.id); pg.checked ? ids.forEach((id) => S.picked.add(id)) : ids.forEach((id) => S.picked.delete(id)); return render(); }
+});
+panel.addEventListener("click", (e) => {
+  if (e.target.closest("[data-close]")) return openRecord(null);
+  const o = e.target.closest("[data-open]");
+  if (o) openRecord(o.dataset.open);
+});
+const fx = document.getElementById("facets");
+fx.addEventListener("change", (e) => {
+  const c = e.target, set = S.f[c.dataset.f];
+  c.checked ? set.add(c.value) : set.delete(c.value);
+  if (!set.size) allOf(FACETS.find((f) => f.id === c.dataset.f)).forEach((v) => set.add(v));
+  render();
+});
+fx.addEventListener("click", (e) => {
+  const o = e.target.closest("[data-only]");
+  if (o) { e.preventDefault(); S.f[o.dataset.only] = new Set([o.dataset.v]); return render(); }
+  const a = e.target.closest("[data-fall]");
+  if (a) { S.f[a.dataset.fall] = allOf(FACETS.find((f) => f.id === a.dataset.fall)); render(); }
+});
+document.getElementById("unmChip").addEventListener("click", (e) => { if (e.target.closest("[data-showunm]")) { S.f.managed.add("unmanaged"); render(); } });
+document.getElementById("group").addEventListener("click", (e) => { const b = e.target.closest("[data-group]"); if (b) { S.group = b.dataset.group; render(); } });
+const colBtn = document.getElementById("colBtn"), colMenu = document.getElementById("colMenu");
+const setMenu = (on) => { colMenu.classList.toggle("open", on); colBtn.setAttribute("aria-expanded", on); };
+colBtn.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!colMenu.classList.contains("open")); });
+colMenu.addEventListener("click", (e) => e.stopPropagation());
+colMenu.addEventListener("change", (e) => { const c = e.target.dataset.col; if (!c) return; e.target.checked ? S.cols.add(c) : S.cols.delete(c); saveCols(); render(); setMenu(true); });
+colMenu.addEventListener("click", (e) => { if (e.target.closest("[data-colreset]")) { S.cols = new Set(COLS.filter((c) => !c.hidden).map((c) => c.id)); saveCols(); render(); setMenu(true); } });
+const saveCols = () => { try { localStorage.setItem("inv-grid-cols", JSON.stringify([...S.cols])); } catch {} };
+document.addEventListener("click", () => setMenu(false));
+document.getElementById("bulk").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-bulk]"), bar = document.getElementById("bulk");
+  if (!b) return;
+  if (b.dataset.bulk === "clear") { S.picked.clear(); return render(); }
+  if (b.dataset.bulk === "open") return toast(`<b>Would open ${bar._urls.length} ${bar._urls.length === 1 ? "tab" : "tabs"}</b> (mock)<ul>${bar._urls.map((u) => `<li>${esc(u)}</li>`).join("")}</ul>`);
+  const text = bar._addrs.join("\n");
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {}
+  toast(`<b>${ok ? "Copied" : "Ready to copy"} ${bar._addrs.length} ${bar._addrs.length === 1 ? "address" : "addresses"}</b><ul>${bar._addrs.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`);
+});
+function clearAll() { S.q = ""; qi.value = ""; FACETS.forEach((f) => (S.f[f.id] = allOf(f))); S.f.managed = new Set(["managed"]); render(); }
+const qi = document.getElementById("q");
+qi.addEventListener("input", () => { S.q = qi.value.trim().toLowerCase(); render(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); qi.focus(); qi.select(); }
+  else if (e.key === "Escape") {
+    if (colMenu.classList.contains("open")) setMenu(false);
+    else if (document.activeElement === qi && qi.value) { qi.value = ""; S.q = ""; render(); }
+    else if (S.open) openRecord(null);
+    else if (S.picked.size) { S.picked.clear(); render(); }
+  }
+});
+
+// ---- URL hash ----
+let lock = false;
+function writeHash() {
+  if (lock) return;
+  const p = new URLSearchParams();
+  if (S.q) p.set("q", S.q);
+  if (S.group !== "host") p.set("group", S.group);
+  if (S.sort) p.set("sort", `${S.sort}:${S.dir > 0 ? "asc" : "desc"}`);
+  if (S.f.managed.has("unmanaged")) p.set("unmanaged", "1");
+  if (S.open) p.set("select", S.open);
+  history.replaceState(null, "", p.toString() ? "#" + p : location.pathname);
+}
+(function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  lock = true;
+  if (p.get("q")) { S.q = p.get("q").toLowerCase(); qi.value = p.get("q"); }
+  if (GROUPS[p.get("group")]) S.group = p.get("group");
+  if (p.get("sort")) { const [c, d] = p.get("sort").split(":"); if (COLS.some((x) => x.id === c)) { S.sort = c; S.dir = d === "desc" ? -1 : 1; } }
+  if (p.get("unmanaged") === "1") S.f.managed.add("unmanaged");
+  if (p.get("live")) S.f.live = new Set(p.get("live").split(",").filter((x) => LIVE.includes(x)));
+  if (!S.f.live.size) S.f.live = allOf(FACETS[1]);
+  for (const id of (p.get("sel") || "").split(",")) if (byId.has(id)) S.picked.add(id);
+  if (p.get("cols") === "all") COLS.forEach((c) => S.cols.add(c.id));
+  lock = false;
+  panel.classList.add("instant");
+  const sel = p.get("select");
+  if (sel && byId.has(sel)) openRecord(sel); else render();
+  requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.remove("instant")));
+})();
+})();
+</script>
+</body>
+</html>
