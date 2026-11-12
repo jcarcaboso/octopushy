@@ -48,7 +48,7 @@ function RunRow({ run }: { run: RunSummary }) {
         {target.type === "Service" ? <>Service {resource(target.name)}</> : target.type === "Other" ? run.resourceKind : target.type}
       </td>
       <td className={`overview-run__state overview-run__state--${style.tone}`}>{style.label}</td>
-      <td className="muted overview-run__started">
+      <td className="muted overview-run__created">
         <RelativeTime value={run.createdAt} />
       </td>
     </tr>
@@ -72,8 +72,8 @@ export function RunsTile({ overview }: { overview: Overview }) {
               <th scope="col">VM</th>
               <th scope="col">Type</th>
               <th scope="col">State</th>
-              <th scope="col" className="overview-run__started">
-                Started
+              <th scope="col" className="overview-run__created">
+                Created
               </th>
             </tr>
           </thead>

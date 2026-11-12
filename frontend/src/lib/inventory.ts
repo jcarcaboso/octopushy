@@ -147,6 +147,8 @@ export interface Filters {
   /** Lower-case words that must all appear. */
   text: string;
   problems: boolean;
+  /** Guest statuses to keep, with the nodes above them; empty keeps every guest. */
+  statuses?: string[];
 }
 
 const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean);
@@ -164,16 +166,18 @@ export const unmanagedText = (u: UnmanagedEntry) => [u.guest.name, u.guest.vmid,
 /**
  * The tree as the filters leave it. Something stays when it matches or something below it does; what matches keeps
  * everything below it, so a node found by name still shows its machines. Problems keep only what is down or degraded,
- * and the nodes and machines above it.
+ * and the nodes and machines above it. Statuses keep only the machines in one of them, and their nodes.
  */
 export function filterTree(nodes: NodeEntry[], filters: Filters): NodeEntry[] {
   const text = filters.text.trim();
-  if (!text && !filters.problems) return nodes;
+  const statuses = filters.statuses ?? [];
+  if (!text && !filters.problems && statuses.length === 0) return nodes;
   const result: NodeEntry[] = [];
   for (const node of nodes) {
     const nodeHit = !text || matches(nodeText(node), text);
     const machines: MachineEntry[] = [];
     for (const machine of node.machines) {
+      if (statuses.length > 0 && !statuses.includes(machine.guest.status)) continue;
       const machineHit = nodeHit || matches(machineText(machine), text);
       const found = machine.services.filter((s) => machineHit || matches(serviceText(s), text));
       if (!machineHit && found.length === 0) continue;
@@ -181,8 +185,13 @@ export function filterTree(nodes: NodeEntry[], filters: Filters): NodeEntry[] {
       if (filters.problems && !isProblem(machine.liveness) && services.length === 0) continue;
       machines.push({ ...machine, services });
     }
-    const unmanaged = filters.problems ? [] : node.unmanaged.filter((u) => nodeHit || matches(unmanagedText(u), text));
-    const keepNode = filters.problems ? isProblem(node.liveness) || machines.length > 0 : nodeHit || machines.length > 0 || unmanaged.length > 0;
+    const unmanaged = filters.problems || statuses.length > 0 ? [] : node.unmanaged.filter((u) => nodeHit || matches(unmanagedText(u), text));
+    const keepNode =
+      statuses.length > 0
+        ? machines.length > 0
+        : filters.problems
+          ? isProblem(node.liveness) || machines.length > 0
+          : nodeHit || machines.length > 0 || unmanaged.length > 0;
     if (keepNode) result.push({ ...node, machines, unmanaged });
   }
   return result;

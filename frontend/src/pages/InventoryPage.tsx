@@ -499,6 +499,8 @@ export function InventoryPage() {
   const [params, setParams] = useSearchParams();
   const search = params.get("q") ?? "";
   const problems = params.get("show") === "problems";
+  // The Overview links here with the guest statuses to show, as "status=running,queued".
+  const statuses = (params.get("status") ?? "").split(",").filter(Boolean);
   const span = (windows.find((w) => w.value === params.get("window"))?.value ?? "day") as UptimeWindow;
   const columnsRef = useRef<HTMLDivElement>(null);
 
@@ -506,7 +508,7 @@ export function InventoryPage() {
   if (!data) return <ErrorMessage error={error} title="The inventory could not be loaded" />;
 
   const tree = buildTree(data, uptime.data);
-  const shown = filterTree(tree, { text: search, problems });
+  const shown = filterTree(tree, { text: search, problems, statuses });
   const total = counts(tree);
 
   const with_ = (changes: Record<string, string | null>) => {
@@ -549,7 +551,7 @@ export function InventoryPage() {
   };
 
   const revision = data.revision;
-  const filtered = Boolean(search.trim() || problems);
+  const filtered = Boolean(search.trim() || problems || statuses.length > 0);
   return (
     <>
       <PageHeader
@@ -600,6 +602,17 @@ export function InventoryPage() {
         }
       />
       {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
+      {statuses.length > 0 ? (
+        <div className="filter-note" role="status">
+          Only machines that are
+          {statuses.map((status) => (
+            <StatusBadge key={status} status={status} />
+          ))}
+          <Link to={href({ status: null })} replace>
+            Show all
+          </Link>
+        </div>
+      ) : null}
       {data.labs
         .filter((lab) => lab.issues.length > 0)
         .map((lab) => (
