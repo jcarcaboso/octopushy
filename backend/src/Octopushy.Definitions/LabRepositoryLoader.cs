@@ -10,7 +10,7 @@ namespace Octopushy.Definitions;
 /// names is resolved. A problem in one resource invalidates that resource and what is below it,
 /// not its siblings.
 /// </summary>
-public sealed class LabRepositoryLoader
+public sealed partial class LabRepositoryLoader
 {
     /// <summary>Keys reserved for Octopushy's own credentials, which definitions may not use.</summary>
     public const string SystemScope = "system/";
@@ -27,6 +27,7 @@ public sealed class LabRepositoryLoader
     private readonly HashSet<string> _invalidAddresses = new(StringComparer.Ordinal);
     private readonly HashSet<string> _invalidTemplates = new(StringComparer.Ordinal);
     private readonly List<ServiceDefinition> _services = [];
+    private readonly List<InterfaceBinding> _bindings = [];
     private readonly Dictionary<string, YamlDocument> _documents = new(StringComparer.Ordinal);
     private bool _repositoryValid = true;
 
@@ -85,6 +86,8 @@ public sealed class LabRepositoryLoader
                 Error(installation.File, LineOf(installation.File, "/connection/tls/caCertificate"),
                     "A privileged Proxmox token cannot be used as a CA certificate.", installation.Address);
         }
+        CheckInterfaces(installations);
+        BindInterfaces(guests, installations);
         foreach (var guest in guests)
         {
             CheckGuest(guest, installations, templates);
@@ -390,6 +393,7 @@ public sealed class LabRepositoryLoader
                 ParseLabels(json["execution"])));
         }
 
+        LoadInterfaces(id, labDirectory);
         foreach (var installationDirectory in DefinitionFiles.SubDirectories(Path.Combine(labDirectory, "proxmox")))
         {
             LoadInstallation(id, installationDirectory, installations, guests, entries);
@@ -398,6 +402,57 @@ public sealed class LabRepositoryLoader
         if (Directory.Exists(Path.Combine(labDirectory, "clusters")))
             Warning(file, null, "Clusters are not supported yet: nothing under this lab's clusters folder is read.", id);
     }
+
+    /// <summary>
+    /// The lab's interface bindings, <c>interfaces/&lt;slot&gt;/&lt;name&gt;.yaml</c>. An error in one is its own: the services whose
+    /// stages it would fill are invalid then, and nothing else is.
+    /// </summary>
+    private void LoadInterfaces(string lab, string labDirectory)
+    {
+        foreach (var slotDirectory in DefinitionFiles.SubDirectories(Path.Combine(labDirectory, "interfaces")))
+        {
+            var slot = Path.GetFileName(slotDirectory);
+            if (!SlotName().IsMatch(slot))
+            {
+                Error(Relative(slotDirectory), null,
+                    $"'{slot}' is not a valid interface slot: use lowercase letters, digits and underscores, starting with a letter, as an extra var is named.",
+                    $"{lab}/interfaces/{slot}");
+                continue;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(slotDirectory).Order(StringComparer.Ordinal))
+            {
+                var file = Relative(path);
+                var fileName = Path.GetFileName(path);
+                if (fileName.StartsWith('.'))
+                    continue;
+                if (!fileName.EndsWith(".yaml", StringComparison.Ordinal))
+                {
+                    Warning(file, null, $"Only .yaml files are interface bindings: {file} is ignored.", lab);
+                    continue;
+                }
+
+                var name = fileName[..^".yaml".Length];
+                var address = $"{lab}/interfaces/{slot}/{name}";
+                if (!CheckId(name, file, address))
+                    continue;
+                var (json, document) = ReadDefinition(file, DefinitionKind.Interface, address);
+                if (json is null || document is null)
+                {
+                    // Its errors are filed under its address; the services it would fill say they are invalid because of it.
+                    _bindings.Add(new InterfaceBinding(lab, slot, name, file, [], [], new Dictionary<string, StoreReference>(StringComparer.Ordinal)));
+                    continue;
+                }
+
+                CollectStoreUses(json, address, file, document);
+                _bindings.Add(new InterfaceBinding(lab, slot, name, file, json,
+                    json["inputs"]?.DeepClone().AsObject() ?? [], StoreReferences(json["secrets"])));
+            }
+        }
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z][a-z0-9_]{0,62}$")]
+    private static partial System.Text.RegularExpressions.Regex SlotName();
 
     private void LoadInstallation(
         string lab,
@@ -456,7 +511,11 @@ public sealed class LabRepositoryLoader
                 hosts,
                 ParsePolicy(json["policy"]),
                 ParseLabels(json["execution"]),
-                json["manage"]?.GetValue<bool>() ?? true));
+                json["manage"]?.GetValue<bool>() ?? true)
+            {
+                Interfaces = (json["interfaces"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>(), StringComparer.Ordinal)
+                    ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            });
         }
 
         foreach (var guestDirectory in DefinitionFiles.SubDirectories(Path.Combine(directory, "guests")))
@@ -586,6 +645,64 @@ public sealed class LabRepositoryLoader
             stage.Executor == Executors.Ansible ? secretFiles : [])).ToList() ?? [];
         _services.Add(new ServiceDefinition(id, guest, file, Relative(directory), json, reference, workflow, stages,
             ParsePolicy(json["policy"]), ParseLabels(json["execution"])));
+    }
+
+    /// <summary>Each slot an installation binds names a binding of its lab's.</summary>
+    private void CheckInterfaces(List<InstallationDefinition> installations)
+    {
+        foreach (var installation in installations)
+        {
+            foreach (var (slot, name) in installation.Interfaces)
+            {
+                if (Binding(installation.Lab, slot, name) is null)
+                    Error(installation.File, LineOf(installation.File, $"/interfaces/{slot}"),
+                        $"interfaces.{slot} names {name}, and labs/{installation.Lab}/interfaces/{slot}/{name}.yaml does not exist.", installation.Address);
+            }
+        }
+    }
+
+    private InterfaceBinding? Binding(string lab, string slot, string name) =>
+        _bindings.Find(b => b.Lab == lab && b.Slot == slot && b.Name == name);
+
+    /// <summary>
+    /// Gives each stage that declares an interface slot what its service's installation binds to it: the binding's inputs as
+    /// the extra var named after the slot, its secrets as extra vars. A stage whose slot is not bound there is not run.
+    /// </summary>
+    private void BindInterfaces(List<GuestDefinition> guests, List<InstallationDefinition> installations)
+    {
+        for (var index = 0; index < _services.Count; index++)
+        {
+            var service = _services[index];
+            if (service.Stages.All(s => s.Definition.Interface is null))
+                continue;
+            var installation = guests.Find(g => g.Address == service.GuestAddress) is { } guest
+                ? installations.Find(i => i.Address == guest.InstallationAddress)
+                : null;
+            var stages = new List<StageDefinition>();
+            foreach (var stage in service.Stages)
+            {
+                if (stage.Definition.Interface is not { } slot)
+                {
+                    stages.Add(stage);
+                    continue;
+                }
+
+                if (installation is null || !installation.Interfaces.TryGetValue(slot, out var name)
+                    || Binding(installation.Lab, slot, name) is not { } binding)
+                    continue;
+                var inputs = stage.Inputs.DeepClone().AsObject();
+                inputs[slot] = binding.Inputs.DeepClone();
+                stages.Add(stage with
+                {
+                    Inputs = inputs,
+                    Secrets = stage.Secrets.Concat(binding.Secrets).GroupBy(p => p.Key, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.Last().Value, StringComparer.Ordinal),
+                    Binding = binding,
+                });
+            }
+
+            _services[index] = service with { Stages = stages };
+        }
     }
 
     private static Dictionary<string, StoreReference> StoreReferences(JsonNode? node) =>
@@ -812,6 +929,56 @@ public sealed class LabRepositoryLoader
             foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
                 Invalid(error.Pointer, $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {workflow.Label})");
+            }
+        }
+
+        CheckBindings(service, workflow, secrets, files, installations);
+    }
+
+    /// <summary>
+    /// What the bindings a service's stages got must hold: inputs its workflows repository's slot schema accepts, extra vars no
+    /// other part of the service sets, and no Proxmox token. An error is the service's: the binding is shared, and another
+    /// workflow's schema may accept it.
+    /// </summary>
+    private void CheckBindings(
+        ServiceDefinition service,
+        WorkflowDefinition workflow,
+        Dictionary<string, StoreReference> secrets,
+        Dictionary<string, StoreReference> files,
+        List<InstallationDefinition> installations)
+    {
+        var inputs = (service.Json["inputs"] as JsonObject)?.Select(p => p.Key).ToHashSet(StringComparer.Ordinal) ?? [];
+        var connectionKeys = ConnectionKeys(installations);
+        foreach (var binding in service.Stages.Select(s => s.Binding).OfType<InterfaceBinding>().DistinctBy(b => b.Address))
+        {
+            void Invalid(string message) => Error(service.File, LineOf(service.File, "/workflow"), message, service.Address);
+            var stage = service.Stages.First(s => s.Binding == binding).Definition;
+            if (_invalidAddresses.Contains(binding.Address))
+            {
+                Invalid($"Stage '{stage.Name}' fills the interface {binding.Slot} with {binding.File}, which has errors.");
+                continue;
+            }
+
+            if (inputs.Contains(binding.Slot))
+                Invalid($"inputs.{binding.Slot} is the extra var stage '{stage.Name}' gets {binding.File} as: give the input another name.");
+            foreach (var name in binding.Secrets.Keys.Where(n => n == binding.Slot || inputs.Contains(n) || secrets.ContainsKey(n) || files.ContainsKey(n)))
+            {
+                Invalid($"{name}, a secret of {binding.File}, is set again by this service: give one of them another name.");
+            }
+
+            foreach (var (name, reference) in binding.Secrets.Where(p => connectionKeys.Contains(p.Value.Key)))
+            {
+                Error(binding.File, LineOf(binding.File, $"/secrets/{name}"), $"{name} cannot use a Proxmox API token.", service.Address);
+            }
+
+            if (stage.InterfaceSchema is { } slotSchema)
+            {
+                var instance = new JsonObject { ["inputs"] = binding.Inputs.DeepClone() };
+                foreach (var error in SchemaCatalog.Evaluate(slotSchema, instance))
+                {
+                    Error(binding.File, LineOf(binding.File, error.Pointer),
+                        $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (interface {binding.Slot} of {workflow.Label}, for {service.Address})", service.Address);
+                }
             }
         }
     }

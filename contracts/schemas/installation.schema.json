@@ -7,6 +7,12 @@
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "name": { "type": "string" },
     "description": { "type": "string" },
+    "interfaces": {
+      "description": "Which binding fills each interface slot for this installation's services: slot -> the name of labs/<lab>/interfaces/<slot>/<name>.yaml. A workflow stage that declares a slot runs only on installations that bind it. See docs/workflows.md#interfaces.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/id" }
+    },
     "manage": {
       "description": "Whether Octopushy may change anything in this installation. false makes it observed only: no guest or service may be defined under it, no run is ever created for it, and its token goes only to observations.",
       "type": "boolean",

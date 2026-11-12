@@ -709,9 +709,12 @@ It replaced the lab repository proposal on November 3, 2026.
   it without a new approval, unless the inputs changed.
 - A later stage cannot use an earlier one's results: every plan is made before
   anything applies.
-- An interface is a named slot bound to a workflow in the lab, whose schema lives in the
-  repository. A cluster is a set of guests with stages applied to them, member by
-  member, under one approval. Both are later steps.
+- ~~An interface is a named slot bound to a workflow in the lab, whose schema lives in the
+  repository.~~ *Replaced November 12, 2026 by
+  [ADR 0006](adr/0006-interfaces-bound-per-installation.md): a slot is filled per
+  installation by a binding of inputs and secrets, given to the stages that declare it.*
+  A cluster is a set of guests with stages applied to them, member by member, under one
+  approval. That is a later step.
 - A deleted folder proposes a removal that removes only what workflows declare. That is a
   later step too: today it is shown as missing and removes nothing.
 

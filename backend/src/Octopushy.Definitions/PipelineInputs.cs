@@ -5,7 +5,8 @@ namespace Octopushy.Definitions;
 /// <summary>
 /// Everything a service's run is built from, and a hash of it that changes exactly when a run could
 /// differ: the service's definition, the workflow it resolved to with its version, its folder and the
-/// roots of its stages, the service's own files, and how its guest is reached. Its policy and labels
+/// roots of its stages, the service's own files, how its guest is reached, and the interface bindings its
+/// stages got from its installation. Its policy and labels
 /// are not part of it, and neither is the guest's hardware or setup: a service runs again when
 /// something about the service changes.
 /// </summary>
@@ -36,6 +37,18 @@ public sealed record PipelineInputs(ServiceDefinition Service, GuestDefinition G
             ["address"] = ConfigureInputs.AddressOf(guest),
             ["workflow"] = ProvisionInputs.WorkflowHash(workflow, workflow.Roots),
         };
+        // Only when a stage fills a slot, so a service without one keeps the hash it had.
+        var bindings = service.Stages.Select(s => s.Binding).OfType<InterfaceBinding>().DistinctBy(b => b.Address).ToList();
+        if (bindings.Count > 0)
+        {
+            hashed["interfaces"] = new JsonObject(bindings.Select(b =>
+            {
+                var binding = b.Json.DeepClone().AsObject();
+                binding.Remove("description");
+                return KeyValuePair.Create(b.Slot, (JsonNode?)new JsonObject { ["name"] = b.Name, ["binding"] = binding });
+            }));
+        }
+
         return new PipelineInputs(service, guest, workflow, service.Stages, Canonical.Hash(hashed));
     }
 }

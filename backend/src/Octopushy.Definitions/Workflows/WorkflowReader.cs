@@ -212,6 +212,16 @@ public sealed class WorkflowReader
                 configure = new ConfigureActions(actions, outcomes, secrets);
             }
 
+            var slot = node["interface"]?.GetValue<string>();
+            JsonSchema? slotSchema = null;
+            if (slot is not null)
+            {
+                if (manages != WorkflowKinds.Service)
+                    Invalid($"{at}/interface", $"Stage '{name}' declares the interface {slot}, and only a stage of a workflow with manages: service fills one.");
+                else
+                    slotSchema = ReadInterfaceSchema(slot, name, at, Invalid, address, ref errors);
+            }
+
             stages.Add(new WorkflowStage(
                 name,
                 executor,
@@ -221,6 +231,8 @@ public sealed class WorkflowReader
                 configure)
             {
                 ManagedHostKey = makesVm && node["hostKey"]?.GetValue<string>() == "managed",
+                Interface = slot,
+                InterfaceSchema = slotSchema,
             });
         }
 
@@ -292,6 +304,31 @@ public sealed class WorkflowReader
             Schema = schema,
             SchemaJson = schemaJson,
         };
+    }
+
+    /// <summary>
+    /// The schema of an interface slot: <c>interfaces/&lt;slot&gt;.schema.json</c> of the workflow's source, beside <c>workflows/</c>,
+    /// shared by every workflow there that fills the slot. It validates a binding's inputs, as <c>{ inputs }</c>.
+    /// </summary>
+    private JsonSchema? ReadInterfaceSchema(string slot, string stage, string at, Action<string, string> invalid, string address, ref int errors)
+    {
+        var path = $"interfaces/{slot}.schema.json";
+        if (!File.Exists(Path.Combine(_root, path)))
+        {
+            invalid($"{at}/interface", $"Stage '{stage}' fills the interface {slot}, and {path}, which says what its bindings hold, does not exist.");
+            return null;
+        }
+
+        try
+        {
+            return SchemaCatalog.BuildUntrusted(File.ReadAllText(Path.Combine(_root, path)));
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or JsonSchemaException or InvalidOperationException or ArgumentException)
+        {
+            Error(path, null, $"The schema of the interface {slot} is not a valid JSON Schema: {e.Message}", address);
+            errors++;
+            return null;
+        }
     }
 
     private void CheckOpenTofuRoot(string root, string stage, string at, Action<string, string> invalid, string address, ref int errors)

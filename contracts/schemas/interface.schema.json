@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.octopushy.invalid/v1/interface.schema.json",
+  "title": "Interface binding (labs/<lab>/interfaces/<slot>/<name>.yaml)",
+  "description": "What fills one interface slot, such as dns, for the installations whose interfaces name this file. A workflow stage that declares the slot gets inputs as one extra var named after the slot, and secrets as extra vars of their own. What they mean is the workflows repository's: its interfaces/<slot>.schema.json validates inputs. See docs/workflows.md#interfaces.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "description": { "type": "string" },
+    "inputs": {
+      "description": "Given to every stage that declares this slot, as the extra var named after the slot. Validated by interfaces/<slot>.schema.json of the stage's workflows repository, as { inputs }.",
+      "type": "object"
+    },
+    "secrets": {
+      "description": "Extra vars filled from the variable store, for the stages that declare this slot.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/extraVar" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/storeRef" }
+    }
+  },
+  "required": ["schemaVersion"],
+  "additionalProperties": false
+}

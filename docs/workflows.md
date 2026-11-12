@@ -572,7 +572,8 @@ is not hashed, only what it resolved to, so `@2` and `@2.3` resolving to the sam
   own files outside `guest.yaml` and `services/`. Hardware and network are not part of it, and neither is a schedule, which
   says when an action runs, not what it does.
 - **Service:** `service.yaml` without its description, links, policy and execution; the service's own files; how its guest is
-  reached; the workflow; and the roots of all its stages.
+  reached; the workflow; the roots of all its stages; and, when a stage fills an interface slot, the binding its
+  installation names, without its description. A service with no such stage has the hash it had before interfaces.
 
 Because a root must be inside the workflow's folder or under `modules/`, a change to a module a workflow uses changes its
 runs' hashes, and a change to a module it does not use changes nothing.
@@ -664,8 +665,8 @@ execution:
 
 A lab groups installations. It carries no state or lock of its own. Agents get their labels on the server when they enroll,
 so an agent cannot grant them to itself. Labels are not needed to send work to the site that can reach it: the controller
-routes by [reachability](worker-routing.md), and labels only narrow it further. `integrations` and `dns` are accepted and do nothing. **Later,**
-[interfaces](#interfaces) replace them.
+routes by [reachability](worker-routing.md), and labels only narrow it further. `integrations` and `dns` are accepted and
+do nothing: an installation's [interfaces](#interfaces) do what they were meant for.
 
 ### Proxmox installation and its hosts
 
@@ -1067,14 +1068,57 @@ New VM → configured guest → working service:
 
 Each step is a separate proposal. A failure in one guest or service blocks only what depends on it.
 
+## Interfaces
+
+A lab may span sites that each run their own shared systems, such as DNS servers. An **interface** is a named slot,
+such as `dns`, that a site fills for the services there. Octopushy knows nothing of what a slot is: a binding is data
+handed to the stages that ask for it. [ADR 0006](adr/0006-interfaces-bound-per-installation.md) records why.
+
+A **binding** is a file in the lab, `labs/<lab>/interfaces/<slot>/<name>.yaml`:
+
+```yaml
+# labs/home/interfaces/dns/moraband.yaml
+schemaVersion: 1
+description: Moraband's house
+inputs:                                  # what they mean is the workflows repository's
+  primary: { name: mrb-dns-01, address: 10.1.0.178 }
+  secondaries: [{ name: umb-dns-01, address: 10.1.0.179 }]
+secrets:
+  dns_api_token: { store: dns/moraband/api-token }
+```
+
+An **installation** names one binding per slot:
+
+```yaml
+# labs/home/proxmox/moraband/installation.yaml
+interfaces:
+  dns: moraband
+```
+
+A **stage** of a workflow with `manages: service` declares the slot it fills:
+
+```yaml
+stages:
+  - { name: deploy, executor: ansible, root: ../../modules/ansible/compose, playbook: deploy.yml }
+  - { name: dns, executor: ansible, root: ../../modules/ansible/dns-records, playbook: records.yml, interface: dns }
+```
+
+- On an installation that binds the slot, the stage gets the binding's `inputs` as one extra var named after the slot
+  (`dns` above), and its `secrets` as extra vars of their own (`dns_api_token`). The service's own inputs and secrets
+  come as for any stage. The binding's file, without its `description`, is part of the service's
+  [hash](#hashes): changing it proposes a run of every service whose stages it fills.
+- On an installation that binds no such slot, the stage is not part of the service's runs. Its other stages run.
+- `interfaces/<slot>.schema.json` of the workflows repository, at the stage's release, says what a binding holds. It
+  validates each binding a service gets, as `{ inputs }`; an error makes that service invalid and points at the binding.
+- An installation naming a binding that does not exist is invalid. A service whose input or secret has the name of the
+  slot or of a binding's secret is invalid, and a binding's secret cannot be a Proxmox token.
+- Only an Ansible stage fills a slot: OpenTofu stages get no secrets yet. It connects to its guest like any stage, so
+  a playbook that talks to the slot's systems delegates those tasks to the agent (`delegate_to: localhost`). Routing
+  does not model that second endpoint: the agent chosen reaches the guest, and is expected to reach the slot's systems
+  from there.
+- Nothing removes what a stage wrote when its service is deleted, as for any service today.
+
 ## Later
-
-### Interfaces
-
-`dns` is a named slot bound to a workflow in the lab. Each workflow of a slot accepts the same inputs, so swapping one is one
-line. This replaces `lab.dns`, which is accepted and ignored today. The slot's schema lives in the repository, such as
-`interfaces/dns.schema.json`, and is evaluated against the stage's inputs together with the guest's definition, as an invalid
-definition at sync, with no knowledge of DNS in Octopushy.
 
 ### Clusters
 
@@ -1088,15 +1132,16 @@ and the lab shows a warning.
 1. **Stages with one approval, and services shown on guests.** Built.
 2. **Workflows kept in the lab repository, with versions, and the offline validator.** Built.
 3. **A workflows repository resolved by tags,** with immutable tags recorded per commit. Built.
-4. **Interfaces, and secrets for OpenTofu stages.** `lab.dns` goes. A stage's plan gets its token here, which is the limit
-   stated above.
+4. **Interfaces, and secrets for OpenTofu stages.** Interfaces are built, bound per installation: see
+   [Interfaces](#interfaces). Secrets for OpenTofu stages are not: a stage's plan gets its token then, which is the
+   limit stated above, and `lab.dns` goes.
 5. **Containers.** Built: `type: container` and `manages: container`.
 6. **Clusters.**
 
 ### Left out for now
 
-- `interface` on a stage, `interfaces` on a lab, `dependsOn` between services, and any other unknown field: refused by the
-  schemas.
+- `interfaces` on a lab (they are bound per installation), `dependsOn` between services, and any other unknown field:
+  refused by the schemas.
 - Secrets on an OpenTofu stage. A stage's state is always the built-in state.
 - A list of what changed since the last success for a service's stage preview, which a configure run's preview has.
 - Choosing an action for a service: its page offers Deploy only.

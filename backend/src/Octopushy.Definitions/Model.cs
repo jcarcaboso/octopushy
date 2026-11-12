@@ -85,6 +85,26 @@ public sealed record InstallationDefinition(
     public string Address => $"{Lab}/{Id}";
 
     public string DisplayName => Json["name"]?.GetValue<string>() ?? Id;
+
+    /// <summary>Which binding fills each interface slot for its services: slot to the name of <c>labs/&lt;lab&gt;/interfaces/&lt;slot&gt;/&lt;name&gt;.yaml</c>.</summary>
+    public IReadOnlyDictionary<string, string> Interfaces { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// What fills one interface slot, from <c>labs/&lt;lab&gt;/interfaces/&lt;slot&gt;/&lt;name&gt;.yaml</c>, for the installations that
+/// name it. Octopushy knows nothing of what a slot is: a stage that declares it gets <paramref name="Inputs"/> as the extra var
+/// named <paramref name="Slot"/>, and <paramref name="Secrets"/> as extra vars of their own. See docs/workflows.md#interfaces.
+/// </summary>
+public sealed record InterfaceBinding(
+    string Lab,
+    string Slot,
+    string Name,
+    string File,
+    JsonObject Json,
+    JsonObject Inputs,
+    IReadOnlyDictionary<string, StoreReference> Secrets)
+{
+    public string Address => $"{Lab}/interfaces/{Slot}/{Name}";
 }
 
 /// <summary>
@@ -175,7 +195,14 @@ public sealed record StageDefinition(
     WorkflowStage Definition,
     JsonObject Inputs,
     IReadOnlyDictionary<string, StoreReference> Secrets,
-    IReadOnlyDictionary<string, StoreReference> SecretFiles);
+    IReadOnlyDictionary<string, StoreReference> SecretFiles)
+{
+    /// <summary>
+    /// For a stage that declares an interface slot, the binding its installation names for it, whose inputs and secrets are in
+    /// <see cref="Inputs"/> and <see cref="Secrets"/>. Null for any other stage. A stage whose slot is not bound is not run.
+    /// </summary>
+    public InterfaceBinding? Binding { get; init; }
+}
 
 public sealed record ImageSource(string Url, string ChecksumAlgorithm, string Checksum, string FileName);
 
