@@ -277,7 +277,8 @@ public static partial class Endpoints
 
             var runs = await query.OrderByDescending(r => r.CreatedAt).Take(Math.Clamp(limit ?? 50, 1, 500)).ToListAsync(ct);
             var ids = runs.Select(r => r.ResourceId).Distinct().ToList();
-            var resources = await db.Resources.AsNoTracking().Where(r => ids.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), ct);
+            var resources = await db.Resources.AsNoTracking().Where(r => ids.Contains(r.Id)).Select(r => new { r.Id, r.Address, r.Kind })
+                .ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), ct);
             return TypedResults.Ok(runs.Select(r => Views.Summary(r, resources.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList());
         })
         .WithName("listRuns");
@@ -422,7 +423,7 @@ public static partial class Endpoints
                 .Select(g => new { g.Key, Count = g.Count() })
                 .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
             var resourceIds = work.Select(w => w.ResourceId).Distinct().ToList();
-            var addresses = await db.Resources.AsNoTracking().Where(r => resourceIds.Contains(r.Id))
+            var addresses = await db.Resources.AsNoTracking().Where(r => resourceIds.Contains(r.Id)).Select(r => new { r.Id, r.Address })
                 .ToDictionaryAsync(r => r.Id, r => r.Address, ct);
             var head = await updates.HeadAsync(db, ct);
             var assessed = await updates.AssessAsync(db, agents, head, ct);

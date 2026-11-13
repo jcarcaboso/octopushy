@@ -87,7 +87,7 @@ demo: dev-db
 proxmox-e2e: dev-db
     tests/proxmox/run.sh
 
-# Build the container images by hand, tagged with the given version (releases are manual for now).
+# Build the container images by hand, tagged with the given version (a v<version> tag publishes a release: .github/workflows/images.yml).
 images version:
     podman build -f backend/Containerfile -t octopushy-backend:{{version}} .
     podman build -f frontend/Containerfile -t octopushy-frontend:{{version}} .

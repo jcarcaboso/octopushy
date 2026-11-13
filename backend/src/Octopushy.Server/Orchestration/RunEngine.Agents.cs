@@ -591,6 +591,21 @@ public sealed partial class RunEngine
             return true;
         }, cancellationToken);
 
+    /// <summary>
+    /// Gives every attempt an agent holds a full lease from now. For when the server starts: it could take no heartbeat while it
+    /// was down, so a lease that ran out meanwhile says nothing about its agent. One that does not connect again still loses it.
+    /// </summary>
+    public Task RenewLeasesAsync(CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
+            var renewed = await db.Attempts
+                .Where(a => (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running) && a.LeaseExpiresAt < lease)
+                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, lease), cancellationToken);
+            if (renewed > 0)
+                logger.LogInformation("Renewed the leases of {Count} attempt(s) that were with an agent when the server stopped.", renewed);
+        }, cancellationToken);
+
     /// <summary>The error of an attempt whose lease ran out: the one kind of uncertain attempt that still takes a late result.</summary>
     public const string LeaseExpired = "The agent stopped reporting before the attempt finished.";
 

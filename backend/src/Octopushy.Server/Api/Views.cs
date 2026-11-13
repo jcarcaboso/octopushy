@@ -782,7 +782,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             Count(GuestStatuses.Invalid),
             Count(GuestStatuses.Missing));
 
-        var addresses = await db.Resources.AsNoTracking().ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), cancellationToken);
+        // Only the three columns: a resource row also carries its definition, outputs and issues.
+        var addresses = await db.Resources.AsNoTracking().Select(r => new { r.Id, r.Address, r.Kind })
+            .ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), cancellationToken);
         var attention = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
             .Where(r => r.Status == RunStatuses.AwaitingApproval || r.Status == RunStatuses.Blocked || r.Status == RunStatuses.Uncertain)
             .OrderBy(r => r.CreatedAt)

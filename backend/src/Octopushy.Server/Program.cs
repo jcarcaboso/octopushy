@@ -84,7 +84,9 @@ builder.Services.AddGrpc(options =>
     // Matches the agent's limits in both directions.
     options.MaxReceiveMessageSize = 64 * 1024 * 1024;
     options.MaxSendMessageSize = 64 * 1024 * 1024;
-});
+})
+    // Enrollment is open to anyone who reaches the agent port, and takes a token and a certificate request: a few kilobytes.
+    .AddServiceOptions<EnrollmentService>(options => options.MaxReceiveMessageSize = 64 * 1024);
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("octopushy");
 if (!generatingDocument)
@@ -222,7 +224,9 @@ if (!generatingDocument)
     }
 }
 
-app.UseForwardedHeaders();
+// Only the API port has a proxy in front of it. Agents connect to theirs directly, so a forwarded header there is the
+// agent's own word, and the address it connects from decides which guest it runs on.
+app.UseWhen(context => context.Connection.LocalPort != settings.AgentChannel.Port, api => api.UseForwardedHeaders());
 // Each port serves only its own endpoints, by the port the connection arrived on rather than
 // the Host header, so a proxy may keep the browser's host name.
 app.Use(async (context, next) =>

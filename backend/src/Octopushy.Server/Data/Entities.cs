@@ -147,9 +147,6 @@ public static class ChangeStatuses
     /// change prepared, such as generated values, can be cleaned up then and only then.
     /// </summary>
     public static bool IsNotCommitted(ResourceChange change) => change.Status == Refused && change.CandidateCommits.Count == 0;
-
-    /// <summary>A push was attempted and has not been settled yet.</summary>
-    public static bool IsUnsettled(string status) => status is Committing or Uncertain or Unknown;
 }
 
 /// <summary>

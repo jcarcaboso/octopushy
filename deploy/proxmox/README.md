@@ -16,8 +16,8 @@ and has `nesting` and `keyctl` turned on, which Docker needs.
 
 - **Published images.** The workflow publishes the three images to the public repository
   `docker.io/skorcius/octopushy`, told apart by tag: `backend-…`, `frontend-…`, and
-  `agent-…`, followed by `main` or `sha-<commit>` on every push to `main`, and by
-  only `<version>` for every `v<version>` tag, without SHA or `latest` aliases.
+  `agent-…`, followed by `<version>` for every `v<version>` tag, without SHA or `latest` aliases. A push
+  to `main` publishes nothing; a run of the workflow started by hand from a branch publishes `<branch>` and `sha-<commit>`.
   It needs the GitHub repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The container pulls without
   credentials. Docker Hub limits anonymous pulls per address; if a pull stops with
   `toomanyrequests`, run `docker login` in the container.
@@ -41,7 +41,7 @@ Each setting can be preset in the environment, which also lets it run unattended
 
 | Variable | Default | |
 |---|---|---|
-| `OCTOPUSHY_VERSION` | `0.9.3` | A release, `main` for the newest build of the main branch, or `sha-<commit>` |
+| `OCTOPUSHY_VERSION` | `0.9.3` | A release, or `main` or `sha-<commit>` once the workflow was run by hand from that branch |
 | `CTID` | next free ID | |
 | `CT_HOSTNAME` | `octopushy` | |
 | `CT_STORAGE` | first storage for containers | Holds the root disk and the key volume |
@@ -234,7 +234,7 @@ On the Proxmox host:
 
 ```sh
 octopushy-update <ctid> 0.2.0     # a release
-octopushy-update <ctid> main      # the newest build of main
+octopushy-update <ctid> main      # main, as last published by hand
 ```
 
 It pulls the new images first (nothing stops if that fails), then stops everything but
