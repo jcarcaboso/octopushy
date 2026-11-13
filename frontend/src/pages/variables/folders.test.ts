@@ -14,13 +14,14 @@ function entry(key: string, overrides: Partial<Variable> = {}): Variable {
     value: null,
     usedBy: [],
     lines: 1,
+    newerVersion: null,
     ...overrides,
   };
 }
 
 describe("listFolder", () => {
   const all = [
-    entry("proxmox/a/token", { latestVersion: 2 }),
+    entry("proxmox/a/token", { latestVersion: 2, newerVersion: 2 }),
     entry("proxmox/a/ca"),
     entry("proxmox/b/deep/token", { revoked: true }),
     entry("proxmox/note"),

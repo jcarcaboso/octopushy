@@ -260,7 +260,8 @@ const findVariable = (key: unknown) => data.variables.entries.find((v) => v.key 
 const activeNow = (key: string) => (findVariable(key) ? (data.variableActive.get(key) ?? 0) : 0);
 function newVersion(key: string, value: string, status: "active" | "candidate", note: unknown) {
   const history = data.variableHistory.get(key) ?? [];
-  const version = (history[0]?.version ?? 0) + 1;
+  // A deleted version's number is never given again, as the server numbers them.
+  const version = Math.max(history[0]?.version ?? 0, findVariable(key)?.latestVersion ?? 0) + 1;
   const active = status === "active";
   if (active) for (const v of history) if (v.status === "active") v.status = "previous";
   history.unshift({ version, status, createdAt: now(), activatedAt: active ? now() : null, activatedBy: active ? user : null,
@@ -277,7 +278,7 @@ on("PUT", "/api/variables", ({ body }) => {
     return problem(409, expected === 0 ? `'${key}' is already set.` : `v${activeNow(key)} of '${key}' became active meanwhile.`);
   }
   const visibility = (body.visibility as string | null) ?? existing?.visibility ?? "secret";
-  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null };
+  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null, newerVersion: null };
   entry.description = (body.description as string | null) ?? null;
   if (typeof body.value === "string") {
     entry.visibility = visibility;
@@ -298,6 +299,20 @@ on("POST", "/api/variables/reveal", ({ body }) => ({
     return { key, value: active?.value ?? null };
   }),
 }));
+on("POST", "/api/variables/versions/reveal", ({ body }) => {
+  const target = (data.variableHistory.get(String(body.key)) ?? []).find((v) => v.version === body.version);
+  return target ? { key: String(body.key), version: target.version, value: target.value } : problem(400, "The selected version does not exist.");
+});
+on("DELETE", "/api/variables/versions", ({ query }) => {
+  const key = query.get("key") ?? "";
+  const version = Number(query.get("version"));
+  const existing = findVariable(key);
+  const history = data.variableHistory.get(key) ?? [];
+  if (!existing || !history.some((v) => v.version === version)) return problem(400, "The selected version does not exist.");
+  if (version === data.variableActive.get(key)) return problem(400, "The active version cannot be deleted. Make another version active first, or delete the key.");
+  data.variableHistory.set(key, history.filter((v) => v.version !== version));
+  data.summarizeVariable(existing);
+});
 on("POST", "/api/variables/candidates", ({ body }) => {
   const existing = findVariable(body.key);
   if (!existing) return notFound("key");

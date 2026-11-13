@@ -75,7 +75,7 @@ function Chips({ entry, lines }: { entry: Variable; lines: number | null }) {
       ) : (
         <span className="run-chip vars-chip--success">v{entry.version} active</span>
       )}
-      {entry.latestVersion > entry.version ? <span className="run-chip vars-chip--warning">Latest v{entry.latestVersion}</span> : null}
+      {entry.newerVersion ? <span className="run-chip vars-chip--warning">Newer v{entry.newerVersion}</span> : null}
     </span>
   );
 }
@@ -420,7 +420,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
               {value()}
               <p className="muted small">
                 v{entry.version}, saved <RelativeTime value={entry.updatedAt} />.
-                {entry.latestVersion > entry.version ? ` v${entry.latestVersion} is newer and not active. See Versions.` : null}
+                {entry.newerVersion ? ` v${entry.newerVersion} is newer and not active. See Versions.` : null}
               </p>
             </>
           )}

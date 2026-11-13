@@ -523,6 +523,26 @@ export function useRevealVariables() {
   });
 }
 
+/** One version's value, whatever its state, for comparing versions. Like a reveal, it is never kept in the query cache. */
+export function useRevealVariableVersion() {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (body: { key: string; version: number }) => unwrap(api.POST("/api/variables/versions/reveal", { body })),
+  });
+}
+
+export function useDeleteVariableVersion() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, version }: { key: string; version: number }) =>
+      unwrap(api.DELETE("/api/variables/versions", { params: { query: { key, version } } })),
+    onSettled: (_, __, { key }) => {
+      void client.invalidateQueries({ queryKey: keys.variables });
+      void client.invalidateQueries({ queryKey: keys.variableVersions(key) });
+    },
+  });
+}
+
 export function useStageVariable() {
   const client = useQueryClient();
   return useMutation({

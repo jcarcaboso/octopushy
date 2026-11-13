@@ -597,7 +597,9 @@ public sealed record TokenDto(
 
 /// <summary>
 /// An entry of the variable store. <c>Lines</c> is the number of lines in the active value, so a list can tell a file from a
-/// one-line value without revealing it; null when there is no active value that may be used.
+/// one-line value without revealing it; null when there is no active value that may be used. <c>NewerVersion</c> is the newest
+/// version after the active one that is not revoked, which could be made active; null when there is none. <c>LatestVersion</c>
+/// is the last number given, whatever became of that version.
 /// </summary>
 public sealed record VariableDto(
     string Key,
@@ -609,7 +611,8 @@ public sealed record VariableDto(
     IReadOnlyList<string> UsedBy,
     int LatestVersion,
     bool Revoked,
-    int? Lines);
+    int? Lines,
+    int? NewerVersion);
 
 public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy);
 
@@ -630,6 +633,11 @@ public sealed record VariableRevealRequest(IReadOnlyList<string> Keys);
 public sealed record RevealedVariableDto(string Key, string? Value);
 
 public sealed record VariableRevealDto(IReadOnlyList<RevealedVariableDto> Values);
+
+public sealed record VariableVersionRevealRequest(string Key, int Version);
+
+/// <summary>One version's value, whatever its state; revealing it releases it to nothing.</summary>
+public sealed record RevealedVariableVersionDto(string Key, int Version, string Value);
 
 public sealed record VariableCandidateRequest(string Key, string Value, string? Description);
 

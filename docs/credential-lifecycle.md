@@ -27,12 +27,20 @@ lack: see [rotating the key](guest-configuration.md#rotating-the-key).
    channel cannot be retracted, even if the worker has not acknowledged receipt.
    Revoke the actual provider token separately.
 
-The UI shows active/latest version numbers, candidate/active/previous/revoked
+The UI shows the active version number, candidate/active/previous/revoked
 states, latest promotion metadata, revocation metadata, and run/definition
-references. History never returns values, ciphertext, or wrapped keys.
+references. History never returns values, ciphertext, or wrapped keys. A key is
+marked **Newer v*n*** only when a version after the active one is not revoked,
+so it could be made active; a revoked one after it is not offered.
 A previous version that is not revoked can be made active again, with the same
 concurrency checks. Revocation is irreversible.
 Emergency revocation of the active version is allowed; there is no fallback.
+
+**Show value** on a version reads that one version's value, whatever its state,
+through the logged reveal endpoint, and compares it line by line with another
+version, the active one at first. Revealing a value releases it to no run.
+**Delete** removes a version that is not the active one: see
+[deleting a version](#deleting-a-version).
 
 ## Exact execution bindings
 
@@ -88,6 +96,8 @@ All endpoints require the existing authenticated administrator session:
 | `PUT /api/variables` | `{key, value?, visibility?, description?, note?, expectedCurrentVersion?}`. Creates a key, or adds a version of an existing one, plain or secret, and makes it active at once. Records the signed-in user and the note. Without `value`, only the description changes. An empty value for an existing secret is refused, and so is making a secret plain. |
 | `POST /api/variables/candidates` | `{key, value, description?}` → `{version}`; existing secret only. |
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
+| `POST /api/variables/versions/reveal` | `{key, version}` → `{key, version, value}`: one version's value, whatever its state, for comparing versions. A version that does not exist, and keys under `system/`, are refused. The server logs who revealed which version. |
+| `DELETE /api/variables/versions?key=…&version=…` | Deletes one version that is not active, once nothing needs it; see below. |
 | `POST /api/variables/reveal` | `{keys}` → `{values: [{key, value}]}`: each key's active value, plain or secret. `null` when the active version is revoked or was never promoted, or the key is missing. Keys under `system/` are refused. The server logs who revealed which keys. |
 | `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote?}`. The note is optional. |
 | `POST /api/variables/revoke` | `{key, version, reason}`. |
@@ -136,6 +146,14 @@ attempt's log lines, error and outputs are withheld rather than kept unmasked.
 Masking never passes text through for an attempt whose values it does not hold:
 an attempt with no secrets is registered with none, and one closed or unknown has
 what it reports withheld.
+
+**Deleting a version.** One version that is not the active one can be deleted:
+its encrypted value goes, and its number is never given to another value, as for
+a deleted key. It is refused for the active version, so make another one active
+first, or delete the key. It is refused too, naming what holds it, while a
+definition in the head revision, or in the one the scheduler observes from,
+pins that version; or a run or an attempt that has not finished pinned it or
+asked for it, or was given it. The resolution records of who received it stay.
 
 Outputs are parsed before they are masked. Strings are masked as they read once
 decoded, whatever JSON escaped in them, and stay strings. Nothing else is

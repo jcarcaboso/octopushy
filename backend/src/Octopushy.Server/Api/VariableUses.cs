@@ -126,6 +126,24 @@ public static class VariableUses
         return holders.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    /// <summary>
+    /// The definitions that pin <paramref name="version"/> of <paramref name="key"/>, in the head revision and in the one the
+    /// scheduler observes from: what keeps that one version from being deleted, apart from runs and attempts.
+    /// </summary>
+    public static async Task<List<string>> PinningAsync(OctopushyDb db, RevisionCache revisions, string key, int version, CancellationToken ct)
+    {
+        var holders = new List<string>();
+        var head = await HeadRevisionAsync(db, ct);
+        var observing = await Planner.ScheduledObservationRevisionAsync(db, ct);
+        foreach (var revision in new[] { head, observing }.OfType<DefinitionRevision>().DistinctBy(r => r.Id))
+        {
+            holders.AddRange((await revisions.GetAsync(revision, ct)).StoreUses
+                .Where(u => u.Key == key && u.Version == version).Select(u => $"definition {u.Consumer}"));
+        }
+
+        return holders.Distinct(StringComparer.Ordinal).ToList();
+    }
+
     private static StoreException Unreadable(string what) =>
         new($"The definitions at {what} could not be read, so whether one uses this key is not known. Nothing was deleted; fix the repository or sync it, then try again.");
 }

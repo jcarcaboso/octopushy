@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { check, detect, formatSummary, pairs, splitLine, summarize } from "./format";
+import { check, detect, diffLines, formatSummary, pairs, splitLine, summarize } from "./format";
 
 const env = ["# outline", "NODE_ENV=production", "PORT=3000", "export SMTP_HOST=smtp.example.org", "SMTP_PASSWORD=h4Jc9sNb2Yq"].join("\n");
 const yml = ["oidc:", "  issuer: https://auth.example.org", "  scopes: [openid, email]", "storage:", "  - bucket"].join("\n");
@@ -98,5 +98,27 @@ describe("helpers", () => {
     expect(splitLine("  issuer: https://a.example", "yaml")).toEqual({ name: "  issuer", sep: ": ", rest: "https://a.example", comment: false });
     expect(splitLine("# note", "env").comment).toBe(true);
     expect(splitLine("PORT=3000", "text")).toEqual({ name: "", sep: "", rest: "PORT=3000", comment: false });
+  });
+});
+
+describe("diffLines", () => {
+  it("keeps the lines both share and marks what one removed and the other added", () => {
+    expect(diffLines("A=1\nB=2\nC=3\n", "A=1\nB=20\nC=3\nD=4\n")).toEqual([
+      { kind: "same", text: "A=1" },
+      { kind: "removed", text: "B=2" },
+      { kind: "added", text: "B=20" },
+      { kind: "same", text: "C=3" },
+      { kind: "added", text: "D=4" },
+    ]);
+  });
+
+  it("reads one trailing newline as the end of the last line, and nothing as no lines", () => {
+    expect(diffLines("x\n", "x")).toEqual([{ kind: "same", text: "x" }]);
+    expect(diffLines("", "x")).toEqual([{ kind: "added", text: "x" }]);
+    expect(diffLines("x", "")).toEqual([{ kind: "removed", text: "x" }]);
+  });
+
+  it("finds a line moved past others as removed in one place and added in another", () => {
+    expect(diffLines("a\nb\nc", "b\nc\na").map((line) => `${line.kind[0]}${line.text}`)).toEqual(["ra", "sb", "sc", "aa"]);
   });
 });

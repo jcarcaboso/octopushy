@@ -619,8 +619,10 @@ export function summarizeVariable(entry: Variable) {
   const history = variableHistory.get(entry.key) ?? [];
   const active = history.find((v) => v.version === variableActive.get(entry.key));
   entry.version = active?.version ?? 0;
-  entry.latestVersion = history[0]?.version ?? 0;
+  entry.latestVersion = Math.max(entry.latestVersion, history[0]?.version ?? 0);
   entry.revoked = active?.status === "revoked";
+  // A revoked version after the active one is no newer value to make active, as the server counts it.
+  entry.newerVersion = history.find((v) => v.version > entry.version && v.status !== "revoked")?.version ?? null;
   const usable = active && active.status === "active" ? active.value : null;
   entry.lines = usable === null ? null : usable.split("\n").length - (usable.endsWith("\n") ? 1 : 0);
   entry.value = entry.visibility === "plain" ? usable : null;
@@ -635,7 +637,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
     const n = version - i;
     return stored(n, n === version ? own : `${own}-v${n}`, n === version ? "active" : "previous", 1000 * (i + 1), n > 1 && n === version ? "Rotated after the token audit." : null);
   }));
-  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null };
+  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null, newerVersion: null };
   summarizeVariable(created);
   return created;
 };
@@ -644,7 +646,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
 const withHistory = (key: string, visibility: "secret" | "plain", usedBy: string[], description: string, versions: StoredVersion[]): Variable => {
   variableHistory.set(key, versions);
   variableActive.set(key, versions.find((v) => v.status === "active")?.version ?? 0);
-  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null };
+  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null, newerVersion: null };
   summarizeVariable(created);
   return created;
 };

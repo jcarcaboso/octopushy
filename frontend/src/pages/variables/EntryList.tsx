@@ -68,7 +68,7 @@ export function EntryList({ folders, entries, flat, selected, hrefFor, revealedV
                 <span className="vars-row__name">{lastSegment(entry.key)}</span>{" "}
                 <span className="vars-row__end">
                   {entry.revoked ? <span className="run-chip vars-chip--danger">Revoked</span> : null}{" "}
-                  {entry.latestVersion > entry.version ? <span className="run-chip vars-chip--warning">Latest v{entry.latestVersion}</span> : null}{" "}
+                  {entry.newerVersion ? <span className="run-chip vars-chip--warning">Newer v{entry.newerVersion}</span> : null}{" "}
                   v{entry.version}
                 </span>
               </span>
