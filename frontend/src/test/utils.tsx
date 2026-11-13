@@ -9,6 +9,8 @@ export interface RecordedRequest {
   path: string;
   search: string;
   body: unknown;
+  /** The Content-Type sent; a body that is not JSON is kept as a Blob. */
+  type: string | null;
 }
 
 type Handler = (request: RecordedRequest) => unknown;
@@ -22,12 +24,15 @@ export function mockApi(handlers: Record<string, Handler>) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const request = input instanceof Request ? input : new Request(input);
     const url = new URL(request.url);
-    const text = request.method === "GET" ? "" : await request.text();
+    const type = request.headers.get("content-type");
+    const json = !type || type.includes("json");
+    const text = request.method === "GET" || !json ? "" : await request.text();
     const recorded: RecordedRequest = {
       method: request.method,
       path: url.pathname,
       search: url.search,
-      body: text ? JSON.parse(text) : undefined,
+      body: json ? (text ? JSON.parse(text) : undefined) : await request.blob(),
+      type,
     };
     requests.push(recorded);
     const handler = handlers[`${request.method} ${url.pathname}`];

@@ -68,6 +68,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<UptimeBucket> UptimeBuckets => Set<UptimeBucket>();
 
+    public DbSet<ServiceIcon> ServiceIcons => Set<ServiceIcon>();
+
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<RepositorySettings>(e =>
@@ -287,6 +289,15 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasKey(x => new { x.CheckKey, x.StartsAt });
             e.Property(x => x.CheckKey).HasMaxLength(2600);
             e.HasIndex(x => x.StartsAt);
+        });
+
+        model.Entity<ServiceIcon>(e =>
+        {
+            e.ToTable("service_icons");
+            e.HasKey(x => x.ResourceId);
+            e.HasOne<Resource>().WithOne().HasForeignKey<ServiceIcon>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.Name).HasMaxLength(128);
+            e.Property(x => x.ContentType).HasMaxLength(32);
         });
     }
 }

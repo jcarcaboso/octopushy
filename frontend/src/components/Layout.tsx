@@ -1,4 +1,4 @@
-import { Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, KeyRound, LayoutDashboard, LogOut, Rocket, Server, User } from "lucide-react";
+import { Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, Globe, KeyRound, LayoutDashboard, LogOut, Rocket, Server, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useAuthState, useLogout, useRepository } from "../api/queries";
@@ -10,6 +10,8 @@ const groups = [
     items: [
       { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
       { to: "/inventory", label: "Inventory", icon: Server },
+      // A service's own page lives under /services/:id; only this list lights the item.
+      { to: "/services", label: "Services", icon: Globe, end: true },
       { to: "/deploy", label: "Deploy", icon: Rocket },
       { to: "/runs", label: "Runs", icon: CirclePlay },
     ],

@@ -9,6 +9,7 @@ import { RequireAuth } from "./components/RequireAuth";
 import { AgentsPage } from "./pages/AgentsPage";
 import { GuestPage } from "./pages/GuestPage";
 import { ServicePage } from "./pages/ServicePage";
+import { ServicesPage } from "./pages/ServicesPage";
 import { InstallationPage } from "./pages/InstallationPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -45,6 +46,7 @@ export function AppRoutes() {
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="guests/:id" element={<GuestPage />} />
         <Route path="guests/:id/change" element={<ChangeEditorPage />} />
+        <Route path="services" element={<ServicesPage />} />
         <Route path="services/:id" element={<ServicePage />} />
         <Route path="services/:id/change" element={<ChangeEditorPage />} />
         <Route path="changes/:id" element={<ChangePage />} />

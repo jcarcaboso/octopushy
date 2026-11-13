@@ -6,6 +6,7 @@ using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
 using Octopushy.Server.Git;
+using Octopushy.Server.Icons;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Orchestration;
 
@@ -31,7 +32,7 @@ public static class GuestStatuses
 
 /// <summary>Builds the read models the API returns.</summary>
 public sealed partial class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors, AgentConnections connections,
-    TimeProvider clock)
+    TimeProvider clock, IconDirectory icons)
 {
     private const int DefinitionTextLimit = 256 * 1024;
 
@@ -550,13 +551,14 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var runs = await LatestRunsAsync(services.Select(s => s.Id).ToList(), cancellationToken);
         var ids = services.Select(s => s.Id).ToList();
         var states = await db.GuestConfigurations.AsNoTracking().Where(c => ids.Contains(c.ResourceId)).ToDictionaryAsync(c => c.ResourceId, cancellationToken);
+        var stored = await StoredIconsAsync(ids, cancellationToken);
         var repository = latest is null || !latest.RepositoryValid ? null : await revisions.GetAsync(latest, cancellationToken);
         var summaries = new List<ServiceSummaryDto>();
         foreach (var service in services)
         {
             var (active, last) = runs.GetValueOrDefault(service.Id);
             summaries.Add(ServiceSummary(service, active, last, states.GetValueOrDefault(service.Id), await ServiceWaitingAsync(guest, service, latest, cancellationToken),
-                repository?.Service(service.Address)));
+                repository?.Service(service.Address), stored.GetValueOrDefault(service.Id)));
         }
 
         return summaries;
@@ -571,17 +573,25 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         return await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, repository.Service(service.Address));
     }
 
+    /// <summary>The icons the database holds for these services, without picture bytes.</summary>
+    private async Task<Dictionary<Guid, StoredIcon>> StoredIconsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken) =>
+        await db.ServiceIcons.AsNoTracking().Where(i => ids.Contains(i.ResourceId))
+            .Select(i => new StoredIcon(i.ResourceId, i.Name, i.ContentType != null, i.SetAt))
+            .ToDictionaryAsync(i => i.ResourceId, cancellationToken);
+
     /// <param name="definition">The service as the head revision reads it, for the names its stages set; null shows only its links.</param>
-    private static ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting,
-        ServiceDefinition? definition)
+    private ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting,
+        ServiceDefinition? definition, StoredIcon? icon)
     {
         var (status, detail) = ServiceStatus(resource, active, last, state, waiting);
-        return new ServiceSummaryDto(resource.Id, resource.Address, resource.Address.Split('/')[^1], status, detail, resource.Valid,
+        var name = resource.Address.Split('/')[^1];
+        return new ServiceSummaryDto(resource.Id, resource.Address, name, status, detail, resource.Valid,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
             Workflow(resource),
             definition?.Links ?? ServiceDefinition.LinksOf(resource.Definition is null ? null : JsonNode.Parse(resource.Definition)),
-            definition?.Names.Select(n => new ServiceNameDto(n.Name, n.Stage, n.Url)).ToList() ?? []);
+            definition?.Names.Select(n => new ServiceNameDto(n.Name, n.Stage, n.Url)).ToList() ?? [],
+            icons.Resolve(resource.Id, name, icon));
     }
 
     /// <summary>What a guest or service names in its definition, and what the latest revision resolved that to.</summary>
@@ -652,7 +662,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var active = runs.Where(r => !RunStatuses.IsTerminal(r.Status)).MinBy(r => r.CreatedAt);
         var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
         return new ServiceDetailDto(
-            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken), definition),
+            ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken), definition,
+                (await StoredIconsAsync([id], cancellationToken)).GetValueOrDefault(id)),
             guest?.Id,
             resource.ParentAddress,
             resource.DefinitionFile,

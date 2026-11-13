@@ -38,6 +38,18 @@ public sealed class OctopushyOptions
     public DeployOptions Deploy { get; set; } = new();
 
     public ImageOptions Images { get; set; } = new();
+
+    public IconOptions Icons { get; set; } = new();
+}
+
+/// <summary>The icons the Services page may show by file name. Octopushy ships none. See docs/service-icons.md.</summary>
+public sealed class IconOptions
+{
+    /// <summary>Where they are; by default <c>icons</c> under <see cref="OctopushyOptions.DataDirectory"/>. It may be its own mount point, missing, or empty.</summary>
+    public string? Directory { get; set; }
+
+    /// <summary>The directory in use: <see cref="Directory"/>, or <c>icons</c> under the data directory.</summary>
+    public string Resolve(string dataDirectory) => Path.GetFullPath(Directory ?? Path.Combine(dataDirectory, "icons"), dataDirectory);
 }
 
 /// <summary>The images Octopushy builds for built templates, kept on the server. See docs/built-templates.md.</summary>

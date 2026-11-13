@@ -17,6 +17,7 @@ describe("shell", () => {
     renderAt(<Layout />, { path: "/", route: "/" });
 
     expect(await screen.findByRole("link", { name: "Repository Last fetch failed" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Services" })).toHaveAttribute("href", "/services");
     expect(screen.queryByRole("banner")).not.toBeInTheDocument();
     const account = await screen.findByRole("button", { name: "ops" });
     expect(screen.getByText("Sign out")).not.toBeVisible();

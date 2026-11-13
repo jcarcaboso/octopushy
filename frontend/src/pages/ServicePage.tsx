@@ -1,4 +1,5 @@
 import { Rocket } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { isNotFound } from "../api/client";
 import { useDeployService, useService } from "../api/queries";
@@ -14,9 +15,11 @@ import { PageHeader } from "../components/PageHeader";
 import { PolicyView } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
+import { ServiceIcon } from "../components/ServiceIcon";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
+import { IconDialog } from "./services/IconDialog";
 
 /** One service: its status, what it waits for, its stages, and its history. Its definition is read from the repository. */
 export function ServicePage() {
@@ -24,6 +27,7 @@ export function ServicePage() {
   const { data, error, isPending } = useService(id);
   const deploy = useDeployService(id);
   const navigate = useNavigate();
+  const [changingIcon, setChangingIcon] = useState(false);
 
   if (isPending) return <PageSkeleton rows={4} />;
   if (!data) return isNotFound(error) ? <NotFound what="service" /> : <ErrorMessage error={error} title="The service could not be loaded" />;
@@ -40,13 +44,21 @@ export function ServicePage() {
             {data.guestId ? <Link to={`/guests/${data.guestId}`}>{data.guestAddress}</Link> : data.guestAddress} / Service
           </>
         }
-        title={<span className="mono">{service.address}</span>}
+        title={
+          <span className="service-heading">
+            <ServiceIcon service={service} large />
+            <span className="mono">{service.address}</span>
+          </span>
+        }
         documentTitle={service.name}
         meta={
           <span className="inline-group">
             <StatusBadge status={service.status} />
             {service.statusDetail ? <span>{service.statusDetail}</span> : null}
             {service.activeRun ? <Link to={`/runs/${service.activeRun.id}`}>Run #{service.activeRun.number}</Link> : null}
+            <button type="button" className="link-button" onClick={() => setChangingIcon(true)}>
+              Change icon
+            </button>
           </span>
         }
         actions={
@@ -66,6 +78,7 @@ export function ServicePage() {
           )
         }
       />
+      {changingIcon ? <IconDialog service={service} onClose={() => setChangingIcon(false)} /> : null}
       <div className="stack stack--large">
         <ErrorMessage error={deploy.error} />
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}

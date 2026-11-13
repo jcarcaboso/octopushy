@@ -45,6 +45,8 @@ services:
       - kek
     volumes:
       - data:/var/lib/octopushy
+      # A folder of icons for the Services page, read-only; see docs/service-icons.md.
+      # - /srv/icons:/var/lib/octopushy/icons:ro
     networks: [default, agents]
     ports:
       # Agents connect here: gRPC over TLS with client certificates.

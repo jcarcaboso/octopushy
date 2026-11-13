@@ -21,12 +21,19 @@ memory: approving, rejecting or cancelling changes it until the server restarts.
 
 ## Scenarios
 
-One lab, `home`, with the Proxmox installation `home/pve01`, seven guests, the service `home/pve01/web/app` and five
+One lab, `home`, with the Proxmox installation `home/pve01`, seven guests, the service `home/pve01/web/app` and seven
 more services with links, four agents, variables and a lab repository with revisions and drafts. A second installation,
 `home/korriban`, has been offline for two days, with its one machine, `nas`.
 
 [/inventory](http://127.0.0.1:5176/inventory) shows uptime from `GET /api/uptime` (mock/uptime.ts): korriban and nas are
 down, jellyfin on media is degraded (its first link answers 502 since 40 minutes ago), and dns has no answers yet.
+[/services](http://127.0.0.1:5176/services) lists the links under home.example.org, ops.example.org (fleet's three
+links, and open-webui) and No domain (technitium's address).
+
+Icons: `GET /api/icons` lists twelve predefined files, each drawn as a coloured square with its first two letters.
+traefik, jellyfin, samba, fleet and open-webui match one by name; app, technitium and proxmox-backup show their letter.
+Change icon on a service's page chooses a file, uploads a picture (kept in memory and served back) or goes back to the
+default.
 
 | Run | What it shows |
 |---|---|

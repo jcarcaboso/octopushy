@@ -7,7 +7,7 @@ import { InventoryPage } from "./InventoryPage";
 
 const service = (guest: string, name: string, links: string[], names: ServiceSummary["names"] = []): ServiceSummary => ({
   id: `svc-${name}`, address: `${guest}/${name}`, name, status: "in-sync", statusDetail: null, valid: true, activeRun: null, lastRun: null,
-  workflow: null, links, names,
+  workflow: null, links, names, icon: null,
 });
 
 const guest = (installation: string, host: string, name: string, vmid: number, services: ServiceSummary[] = []): GuestSummary => ({

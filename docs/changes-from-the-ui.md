@@ -3,7 +3,8 @@
 **Decided by the owner on November 3, 2026** ([D6](workflows-migration.md#decisions)): every change made in the UI is a
 commit that Octopushy writes to the lab repository. It then syncs at once, and the normal process runs: validation, plan,
 approval as the policy says, apply, verify. Git stays the only source of truth. Nothing a form changes lives only in the
-database, so there is no drift to reconcile.
+database, so there is no drift to reconcile. The one exception is a picture uploaded as a service's icon, which is only
+shown and lives in the database: see [service icons](service-icons.md).
 
 This page is Phase 3A and 3B of the [workflows migration](workflows-migration.md#phase-3-change-from-the-ui-and-one-click-deployment):
 changes to what exists, and [the workflow wizard](#the-workflow-wizard), which deploys something new.

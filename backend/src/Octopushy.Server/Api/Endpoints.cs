@@ -8,6 +8,7 @@ using Octopushy.Server.Agents;
 using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Icons;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
@@ -28,6 +29,7 @@ public static partial class Endpoints
         MapOverview(api);
         MapRepository(api.MapGroup("/repository").WithTags("Repository"));
         MapInventory(api);
+        api.MapIcons();
         api.MapTofuState();
         MapRuns(api);
         MapAgents(api.MapGroup("/agents").WithTags("Agents"));

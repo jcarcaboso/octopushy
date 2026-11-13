@@ -442,10 +442,28 @@ public sealed record ServiceSummaryDto(
     /// </summary>
     IReadOnlyList<string> Links,
     /// <summary>The host names the service's stages set, from the input each stage names with <c>names</c>.</summary>
-    IReadOnlyList<ServiceNameDto> Names);
+    IReadOnlyList<ServiceNameDto> Names,
+    /// <summary>The icon the Services page shows for the service; null when it has none. See docs/service-icons.md.</summary>
+    ServiceIconDto? Icon);
 
 /// <summary>A host name a service's stage sets, and the URL it is opened and checked at.</summary>
 public sealed record ServiceNameDto(string Name, string Stage, string Url);
+
+/// <summary>A service's icon and where it comes from.</summary>
+public sealed record ServiceIconDto(
+    /// <summary>Where the browser loads it: a path on this origin.</summary>
+    string Url,
+    /// <summary>
+    /// <c>picture</c>: uploaded for the service. <c>chosen</c>: a file of the icons directory picked for it. <c>name</c>: the
+    /// file of the icons directory named after the service.
+    /// </summary>
+    string Source);
+
+/// <summary>Picks a file of the icons directory for a service.</summary>
+public sealed record ServiceIconChoice(string Name);
+
+/// <summary>The files of the icons directory, sorted.</summary>
+public sealed record IconNamesDto(IReadOnlyList<string> Names);
 
 public sealed record ServiceStageDto(string Name, string Executor);
 
