@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octopushy backend and agent review, 13 November 2026</title>
+<style>
+  :root {
+    --fg: var(--foreground, light-dark(#1b1f23, #e6e8eb));
+    --mut: var(--muted-foreground, light-dark(#5b6470, #9aa3ad));
+    --line: var(--border, light-dark(#d5d9df, #30363d));
+    --panel: var(--card, light-dark(#f5f6f8, #171b20));
+    --codebg: var(--code-background, light-dark(#eceef2, #1f252c));
+    --acc: var(--info, light-dark(#0b62c4, #6cb6ff));
+    --bad: var(--destructive, light-dark(#bf3328, #ff7b72));
+    --warn: var(--warning, light-dark(#9a5a00, #e3a23c));
+    --ok: var(--success, light-dark(#1a7f4b, #4cc38a));
+    --r: var(--radius, 8px);
+    --mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  }
+  html.standalone { color-scheme: light dark; }
+  html.standalone body { max-width: 900px; margin: 0 auto; padding: 28px 20px 60px; }
+  body { margin: 0; color: var(--fg); font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif); font-size: 14.5px; line-height: 1.55; }
+  h1 { font-size: 25px; line-height: 1.25; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+  h3 { font-size: 15px; margin: 24px 0 6px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  a { color: var(--acc); }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--codebg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .sub { color: var(--mut); font-size: 13px; }
+  .lede { font-size: 15.5px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 0; font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; }
+  .tile b { display: block; font-size: 24px; line-height: 1.15; font-weight: 650; }
+  .tile span { color: var(--mut); font-size: 12.5px; }
+  .fig { margin: 16px 0 8px; overflow-x: auto; }
+  .fig svg { display: block; width: 100%; min-width: 640px; height: auto; font-family: inherit; }
+  .cap { color: var(--mut); font-size: 12.5px; margin: 4px 0 14px; }
+  .b { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+  .bx { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  .bw { fill: color-mix(in oklab, var(--warn) 15%, transparent); stroke: var(--warn); stroke-width: 1.3; }
+  .bo { fill: color-mix(in oklab, var(--ok) 14%, transparent); stroke: var(--ok); stroke-width: 1.3; }
+  .t { fill: var(--fg); font-size: 12px; }
+  .th { fill: var(--fg); font-size: 12.5px; font-weight: 650; }
+  .s { fill: var(--mut); font-size: 11px; }
+  .ln { stroke: var(--mut); stroke-width: 1.3; fill: none; }
+  .ld { stroke: var(--mut); stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; }
+  .life { stroke: var(--line); stroke-width: 1.2; }
+  .ah { fill: var(--mut); }
+  .hot { fill: var(--bad); }
+  .hott { fill: #fff; font-size: 11px; font-weight: 700; text-anchor: middle; }
+  .card { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 16px; margin: 12px 0; }
+  .card h3 { margin: 0 0 4px; }
+  .card p { margin: 6px 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+  .chip { display: inline-block; font-size: 11.5px; line-height: 1.5; padding: 0 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--mut); white-space: nowrap; }
+  .chip.high { border-color: var(--bad); color: var(--bad); }
+  .chip.med { border-color: var(--warn); color: var(--warn); }
+  .chip.low { border-color: var(--line); }
+  .chip.done { border-color: var(--ok); color: var(--ok); }
+  .num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; margin-right: 6px; flex: none; }
+  .tw { overflow-x: auto; margin: 10px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; vertical-align: top; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); }
+  th { color: var(--mut); font-weight: 600; font-size: 12px; }
+  td.n { white-space: nowrap; color: var(--mut); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 12px 0; }
+  .col { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; }
+  .col h3 { margin: 0 0 6px; }
+  .col ul { padding-left: 18px; font-size: 13.5px; }
+  .legend { list-style: none; padding: 0; font-size: 13.5px; }
+  .legend li { display: flex; align-items: flex-start; margin: 5px 0; }
+  .src { font-size: 11.5px; color: var(--mut); }
+</style>
+</head>
+<body>
+
+<h1>Octopushy backend and agent review</h1>
+<p class="sub">13 November 2026, at commit <code>a860484</code> on <code>t3/backend-agent-review</code>. Scope is <code>backend/</code>, <code>agent/</code>, <code>contracts/</code> and <code>deploy/</code>. The frontend is out of scope except where it drives server load.</p>
+
+<p class="lede">The design is sound and I would keep it. The rules that matter for a tool that owns every deployment are already in the code. A change is never retried or interrupted, a lost agent means "uncertain" and never "failed", the approved plan is checked by hash before it is applied, and results survive a restart on both sides. I found no critical hole.</p>
+<p class="lede">What needs work is how the system behaves on a bad day. One lock covers too much, so a slow git push can make healthy work look lost. One run that throws stops every other run. Run history, logs and artifacts are never deleted. And one path lets a commit to the lab repository send a stored secret to a host the commit chooses. Fix those, then do one structural refactor before adding the next executor or stage type.</p>
+
+<div class="tiles">
+  <div class="tile"><b>0</b><span>critical findings</span></div>
+  <div class="tile"><b>8</b><span>things to do first</span></div>
+  <div class="tile"><b>9</b><span>small fixes made in this pass</span></div>
+  <div class="tile"><b>36</b><span>small fixes left, each under an hour</span></div>
+  <div class="tile"><b>6</b><span>refactors, in order</span></div>
+</div>
+
+<nav class="toc">
+  <a href="#map">System map</a><a href="#done">What I changed</a><a href="#first">Do first</a><a href="#lock">The engine lock</a><a href="#agent">The agent</a><a href="#security">Security</a><a href="#data">Performance and data</a><a href="#refactor">Refactors</a><a href="#quick">Quick wins</a><a href="#keep">Worth keeping</a><a href="#plan">Order of work</a><a href="#method">Method</a>
+</nav>
+
+<h2 id="map">System map, with where the problems are</h2>
+<div class="fig">
+<svg viewBox="0 0 720 430" role="img" aria-label="System map of Octopushy with six numbered problem areas">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs>
+  <text x="300" y="16" class="s">Control host: backend (.NET 10)</text>
+  <rect x="300" y="24" width="250" height="246" rx="8" class="bx"/>
+  <rect x="10" y="34" width="120" height="40" rx="6" class="b"/><text x="70" y="58" text-anchor="middle" class="t">Operator browser</text>
+  <rect x="160" y="34" width="110" height="40" rx="6" class="b"/><text x="215" y="58" text-anchor="middle" class="t">Caddy :8081</text>
+  <rect x="314" y="36" width="222" height="36" rx="6" class="b"/><text x="326" y="58" class="t">HTTP API and views :8080</text>
+  <rect x="314" y="82" width="222" height="50" rx="6" class="b"/><text x="326" y="103" class="th">RunEngine</text><text x="326" y="120" class="s">one lock, 5 s tick</text>
+  <rect x="314" y="142" width="222" height="36" rx="6" class="b"/><text x="326" y="164" class="t">RepositorySync and git mirrors</text>
+  <rect x="314" y="218" width="222" height="40" rx="6" class="b"/><text x="326" y="242" class="t">Agent channel :8443, mTLS</text>
+  <rect x="590" y="36" width="120" height="40" rx="6" class="b"/><text x="650" y="60" text-anchor="middle" class="t">PostgreSQL</text>
+  <rect x="590" y="96" width="120" height="66" rx="6" class="b"/><text x="650" y="118" text-anchor="middle" class="t">Data directory</text><text x="650" y="134" text-anchor="middle" class="s">logs, artifacts,</text><text x="650" y="148" text-anchor="middle" class="s">images, keys</text>
+  <rect x="10" y="126" width="150" height="40" rx="6" class="b"/><text x="85" y="150" text-anchor="middle" class="t">Lab repository</text>
+  <rect x="10" y="186" width="150" height="40" rx="6" class="b"/><text x="85" y="210" text-anchor="middle" class="t">Workflows repository</text>
+  <text x="262" y="316" class="s">Agent host: agent (Rust)</text>
+  <rect x="230" y="324" width="290" height="96" rx="8" class="bx"/>
+  <rect x="244" y="338" width="128" height="68" rx="6" class="b"/><text x="308" y="366" text-anchor="middle" class="t">attempts, outbox,</text><text x="308" y="382" text-anchor="middle" class="t">recovery</text>
+  <rect x="382" y="338" width="124" height="68" rx="6" class="b"/><text x="444" y="366" text-anchor="middle" class="t">executors: tofu,</text><text x="444" y="382" text-anchor="middle" class="t">ansible, nix</text>
+  <rect x="570" y="322" width="140" height="36" rx="6" class="b"/><text x="640" y="344" text-anchor="middle" class="t">Proxmox API</text>
+  <rect x="570" y="372" width="140" height="36" rx="6" class="b"/><text x="640" y="394" text-anchor="middle" class="t">Guests over SSH</text>
+  <line x1="130" y1="54" x2="160" y2="54" class="ln" marker-end="url(#a1)"/>
+  <line x1="270" y1="54" x2="314" y2="54" class="ln" marker-end="url(#a1)"/>
+  <line x1="536" y1="56" x2="590" y2="56" class="ln" marker-end="url(#a1)"/>
+  <line x1="536" y1="112" x2="590" y2="122" class="ln" marker-end="url(#a1)"/>
+  <line x1="314" y1="154" x2="160" y2="146" class="ln" marker-end="url(#a1)"/>
+  <line x1="314" y1="168" x2="160" y2="206" class="ln" marker-end="url(#a1)"/>
+  <line x1="490" y1="324" x2="490" y2="258" class="ln" marker-end="url(#a1)"/>
+  <text x="499" y="296" class="s">the agent dials out</text>
+  <line x1="520" y1="352" x2="570" y2="342" class="ln" marker-end="url(#a1)"/>
+  <line x1="520" y1="386" x2="570" y2="390" class="ln" marker-end="url(#a1)"/>
+  <circle cx="236" cy="187" r="10" class="hot"/><text x="236" y="191" class="hott">1</text>
+  <circle cx="522" cy="96" r="10" class="hot"/><text x="522" y="100" class="hott">2</text>
+  <circle cx="522" cy="238" r="10" class="hot"/><text x="522" y="242" class="hott">3</text>
+  <circle cx="704" cy="98" r="10" class="hot"/><text x="704" y="102" class="hott">4</text>
+  <circle cx="244" cy="326" r="10" class="hot"/><text x="244" y="330" class="hott">5</text>
+  <circle cx="286" cy="40" r="10" class="hot"/><text x="286" y="44" class="hott">6</text>
+</svg>
+</div>
+<ul class="legend">
+  <li><span class="num">1</span><span>The backend fetches whatever workflows repository the newest commit names, with whatever store key that commit names, before anyone validates the commit. Partly closed in this pass.</span></li>
+  <li><span class="num">2</span><span>One lock serializes ticks, heartbeats, results, git pushes and some GET requests. One exception in one run ends the whole pass.</span></li>
+  <li><span class="num">3</span><span>A result that throws while it is recorded drops the stream, and the agent replays the same result on every reconnect.</span></li>
+  <li><span class="num">4</span><span>Runs, attempt logs, saved plans and secret-release rows are kept forever.</span></li>
+  <li><span class="num">5</span><span>The agent follows symlinks a tool leaves behind, and the shipped image runs tools as the agent's own user. A running change cannot be stopped, OpenTofu has no time limit, and a result over 64 MiB blocks the channel.</span></li>
+  <li><span class="num">6</span><span>Forwarded headers were trusted on both ports. Fixed in this pass. Bodiless POST endpoints have no origin check.</span></li>
+</ul>
+
+<h2 id="done">What I changed in this pass</h2>
+<p>Nine small changes, uncommitted in the worktree. The backend builds clean with warnings as errors. The agent's tests pass, 249 of 249 with 6 ignored as before. The full backend suite passes, 1,128 of 1,128 test cases, including the two I added.</p>
+<div class="tw"><table>
+<tr><th>Change</th><th>Where</th><th>Why</th></tr>
+<tr><td>A commit can no longer name a <code>system/</code> key as the workflows credential, no credential goes out over <code>http://</code>, and the lab repository's token is reused only for the same host and port.</td><td><code>Git/RepositorySync.cs</code> <code>WorkflowsCredentialAsync</code>, new test in <code>WorkflowsRepositoryTests.cs</code></td><td>Closes three of the four ways area 1 leaks a secret. The fourth needs a decision from you, see below.</td></tr>
+<tr><td>Forwarded headers apply to the API port only.</td><td><code>Program.cs</code></td><td>With <code>TrustForwardedHeaders</code> on, which compose sets, an agent could send <code>x-forwarded-for</code> on its stream and choose the address the server believes it connects from. That address decides which guest an agent may not configure and which guest an agent update targets.</td></tr>
+<tr><td>Enrollment accepts at most 64 KiB per request.</td><td><code>Program.cs</code></td><td>It was 64 MiB, before any token check, for anyone who reaches the agent port.</td></tr>
+<tr><td>At startup the server gives every attempt held by an agent one full lease before it judges any.</td><td><code>Orchestrator.cs</code>, <code>RunEngine.RenewLeasesAsync</code>, new test in <code>ProvisioningTests.cs</code></td><td>After more than about a minute of downtime the first tick marked every running change uncertain and queued a second copy of every read-only step, before any agent could reconnect.</td></tr>
+<tr><td>The orchestrator loop ends only when the server stops.</td><td><code>Orchestrator.cs</code></td><td>A cancellation from anywhere else, such as a timeout, escaped the catch and ended the loop for good while the API stayed up.</td></tr>
+<tr><td>An apply stays succeeded when <code>tofu output -json</code> cannot be parsed.</td><td><code>agent/.../executors/opentofu/mod.rs</code></td><td>The change was already made. The code reported it as failed, against its own comment two lines above.</td></tr>
+<tr><td>Three lookups read three columns of <code>resources</code> and no longer whole rows.</td><td><code>Api/Views.cs</code>, <code>Api/Endpoints.cs</code></td><td>The overview loaded every resource ever, with its definition, outputs and issues JSON, every 10 seconds to build an id to address map.</td></tr>
+<tr><td>Removed <code>ChangeStatuses.IsUnsettled</code>.</td><td><code>Data/Entities.cs</code></td><td>No caller in source or tests.</td></tr>
+<tr><td>Release notes say what the image workflow does since #87.</td><td><code>justfile</code>, <code>deploy/proxmox/README.md</code></td><td>They still said every push to main publishes images.</td></tr>
+</table></div>
+<p class="sub">I could not run <code>rustfmt</code> or <code>clippy</code> here, this machine has neither. CI will. I ran <code>dotnet</code> from outside the checkout because <code>global.json</code> pins SDK 10.0.112 with <code>rollForward: disable</code> and this machine has 10.0.113, so <code>dotnet</code>, and with it <code>just backend</code> and <code>just test</code>, refuses to start inside the repository. If that is your daily machine, <code>"rollForward": "latestPatch"</code> fixes it. I left the pin alone because it looks deliberate.</p>
+
+<h2 id="first">Do first</h2>
+<p>Ranked by what I would fix before trusting this with everything. Each names the smallest change that removes the problem. A filled dot means I read the code path myself. A hollow dot means one reviewer reported it with file references and I did not re-trace it.</p>
+
+<div class="card">
+<h3>1. Decide who may point the server at a workflows repository</h3>
+<div class="meta"><span class="chip high">High, security</span><span class="chip">Half a day</span><span class="chip done">Partly fixed</span><span class="chip">● read</span></div>
+<p><code>RepositorySync</code> reads <code>workflows.repository</code> and <code>workflows.credential.store</code> from the newest commit's <code>octopushy.yaml</code> and fetches at once, before the revision is validated. The askpass helper answers any password prompt with the secret. So a commit can still name any key outside <code>system/</code>, such as a Proxmox token, and an <code>https://</code> URL of its choosing, and the next poll sends that token there as Basic auth.</p>
+<p>ADR 0002 accepts that repository code runs with credentials. This is a different thing. It needs no run, no approval and no installation trust, and it reaches keys the commit's own guests were never given. Your threat model is one operator, so the realistic causes are a compromised Git account or a bad merge.</p>
+<p>The fix is the pattern you already have for Proxmox endpoints. Record the pair of URL and key an operator confirmed, fetch only that pair, and show "Waiting for trust" when a commit changes it. Also refuse <code>file://</code> and absolute paths from the repository unless a server setting allows them, since those make the server read any Git repository it can reach on its own disk.</p>
+</div>
+
+<div class="card">
+<h3>2. Contain a failure to the run it belongs to</h3>
+<div class="meta"><span class="chip high">High, reliability</span><span class="chip">Half a day</span><span class="chip">● read</span></div>
+<p><code>RunEngine.TickAsync</code> advances every active run in one loop with no catch, oldest first, and <code>Orchestrator</code> wraps the tick and every scheduling phase in a single try. If run N throws, runs after it are skipped, so are configure and pipeline scheduling, agent updates, observations and cron. The same run throws again five seconds later. Dispatch has the same shape. It catches a named list of exception types, and anything else, such as a missing key in <code>context.Secrets</code>, ends the pass. Attempts already saved as assigned in that pass are never sent, and after 60 seconds the changes among them are uncertain.</p>
+<p>The agent stream has the twin problem. <code>AgentChannelService.Connect</code> catches cancellation and <code>IOException</code> only. If <code>OnResultAsync</code> throws, the stream ends, the agent reconnects, sends the same result first, and it throws again.</p>
+<p>Give each run its own scope and a catch that writes the error to <code>run.Detail</code>. Give dispatch a catch-all per attempt that fails that attempt only. Give each phase in <code>Orchestrator</code> its own try. In <code>Connect</code>, catch per message, do not acknowledge a result that failed to record, and after a few tries settle the attempt as uncertain with "the result could not be recorded".</p>
+</div>
+
+<div class="card">
+<h3>3. Take slow work out from under the engine lock</h3>
+<div class="meta"><span class="chip high">High, reliability</span><span class="chip">An hour, then half a day</span><span class="chip">● read</span></div>
+<p>Details and a diagram are in <a href="#lock">the next section</a>. In short, <code>ChangeService.CommitAsync</code> pushes to Git inside <code>engine.ExecuteAsync</code>, each git command may take five minutes, heartbeats wait for the same lock, and leases last 60 seconds. A slow push makes every running change look lost.</p>
+</div>
+
+<div class="card">
+<h3>4. A stop that stops, and a time limit for OpenTofu</h3>
+<div class="meta"><span class="chip high">High, operations</span><span class="chip">Half a day</span><span class="chip">● read</span></div>
+<p>The agent refuses <code>CancelAttempt</code> for a running change, which is right as a default. But Force stop in the UI sends that same cancel, marks the attempt uncertain and moves on, while the tool keeps running and keeps its slot on the agent. <code>tofu apply</code> has no time limit and its heartbeats renew the lease for as long as it hangs. Ansible has <code>timeoutMinutes</code>, OpenTofu does not. Today the only way to end a provider stuck on a Proxmox task is to kill the agent.</p>
+<p>Add <code>force</code> to <code>CancelAttempt</code> behind a capability. On a forced cancel send OpenTofu SIGINT, which makes it finish the resource in flight and save state, then SIGTERM after a grace period. The outcome stays uncertain and carries the state. Add <code>timeoutMinutes</code> to the opentofu input with the same timer Ansible uses.</p>
+</div>
+
+<div class="card">
+<h3>5. Never queue a result the channel cannot carry</h3>
+<div class="meta"><span class="chip high">High, reliability</span><span class="chip">Under an hour</span><span class="chip">● read</span></div>
+<p>The gRPC limit is 64 MiB each way. Nothing compares a finished <code>AttemptResult</code> with it. Captured stdout may reach 512 MiB (<code>tools/mod.rs:32</code>), state may be 32 MiB, and the saved plan has no cap. A result over the limit fails to encode, the stream errors, the agent reconnects, and <code>collect</code> sends the same result first again. Everything behind it waits forever.</p>
+<p>In <code>AttemptManager::finish</code>, measure the encoded size. Over the limit, drop outputs and the plan, keep the state if it fits, and store uncertain for a change or failed for a read, with "result too large". Lower <code>MAX_CAPTURE</code> to 64 MiB and fail at the cap, since today it truncates without saying so.</p>
+</div>
+
+<div class="card">
+<h3>6. Retention for runs, logs and artifacts</h3>
+<div class="meta"><span class="chip high">High, after months</span><span class="chip">Half a day</span><span class="chip">● read in part</span></div>
+<p>Uptime, observations, state versions, images and git snapshots are all bounded already. Runs, steps, attempts, their log files, saved plans under <code>artifacts/</code> and <code>secret_resolutions</code> rows are not. <code>ArtifactStore</code> has no delete at all. The polled endpoints sort and scan these tables, so the cost shows up as latency before it shows up as disk.</p>
+<p>Add a daily job that keeps, per resource, the last 50 finished runs or 180 days, and always keeps unfinished and uncertain runs and any run a change or schedule points at. Delete the attempt rows, log file, artifact directory and secret-release rows together. Add the missing foreign keys and indexes first, listed under <a href="#data">performance and data</a>, or the job has to cascade by hand.</p>
+</div>
+
+<div class="card">
+<h3>7. Keep tool code away from the agent's own files</h3>
+<div class="meta"><span class="chip high">High, security</span><span class="chip">Half a day, then days</span><span class="chip">● read</span></div>
+<p>Two separate holes lead to the same place, the agent's private key and other stacks' state.</p>
+<p>First, the agent follows symlinks a tool leaves behind. After <code>tofu plan</code> and <code>tofu show</code> exit, the agent reads <code>out/plan.bin</code> and <code>.terraform.lock.hcl</code> with a plain <code>fs::read</code> (<code>executors/opentofu/mod.rs:501-504</code>) and packs them into the plan artifact. The tool image is named by the workflow, so repository code controls what runs. If it swaps either file for a symlink to <code>/var/lib/octopushy-agent/key.pem</code>, the agent reads the host file from outside the container and ships it. The apply step then unpacks that artifact into a workspace the same image can read. The archive extractor's symlink checks are thorough, but they cover what arrives, not what a tool writes afterwards. This works with podman and docker too, so it defeats the sandbox. The second reviewer found it and I confirmed the read sites. Fix: open every file a tool wrote without following links and require a regular file inside the workspace. The same goes for the state file, the Nix lock and Ansible's prepared document.</p>
+<p>Second, the agent image starts with <code>--tool-runtime local</code> (<code>agent/packaging/container-entrypoint.sh</code>), and that is what the compose stack and the Proxmox installer run. In that mode OpenTofu, Ansible and Nix run as the agent's own user with a cleared environment and nothing else between them and the agent. Code that runs during a preview, with only the read-only token, can read the agent's key, the outbox, a neighbouring workspace, and the environment of an apply running beside it, which holds the write token. <code>agent/README.md</code> still calls this mode "for development and tests".</p>
+<p>The safety boundary document accepts that hostile code can use the token it was given. It does not accept a step from the read-only token to the write token, or theft of the agent's identity. Interim: cap concurrency at 1 for the local runtime and correct the README and <code>executors.md</code>. Proper fix: start the container as root, keep state readable by root only, and drop each tool to its own unprivileged user before exec.</p>
+</div>
+
+<div class="card">
+<h3>8. Refuse a second server process</h3>
+<div class="meta"><span class="chip med">Medium, reliability</span><span class="chip">Under an hour</span><span class="chip">● read</span></div>
+<p>Runs, steps, attempts and OpenTofu state have no row version and no conditional update. Only store entries carry concurrency tokens. All correctness comes from one in-process semaphore. That is a fine choice for one server, and simpler than the <code>FOR UPDATE SKIP LOCKED</code> queue the architecture agreement describes. But nothing enforces one server. Two containers during a botched update would both dispatch the same apply. Take a PostgreSQL advisory lock on a dedicated connection at startup and do not start the orchestrator or the agent channel without it.</p>
+</div>
+
+<h2 id="lock">The engine lock</h2>
+<p><code>RunEngine._gate</code> is a single semaphore. Every write to a run goes through it, which is why I found no interleaving that corrupts a run. I would keep that. The problem is what else waits behind it.</p>
+<div class="fig">
+<svg viewBox="0 0 720 316" role="img" aria-label="What waits for the engine lock today, and what should stay outside it">
+  <text x="10" y="16" class="th">Today</text>
+  <rect x="10" y="26" width="340" height="280" rx="8" class="bx"/>
+  <text x="22" y="46" class="s">RunEngine lock, one holder at a time</text>
+  <rect x="22" y="56" width="316" height="46" rx="6" class="bw"/><text x="34" y="75" class="t">Holding: commit a change from the UI</text><text x="34" y="92" class="s">git push and fetch, up to 5 min per command</text>
+  <text x="22" y="124" class="s">Waiting, in arrival order</text>
+  <rect x="22" y="132" width="316" height="30" rx="6" class="b"/><text x="34" y="151" class="t">Tick: expire leases, advance runs, dispatch</text>
+  <rect x="22" y="168" width="316" height="30" rx="6" class="b"/><text x="34" y="187" class="t">Heartbeat from agent A. Its lease is 60 s</text>
+  <rect x="22" y="204" width="316" height="30" rx="6" class="b"/><text x="34" y="223" class="t">Result from agent B, with disk writes</text>
+  <rect x="22" y="240" width="316" height="30" rx="6" class="b"/><text x="34" y="259" class="t">GET /api/changes, polled every 15 s</text>
+  <text x="22" y="292" class="s">The tick goes first and finds the lease expired.</text>
+  <text x="370" y="16" class="th">Proposed</text>
+  <rect x="370" y="26" width="340" height="96" rx="8" class="bx"/>
+  <text x="382" y="46" class="s">RunEngine lock</text>
+  <rect x="382" y="56" width="316" height="52" rx="6" class="bo"/><text x="394" y="77" class="t">Holding: one state transition</text><text x="394" y="94" class="s">read rows, decide, save. Milliseconds</text>
+  <text x="370" y="146" class="s">Outside the lock</text>
+  <rect x="370" y="154" width="340" height="30" rx="6" class="b"/><text x="382" y="173" class="t">Git push and fetch, under a repository lock</text>
+  <rect x="370" y="190" width="340" height="30" rx="6" class="b"/><text x="382" y="209" class="t">Heartbeats: two UPDATE statements, no lock</text>
+  <rect x="370" y="226" width="340" height="30" rx="6" class="b"/><text x="382" y="245" class="t">Artifact and state bytes, written beforehand</text>
+  <rect x="370" y="262" width="340" height="30" rx="6" class="b"/><text x="382" y="281" class="t">Read-only GETs, refreshed by the sync loop</text>
+</svg>
+</div>
+<p class="cap">Left: what queues behind one slow holder today. Right: the lock keeps its job, deciding state transitions one at a time, and the slow work moves out.</p>
+<p>The sequence that hurts, with the default settings. At T+0 you save a change in the UI and the push holds the lock. At T+5 the tick queues. At T+10 each agent's heartbeat queues behind the tick. The push returns at T+70. The tick goes first, and every lease is now older than 60 seconds. Every running change becomes uncertain and every read-only step gets a second copy while the first still runs. A late result repairs it, unless you close the run first, and then an apply that succeeded is recorded as failed.</p>
+<p>The one-hour fix is to stop heartbeats from needing the lock. <code>OnHeartbeatAsync</code> is two <code>ExecuteUpdate</code> statements that are safe on their own scope. The half-day fix moves git network work behind its own lock. <code>ChangeReconciler</code> relies on pushes holding the engine lock today, so it has to take the new one too.</p>
+
+<h3>Other correctness findings</h3>
+<div class="tw"><table>
+<tr><th>Finding</th><th>Where</th><th>Fix</th><th></th></tr>
+<tr><td>On reconnect the session is registered before <code>OnHelloAsync</code> runs. A tick in between assigns a read-only attempt to the new session, Hello does not list it, the server re-queues it, and the queued message still goes out. Two agents run it and secrets are released twice.</td><td><code>AgentServices.cs:125-151</code></td><td>Run <code>OnHelloAsync</code> before <code>connections.Add</code>, or re-queue only attempts assigned before the session connected.</td><td class="n">● S</td></tr>
+<tr><td>A change marked assigned whose message never reached the agent still ends uncertain and needs a person. The agent knows it never got it.</td><td><code>RunEngine.Agents.cs</code> dispatch and <code>OnHelloAsync</code></td><td>Send finished-but-unacknowledged ids in Hello. Re-queue a change that is assigned, never started, and in neither list.</td><td class="n">○ M</td></tr>
+<tr><td>Disabling an agent in the middle of an apply guarantees an uncertain run that cannot heal, because its late result is refused. Delete has a guard, disable has none.</td><td><code>Endpoints.cs</code> agent disable</td><td>The same guard, or offer drain.</td><td class="n">● S</td></tr>
+<tr><td>Cancel messages go to the agent before the database commit, also from inside the revision transaction.</td><td><code>RunEngine.cs</code> <code>CancelInternalAsync</code></td><td>Send after the save.</td><td class="n">● S</td></tr>
+<tr><td>Two clicks on "run again" make two runs. The check and the create take the lock separately.</td><td><code>Planner.RunAgain.cs:17-35</code></td><td>One <code>ExecuteAsync</code> for both.</td><td class="n">● S</td></tr>
+<tr><td>Secret-release audit rows and reservations are saved for assignments that were then not sent.</td><td><code>AssignmentBuilder.cs:162</code></td><td>Record after the send succeeds.</td><td class="n">○ M</td></tr>
+<tr><td>The agent-update queue stays "updating" while its change waits for approval, with no deadline.</td><td><code>AgentUpdates.cs</code> <code>Failure()</code></td><td>A deadline, or fail the update when its run needs a person.</td><td class="n">○ S</td></tr>
+</table></div>
+
+<h3>The state machine as built</h3>
+<div class="fig">
+<svg viewBox="0 0 720 356" role="img" aria-label="States of an attempt and of a run, and what moves them">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs>
+  <text x="10" y="16" class="th">Attempt</text>
+  <rect x="10" y="46" width="84" height="30" rx="6" class="b"/><text x="52" y="65" text-anchor="middle" class="t">queued</text>
+  <rect x="150" y="46" width="90" height="30" rx="6" class="b"/><text x="195" y="65" text-anchor="middle" class="t">assigned</text>
+  <rect x="300" y="46" width="84" height="30" rx="6" class="b"/><text x="342" y="65" text-anchor="middle" class="t">running</text>
+  <rect x="560" y="10" width="100" height="30" rx="6" class="b"/><text x="610" y="29" text-anchor="middle" class="t">succeeded</text>
+  <rect x="560" y="46" width="100" height="30" rx="6" class="b"/><text x="610" y="65" text-anchor="middle" class="t">failed</text>
+  <rect x="560" y="82" width="100" height="30" rx="6" class="b"/><text x="610" y="101" text-anchor="middle" class="t">cancelled</text>
+  <rect x="300" y="130" width="84" height="30" rx="6" class="bw"/><text x="342" y="149" text-anchor="middle" class="t">uncertain</text>
+  <rect x="440" y="130" width="176" height="30" rx="6" class="bx"/><text x="528" y="149" text-anchor="middle" class="s">one late Result settles it</text>
+  <line x1="94" y1="61" x2="150" y2="61" class="ln" marker-end="url(#a3)"/><text x="122" y="54" text-anchor="middle" class="s">dispatch</text>
+  <line x1="240" y1="61" x2="300" y2="61" class="ln" marker-end="url(#a3)"/><text x="270" y="54" text-anchor="middle" class="s">Started</text>
+  <line x1="384" y1="55" x2="560" y2="26" class="ln" marker-end="url(#a3)"/>
+  <line x1="384" y1="61" x2="560" y2="61" class="ln" marker-end="url(#a3)"/>
+  <line x1="384" y1="67" x2="560" y2="96" class="ln" marker-end="url(#a3)"/>
+  <text x="470" y="57" text-anchor="middle" class="s">agent's Result</text>
+  <line x1="342" y1="76" x2="342" y2="130" class="ln" marker-end="url(#a3)"/>
+  <line x1="205" y1="76" x2="300" y2="138" class="ln" marker-end="url(#a3)"/>
+  <text x="350" y="108" class="s">lease ran out, or force stop</text>
+  <line x1="384" y1="145" x2="440" y2="145" class="ln" marker-end="url(#a3)"/>
+  <path d="M176 76 C166 112 68 112 58 78" class="ln" marker-end="url(#a3)"/>
+  <text x="10" y="122" class="s">reconnect without it, read-only</text>
+  <text x="10" y="196" class="th">Run</text>
+  <rect x="10" y="236" width="84" height="30" rx="6" class="b"/><text x="52" y="255" text-anchor="middle" class="t">queued</text>
+  <rect x="150" y="236" width="90" height="30" rx="6" class="b"/><text x="195" y="255" text-anchor="middle" class="t">running</text>
+  <rect x="250" y="186" width="140" height="28" rx="6" class="b"/><text x="320" y="204" text-anchor="middle" class="t">awaiting-approval</text>
+  <text x="398" y="204" class="s">a person decides</text>
+  <rect x="80" y="300" width="84" height="28" rx="6" class="b"/><text x="122" y="318" text-anchor="middle" class="t">blocked</text>
+  <rect x="236" y="300" width="90" height="28" rx="6" class="bw"/><text x="281" y="318" text-anchor="middle" class="t">uncertain</text>
+  <text x="122" y="344" text-anchor="middle" class="s">trust, credentials</text>
+  <text x="281" y="344" text-anchor="middle" class="s">late Result, or close</text>
+  <rect x="470" y="206" width="96" height="28" rx="6" class="b"/><text x="518" y="224" text-anchor="middle" class="t">succeeded</text>
+  <rect x="470" y="242" width="96" height="28" rx="6" class="b"/><text x="518" y="260" text-anchor="middle" class="t">failed</text>
+  <rect x="470" y="278" width="96" height="28" rx="6" class="b"/><text x="518" y="296" text-anchor="middle" class="t">cancelled</text>
+  <text x="574" y="224" class="s">all steps done</text>
+  <text x="574" y="260" class="s">step failed, or closed</text>
+  <text x="574" y="296" class="s">cancelled or superseded</text>
+  <line x1="94" y1="251" x2="150" y2="251" class="ln" marker-end="url(#a3)"/>
+  <line x1="228" y1="236" x2="286" y2="214" class="ln" marker-start="url(#a3)" marker-end="url(#a3)"/>
+  <line x1="174" y1="266" x2="134" y2="300" class="ln" marker-start="url(#a3)" marker-end="url(#a3)"/>
+  <line x1="216" y1="266" x2="268" y2="300" class="ln" marker-start="url(#a3)" marker-end="url(#a3)"/>
+  <line x1="240" y1="247" x2="470" y2="221" class="ln" marker-end="url(#a3)"/>
+  <line x1="240" y1="252" x2="470" y2="256" class="ln" marker-end="url(#a3)"/>
+  <line x1="240" y1="257" x2="470" y2="291" class="ln" marker-end="url(#a3)"/>
+</svg>
+</div>
+<p class="cap">Names are the strings in <code>AttemptStatuses</code> and <code>RunStatuses</code>. A read-only attempt whose lease runs out gets a retry instead of "uncertain". A step follows its newest attempt. An uncertain run goes back to running when the late result arrives, or to failed when you close it.</p>
+
+<h2 id="agent">The agent</h2>
+<p>The agent is the stronger half. Tar extraction refuses absolute paths, parent segments, links through earlier symlinks, devices and duplicates. The outbox writes a temp file, syncs, renames and syncs the directory. Recovery treats an unreadable marker as uncertain. Ansible gets secrets on stdin only and its key through a private ssh-agent. I would not restructure any of that.</p>
+<div class="fig">
+<svg viewBox="0 0 720 446" role="img" aria-label="Life of one attempt between backend, agent and tool, with five weak points">
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs>
+  <rect x="50" y="8" width="120" height="28" rx="6" class="b"/><text x="110" y="27" text-anchor="middle" class="th">Backend</text>
+  <rect x="300" y="8" width="120" height="28" rx="6" class="b"/><text x="360" y="27" text-anchor="middle" class="th">Agent</text>
+  <rect x="550" y="8" width="120" height="28" rx="6" class="b"/><text x="610" y="27" text-anchor="middle" class="th">Tool</text>
+  <line x1="110" y1="36" x2="110" y2="440" class="life"/><line x1="360" y1="36" x2="360" y2="440" class="life"/><line x1="610" y1="36" x2="610" y2="440" class="life"/>
+  <line x1="110" y1="66" x2="360" y2="66" class="ln" marker-end="url(#a4)"/><text x="235" y="59" text-anchor="middle" class="t">Assignment, 60 s lease</text>
+  <text x="368" y="100" class="s">workspace and marker on disk</text>
+  <line x1="360" y1="126" x2="110" y2="126" class="ln" marker-end="url(#a4)"/><text x="235" y="119" text-anchor="middle" class="t">Started</text>
+  <line x1="360" y1="156" x2="610" y2="156" class="ln" marker-end="url(#a4)"/><text x="485" y="149" text-anchor="middle" class="t">tofu init, plan or apply</text>
+  <line x1="360" y1="196" x2="110" y2="196" class="ld" marker-end="url(#a4)"/><text x="235" y="189" text-anchor="middle" class="t">logs, heartbeat each 10 s</text>
+  <line x1="360" y1="226" x2="110" y2="226" class="ld" marker-end="url(#a4)"/><text x="235" y="219" text-anchor="middle" class="t">state snapshots during apply</text>
+  <line x1="610" y1="266" x2="360" y2="266" class="ln" marker-end="url(#a4)"/><text x="485" y="259" text-anchor="middle" class="t">exit code and outputs</text>
+  <text x="368" y="300" class="s">result written to the outbox, synced</text>
+  <line x1="360" y1="326" x2="110" y2="326" class="ln" marker-end="url(#a4)"/><text x="235" y="319" text-anchor="middle" class="t">Result, artifacts, state</text>
+  <text x="118" y="360" class="s">mask, store, settle, advance the run</text>
+  <line x1="110" y1="396" x2="360" y2="396" class="ln" marker-end="url(#a4)"/><text x="235" y="389" text-anchor="middle" class="t">ResultAck</text>
+  <text x="368" y="430" class="s">workspace and outbox entry deleted</text>
+  <circle cx="130" cy="52" r="9" class="hot"/><text x="130" y="56" class="hott">A</text>
+  <circle cx="590" cy="142" r="9" class="hot"/><text x="590" y="146" class="hott">B</text>
+  <circle cx="130" cy="182" r="9" class="hot"/><text x="130" y="186" class="hott">C</text>
+  <circle cx="130" cy="312" r="9" class="hot"/><text x="130" y="316" class="hott">D</text>
+  <circle cx="96" cy="356" r="9" class="hot"/><text x="96" y="360" class="hott">E</text>
+</svg>
+</div>
+<ul class="legend">
+  <li><span class="num">A</span><span>The attempt is saved as assigned before the message is written to the stream. If the stream drops first, a change ends uncertain even though it never ran.</span></li>
+  <li><span class="num">B</span><span>No time limit for OpenTofu, and a running change cannot be stopped. Item 4 above.</span></li>
+  <li><span class="num">C</span><span>The heartbeat waits for the engine lock. Item 3 above.</span></li>
+  <li><span class="num">D</span><span>No size check against the 64 MiB limit, and unacknowledged results go first on every reconnect. Item 5 above.</span></li>
+  <li><span class="num">E</span><span>An exception while recording drops the stream and the agent replays the same result. Item 2 above.</span></li>
+</ul>
+
+<h3>Making deployments better</h3>
+<p>These are the improvements I would build, ranked by what a single operator feels. The first four cut how often you have to step in by hand.</p>
+<div class="tw"><table>
+<tr><th>Improvement</th><th>Today</th><th>Proposal</th><th>Effort</th></tr>
+<tr><td>Know when a change really started</td><td>The "running" marker is written before the executor starts, so a restart during <code>tofu init</code> or an image download reports uncertain. The agent's own table marks every <code>ansible/run</code> as a change, while the server treats verify steps as reads.</td><td>A <code>mutating</code> marker written right before <code>tofu apply</code>, the playbook, or the protection PUT. A restart before it reports failed, "nothing ran". Add <code>Assignment.mutating</code> so the agent uses the server's flag.</td><td class="n">S to M</td></tr>
+<tr><td>Retry what is safe to repeat</td><td><code>tofu init</code> runs once. Images are pulled inside the first tool step, so a registry blip reads as a failed "version". The Proxmox client never retries a GET. <code>set-protection</code> returns uncertain on a 5xx though it is idempotent.</td><td>Three tries with backoff for init, an explicit pull step and Proxmox GETs. Repeat the protection PUT and read it back before giving up.</td><td class="n">S to M</td></tr>
+<tr><td>Say why an agent cannot take work</td><td>Executors are probed once at startup and the reason is only in the agent's log. The server can say "waiting for an agent advertising ansible" and nothing more.</td><td><code>Hello.unavailable</code>, a map of executor to reason. Re-probe every few minutes. Report free disk and cache sizes with every Nth heartbeat. Add <code>octopushy agent doctor</code>.</td><td class="n">M</td></tr>
+<tr><td>Agent updates that do not hurt running work</td><td>The setup run can restart an agent in the middle of its own work. A failed update leaves the new version committed with no way back. No test covers the flow.</td><td>Hold the update's run until the target agent is idle. Record the previous version and offer Revert. Fail the update when the new Hello offers fewer executors. Add an end-to-end test.</td><td class="n">M</td></tr>
+<tr><td>Phases and timings per attempt</td><td>One total duration and raw log lines. Time spent waiting for a slot on the agent is invisible.</td><td>An <code>AttemptProgress</code> message behind a capability, shown as "queued 0 s, pull 14 s, init 9 s, plan 31 s".</td><td class="n">M</td></tr>
+<tr><td>Task-level Ansible results</td><td>The recap carries counts and the failed task's name. The UI shows raw JSON.</td><td>Names of changed tasks, the slowest few, and the failed task's message.</td><td class="n">S to M</td></tr>
+<tr><td>One webhook for things that wait on you</td><td>Planned, not built.</td><td>Approval waiting, run failed, run uncertain, agent offline, update failed.</td><td class="n">M</td></tr>
+<tr><td>Cache template images on the agent</td><td>About 800 MiB is downloaded into each attempt's workspace, twice per guest.</td><td>Keep them by SHA-256 under the state directory and hard-link.</td><td class="n">S to M</td></tr>
+<tr><td>Disk housekeeping</td><td>The provider cache and tool images are never pruned. Containers left by a killed agent stay, with their environment in the runtime's config on disk.</td><td>Remove labelled containers at startup. Prune caches unused for 30 days while idle.</td><td class="n">S to M</td></tr>
+<tr><td>Check the service after a deploy</td><td>Uptime probes exist. No run uses them.</td><td>A last pipeline step that probes the service's links for N seconds and records the answer. No rollback.</td><td class="n">M</td></tr>
+<tr><td>Structured OpenTofu errors</td><td>The failure message is the last five stderr lines.</td><td>Run plan and apply with <code>-json</code> and report the failed resource and its diagnostic.</td><td class="n">M to L</td></tr>
+<tr><td>Skip the probe wait with one candidate</td><td>Every candidate needs fresh reachability evidence, lost on each reconnect. With one eligible agent this adds waiting and no choice.</td><td>Dispatch at once when exactly one agent qualifies. Keep the own-guest rule.</td><td class="n">S</td></tr>
+</table></div>
+
+<h2 id="security">Security</h2>
+<p>Authorization is complete. Every <code>/api</code> group requires it and the only open endpoints are health, auth and the OpenAPI document. Agent callbacks all check that the attempt belongs to the calling agent. Besides items 1 and 7 above, these remain.</p>
+<div class="tw"><table>
+<tr><th>Finding</th><th>Where</th><th>Fix</th><th></th></tr>
+<tr><td>Cookie-authenticated POST endpoints that take no body have no origin check. <code>SameSite=Strict</code> does not stop a request from another app on the same registrable domain, which is how a homelab is usually laid out. An XSS in a sibling app could post to <code>/api/agents/update</code> or a run's <code>force-stop</code>.</td><td><code>Program.cs</code>, <code>Api/Endpoints.cs</code></td><td>Middleware that refuses unsafe methods on a cookie session unless <code>Sec-Fetch-Site</code> is <code>same-origin</code> or <code>Origin</code> matches the host.</td><td class="n">● S</td></tr>
+<tr><td>Sessions cannot be revoked, expiry slides for as long as the cookie is used, and the data-protection keys that sign them sit unencrypted in the data directory. The deploy README records the last part.</td><td><code>Program.cs</code>, <code>Auth/AccountEndpoints.cs</code></td><td>A per-user session stamp checked in <code>OnValidatePrincipal</code> and bumped on logout, an absolute lifetime, and the key ring encrypted with a key derived from the KEK.</td><td class="n">○ M</td></tr>
+<tr><td>YAML aliases are expanded with no node or depth limit, on content the server parses before validation. A "billion laughs" file can exhaust memory, and the next sync parses it again.</td><td><code>Definitions/Yaml/YamlDocumentReader.cs</code></td><td>Count nodes and depth in <code>Convert</code> and cap file size.</td><td class="n">● S</td></tr>
+<tr><td>An agent can append log lines without limit to any attempt it ever held, including finished ones.</td><td><code>AgentServices.cs:182</code>, <code>AttemptFiles.cs</code></td><td>Accept logs for active attempts only and cap bytes per attempt.</td><td class="n">● S</td></tr>
+<tr><td>With podman or docker, secret environment values end up in the container's config on disk, and a container left by a killed agent is never removed.</td><td><code>tools/mod.rs:413-416</code></td><td>Sweep labelled containers at startup. Later, pass OpenTofu's secrets on stdin as Ansible's already are.</td><td class="n">● S, M</td></tr>
+<tr><td>Log masking covers raw, JSON-escaped and trimmed values. Base64 and URL-encoded forms pass. The two maskers disagree on short values.</td><td><code>agent/.../masking.rs</code>, <code>Agents/OutputMasking.cs</code></td><td>Add the encoded forms for values of six bytes or more. One shared file of cases that both maskers run.</td><td class="n">○ S</td></tr>
+<tr><td>Tool images are named by tag. Only the Nix and Ansible base images are pinned by digest.</td><td><code>tools/mod.rs</code>, <code>agent/Containerfile</code></td><td>Refuse an image without <code>@sha256:</code>, and pin the <code>FROM</code> lines.</td><td class="n">○ S</td></tr>
+<tr><td>The OpenAPI document is served without a session, and login answers faster for an unknown user.</td><td><code>Program.cs</code>, <code>AccountEndpoints.cs</code></td><td>Require authorization on <code>MapOpenApi</code>. Verify against a dummy hash.</td><td class="n">● S</td></tr>
+<tr><td>Tool containers have no memory or process limit, and the environment name check is a deny-list that lets <code>LD_PRELOAD</code> through to the runtime's own process.</td><td><code>tools/mod.rs</code>, <code>opentofu/mod.rs:106-139</code></td><td><code>--pids-limit</code> and <code>--memory</code>. Allow only known prefixes, and keep assignment-chosen values off the runtime's own process.</td><td class="n">○ S</td></tr>
+<tr><td>The API port still trusts forwarded headers from any source, and the internal agent's network can reach <code>backend:8080</code> without going through Caddy. A compromised agent container can send a new <code>X-Forwarded-For</code> with every login attempt and never hit the limiter.</td><td><code>Program.cs</code>, <code>deploy/compose.yaml</code></td><td>List Caddy's network as the known proxy in place of clearing the list. Keep the API listener off the agents network. Add a per-account limit.</td><td class="n">● S</td></tr>
+<tr><td>A snapshot of a commit is built from <code>git archive</code> into an unbounded memory stream and extracted with no total size or entry limit, before validation. A small push with many paths to one compressible blob can exhaust the server's memory on every sync.</td><td><code>Git/RepositoryMirror.cs</code> <code>SnapshotAsync</code>, <code>Definitions/SnapshotArchive.cs</code></td><td>Stream it, with limits on total bytes, bytes per file and entries.</td><td class="n">○ M</td></tr>
+</table></div>
+<div id="sol"><h3>Second opinion</h3>
+<p>A second model reviewed security on its own, with no sight of the other findings. It reached the workflows credential path independently and rated it critical. I rate it high because ADR 0002 already treats whoever can push as trusted to run code, but we agree on the fix. It also reported the log append, the bodiless POSTs and the forwarded headers, which matches the first reviewer. It added two things nobody else had. The symlink read is now part of item 7. The snapshot expansion is the last row above.</p>
+<p>Its other point is about the trust model, not a bug. Since ADR 0002, permission to push to the lab branch or to move a workflow release tag is permission to run code with an installation's token, before any apply approval. That is your documented choice and it is reasonable for one operator. It does mean the Git host is part of the control plane. Protect the tracked branch and the release tags there today, which costs nothing, and treat a second person with push access as a second operator.</p></div>
+
+<h2 id="data">Performance and data</h2>
+<p>Nothing is slow today at your scale. Three things will be, in this order. The UI's polls load whole run graphs, the log viewer re-reads a file from the top every second, and the tick redoes work for runs that are only waiting.</p>
+<div class="tw"><table>
+<tr><th>Finding</th><th>Cost</th><th>Fix</th><th></th></tr>
+<tr><td><code>GET /api/runs</code> every 5 s and <code>/api/overview</code> every 10 s load runs with all steps and attempts in one join, so each run's context JSON repeats on every attempt row. They sort on <code>created_at</code>, which has no index.</td><td>A full scan and sort of <code>runs</code> per poll, plus plan outputs for runs that finished long ago.</td><td>Project to the columns the summary uses. Read plan outputs for unfinished runs only. Order by <code>Number</code>.</td><td class="n">● M</td></tr>
+<tr><td>The log viewer polls every second and <code>AttemptLogStore.ReadAsync</code> parses every line from the first.</td><td>Quadratic in log length per open viewer. A long Nix build is the bad case.</td><td>Keep a sparse index of byte offsets every 1,000 lines and seek.</td><td class="n">● M</td></tr>
+<tr><td>A run waiting for approval or trust is advanced on every tick.</td><td>About ten queries per waiting run every 5 s, under the lock, for days.</td><td>Advance waiting runs on a signal or once a minute.</td><td class="n">○ M</td></tr>
+<tr><td><code>Planner.ScheduleConfigurationsAsync</code> loads up to 50 run contexts per configured guest on every tick, also for guests that follow no store keys.</td><td>With 20 guests, 20 queries and up to 1,000 JSON parses every 5 s.</td><td>Skip guests with no followed keys.</td><td class="n">○ S</td></tr>
+<tr><td>Missing indexes on <code>attempts.run_id</code>, <code>runs.created_at</code> and <code>secret_resolutions.key</code>. No foreign key from attempts, artifacts or secret releases to their parents.</td><td>Sequential scans that grow with history, and retention that must cascade by hand.</td><td>One migration.</td><td class="n">● S</td></tr>
+<tr><td>Recording a result copies each artifact three to five times while holding the lock.</td><td>A 30 MB plan is about 150 MB of short-lived large allocations in a small container.</td><td>Hash while streaming, pass spans, write artifacts before taking the lock.</td><td class="n">○ M</td></tr>
+<tr><td>After a server restart, every log batch of a running attempt recounts the whole log file and decrypts the attempt's secrets again.</td><td>Twice a second per running attempt.</td><td>Keep the line count outside the per-attempt gate.</td><td class="n">○ S</td></tr>
+<tr><td><code>attempts.log_lines</code> is never written, so the API always returns 0 for it.</td><td>None, it misleads.</td><td>Maintain it, which also fixes the row above, or drop it.</td><td class="n">● S</td></tr>
+</table></div>
+
+<h3>What grows</h3>
+<div class="tw"><table>
+<tr><th>Data</th><th>Bounded today by</th><th>Proposed</th></tr>
+<tr><td>Runs, steps, attempts</td><td>Nothing</td><td>Last 50 finished per resource or 180 days. Keep unfinished, uncertain and referenced runs.</td></tr>
+<tr><td>Attempt logs on disk</td><td>Observation attempts only</td><td>Deleted with their attempt.</td></tr>
+<tr><td>Artifacts on disk, saved plans</td><td>Nothing, there is no delete</td><td>Deleted with their attempt, or 30 days after the run ends.</td></tr>
+<tr><td>Secret-release rows</td><td>Nothing</td><td>Deleted with their attempt.</td></tr>
+<tr><td>Store versions</td><td>Deleted with the key</td><td>All active ones plus 20 per key.</td></tr>
+<tr><td>Revisions and their issues</td><td>Nothing</td><td>Keep 500 plus any that a run or change references.</td></tr>
+<tr><td>OpenTofu state versions</td><td>50 per stack</td><td>Fine.</td></tr>
+<tr><td>Observations, uptime, images, git snapshots</td><td>50 per installation, 31 days, size cap, last 10</td><td>Fine.</td></tr>
+</table></div>
+
+<h2 id="refactor">Refactors, in order</h2>
+<p>The code has almost no dead weight and the tests pin behaviour through HTTP and a fake agent, so they will carry these refactors. Two things will slow you down if left alone. The meaning of a step is spread over name switches in about 15 files, and the JSON contract between backend and agent is written by hand on both sides with nothing that checks one against the other.</p>
+
+<h3>1. A step-type registry and explicit run kinds</h3>
+<div class="fig">
+<svg viewBox="0 0 720 300" role="img" aria-label="RunEngine today as one class with switches, and the proposed step-type registry">
+  <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs>
+  <text x="10" y="16" class="th">Today</text>
+  <rect x="10" y="26" width="330" height="264" rx="8" class="bx"/>
+  <text x="22" y="46" class="s">RunEngine, seven partial files, about 3,000 lines</text>
+  <rect x="22" y="56" width="306" height="28" rx="6" class="b"/><text x="34" y="74" class="t">ActionFor(name) switch</text>
+  <rect x="22" y="90" width="306" height="28" rx="6" class="b"/><text x="34" y="108" class="t">TokenFor(name) switch</text>
+  <rect x="22" y="124" width="306" height="28" rx="6" class="b"/><text x="34" y="142" class="t">SecretsFor(name) switch</text>
+  <rect x="22" y="158" width="306" height="28" rx="6" class="b"/><text x="34" y="176" class="t">ApplyEffectsAsync, a 140-line switch</text>
+  <rect x="22" y="192" width="306" height="28" rx="6" class="b"/><text x="34" y="210" class="t">three approval deciders, by null checks</text>
+  <rect x="22" y="226" width="306" height="28" rx="6" class="b"/><text x="34" y="244" class="t">image builds and observations, not runs</text>
+  <text x="22" y="276" class="s">A new step edits about ten of these places.</text>
+  <text x="380" y="16" class="th">Target</text>
+  <rect x="380" y="26" width="330" height="46" rx="6" class="bo"/><text x="392" y="45" class="th">RunEngine</text><text x="392" y="62" class="s">lock, advance loop, leases, dispatch, results</text>
+  <line x1="545" y1="72" x2="545" y2="94" class="ln" marker-end="url(#a5)"/>
+  <rect x="380" y="96" width="330" height="118" rx="8" class="bx"/>
+  <text x="392" y="114" class="s">StepType registry, one entry per step</text>
+  <rect x="392" y="122" width="306" height="24" rx="5" class="b"/><text x="402" y="138" class="t">plan: opentofu preview, read-only token</text>
+  <rect x="392" y="150" width="306" height="24" rx="5" class="b"/><text x="402" y="166" class="t">apply: opentofu apply, write token</text>
+  <rect x="392" y="178" width="306" height="24" rx="5" class="b"/><text x="402" y="194" class="t">playbook: ansible run, guest key</text>
+  <rect x="380" y="224" width="330" height="40" rx="6" class="b"/><text x="392" y="242" class="t">Run kinds: Provision, Configure, Pipeline</text><text x="392" y="257" class="s">approval and finish rules, stored on the run</text>
+  <text x="380" y="284" class="s">A new step is one entry, effects included.</text>
+</svg>
+</div>
+<p><code>AssignmentBuilder.ActionFor</code>, <code>TokenFor</code> and <code>SecretsFor</code> switch on step names, more than 20 of them. <code>RunEngine.ApplyEffectsAsync</code> is a 140-line switch on the same names. The run kind is never stored. The code infers it with <code>context.Stages is not null ? pipeline : context.Ansible is not null ? configure : provision</code>, in three places. Your own migration document lists this as its phase 6 and measures 2,000 to 5,000 backend lines per feature. That number is the cost of this shape.</p>
+<p>Do it in five steps, one pull request each. Store <code>RunContext.Kind</code>. Turn the three static switches into registry data, which is mechanical and the tests prove it. Move the three approval deciders behind a run-kind interface. Move effects one step family at a time, starting with the ones that hold no safety-boundary logic. Move image builds and observations into their own folders. The risk sits in the effects, which bind guests and restore protection, so that is where to go slowly. Effort is days. Do it before the next executor or stage type, not after.</p>
+
+<h3>2. One checked contract between backend and agent</h3>
+<p>The backend builds executor inputs with <code>new JsonObject</code> in 26 places and reads outputs through string indexers in about a hundred. The agent emits with <code>json!</code> in 46. The contract is 567 lines of prose in <code>executors.md</code>. Backend tests invent the agent's outputs by hand, so each side is tested against its own assumptions. Rename a field and every test stays green while production breaks. The one test that crosses languages, <code>tests/e2e</code>, is not in CI.</p>
+<p>Start cheap. Add <code>contracts/agent/v1/examples/</code> with one input and one output file per action. A Rust test deserializes each input into the agent's structs and checks each output builder against the example's keys. A backend test does the reverse, and <code>FakeAgent.Plan</code> loads the example. That is half a day and catches drift from then on. Typed records on the backend can follow.</p>
+
+<h3>3. Stop keeping state in prose</h3>
+<p>A superseded run is recognised by <code>Detail.StartsWith("Superseded by ")</code>. Schema issues are filtered by <code>Message.Contains("(workflow ")</code>. Decisions and policy values are string literals. Rewording a message changes behaviour. Add <code>Run.EndReason</code>, an issue source field, and constants. One migration, a few hours.</p>
+
+<h3>4. A test suite that stays fast</h3>
+<p>All 42 server test classes share one xUnit collection, so they run one after another, and 347 calls to <code>ServerHarness.StartAsync</code> each create a database and run every migration. The suite took 12 and a half minutes on this machine, against a 20-minute limit in CI, and it grows with every feature. Migrate one template database and create each test's database from it, then let classes run in parallel. Each test already owns its database.</p>
+
+<h3>5. Slices in place of <code>Api/</code></h3>
+<p><code>Views.cs</code> holds every page's read model and <code>Endpoints.cs</code> holds 47 routes. Changes, Icons, Uptime and Agents all depend upward on <code>Api</code> for DTOs. Follow the split you already made for changes, icons and state. Move runs, agents, variables and inventory into their own folders with their endpoints, views and DTOs. Do this after refactor 1 so the orchestration files move once.</p>
+
+<h3>6. One source of truth for versions and toolchains</h3>
+<p>A release touches eight files and nothing checks the tag against them. <code>backend/Containerfile</code> builds with the floating <code>sdk:10.0</code> image while CI tests with the pinned SDK. There is no <code>rust-toolchain.toml</code>, no Dependabot, no <code>dotnet format</code> check. Add a release script, a CI check that the tag matches, and the pins.</p>
+
+<h2 id="quick">Quick wins left</h2>
+<p>Each is under an hour and low risk. I left them because they either change behaviour you should decide on, or need a test I did not want to write blind.</p>
+<div class="tw"><table>
+<tr><th>#</th><th>Change</th><th>Where</th></tr>
+<tr><td class="n">1</td><td>Heartbeats without the engine lock</td><td><code>RunEngine.Agents.cs</code> <code>OnHeartbeatAsync</code></td></tr>
+<tr><td class="n">2</td><td>A catch per message in the agent stream</td><td><code>AgentServices.cs:171</code></td></tr>
+<tr><td class="n">3</td><td>One try per phase in the orchestrator loop</td><td><code>Orchestrator.cs</code></td></tr>
+<tr><td class="n">4</td><td><code>OnHelloAsync</code> before the session is registered</td><td><code>AgentServices.cs:125-140</code></td></tr>
+<tr><td class="n">5</td><td>Advisory lock at startup</td><td><code>Program.cs</code></td></tr>
+<tr><td class="n">6</td><td>Three indexes and the missing foreign keys</td><td><code>Data/OctopushyDb.cs</code></td></tr>
+<tr><td class="n">7</td><td>Origin check for cookie-authenticated unsafe methods</td><td><code>Program.cs</code></td></tr>
+<tr><td class="n">8</td><td>Logs only for active attempts, with a byte cap</td><td><code>AgentServices.cs:182</code></td></tr>
+<tr><td class="n">9</td><td>Node and depth limits when reading YAML</td><td><code>Yaml/YamlDocumentReader.cs</code></td></tr>
+<tr><td class="n">10</td><td>Refuse <code>file://</code> workflows URLs from the repository unless a setting allows them</td><td><code>RepositorySync.cs</code></td></tr>
+<tr><td class="n">11</td><td><code>/api/health</code> that checks the database and the last tick time</td><td><code>Program.cs</code></td></tr>
+<tr><td class="n">12</td><td>Log every run, step and attempt transition with its ids. <code>RunEngine.cs</code> has no log call today and the whole server has 72.</td><td><code>RunEngine*.cs</code></td></tr>
+<tr><td class="n">13</td><td>Guard on disabling an agent that holds a running change</td><td><code>Api/Endpoints.cs</code></td></tr>
+<tr><td class="n">14</td><td>"Run again" checks and creates in one unit</td><td><code>Planner.RunAgain.cs</code></td></tr>
+<tr><td class="n">15</td><td>Skip guests with no followed keys on each tick</td><td><code>Planner.cs:182</code></td></tr>
+<tr><td class="n">16</td><td>Keep each log's line count outside its gate</td><td><code>Agents/AttemptFiles.cs</code></td></tr>
+<tr><td class="n">17</td><td>Wrap bundles and plans without copying when building an assignment</td><td><code>AssignmentBuilder*.cs</code></td></tr>
+<tr><td class="n">18</td><td>OpenAPI behind a session, and a dummy hash for unknown users</td><td><code>Program.cs</code>, <code>AccountEndpoints.cs</code></td></tr>
+<tr><td class="n">19</td><td>Constants for decisions, executors and policy values</td><td><code>RunEngine.cs</code>, <code>AssignmentBuilder.cs</code>, <code>ChangeTracker.cs</code></td></tr>
+<tr><td class="n">20</td><td><code>DraftChangedException</code> maps to 409 globally, which removes seven local catches</td><td><code>ApiExceptionHandler.cs</code>, <code>RepositoryEditor.cs</code></td></tr>
+<tr><td class="n">21</td><td>Pin the SDK image, add <code>rust-toolchain.toml</code> and Dependabot</td><td><code>backend/Containerfile</code>, <code>agent/</code>, <code>.github/</code></td></tr>
+<tr><td class="n">22</td><td>Size guard before a result enters the outbox</td><td><code>attempts/mod.rs</code> <code>finish</code></td></tr>
+<tr><td class="n">23</td><td>Remove labelled containers at agent startup</td><td><code>run.rs</code>, <code>tools/mod.rs</code></td></tr>
+<tr><td class="n">24</td><td>Capture at most 64 MiB of stdout and fail at the cap</td><td><code>tools/mod.rs:32</code></td></tr>
+<tr><td class="n">25</td><td>Recovery that survives an I/O error. Today a full disk makes the agent crash-loop.</td><td><code>attempts/recovery.rs:63-110</code></td></tr>
+<tr><td class="n">26</td><td>Set "running" under the entries lock, so a cancel cannot land between the slot and the start</td><td><code>attempts/mod.rs:276-300</code></td></tr>
+<tr><td class="n">27</td><td>Drop the repository archive from memory after extraction</td><td><code>executors/mod.rs</code></td></tr>
+<tr><td class="n">28</td><td>Abort the state watcher and the Ansible timer on drop</td><td><code>opentofu/mod.rs:596</code>, <code>ansible.rs:888</code></td></tr>
+<tr><td class="n">29</td><td>Move blocking file work off the async runtime, and replace <code>std::thread::sleep</code> in <code>read_stored</code></td><td><code>attempts/mod.rs:597</code>, extraction call sites</td></tr>
+<tr><td class="n">30</td><td>Retry <code>tofu init</code> and pull images in their own step</td><td><code>opentofu/mod.rs</code>, <code>tools/mod.rs</code></td></tr>
+<tr><td class="n">31</td><td>Repeat the protection PUT and read it back before reporting uncertain</td><td><code>executors/proxmox.rs:929</code></td></tr>
+<tr><td class="n">32</td><td><code>Assignment.mutating</code>, so verify-only Ansible runs are never uncertain after a restart</td><td><code>agent.proto</code>, <code>executors/mod.rs:28</code></td></tr>
+<tr><td class="n">33</td><td><code>Hello.unavailable</code> with a reason per missing executor</td><td><code>agent.proto</code>, <code>run.rs:82-129</code></td></tr>
+<tr><td class="n">34</td><td>Memory and process limits on tool containers, and an allow-list for environment names</td><td><code>tools/mod.rs</code>, <code>opentofu/mod.rs:106</code></td></tr>
+<tr><td class="n">35</td><td>Mask base64 and URL-encoded forms, and share one file of cases with the backend</td><td><code>masking.rs</code>, <code>OutputMasking.cs</code></td></tr>
+<tr><td class="n">36</td><td>Dispatch at once when exactly one agent qualifies</td><td><code>RunEngine.Agents.cs</code> <code>ReachableAsync</code></td></tr>
+</table></div>
+
+<h2 id="keep">Worth keeping</h2>
+<p>These are the parts I would defend in a refactor. Most of them are rules, and rules are easy to lose when code moves.</p>
+<ul>
+  <li>A change is never retried and never interrupted. A lost lease means uncertain, a person closes it, and one late result may still settle it (<code>RunEngine.Agents.cs</code> <code>ExpireLeasesAsync</code>, <code>attempts/mod.rs</code> <code>cancel</code>).</li>
+  <li>One writer for runs. Keep the lock, shrink what it covers. Do not replace it with row versions.</li>
+  <li>The approved plan is checked three ways before apply, and the plan's state version must still be the head (<code>AssignmentBuilder.cs:393-433</code>, <code>TofuStateStore.cs</code>).</li>
+  <li>OpenTofu state in the database with a lock owned by an attempt, lineage and serial checks, and snapshots during apply.</li>
+  <li>The agent's outbox and recovery, including the order in which the marker and the outbox entry are removed on acknowledgement.</li>
+  <li>Envelope encryption with the key name and version bound into the authenticated data, and the <code>system/</code> scope kept away from every operator endpoint (<code>Store/Envelope.cs</code>, <code>VariableStore.CheckUserKey</code>).</li>
+  <li>Agent identity. The server sets the certificate subject, the agent pins the CA fingerprint from its enrollment token, and every RPC checks the serial against the database.</li>
+  <li>Masking that fails closed. The server withholds outputs whole when it does not know every secret the attempt held.</li>
+  <li>The hardened git wrapper and the agent's tar extraction. Both treat repository content as hostile already.</li>
+  <li>The test harness. Real PostgreSQL, a real Git repository, the real HTTP API and a fake agent on a real session. 1,128 backend test cases and 255 in the agent.</li>
+  <li>CI that fails on OpenAPI drift, generated-client drift and model-versus-migration drift, with actions pinned by SHA and audits on all three ecosystems.</li>
+  <li><code>CONTEXT.md</code> with its "avoid" entries, and the ADRs. Few projects this young have a vocabulary this exact.</li>
+  <li><code>Octopushy.Definitions</code> as its own project, shared by the server, the offline validator and CI.</li>
+</ul>
+
+<h3>Not worth doing</h3>
+<ul>
+  <li>Squashing migrations. <code>SchemaHistory</code> refuses a database that records an id the assembly does not know, so a squash would lock out every existing install. The 26,000 Designer lines cost build time only.</li>
+  <li>Typed protobuf messages per executor. Example files give the check for a tenth of the churn.</li>
+  <li>Chunked transfer for repository files, or several streams per agent. 64 MiB on a LAN is enough once the size guard exists.</li>
+  <li>Automatic rollback, canaries across guests, Ansible check mode. Your docs explain why not, and I agree for one operator.</li>
+  <li>Removing reachability routing. It pays off with a second site. Add the single-candidate shortcut instead.</li>
+</ul>
+
+<h2 id="plan">Order of work</h2>
+<div class="cols">
+  <div class="col"><h3>This week</h3><ul>
+    <li>Heartbeats off the lock</li>
+    <li>Catch per message, per phase, per run</li>
+    <li>Result size guard on the agent</li>
+    <li>Advisory lock at startup</li>
+    <li>Hello before session registration</li>
+    <li>Indexes and foreign keys</li>
+    <li>Health endpoint and transition logs</li>
+    <li>Container sweep, origin check</li>
+    <li>No-follow reads of tool output</li>
+    <li>Protect branch and tags on the Git host</li>
+  </ul></div>
+  <div class="col"><h3>Next two or three weeks</h3><ul>
+    <li>Operator-confirmed workflows source</li>
+    <li>Forced stop and OpenTofu time limit</li>
+    <li>Retention job</li>
+    <li>Slim projections for polled lists</li>
+    <li>Mutating marker and server flag</li>
+    <li>Retries for safe steps</li>
+    <li>Agent doctor and unavailable reasons</li>
+    <li>Contract example files, both sides</li>
+  </ul></div>
+  <div class="col"><h3>Then</h3><ul>
+    <li>Step-type registry and run kinds</li>
+    <li>Tool users in the local runtime</li>
+    <li>Template database for tests</li>
+    <li>Slices in place of <code>Api/</code></li>
+    <li>Webhook, phases, task-level results</li>
+    <li>Agent update: wait, revert, test</li>
+    <li>Typed contract records</li>
+  </ul></div>
+</div>
+<p>One more habit worth adding now. There is no <code>CLAUDE.md</code> or <code>AGENTS.md</code> and no map of the code, only of the domain. A short file with the folder map, the commands, and two rules, "use the constants, never compare strings" and "contracts live in <code>contracts/</code>", will keep assistants and future you from reading a superseded design document as current. <code>docs/architecture-agreement.md</code> and <code>docs/workflows-migration.md</code> both still describe recipes and should say at the top that they are history.</p>
+
+<h2 id="method">Method and limits</h2>
+<p>I read the spine myself: the proto contract, <code>Program.cs</code>, <code>AgentServices.cs</code>, <code>RunEngine.cs</code> and <code>RunEngine.Agents.cs</code>, the orchestrator, and on the agent <code>connection.rs</code>, <code>run.rs</code>, <code>attempts/mod.rs</code> and <code>tools/mod.rs</code>. Five reviewers then worked in parallel on backend security, agent security and robustness, orchestration correctness, performance and data, and architecture and tests, plus one on how to make the executors better. A sixth, on a different model, did an independent security pass and found the symlink read in item 7. I re-read the code behind every item in "do first" and behind everything I changed. Findings marked with a hollow dot come from one reviewer with file references that I did not re-trace.</p>
+<p>Nobody ran an exploit or a load test. The credential path, the lock sequence and the oversize result are established by reading the code, not by reproducing them. Line numbers refer to commit <code>a860484</code> and have shifted by a few lines in the files I edited.</p>
+
+<script>
+  if (!getComputedStyle(document.documentElement).getPropertyValue('--background').trim()) {
+    document.documentElement.classList.add('standalone');
+  }
+</script>
+</body>
+</html>

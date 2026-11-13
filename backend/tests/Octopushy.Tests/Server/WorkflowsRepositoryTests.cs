@@ -3,10 +3,13 @@ using System.IO.Compression;
 using System.Net.Http.Json;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
+using Octopushy.Server.Git;
 using Octopushy.Server.Orchestration;
+using Octopushy.Server.Store;
 
 namespace Octopushy.Tests.Server;
 
@@ -249,5 +252,35 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
         Assert.False(revision.RepositoryValid);
         Assert.Contains($"Workflows come from {workflows.Root}; remove workflows/ and modules/ here.", revision.Issues);
         Assert.Empty(await server.QueryAsync(db => db.Runs.AsNoTracking().ToListAsync()));
+    }
+
+    /// <summary>
+    /// The workflows repository's address and key come from a commit nobody has validated yet, so the server decides what
+    /// that commit can make it send, and where.
+    /// </summary>
+    [Fact]
+    public async Task A_commit_cannot_send_the_servers_own_keys_anywhere_or_the_lab_token_to_another_host()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await using var scope = server.Services.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
+        await store.SetInternalAsync(RepositorySync.CredentialKey, "lab-token", Visibilities.Secret, null, CancellationToken.None);
+        await server.SetSecretAsync("git/workflows", "workflows-token");
+        var lab = new RepositorySettings { Url = "https://git.example/lab.git", CredentialKind = "token", CredentialUsername = "oauth2" };
+        Task<GitCredential> For(string url, string? key = null) => RepositorySync.WorkflowsCredentialAsync(
+            store, lab, url, key is null ? null : new Octopushy.Definitions.StoreReference(key), CancellationToken.None);
+
+        // The lab repository's token goes to the lab repository's host, and to no other.
+        Assert.Equal("lab-token", (await For("https://git.example/workflows.git")).Secret);
+        Assert.Equal(GitCredential.None, await For("https://elsewhere.example/workflows.git"));
+        Assert.Equal(GitCredential.None, await For("https://git.example:8443/workflows.git"));
+        Assert.Equal(GitCredential.None, await For("http://git.example/workflows.git"));
+
+        // A key the commit names is sent, unless it is one of the server's own or would travel in the clear.
+        Assert.Equal("workflows-token", (await For("https://elsewhere.example/workflows.git", "git/workflows")).Secret);
+        var system = await Assert.ThrowsAsync<GitException>(() => For("https://elsewhere.example/workflows.git", RepositorySync.CredentialKey));
+        Assert.Contains("system scope", system.Message);
+        var clear = await Assert.ThrowsAsync<GitException>(() => For("http://elsewhere.example/workflows.git", "git/workflows"));
+        Assert.Contains("http://", clear.Message);
     }
 }

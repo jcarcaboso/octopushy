@@ -635,7 +635,14 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         .run_ok("output", strings(&["output", "-json", "-no-color"]), true)
         .await
     {
-        Ok(out) => plan::split_outputs(&out.stdout)?,
+        Ok(out) => match plan::split_outputs(&out.stdout) {
+            Ok(split) => split,
+            Err(e) => {
+                ctx.log
+                    .agent(format!("warning: could not read the outputs: {e:#}"));
+                (Map::new(), Vec::new())
+            }
+        },
         Err(Failure::Failed { message, .. }) => {
             ctx.log
                 .agent(format!("warning: could not read the outputs: {message}"));

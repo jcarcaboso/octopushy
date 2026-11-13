@@ -11,6 +11,17 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.Agent
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // The server was away for an unknown time, and no agent could report meanwhile: each gets a full lease to
+        // connect again before its work is taken for lost.
+        try
+        {
+            await engine.RenewLeasesAsync(stoppingToken);
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogError(e, "Renewing the leases of running work at startup failed; work whose agent has not reported in time is taken for lost.");
+        }
+
         var nextObserveCheck = clock.GetUtcNow();
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -28,7 +39,8 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.Agent
                     await planner.ExpireScheduledAsync(clock.GetUtcNow(), stoppingToken);
                 }
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+            // Only the server stopping ends the loop: a cancellation from anywhere else, such as a timeout, is one more failed pass.
+            catch (Exception e) when (e is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
             {
                 logger.LogError(e, "The orchestrator loop failed; it will try again.");
             }

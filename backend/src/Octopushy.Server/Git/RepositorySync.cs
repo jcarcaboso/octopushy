@@ -347,11 +347,18 @@ public sealed class RepositorySync(
         CancellationToken cancellationToken)
     {
         var scheme = GitUrls.Scheme(url);
+        // The address and the key are whatever the newest commit says, read before that commit is validated. So nothing goes
+        // out in the clear, no key of the server's own is given, and the lab repository's token goes only to its own host.
+        var cleartext = url.StartsWith("http://", StringComparison.Ordinal);
         if (key is not null)
         {
             var kind = scheme switch { GitUrls.Https => "token", GitUrls.Ssh => "ssh", _ => null };
             if (kind is null)
                 return GitCredential.None;
+            if (cleartext)
+                throw new GitException("The workflows repository's credential is not sent over http://. Name it by https:// or SSH.");
+            if (key.Key.StartsWith(LabRepositoryLoader.SystemScope, StringComparison.Ordinal))
+                throw new GitException($"The workflows repository's credential, {key.Key}, is in the system scope, which definitions cannot use.");
             var secret = key.Version is { } version
                 ? await store.GetVersionInternalAsync(key.Key, version, cancellationToken)
                 : (await store.GetAsync(key.Key, cancellationToken))?.Value;
@@ -360,7 +367,14 @@ public sealed class RepositorySync(
         }
 
         return settings.Url is { } configUrl && scheme is GitUrls.Https or GitUrls.Ssh && GitUrls.Scheme(configUrl) == scheme
+            // A token is handed to whoever asks for it; a key only signs, so another host learns nothing from it.
+            && (scheme == GitUrls.Ssh || !cleartext && SameHost(configUrl, url))
             ? await CredentialAsync(store, settings, cancellationToken)
             : GitCredential.None;
     }
+
+    /// <summary>Whether two https:// URLs name the same host and port.</summary>
+    private static bool SameHost(string first, string second) =>
+        Uri.TryCreate(first, UriKind.Absolute, out var a) && Uri.TryCreate(second, UriKind.Absolute, out var b)
+        && a.Scheme == b.Scheme && a.Port == b.Port && string.Equals(a.IdnHost, b.IdnHost, StringComparison.OrdinalIgnoreCase);
 }

@@ -248,6 +248,27 @@ public class ProvisioningTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_lease_that_ran_out_while_the_server_was_down_is_renewed_when_it_starts()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        await server.Engine.OnStartedAsync(agent.Id, Guid.Parse(apply.AttemptId), CancellationToken.None);
+        await server.WithDbAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(apply.AttemptId))
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, DateTimeOffset.UtcNow.AddMinutes(-1))));
+
+        // What the orchestrator does before its first pass: no agent could report while the server was away.
+        await server.Engine.RenewLeasesAsync(CancellationToken.None);
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Running, run.Status);
+        Assert.Equal(AttemptStatuses.Running, run.Steps.Single(s => s.Name == StepNames.Apply).Attempts.Single().Status);
+    }
+
+    [Fact]
     public async Task A_read_only_attempt_that_loses_its_agent_is_retried()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
