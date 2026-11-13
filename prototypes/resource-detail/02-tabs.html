@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabs</title>
+<!--
+  02 · Tabs. A calm header (path, name, status, actions) stays on top while you scroll, and under it
+  a tab bar. Overview is a digest that fits one screen: what it is in six facts, what needs you,
+  what happens next, the latest run. Every other tab holds one subject, and the tabs differ per
+  kind because a machine, a service and a node are different things. The YAML lives in the
+  Definition tab behind a "Readable / YAML" switch, readable first; a section's or a line's
+  reference switches to the YAML with those lines marked. The tab is kept in the URL hash
+  (#tab=health, #tab=definition&view=yaml&hl=6-14). A dot or a count on a tab means it holds
+  something that needs you.
+  Sample data: the node's Capacity tab shows datastores from `sample.datastores` (not in the API).
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#main { padding-top: 0; }
+/* ---- The header that stays ---- */
+.top { position: sticky; top: 0; z-index: 20; background: var(--bg); padding-top: var(--space-6); }
+.hd { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.hd h1 { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-1) 0 var(--space-2); font-size: var(--text-2xl); }
+.hd__kind { font-size: var(--text-sm); font-weight: 500; color: var(--text-muted); }
+.hd__status { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; color: var(--text-muted); }
+.tabbar { margin-top: var(--space-5); gap: var(--space-6); overflow-x: auto; scrollbar-width: none; }
+.tabbar .tab { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-3) 0; white-space: nowrap; }
+.tab__count { font-size: var(--text-xs); font-variant-numeric: tabular-nums; color: var(--text-muted); padding: 0 0.4rem; border-radius: 999px; background: var(--surface-3); line-height: 1.25rem; }
+.tab__count[data-tone] { background: var(--tone-bg); color: var(--tone-fg); }
+.tabpanel { padding-top: var(--space-6); }
+.tabpanel:focus-visible { outline: none; }
+
+/* ---- Overview ---- */
+.ov { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+.ov__lede { color: var(--text-muted); margin-bottom: var(--space-4); max-width: 60ch; }
+.facts > div { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--border); align-items: baseline; }
+.facts > div:last-child { border-bottom: 1px solid var(--border); }
+.facts dt { color: var(--text-muted); font-size: var(--text-sm); }
+.facts dd { min-width: 0; }
+.facts__v { display: block; font-size: var(--text-lg); font-weight: 550; overflow-wrap: anywhere; }
+.facts__v .mono { font-weight: 500; }
+.facts__h { display: block; font-size: var(--text-sm); color: var(--text-muted); margin-top: 1px; }
+.facts .meter { margin-top: var(--space-2); max-width: 16rem; }
+.digest { display: flex; flex-direction: column; gap: var(--space-5); }
+.digest h2 { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); margin-bottom: var(--space-2); display: flex; align-items: center; gap: var(--space-2); }
+.need { border: 1px solid var(--tone-border); background: var(--tone-bg); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--space-3); }
+.need + .need { margin-top: var(--space-2); }
+.need > svg { color: var(--tone-fg); margin-top: 2px; grid-row: span 3; }
+.need__title { font-weight: 600; }
+.need__detail { color: var(--text-muted); font-size: var(--text-sm); }
+.need__actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
+.calm { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3) 0; }
+.calm > svg { color: var(--success-fg); margin-top: 2px; }
+.mini > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.mini > li:last-child { border-bottom: 1px solid var(--border); }
+.mini__sub { display: block; font-size: var(--text-sm); color: var(--text-muted); }
+.lastrun { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.lastrun .track { margin-top: var(--space-2); }
+
+/* ---- Tabs with content ---- */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); align-items: start; }
+.grid2 > .stack { gap: var(--space-5); }
+.sec__lines { font-size: var(--text-xs); }
+.fl > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+.fl > div:last-child { border-bottom: 0; }
+.fl dt { color: var(--text-muted); }
+.fl dd { min-width: 0; overflow-wrap: anywhere; }
+.fl__note { font-size: var(--text-sm); color: var(--text-muted); margin-top: 2px; }
+.sec-note { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--text-sm); }
+.tabpanel .card:has(> .table), .tabpanel .card__body--flush:has(> .table) { overflow-x: auto; }
+.table td.wrap { white-space: normal; }
+.table .sub { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+.table--runs td { white-space: nowrap; }
+.table--runs td.detail { white-space: normal; min-width: 12rem; }
+.subhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin: var(--space-6) 0 var(--space-3); }
+.subhead:first-child { margin-top: 0; }
+.subhead h2 { font-size: var(--text-lg); }
+.statrow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); margin-bottom: var(--space-5); }
+.stat { padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; }
+.stat b { display: block; font-size: var(--text-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.axis { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); }
+.wide-spark svg { width: 100%; height: 4rem; }
+.wide-spark .line { vector-effect: non-scaling-stroke; }
+.pending { border-color: var(--attention-border); }
+.pending .card__header { background: var(--attention-bg); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.diff { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-lg); }
+.diff__old { color: var(--text-muted); }
+.diff svg { color: var(--text-muted); }
+.steps { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.step { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-xs); color: var(--text-muted); }
+.step .track__segment { width: 5.5rem; }
+.stages > li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: var(--space-3); align-items: start; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+.stages > li:last-child { border-bottom: 0; }
+.stages__n { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--surface-3); font-size: var(--text-xs); color: var(--text-muted); }
+.bigmeter { display: grid; grid-template-columns: 6rem minmax(0, 1fr) auto; gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+.bigmeter:last-child { border-bottom: 0; }
+.bigmeter .meter { height: 8px; border-radius: 4px; }
+.alloc td { white-space: nowrap; }
+.alloc .meter { width: 8rem; }
+.alloc tr.off td { color: var(--text-muted); }
+.alloc tfoot td { border-top: 1px solid var(--border-strong); font-weight: 600; }
+
+/* ---- Definition tab ---- */
+.defbar { max-width: 60rem; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-5); }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); }
+.seg button { border: 0; background: none; padding: 0.25rem 0.8rem; border-radius: var(--radius-sm); color: var(--text-muted); font-size: var(--text-sm); font-weight: 550; }
+.seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+.readable { max-width: 60rem; }
+.rsec { padding: var(--space-5) 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: 12rem minmax(0, 1fr); gap: var(--space-5); }
+.rsec:first-child { border-top: 0; padding-top: 0; }
+.rsec__title { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.rsec__title svg { color: var(--text-muted); }
+.rrow { display: grid; grid-template-columns: 11rem minmax(0, 1fr) 3rem; gap: var(--space-4); padding: var(--space-2) 0; align-items: baseline; }
+.rrow dt { color: var(--text-muted); }
+.rrow dd { min-width: 0; overflow-wrap: anywhere; }
+.rrow .ln { text-align: right; font-size: var(--text-xs); font-family: var(--font-mono); color: var(--text-faint); }
+.rrow .ln:hover { color: var(--link); }
+.rnote { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: var(--space-2); max-width: 64ch; }
+.yamlwrap { max-width: 60rem; }
+
+@media (max-width: 960px) { .ov { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) {
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .statrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rsec { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+}
+@media (max-width: 720px) {
+  .fl > div, .rrow, .facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const kind = RD.kind;
+const main = RD.mount();
+const def = res.definition;
+const up = res.checks[0];
+const sec = (id) => def.sections.find((s) => s.id === id);
+const runOf = (n) => res.runs.find((r) => r.number === n);
+const guestOf = (r) => (r.address ? r.address.split("/").pop() : null);
+
+// ---- Small pieces shared by the tabs ---------------------------------------------------
+const facts = (rows) => `<dl class="facts">${rows.map(([k, v, h]) => `<div><dt>${k}</dt><dd><span class="facts__v">${v}</span>${h ? `<span class="facts__h">${h}</span>` : ""}</dd></div>`).join("")}</dl>`;
+const need = (t, ic, title, detail, actions = "") => `<div class="need" data-tone="${t}">${icon(ic, 18)}<div class="need__title">${title}</div><div class="need__detail">${detail}</div>${actions ? `<div class="need__actions">${actions}</div>` : ""}</div>`;
+const calm = (title, detail) => `<div class="calm">${icon("circleCheck", 18)}<div><div class="need__title">${title}</div><div class="need__detail">${detail}</div></div></div>`;
+const btn = (label, action, { primary = false, ic } = {}) => `<button type="button" class="button button--small${primary ? " button--primary" : ""}" data-action="${action}">${ic ? icon(ic, 14) : ""}${esc(label)}</button>`;
+const goTab = (tab, label) => `<a href="#tab=${tab}">${label}</a>`;
+const lines = (s) => `<a class="sec__lines" href="#tab=definition&view=yaml&hl=${s.lines[0]}-${s.lines[1]}">lines ${s.lines[0]}–${s.lines[1]}</a>`;
+
+function lastRun(r) {
+  if (!r) return "";
+  const g = kind === "node" ? guestOf(r) : null;
+  return `<div class="lastrun">
+    <div class="truncate"><a href="#">#${r.number}</a> <b>${esc(r.title)}</b>${g ? ` ${RD.chip(g, { mono: true })}` : ""}</div>
+    <div>${RD.status(r.status)}</div>
+    <div class="small muted">${esc(r.detail ?? "")} · ${esc(r.reason)}</div>
+    <div class="small muted num">${r.seconds ? RD.duration(r.seconds) + " · " : ""}${RD.rel(r.createdAt)}</div>
+    <div style="grid-column:1/-1">${RD.track(r)}</div>
+  </div>`;
+}
+
+function runsTable(runs) {
+  const guest = kind === "node";
+  return `<div class="card"><table class="table table--runs"><thead><tr><th>Run</th>${guest ? "<th>Guest</th>" : ""}<th>Status</th><th>Detail</th><th>Stages</th><th>Commit</th><th>Took</th><th>When</th></tr></thead><tbody>
+    ${runs.map((r) => `<tr>
+      <td><a href="#">#${r.number}</a> ${esc(r.title)}</td>
+      ${guest ? `<td class="mono">${esc(guestOf(r))}</td>` : ""}
+      <td>${RD.status(r.status)}</td>
+      <td class="detail">${esc(r.detail ?? "")}<span class="sub">${esc(r.reason)}</span></td>
+      <td>${RD.track(r)}</td>
+      <td>${RD.commit(r.commit)}</td>
+      <td class="num muted">${RD.duration(r.seconds)}</td>
+      <td class="muted">${RD.rel(r.createdAt)}</td></tr>`).join("")}
+  </tbody></table></div>`;
+}
+
+/** One definition section as label / value rows, its comments kept. */
+function fieldList(s, { show } = {}) {
+  return `${s.note ? `<p class="sec-note">${esc(s.note)}</p>` : ""}<dl class="fl">${s.fields.map((f) => `<div><dt>${esc(f.label)}</dt><dd>${show?.(f) ?? RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note || f.raw ? `<div class="fl__note">${esc(f.note ?? f.raw)}</div>` : ""}</dd></div>`).join("")}</dl>`;
+}
+const secCard = (id, opts = {}) => { const s = sec(id); return RD.card(opts.title ?? s.title, fieldList(s, opts), { flush: true, actions: lines(s) }); };
+
+function policyCard() {
+  const p = res.policy;
+  return RD.card("Policy", `<dl class="fl">
+    <div><dt>Approval</dt><dd>${RD.badge(p.approval, p.approval === "manual" ? "attention" : "neutral")}<div class="fl__note">Set by ${esc(p.approvalSetBy)}</div></dd></div>
+    ${p.actions.map((a) => `<div><dt class="mono">${esc(a.action)}</dt><dd>${RD.badge(a.approval, "neutral")}<div class="fl__note">Set by ${esc(a.setBy)}</div></dd></div>`).join("")}
+    <div><dt>Destructive</dt><dd>${RD.badge(p.destructive, "attention")}<div class="fl__note">Set by ${esc(p.destructiveSetBy)}</div></dd></div>
+  </dl>`, { flush: true, actions: sec("policy") ? lines(sec("policy")) : "" });
+}
+
+// ---- Overview, per kind ---------------------------------------------------------------
+function overview() {
+  const parts = {
+    machine: () => {
+      const c = res.configuration, waiting = res.services.filter((s) => s.status === "awaiting-approval"), failed = res.services.filter((s) => s.status === "failed");
+      const auto = new Set(res.policy.actions.filter((a) => a.approval === "automatic").map((a) => a.action));
+      return {
+        facts: [
+          ["Power", "Running", `up ${RD.duration(res.observed.uptimeSeconds)} on <a href="${RD.href("node")}">${esc(res.host)}</a>`],
+          ["Size", `${res.observed.maxCpu} vCPU · ${RD.bytes(res.observed.maxMemoryBytes)}`, "300 GiB disk on local-lvm"],
+          ["Address", `<span class="mono">${res.accessAddress}</span>`, `static on vmbr1 · SSH answers in ${up.elapsedMs} ms`],
+          ["Built from", esc(res.template), `VM ${res.vmid} · workflow ${esc(c.workflow)}`],
+          ["Configuration", "In sync", `${esc(c.appliedAction)} applied ${RD.rel(c.appliedAt)} · ${c.appliedCommit.slice(0, 7)}`],
+          ["Services", res.services.length, `${waiting.length} waits for approval · ${failed.length} failed`],
+        ],
+        need: calm("Nothing needs you", `falcon matches its definition at ${res.revisions.checkedCommit.slice(0, 7)}, checked ${RD.rel(res.revisions.checkedAt)}.`)
+          + `<ul class="mini" style="margin-top:var(--space-2)">${[...waiting, ...failed].map((s) => `<li><span>${RD.svcIcon(s.name)} <a href="${RD.href("service")}">${esc(s.name)}</a><span class="mini__sub">On this machine · ${esc(s.statusDetail)}</span></span>${RD.status(s.status)}</li>`).join("")}</ul>`,
+        next: `<ul class="mini">${c.schedules.map((s) => `<li><span><span class="mono">${esc(s.action)}</span><span class="mini__sub">${esc(s.human)} · ${auto.has(s.action) ? "runs on its own" : "waits for approval"}</span></span><span class="small num">${RD.rel(s.nextAt)}</span></li>`).join("")}</ul>`,
+        run: lastRun(res.runs[0]), runsTab: "maintenance",
+      };
+    },
+    service: () => {
+      const r = runOf(res.pending.run), done = res.runs.find((x) => x.finishedAt);
+      return {
+        facts: [
+          ["Link", `<a href="#" class="mono">${esc(res.names[0].name)}</a>`, `${RD.statusLabel(up.status)} · answers in ${up.elapsedMs} ms`],
+          ["Uptime", `${up.uptime.month}%`, `30 days · ${up.uptime.day}% today`],
+          ["Runs on", `<a href="${RD.href("machine")}">${esc(res.guest.name)}</a>`, `<span class="mono">${res.guest.accessAddress}</span>`],
+          ["Image", "0.6.30", "0.6.34 waits for approval"],
+          ["Workflow", esc(`${res.workflow.reference.split("@")[0]}@${res.workflow.resolved}`), `${res.workflow.latest} is available`],
+          ["Last deployed", RD.rel(res.appliedAt), `commit ${res.appliedCommit.slice(0, 7)} · deploy #${done.number}`],
+        ],
+        need: need("attention", "hand", `Deploy #${r.number} waits for approval`, `${esc(res.pending.summary)} · change by ${esc(res.pending.author)} · ${RD.rel(res.pending.since)}`,
+          `${btn("Approve", "approve", { primary: true, ic: "check" })}${btn("Reject", "reject", { ic: "x" })}<a class="button button--small button--ghost" href="#tab=deploys">See the change</a>`),
+        next: `<p class="small muted" style="margin-bottom:var(--space-2)">Once approved, deploy #${r.number} runs these stages:</p><ul class="mini">${res.workflow.stages.map((s) => `<li><span><span class="mono">${esc(s.name)}</span><span class="mini__sub">${esc(s.detail)}</span></span>${RD.chip(s.executor)}</li>`).join("")}</ul>`,
+        run: lastRun(done), runLabel: "Latest finished run", runsTab: "deploys",
+      };
+    },
+    node: () => {
+      const h = res.hosts[0], waiting = res.runs.find((r) => r.status === "awaiting-approval"), failed = res.runs.find((r) => r.status === "failed");
+      const sched = RD.data.machine.configuration.schedules[0];
+      return {
+        facts: [
+          ["Proxmox VE", res.proxmoxVersion, `${esc(res.type)} · observed ${RD.rel(res.observedAt)}`],
+          ["Host", `${esc(h.name)} is online`, `up ${RD.duration(h.uptimeSeconds)}`],
+          ["CPU", RD.pct(h.cpu), `of ${h.maxCpu} cores${RD.meter(h.cpu)}`],
+          ["Memory", RD.bytes(h.memoryBytes), `of ${RD.bytes(h.maxMemoryBytes)}${RD.meter(h.memoryBytes / h.maxMemoryBytes)}`],
+          ["Guests", `${res.guests.length} managed`, `${res.unmanaged.length} unmanaged · ${goTab("guests", "see all")}`],
+          ["Endpoint", `<span class="mono">${esc(res.endpoint.replace("https://", "").replace(/\/$/, ""))}</span>`, `TLS not verified`],
+        ],
+        need: need("warning", "alert", "The Proxmox certificate is not checked", `${esc(res.issues[0].message.split(":")[0])} in installation.yaml, line ${res.issues[0].line}`, `<a class="button button--small" href="#tab=definition&view=yaml&hl=${res.issues[0].line}-${res.issues[0].line}">Show the line</a>`)
+          + need("attention", "hand", `Apply #${waiting.number} of ${guestOf(waiting)} waits for approval`, `${esc(waiting.detail)} · ${RD.rel(waiting.createdAt)}`, `${btn("Approve", "approve", { primary: true, ic: "check" })}${btn("Reject", "reject", { ic: "x" })}`)
+          + need("danger", "circleX", `${esc(failed.title)} #${failed.number} of ${guestOf(failed)} failed`, `${esc(failed.detail)} · ${RD.rel(failed.createdAt)}`, `<a class="button button--small" href="#">Open run</a>`),
+        next: `<ul class="mini">
+          <li><span>Apply #${waiting.number} ${RD.chip(guestOf(waiting), { mono: true })}<span class="mini__sub">Runs once approved · ${esc(waiting.steps.map((s) => s.name).join(" → "))}</span></span><span class="small muted">waiting</span></li>
+          <li><span><span class="mono">${esc(sched.action)}</span> ${RD.chip("falcon", { mono: true })}<span class="mini__sub">${esc(sched.human)} · schedule</span></span><span class="small num">${RD.rel(sched.nextAt)}</span></li></ul>`,
+        run: lastRun(res.runs.find((r) => r.finishedAt)), runLabel: "Latest finished run of a guest", runsTab: "guests",
+      };
+    },
+  }[kind]();
+  return `<div class="ov">
+    <div><p class="ov__lede">${esc(res.description)}</p>${facts(parts.facts)}</div>
+    <div class="digest">
+      <section><h2>${kind === "machine" ? "Attention" : "Needs you"}</h2>${parts.need}</section>
+      <section><h2>What happens next</h2>${parts.next}</section>
+      <section><h2 class="row row--between"><span>${parts.runLabel ?? "Latest run"}</span>${goTab(parts.runsTab, "All runs")}</h2>${parts.run}</section>
+    </div>
+  </div>`;
+}
+
+// ---- Machine tabs ---------------------------------------------------------------------
+const machineTabs = {
+  configuration: () => {
+    const used = Object.fromEntries(res.configuration.secrets.map((s) => [s.key, s]));
+    const secretValue = (f) => { const u = used[f.secret.key]; return `<span class="mono break">${esc(f.secret.key)}</span><div class="row" style="margin-top:var(--space-1)">${RD.chip(`v${f.secret.activeVersion} active`)}${u ? RD.badge(`running with v${u.startedVersion}`, u.startedVersion === u.activeVersion ? "success" : "warning") : ""}</div>`; };
+    return `<div class="grid2">
+      <div class="stack">${secCard("hardware")}${secCard("network")}</div>
+      <div class="stack">${secCard("inputs")}${secCard("secrets", { show: (f) => (f.type === "secret" ? secretValue(f) : null) })}</div>
+    </div>`;
+  },
+  maintenance: () => {
+    const c = res.configuration, sched = Object.fromEntries(c.schedules.map((s) => [s.action, s]));
+    const auto = new Set(res.policy.actions.filter((a) => a.approval === "automatic").map((a) => a.action));
+    return `<div class="subhead"><h2>Configure actions</h2><span class="small muted">${RD.badge("In sync", "success", "circleCheck")} ${esc(c.appliedAction)} applied ${RD.rel(c.appliedAt)} at ${c.appliedCommit.slice(0, 7)}${c.hasSnapshot ? " · snapshot kept" : ""}</span></div>
+      <div class="card"><table class="table"><thead><tr><th>Action</th><th>What it does</th><th>When</th><th>Next</th><th>Approval</th><th></th></tr></thead><tbody>
+      ${c.actions.map((a) => { const s = sched[a.id]; return `<tr>
+        <td class="mono">${esc(a.id)}${a.destructive ? ` ${RD.badge("destructive", "danger")}` : ""}</td>
+        <td class="wrap">${esc(a.description)}</td>
+        <td>${s ? `${esc(s.human)}<span class="sub">${esc(s.cron)} · ${esc(s.timezone)}</span>` : a.onChange ? "When the definition changes" : `<span class="muted">By hand</span>`}</td>
+        <td class="num">${s ? `${RD.rel(s.nextAt)}<span class="sub">last #${s.lastRunNumber} · ${esc(s.lastRunDetail)}</span>` : `<span class="muted">—</span>`}</td>
+        <td>${auto.has(a.id) ? RD.badge("automatic", "neutral") : RD.badge("manual", "attention")}</td>
+        <td style="text-align:right">${btn("Run", "run", { ic: "play" })}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <div class="subhead"><h2>Runs</h2><span class="small muted">${res.runs.length} runs · ${res.runs.filter((r) => r.status === "failed").length} failed</span></div>
+      ${runsTable(res.runs)}`;
+  },
+  access: () => {
+    const k = res.managedAccess, hk = res.hostKey.pinned;
+    return `<div class="grid2">
+      <div class="stack">
+        ${RD.card("SSH", `<dl class="fl">
+          <div><dt>Address</dt><dd class="mono">${esc(res.accessAddress)}:22</dd></div>
+          <div><dt>User</dt><dd class="mono">ops</dd></div>
+          <div><dt>Answers</dt><dd>${RD.status(up.status)} <span class="muted">in ${up.elapsedMs} ms · ${up.uptime.month}% over 30 days</span></dd></div>
+        </dl>`, { flush: true, actions: lines(sec("access")) })}
+        ${RD.card("Host key", `<dl class="fl">
+          <div><dt>Pinned</dt><dd class="mono small">${esc(hk.fingerprint)}</dd></div>
+          <div><dt>Delivered</dt><dd>${RD.rel(hk.deliveredAt)}</dd></div>
+          <div><dt>Next key</dt><dd class="muted">None waiting</dd></div>
+        </dl>`, { flush: true, meta: `v${hk.version}` })}
+        ${RD.card("Agents", `<dl class="fl">
+          <div><dt>Runs on</dt><dd>Any agent<div class="fl__note">No agent labels; the default</div></dd></div>
+          <div><dt>Reaches it at</dt><dd class="mono">${esc(res.accessAddress)}</dd></div>
+          <div><dt>Bound to</dt><dd><a href="${RD.href("node")}">${esc(res.binding.installation)}</a>, VMID ${res.binding.vmid}<div class="fl__note">since ${RD.rel(res.binding.boundAt)}</div></dd></div>
+        </dl>`, { flush: true })}
+      </div>
+      <div class="stack">
+        ${RD.card("Managed key", `<dl class="fl">
+          <div><dt>Fingerprint</dt><dd class="mono small">${esc(k.fingerprint)}</dd></div>
+          <div><dt>Last used</dt><dd>${RD.rel(k.lastUsedAt)}</dd></div>
+          ${k.keys.map((x) => `<div><dt>Version ${x.version}</dt><dd>${RD.badge(x.state, x.state === "active" ? "success" : "muted")} <span class="muted small">${x.state === "active" ? `promoted by ${esc(x.promotedBy)} ${RD.rel(x.promotedAt)}` : `removed ${RD.rel(x.removedAt)}`}</span></dd></div>`).join("")}
+        </dl>`, { flush: true, meta: `v${k.version}`, actions: btn("Rotate", "rotate-key", { ic: "refresh" }) })}
+        ${policyCard()}
+      </div>
+    </div>`;
+  },
+};
+
+// ---- Service tabs ---------------------------------------------------------------------
+const serviceTabs = {
+  health: () => {
+    const lat = up.latency.filter((x) => x != null), sorted = [...lat].sort((a, b) => a - b);
+    return `<div class="statrow">
+        <div class="stat"><span class="small muted">Now</span><b>${RD.statusLabel(up.status)}</b><span class="small muted">${up.elapsedMs} ms · checked ${RD.rel(up.checkedAt)}</span></div>
+        <div class="stat"><span class="small muted">Last 24 hours</span><b>${up.uptime.day}%</b></div>
+        <div class="stat"><span class="small muted">Last 7 days</span><b>${up.uptime.week}%</b></div>
+        <div class="stat"><span class="small muted">Last 30 days</span><b>${up.uptime.month}%</b></div>
+      </div>
+      <div class="stack stack--large">
+        ${RD.card("Last 24 hours", `${RD.beats(up)}<div class="axis"><span>24 h ago</span><span>one bar per 15 min</span><span>now</span></div>
+          <div class="row row--between small" style="margin-top:var(--space-5)"><span class="muted">Latency</span><span class="muted num">median ${sorted[Math.floor(sorted.length / 2)]} ms · highest ${sorted.at(-1)} ms</span></div>
+          <div class="wide-spark" style="margin-top:var(--space-2)">${RD.spark(up.latency, { width: 960, height: 64 }).replace("<svg ", '<svg preserveAspectRatio="none" ')}</div>`, { meta: `${up.kind} · ${up.url}` })}
+        ${RD.card("Last 30 days", `${RD.days(up)}<div class="axis"><span>30 days ago</span><span>one bar per day</span><span>today</span></div>`)}
+        ${RD.card("Incidents", `<table class="table"><thead><tr><th>When</th><th>What</th><th>For</th><th>Why</th></tr></thead><tbody>${up.incidents.map((i) => `<tr><td>${RD.clock(i.at)}<span class="sub">${RD.rel(i.at)}</span></td><td>${i.state === "down" ? RD.badge("Down", "danger") : RD.badge("Slow", "warning")}</td><td class="num">${i.minutes} min</td><td class="wrap">${esc(i.detail)}</td></tr>`).join("")}</tbody></table>`, { flush: true, meta: up.incidents.length })}
+      </div>`;
+  },
+  deploys: () => {
+    const r = runOf(res.pending.run), p = res.pending;
+    return `<div class="stack stack--large">
+      <section class="card pending"><header class="card__header"><h2 class="card__title">${icon("hand", 16)} Deploy #${r.number} waits for approval</h2><div class="card__actions">${btn("Reject", "reject", { ic: "x" })}${btn("Approve", "approve", { primary: true, ic: "check" })}</div></header>
+        <div class="card__body"><div class="grid2" style="align-items:center">
+          <div><div class="small muted" style="margin-bottom:var(--space-1)">Image</div><div class="diff"><span class="diff__old">0.6.30</span>${icon("arrowRight", 16)}<span>0.6.34</span></div>
+            <div class="small muted" style="margin-top:var(--space-2)">ghcr.io/open-webui/open-webui · change by ${esc(p.author)} ${RD.rel(p.since)} · ${RD.commit(p.commit)} · <button type="button" class="link-button" data-yaml="inputs">line ${sec("inputs").fields.find((f) => f.key === "image").line}</button></div></div>
+          <div class="steps">${r.steps.map((s) => `<div class="step"><span class="track__segment track__segment--${s.status === "todo" ? "todo" : RD.tone(s.status)}"></span><span>${esc(s.name)}</span></div>`).join("")}</div>
+        </div></div></section>
+      <div class="grid2">
+        ${RD.card("Stages", `<ol class="stages">${res.workflow.stages.map((s, i) => `<li><span class="stages__n">${i + 1}</span><span><span class="mono">${esc(s.name)}</span><span class="mini__sub">${esc(s.detail)}</span></span>${RD.chip(s.executor)}</li>`).join("")}</ol>`, { flush: true, meta: `${res.workflow.reference} · resolved ${res.workflow.resolved}`, actions: RD.badge(`${res.workflow.latest} available`, "info") })}
+        ${RD.card("Deployed now", `<dl class="fl">
+          <div><dt>Commit</dt><dd>${RD.commit(res.appliedCommit)} <span class="muted small">${RD.rel(res.appliedAt)}</span></dd></div>
+          <div><dt>Image</dt><dd class="mono">0.6.30</dd></div>
+          <div><dt>Name</dt><dd><a href="#" class="mono">${esc(res.names[0].name)}</a><div class="fl__note">set by the ${esc(res.names[0].stage)} stage</div></dd></div>
+          <div><dt>Approval</dt><dd>${RD.badge(res.policy.approval, "attention")}<div class="fl__note">Every deploy waits for approval</div></dd></div>
+        </dl>`, { flush: true })}
+      </div>
+      <div><div class="subhead"><h2>Runs</h2><span class="small muted">${res.runs.length} deploys</span></div>${runsTable(res.runs)}</div>
+    </div>`;
+  },
+  configuration: () => `<div class="grid2">
+      <div class="stack">${secCard("inputs")}</div>
+      <div class="stack">${secCard("service")}${secCard("secrets")}${policyCard()}</div>
+    </div>`,
+};
+
+// ---- Node tabs ------------------------------------------------------------------------
+const nodeTabs = {
+  guests: () => `<div class="subhead"><h2>Managed</h2><span class="small muted">${res.guests.length} guests Octopushy defines</span></div>
+    <div class="card"><table class="table"><thead><tr><th>Name</th><th>Kind</th><th>VMID</th><th>Size</th><th>Services</th><th>Power</th><th>Status</th></tr></thead><tbody>
+      ${res.guests.map((g) => `<tr><td><a class="mono" href="${RD.href("machine")}">${esc(g.name)}</a></td><td>${g.kind}</td><td class="num">${g.vmid}</td><td class="num">${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}</td><td class="num">${g.services}</td><td>${g.power === "running" ? "Running" : `<span class="muted">Stopped</span>`}</td><td>${RD.status(g.status)}${g.statusDetail ? `<span class="sub">${esc(g.statusDetail)}</span>` : ""}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="subhead"><h2>Unmanaged</h2><span class="small muted">Proxmox reports them; no definition in Git</span></div>
+    <div class="card"><table class="table"><thead><tr><th>Name</th><th>Kind</th><th>VMID</th><th>Size</th><th>Tags</th><th>Power</th><th></th></tr></thead><tbody>
+      ${res.unmanaged.map((g) => `<tr><td class="mono">${esc(g.name)}</td><td>${g.template ? "Template" : g.kind}</td><td class="num">${g.vmid}</td><td class="num">${g.maxCpu} vCPU · ${RD.bytes(g.maxMemoryBytes)}</td><td><span class="chips">${g.tags.map((t) => RD.chip(t)).join("") || `<span class="muted">—</span>`}</span></td><td>${g.status === "running" ? "Running" : `<span class="muted">Stopped</span>`}</td><td style="text-align:right">${btn("Adopt", "adopt")}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="subhead"><h2>Runs of its guests</h2></div>${runsTable(res.runs)}`,
+  capacity: () => {
+    const h = res.hosts[0];
+    const all = [...res.guests.map((g) => ({ name: g.name, cores: g.cores, mem: g.memoryBytes, on: g.power === "running", managed: true })),
+      ...res.unmanaged.map((g) => ({ name: g.name, cores: g.maxCpu, mem: g.maxMemoryBytes, on: g.status === "running", managed: false }))];
+    const sum = (f, xs) => xs.reduce((m, x) => m + f(x), 0), on = all.filter((g) => g.on);
+    return `<div class="grid2">
+      <div class="stack">
+        ${RD.card(`Host ${h.name}`, `
+          <div class="bigmeter"><span class="muted">CPU</span>${RD.meter(h.cpu)}<span class="num"><b>${RD.pct(h.cpu)}</b> <span class="muted">of ${h.maxCpu} cores</span></span></div>
+          <div class="bigmeter"><span class="muted">Memory</span>${RD.meter(h.memoryBytes / h.maxMemoryBytes)}<span class="num"><b>${RD.bytes(h.memoryBytes)}</b> <span class="muted">of ${RD.bytes(h.maxMemoryBytes)}</span></span></div>
+          <div class="bigmeter"><span class="muted">Operations</span>${RD.meter(h.concurrentOperations / h.limit)}<span class="num"><b>${h.concurrentOperations}</b> <span class="muted">running, limit ${h.limit}</span></span></div>
+        `, { flush: true, meta: `${res.sample.cpuModel} · up ${RD.duration(h.uptimeSeconds)}` })}
+        ${RD.card("Datastores", res.sample.datastores.map((d) => `<div class="bigmeter"><span class="mono">${esc(d.name)}</span>${RD.meter(d.usedBytes / d.totalBytes)}<span class="num"><b>${RD.bytes(d.usedBytes)}</b> <span class="muted">of ${RD.bytes(d.totalBytes)} · ${esc(d.role)}</span></span></div>`).join(""), { flush: true })}
+      </div>
+      ${RD.card("Given to guests", `<table class="table alloc"><thead><tr><th>Guest</th><th>vCPU</th><th>Memory</th><th>Share of memory</th></tr></thead><tbody>
+          ${all.map((g) => `<tr class="${g.on ? "" : "off"}"><td><span class="mono">${esc(g.name)}</span>${g.managed ? "" : ` ${RD.chip("unmanaged")}`}</td><td class="num">${g.cores}</td><td class="num">${RD.bytes(g.mem)}</td><td>${g.on ? RD.meter(g.mem / h.maxMemoryBytes) : `<span class="small">stopped</span>`}</td></tr>`).join("")}
+        </tbody><tfoot><tr><td>Running</td><td class="num">${sum((g) => g.cores, on)}</td><td class="num">${RD.bytes(sum((g) => g.mem, on))}</td><td>${RD.meter(sum((g) => g.mem, on) / h.maxMemoryBytes)}</td></tr></tfoot></table>`, { flush: true, meta: `${on.length} of ${all.length} running` })}
+    </div>`;
+  },
+  connection: () => {
+    const conn = sec("connection"), issue = res.issues[0];
+    return `<div class="stack stack--large">
+      ${need("warning", "alert", "TLS is not verified", `${esc(issue.message)} <a href="#tab=definition&view=yaml&hl=${issue.line}-${issue.line}">installation.yaml, line ${issue.line}</a>`)}
+      <div class="grid2">
+        <div class="stack">
+          ${RD.card("Trust", `<dl class="fl">
+            <div><dt>Endpoint</dt><dd><a href="#" class="mono">${esc(res.endpoint)}</a></dd></div>
+            <div><dt>Trusted</dt><dd>${RD.badge("Trusted", "success", "shield")} <span class="muted small">by ${esc(res.trust.trustedBy)} ${RD.rel(res.trust.trustedAt)}</span></dd></div>
+            <div><dt>TLS</dt><dd>${RD.badge("Not verified", "warning", "alert")}</dd></div>
+            <div><dt>Observed</dt><dd>${RD.rel(res.observedAt)} <span class="muted small">· Proxmox VE ${res.proxmoxVersion} · API ${up.uptime.month}% over 30 days</span></dd></div>
+          </dl>`, { flush: true })}
+          ${RD.card("Tokens", `<dl class="fl">${conn.fields.filter((f) => f.type === "secret").map((f) => `<div><dt>${esc(f.label)}</dt><dd><span class="mono break small">${esc(f.secret.key)}</span><div class="row" style="margin-top:var(--space-1)">${RD.chip(`v${f.secret.activeVersion} active`)}${f.key === "readOnlyToken" ? `<span class="small muted">observes the node</span>` : `<span class="small muted">applies changes</span>`}</div></dd></div>`).join("")}</dl>`, { flush: true, actions: lines(conn) })}
+        </div>
+        <div class="stack">
+          ${RD.card("Snippets", `<dl class="fl">
+            <div><dt>SSH user</dt><dd><span class="mono">${esc(res.snippets.user)}</span><div class="fl__note">${esc(sec("snippets").fields[0].note)}</div></dd></div>
+            <div><dt>Datastore</dt><dd class="mono">${esc(res.snippets.datastore)}</dd></div>
+            <div><dt>Key</dt><dd class="mono small">${esc(res.snippets.fingerprint)}</dd></div>
+            ${res.snippets.hosts.map((x) => `<div><dt>Host ${esc(x.name)}</dt><dd>${x.reachable ? RD.badge("Reachable", "success") : RD.badge("Unreachable", "danger")}</dd></div>`).join("")}
+          </dl>`, { flush: true, actions: lines(sec("snippets")) })}
+          ${policyCard()}
+        </div>
+      </div>
+    </div>`;
+  },
+};
+
+// ---- Definition: readable first, YAML behind a switch ------------------------------------
+function definitionTab(params) {
+  const view = params.get("view") === "yaml" ? "yaml" : "readable";
+  const hl = params.get("hl")?.split("-").map(Number);
+  const bar = `<div class="defbar">
+    <div class="seg" role="group" aria-label="View">
+      <button type="button" aria-pressed="${view === "readable"}" data-view="readable">Readable</button>
+      <button type="button" aria-pressed="${view === "yaml"}" data-view="yaml">YAML</button>
+    </div>
+    <div class="row small muted">${view === "readable" ? `<span class="mono truncate">${esc(def.file)}</span>` : ""}${btn("Edit", "edit", { ic: "pencil" })}</div>
+  </div>`;
+  if (view === "yaml") return `${bar}<div class="yamlwrap">${RD.yamlBox(def, hl ? { highlight: hl } : undefined)}</div>`;
+  return `${bar}<div class="readable">${def.sections.map((s) => `
+    <section class="rsec">
+      <div><div class="rsec__title">${icon(s.icon, 16)}${esc(s.title)}</div>${lines(s)}</div>
+      <div>${s.note ? `<p class="rnote">${esc(s.note)}</p>` : ""}<dl>${s.fields.map((f) => `
+        <div class="rrow"><dt>${esc(f.label)}</dt><dd>${RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note || f.raw ? `<div class="fl__note">${esc(f.note ?? f.raw)}</div>` : ""}</dd>
+        <a class="ln" href="#tab=definition&view=yaml&hl=${f.line}-${f.line}" title="Show line ${f.line} in the YAML">${f.line}</a></div>`).join("")}</dl></div>
+    </section>`).join("")}</div>`;
+}
+
+// ---- Tabs, per kind -------------------------------------------------------------------
+const TABS = {
+  machine: () => [["overview", "Overview"], ["configuration", "Configuration"], ["maintenance", "Maintenance", { count: res.runs.length }], ["access", "Access"], ["definition", "Definition"]],
+  service: () => [["overview", "Overview"], ["health", "Health", { count: up.incidents.length }], ["deploys", "Deploys", { count: 1, tone: "attention" }], ["configuration", "Configuration"], ["definition", "Definition"]],
+  node: () => [["overview", "Overview"], ["guests", "Guests", { count: res.guests.length + res.unmanaged.length, dot: "attention" }], ["capacity", "Capacity"], ["connection", "Connection", { dot: "warning" }], ["definition", "Definition"]],
+}[kind]();
+const PANELS = { overview, definition: definitionTab, ...{ machine: machineTabs, service: serviceTabs, node: nodeTabs }[kind] };
+
+main.innerHTML = `
+  <div class="top">
+    <div class="hd">
+      <div>
+        <div class="eyebrow">${RD.crumbs()}</div>
+        <h1>${kind === "service" ? RD.svcIcon(res.name, true) : ""}<span>${esc(res.name)}</span><span class="hd__kind">${esc(res.noun)}</span></h1>
+        <div class="hd__status">${RD.status(res.status)}${res.statusDetail ? `<span>${esc(res.statusDetail)}</span>` : `<span>Matches its definition</span>`}</div>
+      </div>
+      <div class="row">${RD.actions()}</div>
+    </div>
+    <div class="tabs tabbar" role="tablist" aria-label="${esc(res.noun)}">${TABS.map(([id, label, m = {}]) => `
+      <button type="button" class="tab" role="tab" id="tab-${id}" data-tab="${id}" aria-controls="panel">${esc(label)}${m.count != null ? `<span class="tab__count"${m.tone ? ` data-tone="${m.tone}"` : ""}>${m.count}</span>` : ""}${m.dot ? `<span class="dot" data-tone="${m.dot}" title="Needs attention"></span>` : ""}</button>`).join("")}
+    </div>
+  </div>
+  <div id="panel" class="tabpanel" role="tabpanel" tabindex="-1"></div>`;
+
+const panel = main.querySelector("#panel");
+function render() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const tab = PANELS[params.get("tab")] ? params.get("tab") : "overview";
+  main.querySelectorAll("[data-tab]").forEach((b) => { const on = b.dataset.tab === tab; b.setAttribute("aria-selected", on); b.tabIndex = on ? 0 : -1; });
+  panel.setAttribute("aria-labelledby", `tab-${tab}`);
+  panel.innerHTML = PANELS[tab](params);
+  const mark = panel.querySelector(".yaml__line--hl");
+  if (mark) mark.scrollIntoView({ block: "center" });
+}
+const go = (hash) => { if (location.hash !== hash) location.hash = hash; else render(); };
+main.querySelector(".tabbar").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) go(`#tab=${b.dataset.tab}`); });
+main.querySelector(".tabbar").addEventListener("keydown", (e) => {
+  const ids = TABS.map((t) => t[0]), cur = ids.indexOf(document.activeElement?.dataset.tab);
+  if (cur < 0) return;
+  const next = { ArrowRight: cur + 1, ArrowLeft: cur - 1, Home: 0, End: ids.length - 1 }[e.key];
+  if (next == null) return;
+  e.preventDefault();
+  const id = ids[(next + ids.length) % ids.length];
+  go(`#tab=${id}`);
+  main.querySelector(`[data-tab="${id}"]`).focus();
+});
+panel.addEventListener("click", (e) => {
+  const v = e.target.closest("[data-view]");
+  if (v) go(v.dataset.view === "yaml" ? "#tab=definition&view=yaml" : "#tab=definition");
+});
+// Placeholder links stay on the tab they are in.
+addEventListener("click", (e) => { if (e.target.closest?.('a[href="#"]')) e.preventDefault(); });
+addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>

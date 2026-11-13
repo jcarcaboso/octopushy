@@ -2,6 +2,8 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ServiceDetail, ServiceSummary } from "../api/types";
+import { check } from "../test/inventory";
+import { runDetail } from "../test/runs";
 import { mockApi, problem, renderAt } from "../test/utils";
 import { ServicePage } from "./ServicePage";
 
@@ -40,12 +42,45 @@ describe("ServicePage", () => {
       "GET /api/runs/run-2": () => new Response(null, { status: 404 }),
     });
     renderAt(<ServicePage />, route);
-    expect(await screen.findByText("web@1.2")).toBeInTheDocument();
-    expect(screen.getByText("from @1")).toBeInTheDocument();
-    expect(screen.getByText("opentofu")).toBeInTheDocument();
-    expect(screen.getByText("ansible")).toBeInTheDocument();
+    const workflow = (await screen.findByRole("heading", { name: "Workflow" })).closest("section")!;
+    expect(within(workflow).getByText("web@1.2")).toBeInTheDocument();
+    expect(within(workflow).getByText("from @1")).toBeInTheDocument();
+    expect(within(workflow).getByText("opentofu")).toBeInTheDocument();
+    expect(within(workflow).getByText("ansible")).toBeInTheDocument();
+    expect(within(workflow).getByText("Last success")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Deploy" }));
     await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+  });
+
+  it("shows its figures: how it answers, its month, where it runs, its workflow and its last deploy", async () => {
+    const service = detail().service;
+    mockApi({
+      "GET /api/services/svc-1": () => detail({}, "in-sync"),
+      "GET /api/uptime": () => ({ checks: [check(service.address, "https://app.test/")] }),
+    });
+    renderAt(<ServicePage />, route);
+    const figure = async (label: string) => (await screen.findByText(label, { selector: "dt" })).parentElement!;
+    expect(await figure("Answers")).toHaveTextContent("Up21 ms");
+    expect(await figure("Uptime, 30 days")).toHaveTextContent("100%");
+    expect(within(await figure("Runs on")).getByRole("link", { name: "krb-app-01" })).toHaveAttribute("href", "/guests/guest-1");
+    expect(await figure("Workflow")).toHaveTextContent("web@1.2named web@1");
+    expect(await figure("Last deployed")).toHaveTextContent("e6b1282");
+  });
+
+  it("brings its pipeline that waits for approval to the page", async () => {
+    const run = runDetail({ operation: "pipeline", resourceId: "svc-1", resourceKind: "service" });
+    mockApi({
+      "GET /api/services/svc-1": () => {
+        const d = detail({ runs: [run.run] }, "awaiting-approval");
+        return { ...d, service: { ...d.service, activeRun: run.run } };
+      },
+      "GET /api/runs/run-1": () => run,
+    });
+    renderAt(<ServicePage />, route);
+    const panel = await screen.findByRole("region", { name: "Pipeline #12 waits for your approval" });
+    expect(await within(panel).findByText(/Approving covers every stage above/)).toBeInTheDocument();
+    expect(within(panel).getByText("Pipeline document SHA-256")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   it("says what a waiting service waits for", async () => {

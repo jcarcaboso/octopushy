@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checklist</title>
+<!--
+  15 · Checklist. The page asks "is this thing as it should be?" and answers with a list of checks.
+  Everything known about the resource is evidence under one check: the definition, what Proxmox
+  reports, the runs, the keys, the uptime. One line and a segmented bar on top say how many pass.
+  Each row has fixed columns (state, the check, its evidence, when it was last true) and opens in
+  place to the full evidence, the YAML lines it rests on and the run that proved it, with the
+  action that fixes it when it does not pass. Uses no `sample` data.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.wrap { max-width: 72rem; margin: 0 auto; }
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+.head .row { flex-wrap: wrap; }
+
+.summary { margin: var(--space-8) 0 var(--space-6); }
+.summary__line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.summary__count { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.01em; }
+.summary__count span { font-size: var(--text-md); font-weight: 400; color: var(--text-muted); margin-left: var(--space-2); }
+.bar { display: flex; gap: 3px; margin-top: var(--space-3); }
+.bar button { flex: 1; height: 0.625rem; padding: 0; border: 0; border-radius: 3px; background: var(--tone-fg); min-width: 0; }
+.bar button[data-tone="success"] { background: color-mix(in srgb, var(--success-fg) 70%, var(--surface)); }
+.bar button:hover, .bar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.seg button { border: 0; background: none; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); color: var(--text-muted); font-size: var(--text-sm); font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+
+.group { margin-top: var(--space-6); }
+.group__head { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) max-content; align-items: baseline; gap: var(--space-3); padding: 0 var(--space-4) var(--space-2); }
+.group__head h2 { grid-column: 2; font-size: var(--text-lg); font-weight: 650; }
+.group__head span { font-size: var(--text-sm); color: var(--text-muted); }
+.checks { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.check + .check { border-top: 1px solid var(--border); }
+.check__row { display: grid; grid-template-columns: 1.75rem minmax(15rem, 1fr) minmax(0, 1.15fr) 7.5rem 1rem; align-items: center; gap: var(--space-3); width: 100%; padding: 0.7rem var(--space-4); border: 0; background: none; text-align: left; min-height: 3.25rem; }
+.check__row:hover { background: var(--surface-2); }
+.check__icon { color: var(--tone-fg); display: grid; place-items: center; }
+.check__text { font-weight: 500; min-width: 0; }
+.check__ev { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); color: var(--text-muted); font-size: var(--text-sm); min-width: 0; }
+.check__when { text-align: right; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.check__chev { color: var(--text-faint); transition: transform 0.15s; display: grid; }
+.check__row[aria-expanded="true"] .check__chev { transform: rotate(90deg); }
+.check:not([data-state="pass"]) .check__row { box-shadow: inset 3px 0 0 var(--tone-fg); }
+.check[data-state="info"] .check__row { box-shadow: none; }
+
+.detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-5) var(--space-6); padding: var(--space-2) var(--space-5) var(--space-5) calc(1.75rem + var(--space-3) + var(--space-4)); }
+.detail[hidden] { display: none; }
+.detail--single { grid-template-columns: minmax(0, 1fr); }
+.detail h3 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-2); }
+.detail .kv { font-size: var(--text-md); grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr); }
+.detail p { color: var(--text-muted); max-width: 60ch; }
+.proof { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px dashed var(--border); font-size: var(--text-sm); }
+.fix { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-4); border: 1px solid var(--tone-border); border-radius: var(--radius); background: var(--tone-bg); }
+.fix p { color: var(--text); flex: 1; min-width: 14rem; max-width: none; }
+.excerpt .code { font-size: var(--text-xs); }
+.excerpt .code__bar button { font: inherit; color: var(--link); background: none; border: 0; padding: 0; }
+.excerpt .code__bar button:hover { text-decoration: underline; }
+.minilist li { display: grid; grid-template-columns: 0.75rem 8rem minmax(0, 1fr); gap: var(--space-2); align-items: baseline; padding: 0.3rem 0; font-size: var(--text-md); }
+.minilist .dot { transform: translateY(-0.05em); }
+.meter-row { display: grid; grid-template-columns: 5rem 8rem minmax(0, 1fr); align-items: center; gap: var(--space-3); font-size: var(--text-md); padding: 0.2rem 0; }
+
+@media (max-width: 1100px) {
+  .check__row { grid-template-columns: 1.75rem minmax(0, 1fr) minmax(0, 1fr) 6.5rem 1rem; }
+  .detail { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .check__row { grid-template-columns: 1.75rem minmax(0, 1fr) 1rem; }
+  .check__ev, .check__when { grid-column: 2; text-align: left; }
+  .check__chev { grid-row: 1; grid-column: 3; }
+  .detail { padding-left: var(--space-4); }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const def = res.definition;
+const fileName = def.file.split("/").pop();
+const sec = (id) => def.sections.find((s) => s.id === id);
+const fld = (sid, key) => sec(sid).fields.find((f) => f.key === key);
+const lineOf = (needle) => def.text.split("\n").findIndex((l) => l.includes(needle)) + 1;
+const mono = (t, tone) => RD.chip(t, { mono: true, tone });
+const ch = (t, tone) => RD.chip(t, { tone });
+const runNo = (n) => [...RD.data.machine.runs, ...RD.data.service.runs, ...RD.data.node.runs].find((r) => r.number === n);
+
+const STATE = {
+  pass: ["success", "circleCheck", "Passes"],
+  warning: ["warning", "alert", "Warning"],
+  fail: ["danger", "circleX", "Does not pass"],
+  waiting: ["attention", "hand", "Waits"],
+  info: ["info", "info", "Note"],
+};
+
+// ---- Pieces of evidence -----------------------------------------------------------------
+/** A few lines of the YAML around [a, b], marked, with a way to open the whole file there. */
+function excerpt(a, b = a) {
+  const t = document.createElement("template");
+  t.innerHTML = RD.yaml(def.text, { highlight: [a, b] });
+  t.content.querySelectorAll(".yaml__line").forEach((l) => { const n = +l.dataset.line; if (n < a - 1 || n > b + 1) l.remove(); });
+  return `<div class="excerpt"><h3>In the definition</h3><div class="code"><div class="code__bar"><span>${esc(fileName)} · ${a === b ? `line ${a}` : `lines ${a}–${b}`}</span><button type="button" data-src="${a}-${b}">Open the file here</button></div>${t.innerHTML}</div></div>`;
+}
+const proof = (r, note = "") => r ? `<div class="proof"><span class="muted">Proved by</span><a href="#">#${r.number}</a><span>${esc(r.title)}</span>${RD.track(r)}<span class="muted">${RD.statusLabel(r.status).toLowerCase()} ${RD.rel(r.finishedAt ?? r.createdAt)}${note ? ` · ${esc(note)}` : ""}</span></div>` : "";
+const facts = (title, pairs, extra = "") => `<div><h3>${title}</h3>${RD.kv(pairs)}${extra}</div>`;
+const fix = (text, buttons) => `<div class="fix">${`<p>${text}</p>`}${buttons.map(([label, id, primary, ic]) => `<button type="button" class="button button--small${primary ? " button--primary" : ""}" data-action="${id}">${ic ? icon(ic, 14) : ""}${esc(label)}</button>`).join("")}</div>`;
+
+// ---- The checks, per kind ------------------------------------------------------------------
+const checks = {
+  machine() {
+    const rv = res.revisions, c = res.configuration, m = res.managedAccess, hk = res.hostKey.pinned, up = res.checks[0], o = res.observed;
+    const sched = (a) => c.schedules.find((s) => s.action === a);
+    const svc = res.services;
+    return [
+      ["Declared", [
+        { state: "pass", text: "The definition is valid", ev: `${mono(fileName)} no issues`, when: `checked ${RD.rel(rv.checkedAt)}`,
+          detail: [facts("Evidence", [["File", `<span class="mono break">${esc(def.file)}</span>`], ["Commit", RD.commit(rv.checkedCommit)], ["Schema", "version 1"], ["Issues", "None"]]), excerpt(1, 7)] },
+        { state: "pass", text: `The workflow ${esc(res.workflow.reference)} resolves to ${res.workflow.resolved}, the latest`, ev: `${mono("fedora-vm@1")} → ${mono("1.10")}`, when: `checked ${RD.rel(rv.checkedAt)}`,
+          detail: [facts("Evidence", [["Reference", mono(res.workflow.reference)], ["Resolved", `${mono(res.workflow.resolved)} latest is ${res.workflow.latest}`], ...res.workflow.stages.map((s) => [`Stage ${s.name}`, `${esc(s.executor)} <span class="muted mono xs">${esc(s.detail)}</span>`])]), excerpt(lineOf("workflow:"))] },
+        { state: "pass", text: "Both secrets exist in the store", ev: `${ch("Tailscale auth key v3")}${ch("GitHub token v1")}`, when: "now",
+          detail: [facts("Evidence", c.secrets.map((s) => [s.key.split("/").pop(), `${mono(`v${s.activeVersion}`)} active, the machine started with v${s.startedVersion}`]), `<p style="margin-top:var(--space-3)">No newer version waits to be delivered.</p>`), excerpt(...sec("secrets").lines)] },
+      ]],
+      ["Applied", [
+        { state: "pass", text: `In sync with commit ${rv.desiredCommit.slice(0, 7)}`, ev: `${RD.commit(rv.desiredCommit)} desired and checked`, when: RD.rel(rv.verifiedAt),
+          detail: [facts("Evidence", [["Desired", RD.commit(rv.desiredCommit)], ["Checked", `${RD.commit(rv.checkedCommit)} ${RD.rel(rv.checkedAt)}`], ["Last applied", `${RD.commit(rv.appliedCommit)} ${RD.rel(rv.appliedAt)}`], ["Snapshot", c.hasSnapshot ? "Yes" : "No"]], proof(runNo(212), "plan found no change"))] },
+        { state: "pass", text: `Bound to VMID ${res.binding.vmid} on moraband`, ev: `${mono("VMID 410")}${mono("home/moraband")}`, when: RD.rel(RD.data.node.observedAt),
+          detail: [facts("Evidence", [["Installation", `<a href="${RD.href("node")}">${esc(res.binding.installation)}</a>`], ["VMID", "410, declared and observed"], ["Bound", RD.rel(res.binding.boundAt)], ["MAC", `<span class="mono">${res.outputs.mac}</span>`]], proof(runNo(120))), excerpt(fld("placement", "vmid").line)] },
+        { state: "pass", text: "Proxmox reports it running with the declared 4 cores and 8 GiB", ev: `${ch("running", "success")}${ch("4 cores")}${ch("8 GiB")}`, when: RD.rel(RD.data.node.observedAt),
+          detail: [facts("Declared and observed", [["Power", `running, up ${RD.duration(o.uptimeSeconds)}`], ["Cores", `4 declared · ${o.maxCpu} observed`], ["Memory", `8 GiB declared · ${RD.bytes(o.maxMemoryBytes)} observed`], ["Tags", o.tags.map((t) => mono(t)).join(" ")]]), excerpt(...sec("hardware").lines)] },
+      ]],
+      ["Reachable", [
+        { state: "pass", text: "SSH answers", ev: `${mono(up.url)} ${up.elapsedMs} ms`, when: RD.rel(up.checkedAt),
+          detail: [`<div><h3>Last 24 hours</h3>${RD.beats(up)}<div class="row row--between xs muted" style="margin-top:var(--space-1)"><span>24 h ago</span><span>${up.uptime.day}% today · ${up.uptime.month}% in 30 days</span><span>now</span></div><p style="margin-top:var(--space-3)">The last outage was ${up.incidents[0].minutes} min, ${RD.rel(up.incidents[0].at)}: ${esc(up.incidents[0].detail.toLowerCase())}.</p></div>`, excerpt(...sec("access").lines)] },
+        { state: "pass", text: "The host key is pinned", ev: `${mono(`v${hk.version}`)}${mono(hk.fingerprint.slice(0, 16) + "…")}`, when: RD.rel(m.lastUsedAt),
+          detail: [facts("Evidence", [["Version", `v${hk.version}`], ["Fingerprint", `<span class="mono break">${hk.fingerprint}</span>`], ["Pinned", RD.rel(hk.createdAt)], ["Next key", "None waiting"]], `<p style="margin-top:var(--space-3)">The last SSH session saw this key.</p>`)] },
+        { state: "pass", text: `The managed key v${m.version} was used ${RD.rel(m.lastUsedAt).replace(" h ", " hours ")}`, ev: `${mono(`v${m.version}`)} by agent-moraband`, when: RD.rel(m.lastUsedAt),
+          detail: [facts("Evidence", [["Active", `v${m.version}, promoted by ${m.keys[0].promotedBy} ${RD.rel(m.keys[0].promotedAt)}`], ["Removed", `v1, ${RD.rel(m.keys[1].removedAt)}`], ["Fingerprint", `<span class="mono break">${m.fingerprint}</span>`], ["SSH user", "ops"]], proof(runNo(212)))] },
+      ]],
+      ["Maintained", ["update-tools", "update-system"].map((a) => { const s = sched(a), r = runNo(s.lastRunNumber); return {
+        state: "pass", text: `${a} ran on schedule`, ev: `${ch(s.human)}${esc(s.lastRunDetail)}`, when: RD.rel(r.createdAt),
+        detail: [facts("Evidence", [["Schedule", `${s.human} <span class="muted mono xs">${s.cron} ${s.timezone}</span>`], ["Last run", `#${r.number}, ${RD.rel(r.createdAt)}, ${RD.duration(r.seconds)}`], ["Result", esc(s.lastRunDetail)], ["Next", RD.rel(s.nextAt)]], proof(r)), excerpt(fld("schedules", a).line)] }; })],
+      ["Services", [
+        { state: "fail", text: "Every service is deployed and in sync", ev: `${ch("2 in sync", "success")}${ch("1 waits", "attention")}${ch("1 failed", "danger")}`, when: "—", open: true,
+          detail: [`<div><h3>Services on falcon</h3><ul class="minilist">${svc.map((s) => `<li><span class="dot" data-tone="${RD.tone(s.status)}"></span>${s.id === "open-webui" ? `<a href="${RD.href("service")}">${s.name}</a>` : `<a href="#">${s.name}</a>`}<span class="muted">${esc(s.statusDetail ?? RD.statusLabel(s.status))}</span></li>`).join("")}</ul></div>`,
+            `<div><h3>Why it does not pass</h3><p>langfuse failed at verify in deploy #209: its link has not answered since. open-webui waits for approval and does not count against this check.</p></div>`,
+            fix("Retry the deploy of langfuse, or open it to read the log of #209.", [["Retry deploy", "retry", true, "refresh"], ["Open langfuse", "open"], ["Review open-webui", "review"]])] },
+      ]],
+    ];
+  },
+
+  service() {
+    const up = res.checks[0], p = res.pending, wf = res.workflow, r214 = runNo(214), r201 = runNo(201);
+    const slow = up.incidents.find((i) => i.state === "warn");
+    return [
+      ["Declared", [
+        { state: "pass", text: "The definition is valid", ev: `${mono(fileName)} no issues`, when: `checked ${RD.rel(p.since)}`,
+          detail: [facts("Evidence", [["File", `<span class="mono break">${esc(def.file)}</span>`], ["Commit", RD.commit(p.commit)], ["Files", res.files.map((f) => mono(f)).join(" ")], ["Issues", "None"]]), excerpt(1, 5)] },
+        { state: "warning", text: `The workflow ${wf.reference} is on its latest version`, ev: `${mono("1.4")} ${ch("1.5 exists", "warning")}`, when: "—",
+          detail: [facts("Evidence", [["Reference", mono(wf.reference)], ["Resolved", mono(wf.resolved)], ["Latest", mono(wf.latest)], ...wf.stages.map((s, i) => [`${i + 1}. ${s.name}`, `${esc(s.executor)} <span class="muted xs">${esc(s.detail)}</span>`])]), excerpt(lineOf("workflow:")),
+            fix("The next deploy resolves compose@1 to 1.5. Approving #214 moves it there.", [["Plan with 1.5", "plan"]])] },
+        { state: "pass", text: "Both secrets exist in the store", ev: `${ch("env file v4")}${ch("secret key v1")}`, when: "now",
+          detail: [facts("Evidence", sec("secrets").fields.map((f) => [f.label, `${mono(`v${f.secret.activeVersion}`)} <span class="muted">${esc(f.note ?? "an input")}</span>`])), excerpt(...sec("secrets").lines)] },
+      ]],
+      ["Deployed", [
+        { state: "waiting", text: "The definition is deployed", ev: `${mono(`#${p.run}`)} ${esc(p.summary)}`, when: RD.rel(res.appliedAt), open: true,
+          detail: [facts("The change", [["Image", `${mono("0.6.30")} → ${mono("0.6.34", "attention")}`], ["Commit", `${RD.commit(p.commit)} by ${esc(p.author)}`], ["Waiting", RD.rel(p.since).replace(" ago", "")], ["Policy", "approval is manual"]], `<div class="proof"><span class="muted">Run</span><a href="#">#${r214.number}</a>${RD.track(r214)}<span class="muted">stopped at approval</span></div>`), excerpt(fld("inputs", "image").line),
+            fix(`Deploy #${p.run} waits for you. Nothing changes on falcon until someone approves it.`, [["Approve", "approve", true, "check"], ["Reject", "reject", false, "x"]])] },
+        { state: "pass", text: "The last deploy succeeded", ev: `${mono("#201")} DEFAULT_MODELS changed`, when: RD.rel(res.appliedAt),
+          detail: [facts("Evidence", [["Commit", RD.commit(res.appliedCommit)], ["Took", RD.duration(r201.seconds)], ["By", "skorcius"]], proof(r201))] },
+      ]],
+      ["Reachable", [
+        { state: "pass", text: "The link answers", ev: `${mono("chat.hlab.example.org")} ${up.elapsedMs} ms`, when: RD.rel(up.checkedAt),
+          detail: [`<div><h3>Last 24 hours</h3>${RD.beats(up)}<div class="row row--between xs muted" style="margin-top:var(--space-1)"><span>24 h ago</span><span>${up.uptime.month}% in 30 days</span><span>now</span></div></div>`, facts("Evidence", [["Link", `<a href="${res.links[0]}" class="mono">${res.links[0]}</a>`], ["Checked by", up.agent], ["Answers in", `${up.elapsedMs} ms`]])] },
+        { state: "pass", text: "The DNS name is set by the dns stage", ev: mono(res.names[0].name), when: RD.rel(res.appliedAt),
+          detail: [facts("Evidence", [["Name", mono(res.names[0].name)], ["Set by", "the dns stage, opentofu"], ["Points at", "traefik"]], `<p style="margin-top:var(--space-3)">“${esc(fld("inputs", "dns_name").note)}.” <span class="xs">The author’s comment.</span></p>` + proof(r201, "dns step")), excerpt(fld("inputs", "dns_name").line)] },
+        { state: "info", text: "One slow period in the last 24 hours", ev: `${ch(`${slow.minutes} min`, "warning")} over 2 s`, when: RD.rel(slow.at),
+          detail: [`<div><h3>Last 24 hours</h3>${RD.beats(up)}<p style="margin-top:var(--space-3)">${esc(slow.detail)}, ${RD.rel(slow.at)}. A slow answer still counts as up.</p></div>`] },
+      ]],
+    ];
+  },
+
+  node() {
+    const h = res.hosts[0], g = res.guests, issue = res.issues[0];
+    const crt = g.find((x) => x.status === "awaiting-approval"), gocd = g.find((x) => x.status === "failed"), ok = g.filter((x) => x.status === "in-sync");
+    return [
+      ["Connection", [
+        { state: "pass", text: "The endpoint is trusted", ev: `${mono(res.endpoint)} by ${res.trust.trustedBy}`, when: "now",
+          detail: [facts("Evidence", [["Endpoint", mono(res.endpoint)], ["Trusted by", res.trust.trustedBy], ["Trusted", RD.rel(res.trust.trustedAt)], ["Changed since", "No"]]), excerpt(fld("connection", "endpoint").line)] },
+        { state: "warning", text: "The certificate is verified", ev: `${mono("tls.verify: false")}`, when: "never", open: true,
+          detail: [facts("Evidence", [["TLS", RD.badge("Not verified", "warning")], ["Issue", esc(issue.message)]], `<p style="margin-top:var(--space-3)">Octopushy accepts any certificate at this endpoint, so it cannot tell the real host from another one at that address.</p>`), excerpt(issue.line),
+            fix("Verify the certificate, or pin it, in the definition.", [["Edit the definition", "edit", true, "pencil"]])] },
+        { state: "pass", text: "Both tokens exist in the store", ev: `${ch("read-only v2")}${ch("privileged v2")}`, when: "now",
+          detail: [facts("Evidence", [["Read-only", `<span class="mono break">${fld("connection", "readOnlyToken").value}</span> v2`], ["Privileged", `<span class="mono break">${fld("connection", "privilegedToken").value}</span> v2`]]), excerpt(fld("connection", "readOnlyToken").line, fld("connection", "privilegedToken").line)] },
+      ]],
+      ["Observed", [
+        { state: "pass", text: "Observed in the last 15 minutes", ev: "1 host, 9 guests", when: RD.rel(res.observedAt),
+          detail: [facts("Evidence", [["Observed", RD.rel(res.observedAt)], ["Found", res.events[0].detail], ["Proxmox VE", res.proxmoxVersion], ["Errors", "None"]])] },
+        { state: "pass", text: "The host is online", ev: `${ch("online", "success")} up ${RD.duration(h.uptimeSeconds)}`, when: RD.rel(res.observedAt),
+          detail: [facts("Evidence", [["Host", mono(h.name)], ["Uptime", RD.duration(h.uptimeSeconds)], ["Operations", `${h.concurrentOperations} of ${h.limit} running`]]), excerpt(...sec("hosts").lines)] },
+        { state: "pass", text: "Capacity has room", ev: `CPU ${RD.pct(h.cpu)} · memory ${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`, when: RD.rel(res.observedAt),
+          detail: [`<div><h3>Use now</h3>
+            <div class="meter-row"><span class="muted">CPU</span><span>${RD.pct(h.cpu)} of ${h.maxCpu} cores</span>${RD.meter(h.cpu)}</div>
+            <div class="meter-row"><span class="muted">Memory</span><span>${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}</span>${RD.meter(h.memoryBytes / h.maxMemoryBytes)}</div>
+            <p style="margin-top:var(--space-3)">The check passes below 75% of each.</p></div>`] },
+      ]],
+      ["Guests", [
+        { state: "pass", text: `${ok.length} machines are in sync`, ev: ok.map((x) => mono(x.name)).join(""), when: RD.rel(res.observedAt),
+          detail: [`<div><h3>In sync</h3><ul class="minilist">${ok.map((x) => `<li><span class="dot" data-tone="success"></span>${x.current ? `<a class="mono" href="${RD.href("machine")}">${x.name}</a>` : `<a class="mono" href="#">${x.name}</a>`}<span class="muted">${x.kind} ${x.vmid} · ${x.cores} core${x.cores === 1 ? "" : "s"} · ${RD.bytes(x.memoryBytes)}</span></li>`).join("")}</ul></div>`] },
+        { state: "waiting", text: `${crt.name} waits for approval`, ev: `${mono("#213")} disk 120 → 160 GiB`, when: RD.rel(runNo(213).createdAt),
+          detail: [facts("The change", [["Machine", `<a class="mono" href="#">${crt.name}</a>`], ["Change", "disk 120 → 160 GiB"], ["Commit", RD.commit("895ec0a41c2")]], `<div class="proof"><span class="muted">Run</span><a href="#">#213</a>${RD.track(runNo(213))}<span class="muted">stopped at approval</span></div>`),
+            fix("Apply #213 waits for you.", [["Approve", "approve", true, "check"], ["Reject", "reject", false, "x"]])] },
+        { state: "fail", text: `${gocd.name} is configured`, ev: `${mono("#207")} SSH did not answer`, when: "26 h ago",
+          detail: [facts("Evidence", [["Machine", `<a class="mono" href="#">${gocd.name}</a>, ${gocd.kind} ${gocd.vmid}`], ["Power", "stopped"], ["Failed", "setup, at verify"]], proof(runNo(207))),
+            fix(`${gocd.name} is stopped, so SSH cannot answer. Start it, then run setup again.`, [["Run setup again", "retry", true, "refresh"], ["Open the run", "open"]])] },
+        { state: "info", text: `${res.unmanaged.length} guests are not managed`, ev: res.unmanaged.map((u) => mono(u.name)).join(""), when: RD.rel(res.observedAt),
+          detail: [`<div><h3>Seen in Proxmox, not in a definition</h3><ul class="minilist">${res.unmanaged.map((u) => `<li><span class="dot" data-tone="${u.status === "running" ? "success" : "muted"}"></span><span class="mono">${u.name}</span><span class="muted">${u.kind} ${u.vmid} · ${u.status}${u.template ? " · template" : ""}</span></li>`).join("")}</ul></div>`,
+            `<div><h3>What to do</h3><p>Nothing has to change. Octopushy leaves these alone; add a definition for one to manage it.</p></div>`] },
+      ]],
+    ];
+  },
+}[RD.kind]();
+
+const all = checks.flatMap(([, list]) => list);
+const counted = all.filter((c) => c.state !== "info");
+const passing = counted.filter((c) => c.state === "pass").length;
+const tally = ["waiting", "warning", "fail", "info"].map((s) => [s, all.filter((c) => c.state === s).length]).filter(([, n]) => n)
+  .map(([s, n]) => ({ waiting: `${n} waits for you`, warning: `${n} warning${n > 1 ? "s" : ""}`, fail: `${n} fail${n > 1 ? "" : "s"}`, info: `${n} note${n > 1 ? "s" : ""}` })[s]);
+let k = 0;
+all.forEach((c) => (c.id = `c${++k}`));
+
+const row = (c) => {
+  const [tone, ic, label] = STATE[c.state];
+  const single = c.detail.length === 1;
+  return `<li class="check" data-state="${c.state}" data-tone="${tone}" id="${c.id}">
+    <button type="button" class="check__row" aria-expanded="${!!c.open}" aria-controls="${c.id}-d">
+      <span class="check__icon" title="${label}">${icon(ic, 18)}<span class="sr">${label}</span></span>
+      <span class="check__text">${c.text}</span>
+      <span class="check__ev">${c.ev}</span>
+      <span class="check__when">${c.when}</span>
+      <span class="check__chev">${icon("chevronRight", 16)}</span>
+    </button>
+    <div class="detail${single ? " detail--single" : ""}" id="${c.id}-d"${c.open ? "" : " hidden"}>${c.detail.join("")}</div>
+  </li>`;
+};
+
+main.innerHTML = `<div class="wrap">
+  <div class="head">
+    <div>
+      <div class="eyebrow">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}${esc(res.name)}</h1>
+      <div class="row">${RD.status(res.status)}<span class="muted">${esc(res.noun)} · <span class="mono">${esc(res.address)}</span></span></div>
+    </div>
+    <div class="row"><button type="button" class="button" data-yaml="">${icon("code", 15)}View definition</button>${RD.actions()}</div>
+  </div>
+  <section class="summary" aria-label="Summary">
+    <div class="summary__line">
+      <div class="summary__count">${passing} of ${counted.length} checks pass<span>${tally.join(" · ")}</span></div>
+      <div class="seg" role="group" aria-label="Show"><button type="button" aria-pressed="true" data-filter="all">All</button><button type="button" aria-pressed="false" data-filter="not">Not passing</button></div>
+    </div>
+    <div class="bar">${all.map((c) => `<button type="button" data-tone="${STATE[c.state][0]}" data-go="${c.id}" title="${esc(c.text.replace(/<[^>]+>/g, ""))}: ${STATE[c.state][2]}" aria-label="${esc(c.text.replace(/<[^>]+>/g, ""))}: ${STATE[c.state][2]}"></button>`).join("")}</div>
+  </section>
+  ${checks.map(([title, list]) => `
+    <section class="group">
+      <div class="group__head"><h2>${title}</h2><span>${list.filter((c) => c.state === "pass").length} of ${list.filter((c) => c.state !== "info").length} pass</span></div>
+      <ul class="checks">${list.map(row).join("")}</ul>
+    </section>`).join("")}
+</div>`;
+
+const toggle = (li, open) => {
+  const b = li.querySelector(".check__row"), d = li.querySelector(".detail");
+  open = open ?? b.getAttribute("aria-expanded") !== "true";
+  b.setAttribute("aria-expanded", String(open)); d.hidden = !open;
+};
+main.addEventListener("click", (e) => {
+  const rowBtn = e.target.closest(".check__row");
+  if (rowBtn) return toggle(rowBtn.closest(".check"));
+  const go = e.target.closest("[data-go]");
+  if (go) { const li = document.getElementById(go.dataset.go); if (li.hidden) setFilter("all"); toggle(li, true); li.scrollIntoView({ behavior: "smooth", block: "center" }); li.querySelector(".check__row").focus({ preventScroll: true }); return; }
+  const f = e.target.closest("[data-filter]");
+  if (f) setFilter(f.dataset.filter);
+});
+function setFilter(which) {
+  main.querySelectorAll("[data-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.filter === which)));
+  main.querySelectorAll(".check").forEach((li) => (li.hidden = which === "not" && ["pass", "info"].includes(li.dataset.state)));
+  main.querySelectorAll(".group").forEach((g) => (g.hidden = ![...g.querySelectorAll(".check")].some((li) => !li.hidden)));
+}
+// A YAML excerpt's "Open the file here" opens the whole file with those lines marked.
+addEventListener("click", (e) => {
+  const t = e.target.closest?.("[data-src]");
+  if (!t) return;
+  const [a, b] = t.dataset.src.split("-").map(Number);
+  RD.drawer("Definition", RD.yamlBox(def, { highlight: [a, b || a] })).querySelector(".yaml__line--hl")?.scrollIntoView({ block: "center" });
+});
+</script>
+</body>
+</html>

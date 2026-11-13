@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Action deck</title>
+<!--
+  05 · Action deck. The page answers "what can I do with this?" before "what is this?". Every action
+  is a tile with the same fixed layout: icon and name, one line on what it does, how it is approved
+  (automatic, manual, destructive), its last result, its next scheduled time, and its button. Tiles
+  sit under two or three quiet headings; destructive ones are set apart at the end. A service's
+  waiting approval is the first and largest tile. Under the deck, a strip of the facts someone needs
+  before acting, and the definition as readable values behind "View definition", with the YAML one
+  step further, in the drawer. No sample data.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-6); }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+.group { margin-bottom: var(--space-6); }
+.group__label { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+.group__label .section-label { color: var(--text-muted); }
+.group__label .xs { color: var(--text-faint); }
+.group--danger .group__label .section-label { color: var(--danger-fg); }
+.group--danger { padding-top: var(--space-5); border-top: 1px dashed var(--danger-border); }
+.deck { display: grid; grid-template-columns: repeat(auto-fill, minmax(16.5rem, 1fr)); gap: var(--space-4); }
+
+/* One tile, always the same rows: head, what it does, extra, last/next, button. */
+.tile { display: grid; grid-template-rows: auto auto 1fr auto auto; gap: var(--space-3); padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); min-width: 0; }
+.tile__head { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.tile__icon { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: var(--radius); background: var(--surface-3); color: var(--text-muted); flex: none; }
+.tile__name { font-weight: 650; font-size: var(--text-lg); min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.tile__name .mono { font-size: 0.9em; }
+.tile__does { color: var(--text-muted); font-size: var(--text-sm); }
+.tile__extra { min-width: 0; align-self: start; }
+.tile__facts { display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: var(--space-1) var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); font-size: var(--text-sm); }
+.tile__facts dt { color: var(--text-faint); }
+.tile__facts dd { min-width: 0; display: flex; align-items: center; gap: var(--space-2); white-space: nowrap; overflow: hidden; min-height: 1.4rem; }
+.tile__facts dd > :not(.faint):not(.dot):not(.badge):not(a):not(.chip) { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tile__facts dd .faint { flex: none; }
+.tile__foot { display: flex; gap: var(--space-2); }
+.tile__foot .button { flex: 1; }
+.tile[data-tone] { border-color: var(--tone-border); }
+.tile[data-tone] .tile__icon { background: var(--tone-bg); color: var(--tone-fg); }
+.tile--wide { grid-column: span 2; }
+.tile--hero { background: color-mix(in srgb, var(--attention-bg) 55%, var(--surface)); }
+.tile--hero .tile__name { font-size: var(--text-xl); }
+@media (max-width: 760px) { .tile--wide { grid-column: auto; } }
+
+.cmd { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3); border: 1px solid var(--code-border); border-radius: var(--radius); background: var(--code-bg); font-family: var(--font-mono); font-size: var(--text-sm); }
+.cmd span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff { display: grid; grid-template-columns: auto auto auto auto; justify-content: start; align-items: center; gap: var(--space-3); font-family: var(--font-mono); font-size: var(--text-lg); }
+.diff .old { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-faint); }
+.diff .new { color: var(--attention-fg); font-weight: 600; }
+.diff .key { font-size: var(--text-sm); color: var(--text-muted); }
+.steps { display: flex; gap: var(--space-4); flex-wrap: wrap; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-3); }
+.steps span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.steps [data-tone] { color: var(--tone-fg); font-weight: 600; }
+
+/* Facts strip and the definition behind it */
+.facts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-2); overflow: hidden; }
+.facts > div { padding: var(--space-3) var(--space-4); border-right: 1px solid var(--border); margin-right: -1px; min-width: 0; }
+.facts span { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+.facts b { display: block; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.defbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-4); }
+.def { margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.def[hidden] { display: none; }
+.def__row { display: grid; grid-template-columns: 9rem minmax(0, 1fr) auto; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); align-items: start; }
+.def__row:last-child { border-bottom: 0; }
+.def__title { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.def__title svg { color: var(--text-muted); }
+.def__fields { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); min-width: 0; }
+.def__field { min-width: 0; max-width: 100%; }
+.def__field small { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+.def__note { flex-basis: 100%; font-size: var(--text-sm); color: var(--text-muted); max-width: 72ch; }
+@media (max-width: 1240px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .def__row { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const up = res.checks[0];
+
+const APPROVAL = {
+  automatic: ["automatic", "success", "Runs without asking"],
+  manual: ["manual", "attention", "Waits for someone to approve"],
+  destructive: ["destructive", "danger", "Destroys data; waits for approval"],
+  none: ["no approval", "muted", "Changes nothing in the lab"],
+};
+const approvalChip = (a) => `<span class="badge" data-tone="${APPROVAL[a][1]}" title="${APPROVAL[a][2]}">${APPROVAL[a][0]}</span>`;
+const runRef = (r) => `<span class="dot" data-tone="${RD.tone(r.status)}" title="${esc(RD.statusLabel(r.status))}"></span><a href="#">#${r.number}</a>${r.status === "succeeded" ? "" : `<span>${esc(RD.statusLabel(r.status).toLowerCase())}</span>`}<span class="faint">${RD.rel(r.createdAt)}</span>`;
+const lastRun = (title) => res.runs.find((r) => r.title === title);
+const btn = (label, action, { primary, danger, ic, yaml, href } = {}) => {
+  const cls = `button${primary ? " button--primary" : danger ? " button--danger-outline" : ""}`;
+  const inner = `${ic ? icon(ic, 15) : ""}${esc(label)}`;
+  if (href) return `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener">${inner}</a>`;
+  return `<button type="button" class="${cls}" ${yaml != null ? `data-yaml="${yaml}"` : `data-action="${action}"`}>${inner}</button>`;
+};
+
+/** A tile. Every tile has the same five rows, so a deck reads as a table of actions. */
+function tile(t) {
+  return `<article class="tile${t.wide ? " tile--wide" : ""}${t.hero ? " tile--hero" : ""}"${t.tone ? ` data-tone="${t.tone}"` : ""}>
+    <div class="tile__head"><span class="tile__icon">${t.svc ?? icon(t.icon, 17)}</span><h3 class="tile__name">${t.name}</h3></div>
+    <p class="tile__does">${t.does}</p>
+    <div class="tile__extra">${t.extra ?? ""}</div>
+    <dl class="tile__facts"><dt>Approval</dt><dd>${approvalChip(t.approval)}</dd><dt>Last</dt><dd>${t.last ?? `<span class="faint">never</span>`}</dd><dt>Next</dt><dd>${t.next ?? `<span class="faint">not scheduled</span>`}</dd></dl>
+    <div class="tile__foot">${t.buttons}</div>
+  </article>`;
+}
+
+const chips = (items, mono = true) => `<span class="chips">${items.map((i) => RD.chip(i, { mono })).join("")}</span>`;
+
+const decks = {
+  machine() {
+    const cfg = res.configuration;
+    const sched = (id) => cfg.schedules.find((s) => s.action === id);
+    const act = (id) => cfg.actions.find((a) => a.id === id);
+    const approvalOf = (id) => act(id).destructive ? "destructive" : (res.policy.actions.find((a) => a.action === id)?.approval ?? res.policy.approval);
+    const configure = (id, ic, extra = {}) => {
+      const s = sched(id), r = lastRun(id);
+      return tile({ icon: ic, name: `<span class="mono">${id}</span>`, does: esc(act(id).description), approval: approvalOf(id),
+        last: r ? runRef(r) : null,
+        next: s ? `<span>${RD.rel(s.nextAt)}</span><span class="faint">${esc(s.human.toLowerCase())}</span>` : act(id).onChange ? `<span>when the definition changes</span>` : null,
+        buttons: btn(act(id).destructive ? "Reset workspace" : `Run ${id}`, id, { danger: act(id).destructive, ic: act(id).destructive ? "trash" : "play" }),
+        tone: act(id).destructive ? "danger" : undefined, ...extra });
+    };
+    const lastChange = res.changes[0];
+    return [
+      ["Routine", "kept up by schedules", [
+        tile({ icon: "play", name: "Plan now", does: "Compare the definition with Proxmox and show what an apply would change.", approval: "manual",
+          extra: `<span class="small muted">An apply waits for approval; the plan itself changes nothing.</span>`,
+          last: `<span class="dot" data-tone="success"></span><span>in sync</span><span class="faint">${RD.rel(res.revisions.checkedAt)}</span>`,
+          next: `<span>on the next commit</span>`, buttons: btn("Plan now", "plan", { primary: true, ic: "play" }) }),
+        configure("update-tools", "refresh"),
+        configure("update-system", "layers"),
+        tile({ icon: "terminal", name: "Connect", does: "Open a shell on falcon as ops, with the managed key.", approval: "none",
+          extra: `<div class="cmd"><span>ssh ${esc(res.definition.sections.find((s) => s.id === "access").fields[1].value)}@${esc(res.accessAddress)}</span><button type="button" class="icon-button" aria-label="Copy the command" data-copy-text="ssh ops@${esc(res.accessAddress)}">${icon("copy", 14)}</button></div>`,
+          last: `<span>key used</span><span class="faint">${RD.rel(res.managedAccess.lastUsedAt)}</span>`, next: null,
+          buttons: `<button type="button" class="button" data-copy-text="ssh ops@${esc(res.accessAddress)}">${icon("copy", 15)}Copy command</button>` }),
+      ]],
+      ["Change", "planned, then approved", [
+        configure("setup", "wrench"),
+        tile({ icon: "pencil", name: "Edit", does: "Change the definition; the change is planned before anything is applied.", approval: "manual",
+          extra: `<div class="stack stack--small"><span class="xs muted">Changes</span>${chips(["hardware", "network", "inputs"], false)}</div>`,
+          last: `<span title="${esc(lastChange.message)}">${esc(lastChange.message)}</span><span class="faint">${RD.rel(lastChange.createdAt)}</span>`, next: null,
+          buttons: btn("Edit", "edit", { ic: "pencil" }) }),
+        tile({ icon: "key", name: "Rotate SSH key", does: "Make a new managed key, deliver it to falcon, then remove the old one.", approval: "manual",
+          extra: `<span class="small"><span class="muted">Now</span> v${res.managedAccess.version} <span class="mono faint">${esc(res.managedAccess.fingerprint.slice(0, 17))}…</span></span>`,
+          last: `<span>v2 by ${esc(res.managedAccess.keys[0].promotedBy)}</span><span class="faint">${RD.rel(res.managedAccess.keys[0].promotedAt)}</span>`, next: null,
+          buttons: btn("Rotate key", "rotate-key", { ic: "refresh" }) }),
+      ]],
+      ["Danger", "destroys data", [
+        configure("reset-workspace", "alert"),
+        tile({ icon: "trash", name: "Remove", does: `Destroy VM ${res.vmid} on ${esc(res.host)} and delete its definition. Its 4 services go with it.`, approval: "destructive", tone: "danger",
+          last: null, next: null, buttons: btn("Remove falcon", "remove", { danger: true, ic: "trash" }) }),
+      ], true],
+    ];
+  },
+
+  service() {
+    const p = res.pending, r = res.runs.find((x) => x.number === p.run), prev = res.runs.find((x) => x.status === "succeeded");
+    const [from, to] = p.summary.replace("image ", "").split(" → ");
+    const link = res.links[0];
+    return [
+      ["Now", "", [
+        tile({ hero: true, wide: true, tone: "attention", icon: "hand", name: `Deploy #${p.run} waits for approval`, approval: "manual",
+          does: `Change by ${esc(p.author)}, commit <span class="mono">${esc(p.commit.slice(0, 7))}</span>. Approving runs deploy, dns and verify on falcon.`,
+          extra: `<div class="diff"><span class="key">image</span><span class="old">${esc(from)}</span>${icon("arrowRight", 16)}<span class="new">${esc(to)}</span></div>
+            <div class="steps">${r.steps.map((s) => `<span${s.status === "awaiting-approval" ? ' data-tone="attention"' : ""}>${s.status === "succeeded" ? icon("check", 12) : s.status === "awaiting-approval" ? icon("hand", 12) : icon("circleDot", 12)}${esc(s.name)}</span>`).join("")}</div>`,
+          last: `<span>waiting since</span><span class="faint">${RD.rel(p.since)}</span>`, next: `<span>nothing runs until someone decides</span>`,
+          buttons: btn("Approve", "approve", { primary: true, ic: "check" }) + btn("Reject", "reject", { ic: "x" }) }),
+        tile({ icon: "rocket", name: "Deploy", does: "Run the workflow again: deploy, dns, verify.", approval: "manual",
+          last: runRef(prev), next: null, buttons: btn("Deploy", "deploy", { ic: "rocket" }) }),
+        tile({ icon: "external", name: "Open", does: `<a href="${esc(link)}" target="_blank" rel="noopener" class="mono break">${esc(link.replace("https://", "").replace(/\/$/, ""))}</a>`, approval: "none",
+          extra: `<span class="small"><span class="badge" data-tone="success">Up</span> <span class="muted">${up.uptime.month}% in 30 days · ${up.elapsedMs} ms</span></span>`,
+          last: `<span>checked</span><span class="faint">${RD.rel(up.checkedAt)}</span>`, next: null,
+          buttons: btn("Open", "", { href: link, ic: "external" }) }),
+      ]],
+      ["Change", "planned, then approved", [
+        tile({ icon: "pencil", name: "Edit inputs", does: "Change what the workflow is given; a deploy is planned from the change.", approval: "manual",
+          extra: `<div class="stack stack--small"><span class="xs muted">Changes</span>${chips(["image", "port", "dns_name", "env"])}</div>`,
+          last: `<span>${esc(res.changes[1].message)}</span><span class="faint">${RD.rel(res.changes[1].createdAt)}</span>`, next: null,
+          buttons: btn("Edit inputs", "edit", { ic: "pencil" }) }),
+        tile({ icon: "workflow", name: "Update workflow", does: `<span class="mono">${esc(res.workflow.reference)}</span> resolves to ${esc(res.workflow.resolved)}; ${esc(res.workflow.latest)} exists.`, approval: "manual",
+          extra: `<div class="diff" style="font-size:var(--text-md)"><span class="key">compose@1</span><span class="old">${esc(res.workflow.resolved)}</span>${icon("arrowRight", 14)}<span style="color:var(--link)">${esc(res.workflow.latest)}</span></div>`,
+          last: `<span>on ${esc(res.workflow.resolved)}</span>`, next: null,
+          buttons: btn(`Update to ${res.workflow.latest}`, "update-workflow", { ic: "refresh" }) }),
+        tile({ svc: RD.svcIcon(res.name), name: "Change icon", does: "Pick an icon from the set Octopushy serves; today it is the letter fallback.", approval: "automatic",
+          last: `<span>letter ${esc(res.icon.letter)}</span>`, next: null, buttons: btn("Change icon", "icon", { ic: "tag" }) }),
+      ]],
+      ["Danger", "destroys data", [
+        tile({ icon: "trash", name: "Remove", does: "Stop the compose project on falcon, delete its DNS record and its definition.", approval: "destructive", tone: "danger",
+          last: null, next: null, buttons: btn("Remove open-webui", "remove", { danger: true, ic: "trash" }) }),
+      ], true],
+    ];
+  },
+
+  node() {
+    const h = res.hosts[0], issue = res.issues[0];
+    const free = h.maxMemoryBytes - h.memoryBytes;
+    return [
+      ["Look", "changes nothing", [
+        tile({ wide: true, tone: "warning", icon: "alert", name: "Review the warning", approval: "none",
+          does: esc(issue.message),
+          extra: `<div class="cmd"><span>${esc(issue.file.split("/").pop())}:${issue.line}  tls: { verify: false }</span></div>`,
+          last: `<span>found by the last observe</span><span class="faint">${RD.rel(res.observedAt)}</span>`, next: null,
+          buttons: btn(`Show line ${issue.line}`, "", { yaml: "connection", ic: "code" }) + btn("Edit connection", "edit", { ic: "pencil" }) }),
+        tile({ icon: "eye", name: "Observe now", does: "Read hosts, guests and storage from Proxmox.", approval: "none",
+          last: `<span class="dot" data-tone="success"></span><span>9 guests</span><span class="faint">${RD.rel(res.observedAt)}</span>`, next: null,
+          buttons: btn("Observe now", "observe", { primary: true, ic: "eye" }) }),
+        tile({ icon: "external", name: "Open Proxmox", does: `<span class="mono">${esc(res.proxmoxUrl.replace("https://", "").replace(/\/$/, ""))}</span> · Proxmox VE ${esc(res.proxmoxVersion)}`, approval: "none",
+          extra: `<span class="small"><span class="badge" data-tone="success">Up</span> <span class="muted">API in ${up.elapsedMs} ms</span></span>`,
+          last: `<span>checked</span><span class="faint">${RD.rel(up.checkedAt)}</span>`, next: null,
+          buttons: btn("Open Proxmox", "", { href: res.proxmoxUrl, ic: "external" }) }),
+      ]],
+      ["Change", "planned, then approved", [
+        tile({ icon: "server", name: "Deploy a new machine here", does: "Write a new guest definition on moraband; it is planned and waits for approval.", approval: "manual",
+          extra: `<span class="small"><span class="muted">Free now</span> ${RD.bytes(free)} memory · ${Math.round(h.maxCpu * (1 - h.cpu))} of ${h.maxCpu} cores idle</span>`,
+          last: null, next: null, buttons: btn("New machine", "new-machine", { ic: "server" }) }),
+        tile({ icon: "circleDot", name: "Adopt an unmanaged guest", does: `Write a definition for a guest Octopushy finds but does not manage. ${res.unmanaged.length} of them.`, approval: "manual",
+          extra: `<span class="chips">${res.unmanaged.map((g) => RD.chip(g.template ? `${g.name} · template` : g.name, { mono: true })).join("")}</span>`,
+          last: null, next: null, buttons: btn("Adopt a guest", "adopt", { ic: "arrowRight" }) }),
+        tile({ icon: "shield", name: "Trust", does: "Accept the endpoint and its certificate as this node's.", approval: "manual",
+          extra: `<span class="small"><span class="badge" data-tone="success">Trusted</span> <span class="muted">${res.trust.endpoints.length} endpoint, nothing untrusted</span></span>`,
+          last: `<span>by ${esc(res.trust.trustedBy)}</span><span class="faint">${RD.rel(res.trust.trustedAt)}</span>`, next: null,
+          buttons: btn("Trust again", "trust", { ic: "shield" }) }),
+      ]],
+    ];
+  },
+};
+
+const cell = (label, value) => `<div><span>${label}</span><b>${value}</b></div>`;
+const facts = {
+  machine: () => [
+    cell("Status", "In sync"), cell("Power", `Running, ${RD.duration(res.observed.uptimeSeconds)}`), cell("Address", `<span class="mono">${res.accessAddress}</span>`),
+    cell("Placement", `${res.host} · VMID ${res.vmid}`), cell("Workflow", `<span class="mono">${res.configuration.workflow}</span>`), cell("Approval", res.policy.approval),
+  ],
+  service: () => [
+    cell("Status", "Waits for approval"), cell("Runs on", `<a href="${RD.href("machine")}">${res.guest.name}</a>`), cell("Image running", "0.6.30"),
+    cell("Uptime, 30 days", `${up.uptime.month}%`), cell("Workflow", `<span class="mono">${res.workflow.reference} · ${res.workflow.resolved}</span>`), cell("Approval", res.policy.approval),
+  ],
+  node: () => { const h = res.hosts[0]; return [
+    cell("Status", "1 warning"), cell("CPU", `${RD.pct(h.cpu)} of ${h.maxCpu} cores`), cell("Memory", `${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`),
+    cell("Guests", `${res.guests.length} managed · ${res.unmanaged.length} not`), cell("Proxmox VE", res.proxmoxVersion), cell("Approval", res.policy.approval),
+  ]; },
+}[RD.kind]();
+
+const defRow = (s) => `
+  <div class="def__row">
+    <div class="def__title">${icon(s.icon, 15)}${esc(s.title)}</div>
+    <div class="def__fields">
+      ${s.fields.map((f) => `<div class="def__field"><small>${esc(f.label)}</small>${RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note ? `<small>${esc(f.note)}</small>` : ""}</div>`).join("")}
+      ${s.note ? `<p class="def__note">${esc(s.note)}</p>` : ""}
+    </div>
+    <button type="button" class="link-button xs" data-yaml="${s.id}">lines ${s.lines[0]}–${s.lines[1]}</button>
+  </div>`;
+
+const groups = decks[RD.kind]();
+main.innerHTML = `
+  <div class="head">
+    <div>
+      <div class="eyebrow">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}<span class="mono">${esc(res.address)}</span></h1>
+      <div class="row row--wrap">${RD.status(res.status)}<span class="muted">${esc(res.statusDetail ?? res.description)}</span></div>
+    </div>
+  </div>
+  ${groups.map(([label, hint, tiles, danger]) => `
+    <section class="group${danger ? " group--danger" : ""}">
+      <div class="group__label"><h2 class="section-label">${label}</h2>${hint ? `<span class="xs">${hint}</span>` : ""}</div>
+      <div class="deck">${tiles.join("")}</div>
+    </section>`).join("")}
+  <section>
+    <div class="group__label"><h2 class="section-label">Before you act</h2></div>
+    <div class="facts">${facts.join("")}</div>
+    <div class="defbar">
+      <button type="button" class="button button--small" id="toggle-def" aria-expanded="false" aria-controls="def">${icon("chevronRight", 14)}View definition</button>
+      <span class="xs muted mono">${esc(res.definition.file)}</span>
+    </div>
+    <div class="def" id="def" hidden>
+      ${res.definition.sections.map(defRow).join("")}
+      <div class="def__row"><span></span><span class="small muted">The same values as YAML, with the file's comments.</span><button type="button" class="button button--small" data-yaml="">${icon("code", 14)}View YAML</button></div>
+    </div>
+  </section>`;
+
+const toggle = document.getElementById("toggle-def"), def = document.getElementById("def");
+toggle.addEventListener("click", () => {
+  const open = def.hidden;
+  def.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.innerHTML = `${icon(open ? "chevronDown" : "chevronRight", 14)}${open ? "Hide definition" : "View definition"}`;
+});
+if (location.hash === "#definition") toggle.click();
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-copy-text]");
+  if (!t) return;
+  navigator.clipboard?.writeText(t.dataset.copyText).catch(() => {});
+  RD.toast(`Copied: ${t.dataset.copyText}`);
+});
+</script>
+</body>
+</html>

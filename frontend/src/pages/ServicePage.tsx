@@ -2,24 +2,62 @@ import { Rocket } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { isNotFound } from "../api/client";
-import { useDeployService, useService } from "../api/queries";
+import { useDeployService, useService, useUptime } from "../api/queries";
+import type { ServiceDetail } from "../api/types";
 import { StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
-import { DefinitionView } from "../components/DefinitionView";
+import { DefinitionSheet, ViewYamlButton } from "../components/DefinitionSheet";
+import { Glance } from "../components/Glance";
 import { IssueList } from "../components/IssueList";
 import { KeyValue } from "../components/KeyValue";
-import { LabelList } from "../components/LabelEditor";
 import { Commit } from "../components/Mono";
 import { PageHeader } from "../components/PageHeader";
-import { PolicyView } from "../components/PolicyView";
+import { PolicyCard } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { ServiceIcon } from "../components/ServiceIcon";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
+import { formatPercent, isServiceCheck, percentOf } from "../lib/inventory";
+import { WaitingRun } from "./run/WaitingRun";
 import { IconDialog } from "./services/IconDialog";
+
+/** The service's figures: how its first link answers, its month, where it runs, its workflow and its last deploy. */
+function ServiceGlance({ data }: { data: ServiceDetail }) {
+  const { data: uptime } = useUptime();
+  const { service } = data;
+  const checks = uptime?.checks.filter((c) => isServiceCheck(c) && c.resource === service.address) ?? [];
+  const first = checks.find((c) => c.url === service.links[0]) ?? checks[0];
+  const month = percentOf(checks, "month");
+  const guestName = data.guestAddress?.split("/").pop();
+  return (
+    <Glance
+      cells={[
+        first
+          ? {
+              label: "Answers",
+              value: first.status === "up" ? "Up" : first.status === "down" ? "Down" : "Not checked yet",
+              note: first.status === "up" && first.elapsedMs !== null ? `${first.elapsedMs} ms` : first.detail,
+            }
+          : null,
+        month !== null ? { label: "Uptime, 30 days", value: formatPercent(month), note: checks.length > 1 ? `lowest of ${checks.length} links` : null } : null,
+        guestName
+          ? {
+              label: "Runs on",
+              value: data.guestId ? <Link to={`/guests/${data.guestId}`} className="mono">{guestName}</Link> : <span className="mono">{guestName}</span>,
+              note: data.guestAddress,
+            }
+          : null,
+        service.workflow
+          ? { label: "Workflow", value: <span className="mono">{service.workflow.resolved ?? service.workflow.reference}</span>, note: service.workflow.resolved ? `named ${service.workflow.reference}` : "not resolved" }
+          : null,
+        data.appliedAt ? { label: "Last deployed", value: <RelativeTime value={data.appliedAt} />, note: <Commit commit={data.appliedCommit} /> } : null,
+      ]}
+    />
+  );
+}
 
 /** One service: its status, what it waits for, its stages, and its history. Its definition is read from the repository. */
 export function ServicePage() {
@@ -62,20 +100,23 @@ export function ServicePage() {
           </span>
         }
         actions={
-          missing || data.retiredAt ? undefined : (
-            <>
-              <ChangeActions resourceId={service.id} kind="service" />
-              <button
-                type="button"
-                className="button button--primary"
-                onClick={() => deploy.mutate(undefined, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
-                disabled={deploy.isPending}
-              >
-                <Rocket size={15} aria-hidden="true" />
-                {deploy.isPending ? "Starting…" : "Deploy"}
-              </button>
-            </>
-          )
+          <>
+            {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
+            {missing || data.retiredAt ? null : (
+              <>
+                <ChangeActions resourceId={service.id} kind="service" />
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => deploy.mutate(undefined, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
+                  disabled={deploy.isPending}
+                >
+                  <Rocket size={15} aria-hidden="true" />
+                  {deploy.isPending ? "Starting…" : "Deploy"}
+                </button>
+              </>
+            )}
+          </>
         }
       />
       {changingIcon ? <IconDialog service={service} onClose={() => setChangingIcon(false)} /> : null}
@@ -88,14 +129,16 @@ export function ServicePage() {
             the guest. Restore the folder to keep managing it.
           </Callout>
         ) : null}
+        {service.activeRun?.status === "awaiting-approval" ? <WaitingRun run={service.activeRun} /> : null}
+        <ServiceGlance data={data} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <Card title="Definition" id="definition">
-              <DefinitionView file={data.definitionFile} text={data.definitionText} issues={data.issues} />
-            </Card>
-            <Card title="Issues" meta={data.issues.length || undefined} id="issues">
-              <IssueList issues={data.issues} />
-            </Card>
+            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="service" issues={data.issues} />
+            {data.issues.length > 0 ? (
+              <Card title="Issues" meta={data.issues.length} id="issues">
+                <IssueList issues={data.issues} />
+              </Card>
+            ) : null}
             <RecentChanges resourceId={service.id} />
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${service.name}`} showAddress={false} />
@@ -103,7 +146,7 @@ export function ServicePage() {
           </div>
           <div className="stack stack--large">
             <Card title="Workflow">
-              <div className="stack stack--small">
+              <div className="stack">
                 <WorkflowLabel workflow={service.workflow} />
                 {data.stages.length === 0 ? (
                   <p className="muted">The repository shows no stages for this service now.</p>
@@ -115,26 +158,23 @@ export function ServicePage() {
                     }))}
                   />
                 )}
+                <KeyValue
+                  items={[
+                    {
+                      term: "Last success",
+                      value: data.appliedAt ? (
+                        <span>
+                          <Commit commit={data.appliedCommit} /> <RelativeTime value={data.appliedAt} />
+                        </span>
+                      ) : (
+                        <span className="muted">Not deployed yet.</span>
+                      ),
+                    },
+                  ]}
+                />
               </div>
             </Card>
-            <Card title="Last success">
-              {data.appliedAt ? (
-                <span>
-                  <Commit commit={data.appliedCommit} /> <RelativeTime value={data.appliedAt} />
-                </span>
-              ) : (
-                <p className="muted">Not deployed yet.</p>
-              )}
-            </Card>
-            <Card title="Policy">
-              <PolicyView policy={data.policy} />
-            </Card>
-            <Card title="Agent labels">
-              <div className="stack stack--small">
-                <LabelList labels={data.agentLabels} empty="Any agent" />
-                {data.agentLabelsSetBy ? <span className="muted small">set by {data.agentLabelsSetBy}</span> : null}
-              </div>
-            </Card>
+            <PolicyCard policy={data.policy} agentLabels={data.agentLabels} agentLabelsSetBy={data.agentLabelsSetBy} />
           </div>
         </div>
       </div>

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resource detail prototypes</title>
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--font-sans); }
+  a { color: var(--link); text-decoration: none; }
+  header { max-width: 1320px; margin: 0 auto; padding: 48px 24px 20px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--text-muted); max-width: 76ch; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+  .seg { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+  .seg button { font: inherit; font-size: 13px; padding: 5px 14px; border: 0; border-radius: 999px; background: none; color: var(--text-muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .hint { font-size: 13px; color: var(--text-muted); }
+  main { max-width: 1320px; margin: 0 auto; padding: 8px 24px 72px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+  .card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .thumb { position: relative; display: block; aspect-ratio: 1440 / 900; overflow: hidden; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .thumb iframe { position: absolute; top: 0; left: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  .thumb:hover { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .body { padding: 14px 16px 16px; }
+  .num { font: 600 12px/1 var(--font-mono); color: var(--text-muted); }
+  h2 { font-size: 17px; margin: 4px 0 6px; }
+  .body p { margin: 0 0 8px; color: var(--text-muted); font-size: 14px; }
+  .yaml { font-size: 13px; }
+  .yaml b { font-weight: 600; }
+  .kinds { display: flex; gap: 14px; margin-top: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Resource detail prototypes</h1>
+  <p>Sixteen different ideas for the page of one node, one machine or one service. None of them leads with the YAML; each says where the YAML went. All read the same sample data, in the app's own colors, so they can be compared directly.</p>
+  <div class="bar">
+    <div class="seg" role="group" aria-label="Thumbnails show">
+      <button type="button" data-kind="node">Node</button>
+      <button type="button" data-kind="machine">Machine</button>
+      <button type="button" data-kind="service">Service</button>
+    </div>
+    <span class="hint">The machine is healthy, the service has a deploy waiting for approval, the node has a warning. Inside a prototype, the switcher at the bottom right changes prototype and resource.</span>
+  </div>
+</header>
+<main id="grid"></main>
+<script src="nav.js"></script>
+<script>
+  // What each one is, and where its YAML is.
+  const notes = {
+    "01-spec-sheet.html": ["The definition as blocks of labelled values, a strip of figures on top, the rest in a quiet side column. A run that waits for approval shows what it changes under the title.", "A drawer, from each block with its lines marked."],
+    "02-tabs.html": ["A header that stays, and one subject per tab. Overview is a digest that fits one screen.", "The Definition tab, behind a Readable / YAML switch."],
+    "03-drift.html": ["One comparison table: what Git declares against what Proxmox, the guest or the link check reports.", "Under each row, the line it comes from, in context."],
+    "04-timeline.html": ["A time axis: what comes next above Now, the past by day below, the state now in a sticky panel.", "A drawer from the state panel, readable first."],
+    "05-actions.html": ["A deck of action tiles: what each does, how it is approved, its last result, its button.", "Behind View definition, one step after the readable values."],
+    "06-blueprint.html": ["A technical drawing: a chassis in its host, a deploy flow, a rack of blades. Click a part to inspect it.", "In the inspector, with the selected part's lines marked."],
+    "07-source-map.html": ["Outline, readable fields and the YAML side by side, linked line by line.", "Always in sight, dimmed except the selected lines."],
+    "08-lines.html": ["One line per topic with a summary in chips, opening in place, like the Agents page.", "Inside the last line, and from each line's lines link."],
+    "09-bento.html": ["Tiles of different sizes that fill one screen, like the Overview page. A tile opens in a drawer.", "The Definition tile, behind a Readable / YAML switch."],
+    "10-status-page.html": ["Health first: a banner in words, uptime, components, incidents with their cause.", "In a collapsed About section at the end."],
+    "11-terminal.html": ["The output of octopushy describe, with keys for everything.", "View 2, or y from any section."],
+    "12-lifecycle.html": ["Stations from Git to the running thing; every fact is filed under the station it belongs to.", "In the Declared station, behind a Values / YAML switch."],
+    "13-three-panes.html": ["Neighbours on the left, topics in the middle, the selected topic in full on the right.", "A tab of the right pane, with the topic's lines marked."],
+    "14-readme.html": ["A short document written from the definition, every value a chip, the author's comments quoted.", "View source, and every chip opens its line."],
+    "15-checklist.html": ["A list of checks that pass, warn, wait or fail; everything known is evidence under one of them.", "Under each check, the lines it rests on."],
+    "16-graph.html": ["The resource at the centre of what it depends on and what depends on it.", "In the side panel of whatever is selected."],
+  };
+  let kind = "machine";
+  try { kind = localStorage.getItem("rd-kind") || kind; } catch {}
+  const grid = document.getElementById("grid");
+  function render() {
+    grid.innerHTML = "";
+    for (const [i, [file, title]] of window.PROTOTYPES.entries()) {
+      const [what, yaml] = notes[file];
+      const card = document.createElement("article");
+      card.className = "card";
+      card.innerHTML = `
+        <a class="thumb" href="${file}?kind=${kind}" aria-label="${title}"><iframe src="${file}?kind=${kind}&thumb=1" tabindex="-1" aria-hidden="true" title=""></iframe></a>
+        <div class="body">
+          <span class="num">${String(i + 1).padStart(2, "0")}</span>
+          <h2>${title}</h2>
+          <p>${what}</p>
+          <div class="yaml"><b>The YAML:</b> ${yaml}</div>
+          <div class="kinds"><a href="${file}?kind=node">Node</a><a href="${file}?kind=machine">Machine</a><a href="${file}?kind=service">Service</a></div>
+        </div>`;
+      grid.appendChild(card);
+    }
+    for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String(b.dataset.kind === kind));
+    fit();
+  }
+  // Scale each 1440×900 iframe to its thumbnail box.
+  function fit() { for (const t of document.querySelectorAll(".thumb")) t.firstElementChild.style.transform = `scale(${t.clientWidth / 1440})`; }
+  new ResizeObserver(fit).observe(grid);
+  document.querySelector(".seg").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    kind = b.dataset.kind;
+    try { localStorage.setItem("rd-kind", kind); } catch {}
+    render();
+  });
+  render();
+</script>
+</body>
+</html>

@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lifecycle</title>
+<!--
+  12 · Lifecycle. The page follows a definition's path from Git to the running thing. Across the top,
+  a row of stations joined by a line (machine: Declared, Checked, Applied, Verified, Configured,
+  Running; service: Declared, Previewed, Approval, Deploy, DNS, Verify, Live; node: Declared, Trusted,
+  Observed, Guests), each with its state and one fact. Every fact on the page is filed under the
+  station it belongs to: selecting one fills the area below. The station that needs attention is
+  selected first, else the last. Arrow keys move; the station is kept in the URL hash.
+  The YAML lives in Declared, behind a Values / YAML switch. Uses no `sample` data.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+
+/* The stations */
+.path { margin: var(--space-6) 0 0; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+.st { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: var(--space-3) var(--space-2) var(--space-4); border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: none; color: var(--text); min-width: 0; }
+.st:hover .st__name { color: var(--link); }
+.st[aria-selected="true"] { background: var(--surface); border-color: var(--border); }
+.st[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--surface); z-index: 2; }
+/* The line: each station draws the half to its left and its right, so it joins at the circles. */
+.st::before { content: ""; position: absolute; top: calc(var(--space-3) + 13px); left: 0; right: 0; height: 2px; background: var(--seg, var(--border-strong)); z-index: 0; }
+.st:first-child::before { left: 50%; }
+.st:last-child::before { right: 50%; }
+.st[data-seg="done"] { --seg: color-mix(in srgb, var(--success-fg) 70%, var(--surface)); }
+.st[data-seg="half"]::before { background: linear-gradient(to right, color-mix(in srgb, var(--success-fg) 70%, var(--surface)) 50%, var(--border-strong) 50%); }
+.st__dot { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--tone-fg); background: var(--bg); color: var(--tone-fg); margin-bottom: var(--space-2); }
+.st[aria-selected="true"] .st__dot { background: var(--surface); box-shadow: 0 0 0 4px var(--surface), 0 0 0 5px var(--tone-border); }
+.st[data-state="done"] .st__dot { background: var(--tone-bg); }
+.st[data-state="waiting"] .st__dot, .st[data-state="failed"] .st__dot, .st[data-state="warning"] .st__dot { background: var(--tone-fg); color: var(--surface); }
+.st[data-state="notyet"] .st__dot { border-style: dashed; border-color: var(--text-faint); }
+.st__name { font-weight: 600; }
+.st__state { font-size: var(--text-xs); font-weight: 600; color: var(--tone-fg); }
+.st__fact { font-size: var(--text-xs); color: var(--text-muted); max-width: 100%; }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); position: relative; }
+.panel[data-first] { border-top-left-radius: 0; }
+.panel[data-last] { border-top-right-radius: 0; }
+.panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding: var(--space-5) var(--space-6) 0; flex-wrap: wrap; }
+.panel__head h2 { font-size: var(--text-xl); display: flex; align-items: center; gap: var(--space-3); }
+.panel__lede { color: var(--text-muted); margin-top: var(--space-1); max-width: 72ch; }
+.panel__body { padding: var(--space-5) var(--space-6) var(--space-6); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: var(--space-6) var(--space-8); align-items: start; }
+.grid--2 { grid-template-columns: minmax(0, 1.5fr) minmax(16rem, 1fr); }
+.grid--pair { grid-template-columns: repeat(auto-fit, minmax(26rem, 1fr)); }
+@media (max-width: 1100px) { .grid--2 { grid-template-columns: minmax(0, 1fr); } }
+.wide { grid-column: 1 / -1; }
+.group > .section-label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding-bottom: var(--space-2); margin-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.group .kv { grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr); }
+.note { color: var(--text-muted); font-size: var(--text-sm); }
+.rows > li { display: grid; grid-template-columns: var(--cols); align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.rows > li:last-child { border-bottom: 0; }
+.rows > li.head { color: var(--text-muted); font-size: var(--text-xs); padding-top: 0; }
+.rows .sub { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+
+/* Declared: the definition as values, in columns */
+.def { columns: 2 20rem; column-gap: var(--space-8); }
+.def section { break-inside: avoid; margin-bottom: var(--space-5); }
+.def h3 { font-size: var(--text-md); display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.def h3 svg { color: var(--text-muted); }
+.def h3 .link-button { margin-left: auto; font-size: var(--text-xs); font-weight: 400; }
+.def dl { display: grid; grid-template-columns: minmax(7.5rem, max-content) minmax(0, 1fr); gap: 6px var(--space-4); }
+.def dt { color: var(--text-muted); }
+.def dd { min-width: 0; overflow-wrap: anywhere; }
+.def .note { margin-bottom: var(--space-2); }
+.def dd .note { margin: 0; font-size: var(--text-xs); }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 0.25rem 0.75rem; font-size: var(--text-sm); color: var(--text-muted); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); font-weight: 550; }
+
+/* Approval */
+.ask { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); flex-wrap: wrap; padding: var(--space-4) var(--space-5); border: 1px solid var(--attention-border); background: var(--attention-bg); border-radius: var(--radius-lg); margin-bottom: var(--space-6); }
+.ask b { font-size: var(--text-lg); }
+.diff { font-family: var(--font-mono); font-size: var(--text-sm); border: 1px solid var(--code-border); border-radius: var(--radius); background: var(--code-bg); padding: var(--space-2) 0; overflow-x: auto; }
+.diff div { padding: 0 var(--space-3); white-space: pre; }
+.diff .del { background: var(--danger-bg); color: var(--danger-fg); }
+.diff .add { background: var(--success-bg); color: var(--success-fg); }
+.diff .ctx { color: var(--text-muted); }
+.issue { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3) var(--space-4); border: 1px solid var(--warning-border); background: var(--warning-bg); border-radius: var(--radius); margin-bottom: var(--space-6); }
+.issue svg { color: var(--warning-fg); margin-top: 2px; }
+.big { font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.01em; }
+.meterline { display: grid; grid-template-columns: 5rem minmax(0, 1fr) 9rem; gap: var(--space-3); align-items: center; padding: var(--space-1) 0; }
+.meterline span:last-child { text-align: right; }
+@media (max-width: 860px) { .st__fact { display: none; } }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const kind = RD.kind;
+const main = RD.mount();
+const def = res.definition;
+const up = res.checks[0];
+const short = (s) => s.slice(0, 7);
+
+// ---- Building blocks --------------------------------------------------------------------
+const group = (title, body, { wide = false, aside = "" } = {}) => `<div class="group${wide ? " wide" : ""}"><div class="section-label"><span>${esc(title)}</span>${aside}</div>${body}</div>`;
+const rows = (cols, head, items) => `<ul class="rows" style="--cols:${cols}">${head ? `<li class="head">${head.map((h) => `<span>${esc(h)}</span>`).join("")}</li>` : ""}${items.map((r) => `<li>${r.join("")}</li>`).join("")}</ul>`;
+const span = (h, cls = "") => `<span class="${cls}">${h}</span>`;
+const secretRow = (key, v, extra = "") => `<span class="row"><span class="muted" style="display:inline-flex">${icon("lock", 13)}</span><a href="#" class="mono break small">${esc(key)}</a>${RD.chip(`v${v}`)}${extra}</span>`;
+const runList = (list, { target = false } = {}) => rows(`3rem minmax(0,1fr) ${target ? "7rem " : ""}9.5rem 4.5rem`, null, list.map((r) => [
+  span(`<a href="#">#${r.number}</a>`, "num"),
+  span(`${esc(r.title)}<span class="sub truncate">${esc(r.detail ?? r.reason)}</span>`, "truncate"),
+  ...(target ? [span(esc(r.address.split("/").pop()), "small mono truncate")] : []),
+  span(RD.status(r.status)), span(RD.rel(r.createdAt), "small muted num"),
+]));
+const uptime = (c, label) => `
+  <div class="row row--between" style="margin-bottom:var(--space-2)"><span><span class="big">${c.uptime.month}%</span> <span class="muted small">over 30 days</span></span><span class="small muted">${esc(label)} answers in ${c.elapsedMs} ms</span></div>
+  ${RD.beats(c)}
+  <div class="row row--between xs muted" style="margin-top:var(--space-1)"><span>24 h ago</span><span>${c.uptime.day}% today · ${c.uptime.week}% this week</span><span>now</span></div>
+  ${c.incidents.length ? `<div style="margin-top:var(--space-3)">${rows("4.5rem minmax(0,1fr) auto", null, c.incidents.map((i) => [span(RD.badge(i.state === "down" ? "Down" : "Slow", i.state === "down" ? "danger" : "warning")), span(`${i.minutes} min · <span class="muted">${esc(i.detail)}</span>`, "small"), span(RD.rel(i.at), "small muted num")]))}</div>` : ""}`;
+
+// Declared: the definition as values, with a switch to the YAML
+let declaredMode = "values";
+function declared(changes) {
+  const values = `<div class="def">${def.sections.map((s) => `
+    <section>
+      <h3>${icon(s.icon, 15)}${esc(s.title)}<button type="button" class="link-button" data-yaml="${s.id}">lines ${s.lines[0]}–${s.lines[1]}</button></h3>
+      ${s.note ? `<p class="note"># ${esc(s.note)}</p>` : ""}
+      <dl>${s.fields.map((f) => `<dt>${esc(f.label)}</dt><dd>${f.link ? `<a href="${RD.href(f.link)}">${esc(f.value)}</a>` : RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note ? `<p class="note"># ${esc(f.note)}</p>` : ""}</dd>`).join("")}</dl>
+    </section>`).join("")}</div>`;
+  const body = declaredMode === "yaml" ? RD.yamlBox(def) : values;
+  return `<div class="grid grid--2">
+    <div>${body}</div>
+    <div class="stack stack--large">
+      ${group("In Git", RD.kv([["File", `<span class="mono small">${esc(def.file.split("/").pop())}</span><span class="sub mono break">${esc(def.file.split("/").slice(0, -1).join("/"))}/</span>`], ...(res.revisions ? [["Commit", RD.commit(res.revisions.desiredCommit)]] : []), ["Lines", `${def.lineCount}`]]))}
+      ${group("Changes", changes.length ? rows("minmax(0,1fr) auto", null, changes.map((c) => [span(`${esc(c.message)}<span class="sub">${esc(c.author)} · ${short(c.commit)} · ${RD.rel(c.createdAt)}</span>`), span(RD.status(c.status === "applied" ? "succeeded" : c.status).replace("Succeeded", "Applied"))])) : `<p class="note">No change recorded through Octopushy.</p>`, { aside: changes[0] ? `<span class="xs muted" style="text-transform:none;letter-spacing:0">last by ${esc(changes[0].author)}</span>` : "" })}
+    </div>
+  </div>`;
+}
+const yamlSwitch = () => `<div class="seg" role="group" aria-label="Show the definition as"><button type="button" data-mode="values" aria-pressed="${declaredMode === "values"}">Values</button><button type="button" data-mode="yaml" aria-pressed="${declaredMode === "yaml"}">YAML</button></div>`;
+
+// ---- Stations per kind ----------------------------------------------------------------
+const STATE = { done: ["Done", "success", "check"], waiting: ["Waiting", "attention", "hand"], failed: ["Failed", "danger", "x"], warning: ["Warning", "warning", "alert"], notyet: ["Not yet", "muted", null] };
+const stationsFor = {
+  machine: () => {
+    const rv = res.revisions, c = res.configuration, o = res.observed;
+    const provision = res.runs.filter((r) => r.operation === "provision");
+    const configure = res.runs.filter((r) => r.operation === "configure");
+    return [
+      { id: "declared", name: "Declared", state: "done", fact: short(rv.desiredCommit), title: "Declared in Git", lede: "What the definition asks for, as its author wrote it.", tools: yamlSwitch, body: () => declared(res.changes) },
+      { id: "checked", name: "Checked", state: "done", fact: RD.rel(rv.checkedAt), title: "Checked against Proxmox", lede: "Octopushy planned the definition at the latest commit and found nothing to change.",
+        tools: () => `<button type="button" class="button button--primary button--small" data-action="plan">${icon("play", 14)}Plan now</button>`,
+        body: () => `<div class="grid">
+          ${group("Last check", RD.kv([["Commit", `${RD.commit(rv.checkedCommit)} <span class="muted small">same as Git</span>`], ["When", RD.rel(rv.checkedAt)], ["Result", RD.status("in-sync")]]))}
+          ${group("Workflow", RD.kv([["Reference", `<span class="mono">${res.workflow.reference}</span>`], ["Resolved", `${res.workflow.resolved} <span class="muted small">latest ${res.workflow.latest}</span>`]]) + `<div style="margin-top:var(--space-3)">${rows("5rem 6rem minmax(0,1fr)", null, res.workflow.stages.map((s) => [span(esc(s.name), "mono"), span(RD.chip(s.executor)), span(esc(s.detail), "small muted mono truncate")]))}</div>`)}
+          ${group("Policy", RD.kv([["Approval", `${RD.badge(res.policy.approval, "attention")}`], ["Destructive", RD.badge(res.policy.destructive, "attention")], ...res.policy.actions.map((a) => [a.action, RD.badge(a.approval, "neutral")])]) + `<p class="note" style="margin-top:var(--space-3)">Set by ${esc(res.policy.approvalSetBy)}. Any agent may run it.</p>`)}
+        </div>` },
+      { id: "applied", name: "Applied", state: "done", fact: `${short(rv.appliedCommit)} · ${RD.rel(rv.appliedAt)}`, title: "Applied on Proxmox", lede: `VM ${o.vmid} on ${o.host}, as Proxmox reports it.`,
+        body: () => `<div class="grid">
+          ${group("Proxmox has", RD.kv([["VM", `<span class="num">${o.vmid}</span> · ${esc(o.kind)} · "${esc(o.name)}"`], ["Power", `${RD.badge("Running", "success")} <span class="muted small">up ${RD.duration(o.uptimeSeconds)}</span>`], ["Cores", `${o.maxCpu} <span class="muted small">declared 4</span>`], ["Memory", `${RD.bytes(o.maxMemoryBytes)} <span class="muted small">declared 8192 MiB</span>`], ["Tags", `<span class="chips">${o.tags.map((t) => RD.chip(t, { mono: true })).join("")}</span>`]]))}
+          ${group("Outputs", RD.kv([["IPv4", `<span class="mono">${res.outputs.ipv4}</span>`], ["MAC", `<span class="mono">${res.outputs.mac}</span>`], ["Disk scsi0", `<span class="mono small">${res.outputs.disks.scsi0}</span>`], ["Node", `<a href="${RD.href("node")}">${res.outputs.node}</a>`]]))}
+          ${group("Binding", RD.kv([["Installation", `<a href="${RD.href("node")}" class="mono">${res.binding.installation}</a>`], ["VMID", `${res.binding.vmid}`], ["Bound", RD.rel(res.binding.boundAt)]]))}
+          ${group("Applies", runList(provision), { wide: true, aside: `<span class="xs muted" style="text-transform:none;letter-spacing:0">opentofu · modules/opentofu/proxmox-vm</span>` })}
+        </div>` },
+      { id: "verified", name: "Verified", state: "done", fact: RD.rel(rv.verifiedAt), title: "Verified", lede: "The machine answers as the definition says, and is the machine Octopushy created.",
+        body: () => `<div class="grid">
+          ${group("Revisions", rows("6.5rem minmax(0,1fr) 6rem", null, [["Desired", RD.commit(rv.desiredCommit), "in Git"], ["Checked", RD.commit(rv.checkedCommit), RD.rel(rv.checkedAt)], ["Applied", RD.commit(rv.appliedCommit), RD.rel(rv.appliedAt)], ["Verified", RD.status("in-sync"), RD.rel(rv.verifiedAt)]].map(([a, b, c]) => [span(a, "muted"), span(b), span(c, "small muted num")])) + `<p class="note" style="margin-top:var(--space-3)">Commits after ${short(rv.appliedCommit)} did not change this machine.</p>`)}
+          ${group("Host key", RD.kv([["Pinned", `v${res.hostKey.pinned.version} · ${RD.rel(res.hostKey.pinned.createdAt)}`], ["Fingerprint", `<span class="mono small break">${res.hostKey.pinned.fingerprint}</span>`], ["Next", "none"]]))}
+        </div>` },
+      { id: "configured", name: "Configured", state: "done", fact: `${c.appliedAction} · ${RD.rel(c.appliedAt)}`, title: "Configured", lede: `The workflow's actions, run with Ansible over SSH. Last applied: ${c.appliedAction} at ${short(c.appliedCommit)}.`,
+        body: () => `<div class="grid grid--pair">
+          ${group("Actions", rows("10rem minmax(0,1fr) 11rem auto", ["Action", "What it does", "When", ""], c.actions.map((a) => { const s = c.schedules.find((x) => x.action === a.id); return [
+            span(`${esc(a.id)}${a.destructive ? ` ${RD.badge("destructive", "danger")}` : ""}`, "mono small"), span(esc(a.description), "small"),
+            span(s ? `${esc(s.human)}<span class="sub">next ${RD.rel(s.nextAt)} · last <a href="#">#${s.lastRunNumber}</a> ${esc(s.lastRunDetail)}</span>` : `<span class="muted">${a.onChange ? "When the definition changes" : "By hand"}</span>`, "small"),
+            span(`<button type="button" class="button button--small${a.destructive ? " button--danger-outline" : ""}" data-action="run">${icon("play", 13)}Run</button>`)]; })), { wide: true })}
+          ${group("Secrets it follows", rows("minmax(0,1fr) 7rem", null, c.secrets.map((s) => [span(secretRow(s.key, s.activeVersion)), span(s.pending ? RD.badge("Restart pending", "attention") : `<span class="small muted">running v${s.startedVersion}</span>`)])))}
+          ${group("Runs", runList(configure.slice(0, 5)))}
+        </div>` },
+      { id: "running", name: "Running", state: "done", fact: `up ${RD.duration(o.uptimeSeconds)}`, title: "Running", lede: `falcon is up and SSH answers on ${res.accessAddress}.`,
+        body: () => `<div class="grid">
+          ${group("SSH", uptime(up, "SSH"))}
+          ${group("Services on it", rows("1.75rem minmax(0,1fr) auto", null, res.services.map((s) => [RD.svcIcon(s.name), span(`<a href="${s.kind === "service" ? RD.href("service") : "#"}">${esc(s.name)}</a><span class="sub mono truncate">${esc(s.links[0])}</span>`, "truncate"), span(RD.status(s.status))])), { aside: `<span class="xs muted" style="text-transform:none;letter-spacing:0">${res.services.length}</span>` })}
+          ${group("Access", RD.kv([["SSH", `<span class="mono">ops@${res.accessAddress}</span>`], ["Managed key", `v${res.managedAccess.version} · used ${RD.rel(res.managedAccess.lastUsedAt)}`], ["Fingerprint", `<span class="mono small break">${res.managedAccess.fingerprint}</span>`], ["Rotated", `${RD.rel(res.managedAccess.keys[0].promotedAt)} by ${res.managedAccess.keys[0].promotedBy}`]]))}
+        </div>` },
+    ];
+  },
+  service: () => {
+    const p = res.pending, w = res.workflow;
+    const stage = (n) => w.stages.find((s) => s.name === n);
+    const last = res.runs.find((r) => r.status === "succeeded");
+    const stageBody = (n, extra) => `<div class="grid">
+      ${group("This stage", RD.kv([["Runs with", RD.chip(stage(n).executor)], ["Does", esc(stage(n).detail)], ["For #" + p.run, `<span class="muted">waits for approval</span>`]]))}
+      ${extra}
+      ${group(`Last times`, runList(res.runs.filter((r) => r.status !== "awaiting-approval").slice(0, 4)), { wide: true })}
+    </div>`;
+    return [
+      { id: "declared", name: "Declared", state: "done", fact: short(p.commit), title: "Declared in Git", lede: "What the definition asks for, as its author wrote it.", tools: yamlSwitch, body: () => declared(res.changes) },
+      { id: "previewed", name: "Previewed", state: "done", fact: `#${p.run} · ${RD.rel(p.since)}`, title: "Previewed", lede: `Deploy #${p.run} compared the commit with what runs on falcon. One input changes.`,
+        body: () => `<div class="grid">
+          ${group("The change", `<div class="diff"><div class="ctx">  inputs:</div><div class="del">-   image: ghcr.io/open-webui/open-webui:0.6.30</div><div class="add">+   image: ghcr.io/open-webui/open-webui:0.6.34</div><div class="ctx">    port: 3000</div></div><p class="note" style="margin-top:var(--space-3)">${RD.commit(p.commit)} by ${esc(p.author)}, ${RD.rel(p.since)}</p>`)}
+          ${group("Workflow", RD.kv([["Reference", `<span class="mono">${w.reference}</span>`], ["Resolved", `${w.resolved} ${RD.badge(`${w.latest} available`, "info")}`], ["Stages", `<span class="chips">${w.stages.map((s) => RD.chip(s.name, { mono: true })).join("")}</span>`]]))}
+        </div>` },
+      { id: "approval", name: "Approval", state: "waiting", fact: RD.rel(p.since), title: "Waiting for your approval", lede: "The policy of this service holds every deploy until someone approves it.",
+        body: () => `
+          <div class="ask"><div><b>Deploy #${p.run}: image 0.6.30 → 0.6.34</b><div class="small muted">${esc(p.author)} committed ${short(p.commit)} ${RD.rel(p.since)}. Approving runs deploy, dns and verify.</div></div>
+            <div class="row"><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button><button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button></div></div>
+          <div class="grid">
+            ${group("What changes", `<div class="diff"><div class="del">- image: …/open-webui:0.6.30</div><div class="add">+ image: …/open-webui:0.6.34</div></div><p class="note" style="margin-top:var(--space-3)">Nothing else in the definition changed.</p>`)}
+            ${group("Why it waits", `<div class="row">${RD.badge("approval: manual", "attention")}<span class="note"># a deploy waits for approval</span></div><p class="note" style="margin-top:var(--space-3)">Set on this service, in <button type="button" class="link-button" data-yaml="policy">service.yaml, line ${def.sections.find((x) => x.id === "policy").line}</button>.</p>`)}
+            ${group("Then", rows("5rem minmax(0,1fr)", null, w.stages.map((s) => [span(esc(s.name), "mono"), span(esc(s.detail), "small muted")])))}
+          </div>` },
+      { id: "deploy", name: "Deploy", state: "notyet", fact: `last ${RD.rel(res.appliedAt)}`, title: "Deploy", lede: "Copies the compose project and its env file to falcon, then brings it up.",
+        body: () => stageBody("deploy", group("What it delivers", rows("minmax(0,1fr)", null, [
+          ...def.sections.find((s) => s.id === "secrets").fields.map((f) => [span(`${secretRow(f.secret.key, f.secret.activeVersion)}<span class="sub">${esc(f.label)}${f.note ? " · " + esc(f.note.toLowerCase()) : ""}</span>`)]),
+          [span(`<span class="mono small">compose project open-webui · port 3000 · 3 env values</span>`)],
+        ])) + group("Where", RD.kv([["Machine", `<a href="${RD.href("machine")}">${esc(res.guest.name)}</a> <span class="mono small muted">${res.guest.accessAddress}</span>`], ["Live now", `0.6.30 · ${RD.commit(res.appliedCommit)} ${RD.rel(res.appliedAt)}`]]))) },
+      { id: "dns", name: "DNS", state: "notyet", fact: res.names[0].name, title: "DNS", lede: "Sets the service's name, pointing at traefik.",
+        body: () => stageBody("dns", group("Names", rows("minmax(0,1fr) auto", null, res.names.map((n) => [span(`<a href="${n.url}" class="mono">${esc(n.name)}</a><span class="sub"># the dns stage sets this record, pointing at traefik</span>`), span(RD.badge("Set", "success"))])))) },
+      { id: "verify", name: "Verify", state: "notyet", fact: "last passed 2 d ago", title: "Verify", lede: "Waits until the containers are healthy. It failed once, 8 days ago.",
+        body: () => stageBody("verify", group("Last failure", RD.kv([["Run", `<a href="#">#177</a> · ${RD.rel(res.runs.find((r) => r.number === 177).createdAt)}`], ["Said", `<span class="mono small">${esc(res.runs.find((r) => r.number === 177).detail)}</span>`]]))) },
+      { id: "live", name: "Live", state: "done", fact: `up · ${up.elapsedMs} ms`, title: "Live", lede: `0.6.30 answers at ${res.links[0]}, deployed ${RD.rel(res.appliedAt)} by #${last.number}.`,
+        tools: () => `<a class="button button--small" href="${res.links[0]}">${icon("external", 14)}Open</a>`,
+        body: () => `<div class="grid">
+          ${group("Uptime", uptime(up, "The link"), { wide: true })}
+          ${group("Runs on", RD.kv([["Machine", `<a href="${RD.href("machine")}">${esc(res.guest.name)}</a>`], ["Address", `<span class="mono">${res.guest.accessAddress}</span>`], ["Node", `<a href="${RD.href("node")}">home/moraband</a>`]]))}
+          ${group("Link", RD.kv([["URL", `<a href="#" class="mono">${res.links[0]}</a>`], ["Check", `${up.kind} · by ${up.agent}`], ["Checked", RD.rel(up.checkedAt)]]))}
+        </div>` },
+    ];
+  },
+  node: () => {
+    const h = res.hosts[0], is = res.issues[0];
+    const conn = def.sections.find((s) => s.id === "connection").fields;
+    const waits = res.guests.filter((g) => g.status === "awaiting-approval").length, failed = res.guests.filter((g) => g.status === "failed").length;
+    return [
+      { id: "declared", name: "Declared", state: "done", fact: def.file.split("/").pop(), title: "Declared in Git", lede: "How Octopushy reaches this installation, and what it may use on it.", tools: yamlSwitch, body: () => declared(res.changes) },
+      { id: "trusted", name: "Trusted", state: "warning", fact: "TLS not verified", title: "Trusted", lede: `Octopushy trusts ${res.endpoint}, but does not check its certificate.`,
+        body: () => `
+          <div class="issue">${icon("alert", 16)}<div class="grow"><b>${esc(is.message)}</b><div class="small muted"><button type="button" class="link-button mono" data-yaml="connection">${esc(def.file.split("/").pop())}:${is.line}</button></div></div></div>
+          <div class="grid">
+            ${group("Trust", RD.kv([["Endpoint", `<a href="#" class="mono">${res.endpoint}</a>`], ["Trusted", `${RD.badge("Trusted", "success")} by ${esc(res.trust.trustedBy)}, ${RD.rel(res.trust.trustedAt)}`], ["TLS", RD.badge("Not verified", "warning")], ["Untrusted", "none"]]))}
+            ${group("Tokens", rows("minmax(0,1fr)", null, [conn[3], conn[4]].map((f) => [span(`<span class="sub" style="margin-bottom:2px">${esc(f.label)}</span>${secretRow(f.secret.key, f.secret.activeVersion)}`)])))}
+            ${group("Snippets", RD.kv([["SSH user", `<span class="mono">${res.snippets.user}</span><p class="note"># uploads cloud-init snippets over SSH</p>`], ["Datastore", res.snippets.datastore], ["Key", `<span class="mono small break">${res.snippets.fingerprint}</span>`], ["Reachable", RD.badge("Yes", "success")]]))}
+          </div>` },
+      { id: "observed", name: "Observed", state: "done", fact: RD.rel(res.observedAt), title: "Observed", lede: `Proxmox VE ${res.proxmoxVersion}, read with the read-only token ${RD.rel(res.observedAt)}: 1 host, ${res.guests.length + res.unmanaged.length} guests.`,
+        tools: () => `<button type="button" class="button button--primary button--small" data-action="observe">${icon("eye", 14)}Observe now</button>`,
+        body: () => `<div class="grid">
+          ${group(`Host ${h.name}`, `
+            <div class="meterline"><span class="muted">CPU</span>${RD.meter(h.cpu)}<span class="num">${RD.pct(h.cpu)} of ${h.maxCpu} cores</span></div>
+            <div class="meterline"><span class="muted">Memory</span>${RD.meter(h.memoryBytes / h.maxMemoryBytes)}<span class="num">${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}</span></div>
+            <div style="margin-top:var(--space-3)">${RD.kv([["State", `${RD.badge("Online", "success")} <span class="muted small">up ${RD.duration(h.uptimeSeconds)}</span>`], ["Operations", `${h.concurrentOperations} running, limit ${h.limit}`], ["Bridges", `<span class="chips">${["vmbr0", "vmbr1"].map((b) => RD.chip(b, { mono: true })).join("")}</span>`], ["Datastores", `<span class="chips">${["images: local", "disks: local-lvm", "snippets: local"].map((b) => RD.chip(b, { mono: true })).join("")}</span>`]])}</div>`)}
+          ${group("Proxmox API", uptime(up, "The API"))}
+        </div>` },
+      { id: "guests", name: "Guests", state: "failed", fact: `${res.guests.length} managed · ${res.unmanaged.length} unmanaged`, title: "Guests", lede: `${res.guests.length} managed guests: ${waits} waits for approval, ${failed} failed. ${res.unmanaged.length} more are on the host but not in Git.`,
+        body: () => `<div class="grid grid--pair">
+          ${group("Managed", rows("minmax(0,1fr) 3.5rem 6.5rem 8rem 12rem", ["Name", "VMID", "Kind", "Size", "Status"], res.guests.map((g) => [
+            span(`<a href="${g.current ? RD.href("machine") : "#"}" class="mono">${esc(g.name)}</a>${g.statusDetail ? `<span class="sub">${esc(g.statusDetail)}</span>` : ""}`, "truncate"), span(g.vmid, "num"), span(g.kind, "small"),
+            span(`${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}`, "small num"), span(RD.status(g.status))])), { wide: true })}
+          ${group("Unmanaged", rows("minmax(0,1fr) 3.5rem 6.5rem 6rem", null, res.unmanaged.map((g) => [span(esc(g.name), "mono"), span(g.vmid, "num muted"), span(g.kind, "small muted"), span(g.template ? RD.badge("Template", "neutral") : RD.badge(g.status === "running" ? "Running" : "Stopped", g.status === "running" ? "success" : "muted"))])))}
+          ${group("Runs of its guests", runList(res.runs, { target: true }))}
+        </div>` },
+    ];
+  },
+};
+const stations = stationsFor[kind]();
+const needs = stations.find((s) => ["waiting", "failed", "warning"].includes(s.state));
+const fallback = (needs ?? stations[stations.length - 1]).id;
+const fromHash = () => (stations.some((s) => s.id === location.hash.slice(1)) ? location.hash.slice(1) : fallback);
+let selected = fromHash();
+
+main.innerHTML = `
+  <div class="head">
+    <div>
+      <div class="eyebrow">${RD.crumbs()}</div>
+      <h1>${kind === "service" ? RD.svcIcon(res.name, true) : ""}<span class="mono">${esc(res.address)}</span></h1>
+      <div class="row row--wrap">${RD.status(res.status)}<span class="muted">${esc(res.statusDetail ?? res.description)}</span></div>
+    </div>
+    <div class="row">${RD.actions()}</div>
+  </div>
+  <div class="path" role="tablist" aria-label="Lifecycle" style="--n:${stations.length}"></div>
+  <section class="panel" role="tabpanel"></section>`;
+const path = main.querySelector(".path"), panel = main.querySelector(".panel");
+
+function draw() {
+  const firstUndone = stations.findIndex((s) => s.state !== "done");
+  path.innerHTML = stations.map((s, i) => {
+    const [label, tone, ic] = STATE[s.state];
+    // The line is green up to the last done station before the first one that is not done.
+    const seg = firstUndone < 0 || i < firstUndone ? "done" : i === firstUndone ? "half" : "";
+    return `<button type="button" class="st" role="tab" id="st-${s.id}" data-state="${s.state}" data-tone="${tone}" ${seg ? `data-seg="${seg}"` : ""} aria-selected="${s.id === selected}" tabindex="${s.id === selected ? 0 : -1}" data-station="${s.id}">
+      <span class="st__dot">${ic ? icon(ic, 14) : ""}</span>
+      <span class="st__name">${esc(s.name)}</span>
+      <span class="st__state">${label}</span>
+      <span class="st__fact truncate${/^[0-9a-f]{7}/.test(s.fact) || s.fact.includes(".") ? " mono" : ""}">${esc(s.fact)}</span>
+    </button>`;
+  }).join("");
+  const s = stations.find((x) => x.id === selected), i = stations.indexOf(s);
+  const [label, tone] = STATE[s.state];
+  panel.toggleAttribute("data-first", i === 0);
+  panel.toggleAttribute("data-last", i === stations.length - 1);
+  panel.setAttribute("aria-labelledby", `st-${s.id}`);
+  panel.innerHTML = `
+    <div class="panel__head">
+      <div><h2>${esc(s.title)} ${RD.badge(label, tone)}</h2><p class="panel__lede">${esc(s.lede)}</p></div>
+      <div class="row">${s.tools ? s.tools() : ""}</div>
+    </div>
+    <div class="panel__body">${s.body()}</div>`;
+}
+function select(id, focus) {
+  selected = id;
+  history.replaceState(null, "", `#${id}`);
+  draw();
+  if (focus) path.querySelector(`[data-station="${id}"]`).focus();
+}
+main.addEventListener("click", (e) => {
+  const st = e.target.closest("[data-station]"); if (st) return select(st.dataset.station);
+  const m = e.target.closest("[data-mode]"); if (m) { declaredMode = m.dataset.mode; draw(); }
+});
+addEventListener("keydown", (e) => {
+  if (e.target.closest?.("input, textarea, select") || document.querySelector(".drawer")) return;
+  const d = { ArrowRight: 1, ArrowLeft: -1, Home: -99, End: 99 }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const i = stations.findIndex((s) => s.id === selected);
+  select(stations[Math.max(0, Math.min(stations.length - 1, i + d))].id, true);
+});
+addEventListener("hashchange", () => { const id = fromHash(); if (id !== selected) { selected = id; draw(); } });
+draw();
+</script>
+</body>
+</html>

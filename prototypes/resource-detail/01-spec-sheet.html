@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spec sheet</title>
+<!--
+  01 · Spec sheet. The definition is read, not shown: every section of the YAML becomes a block of
+  labelled values, with the file's comments as notes. A strip of figures under the title answers
+  "what is it and is it fine". The YAML is one click away, in a drawer, and each block opens it
+  with its own lines marked. What Octopushy adds (configuration, policy, access, runs) sits in a
+  quiet right column.
+
+  A run that waits for approval brings its changes to this page, in a panel under the title: the
+  same "what changes" tiles as the Run page (frontend/src/pages/run/ChangeOverview.tsx), each opening
+  to its rows, with Approve and Reject. The values that run would change are also marked where they
+  stand in the sheet: the declared value, and under it what is there now.
+
+  ?case= picks the example (the dashed bar on top is the prototype's, not the design's):
+    machine: apply (an OpenTofu plan that updates in place), replace (a plan that recreates the VM),
+             action (a configure action: a preview, which says what will run, not what will change), sync
+    service: deploy (one approval for the whole pipeline), sync
+    node:    guests (the runs of its guests that wait or failed)
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.proto { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-5); padding: var(--space-2) var(--space-3); border: 1px dashed var(--border-strong); border-radius: var(--radius); font-size: var(--text-xs); color: var(--text-muted); }
+.proto a { padding: 2px var(--space-2); border-radius: var(--radius-sm); color: var(--text-muted); }
+.proto a[aria-current] { background: var(--surface-3); color: var(--text); }
+
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+
+/* The run that waits, and what it changes. */
+.wait { margin-top: var(--space-5); border: 1px solid var(--attention-border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.wait--danger { border-color: var(--danger-border); }
+.wait__head { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; padding: var(--space-3) var(--space-5); background: var(--attention-bg); }
+.wait--danger .wait__head { background: var(--danger-bg); }
+.wait__title { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-lg); font-weight: 650; color: var(--attention-fg); }
+.wait--danger .wait__title { color: var(--danger-fg); }
+.wait__body { padding: var(--space-4) var(--space-5) var(--space-4); }
+.wait__meta { display: flex; align-items: center; gap: var(--space-2) var(--space-4); flex-wrap: wrap; color: var(--text-muted); font-size: var(--text-sm); }
+.steps { display: flex; gap: var(--space-2); }
+.steps > span { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-xs); color: var(--text-muted); }
+.steps .track__segment { width: 4rem; }
+.steps .is-now { color: var(--attention-fg); font-weight: 600; }
+.danger-note { display: flex; gap: var(--space-3); margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--danger-border); border-radius: var(--radius); background: var(--danger-bg); color: var(--danger-fg); }
+.danger-note p { color: var(--text); max-width: 80ch; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-2); margin-top: var(--space-4); }
+.tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0.6rem var(--space-3) 0.65rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); text-align: left; }
+.tile:hover { border-color: var(--border-strong); }
+.tile[aria-expanded="true"] { border-color: var(--text-muted); background: var(--surface-3); }
+.tile__label { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs); color: var(--text-muted); }
+.tile__label svg { opacity: 0.7; transition: transform 0.12s; }
+.tile[aria-expanded="true"] .tile__label svg { transform: rotate(180deg); }
+.tile__value { font-family: var(--font-mono); font-size: 1.05rem; line-height: 1.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile__value .old, .tile__value .arrow, .tile__value .unit { color: var(--text-muted); }
+.tile__value .arrow { margin: 0 4px; }
+.tile__value .unit { margin-left: 3px; font-size: var(--text-xs); }
+.tile--danger .tile__value { color: var(--danger-fg); }
+.tile--warn .tile__value { color: var(--warning-fg); }
+.tile__sub { font-size: var(--text-xs); color: var(--text-muted); }
+.add { color: var(--success-fg); }
+.remove { color: var(--danger-fg); }
+.rows-panel { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--code-bg); overflow-x: auto; }
+.rows-panel__heading { margin-bottom: var(--space-2); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+.rows { border-collapse: collapse; font-family: var(--font-mono); font-size: var(--text-sm); }
+.rows td { padding: 3px 0; vertical-align: baseline; white-space: nowrap; }
+.rows .mark { width: 1.25rem; color: var(--text-muted); }
+.rows .name { padding-right: var(--space-6); }
+.rows .old { text-align: right; color: var(--text-muted); }
+.rows .arr { width: 2rem; text-align: center; color: var(--text-muted); }
+.rows .new { padding-right: var(--space-5); }
+.rows .note { color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-xs); }
+.rows tr.same td { color: var(--text-faint); }
+.rows-panel .link-button { margin-top: var(--space-2); font-size: var(--text-xs); }
+.wait__foot { display: flex; align-items: center; gap: var(--space-2) var(--space-4); flex-wrap: wrap; margin-top: var(--space-4); font-size: var(--text-sm); color: var(--text-muted); }
+.wait__foot p { max-width: 86ch; }
+.button--danger { background: color-mix(in srgb, var(--meter-danger) 72%, var(--sidebar-bg)); border-color: transparent; color: var(--accent-text); }
+.button--danger:hover { background: color-mix(in srgb, var(--meter-danger) 82%, var(--sidebar-bg)); color: var(--accent-text); }
+/* The node: one line per guest run that waits or failed. */
+.guest-runs > li { display: flex; align-items: center; gap: var(--space-3) var(--space-4); flex-wrap: wrap; padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.guest-runs > li:first-child { border-top: 0; padding-top: 0; }
+.guest-runs > li:last-child { padding-bottom: 0; }
+.guest-runs .what { font-family: var(--font-mono); }
+
+.glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); margin: var(--space-5) 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.glance > div { padding: var(--space-3) var(--space-4); border-right: 1px solid var(--border); margin-right: -1px; min-width: 0; }
+.glance b { display: block; font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.glance .meter { margin-top: var(--space-2); }
+.will { color: var(--attention-fg); }
+.will--danger { color: var(--danger-fg); }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--space-5); align-items: start; }
+@media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.sheet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.sheet__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border); }
+.block { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: var(--space-4); padding: var(--space-5); border-bottom: 1px solid var(--border); }
+.block:last-child { border-bottom: 0; }
+.block__title { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.block__title svg { color: var(--text-muted); }
+.block__lines { margin-top: var(--space-1); font-size: var(--text-xs); }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: var(--space-4) var(--space-5); }
+.field { min-width: 0; }
+.field--wide { grid-column: 1 / -1; }
+.field__label { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: 2px; }
+.field__value { font-size: var(--text-lg); overflow-wrap: anywhere; }
+.field--wide .field__value, .field__value:has(.chips), .field__value:has(a) { font-size: var(--text-md); }
+/* A value the waiting run would change: declared above, what is there now below. */
+.field--pending { margin-left: calc(var(--space-3) * -1); padding-left: calc(var(--space-3) - 2px); border-left: 2px solid var(--attention-fg); }
+.field--pending.is-danger { border-left-color: var(--danger-fg); }
+.field__now { display: flex; align-items: center; gap: var(--space-2); margin-top: 2px; font-size: var(--text-xs); color: var(--attention-fg); }
+.field--pending.is-danger .field__now { color: var(--danger-fg); }
+.note { grid-column: 1 / -1; color: var(--text-muted); font-size: var(--text-sm); max-width: 70ch; }
+@media (max-width: 720px) { .block { grid-template-columns: minmax(0, 1fr); } }
+.list > li { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); min-width: 0; }
+.list > li:last-child { border-bottom: 0; }
+.side .card__title { font-size: var(--text-md); }
+.side .card__header { min-height: 2.5rem; }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const def = res.definition;
+const up = res.checks[0];
+const minutesAgo = (m) => new Date(RD.NOW - m * 60_000).toISOString();
+
+// ---- The examples ---------------------------------------------------------------------
+// Each waiting run is what the Run page already has: a plan's or a preview's tiles, the note that says
+// what approving does, and the fingerprint the approval covers. `fields` are the values it would change,
+// keyed section.key: the sheet shows the declared value and, under it, what is there now.
+const vm = "proxmox_virtual_environment_vm.guest";
+const CASES = {
+  machine: {
+    apply: { label: "A plan waits", wait: {
+      run: { number: 215, title: "Apply", reason: "Change by skorcius", commit: "4f2a91c", at: minutesAgo(12) },
+      steps: ["plan", "approval", "apply", "verify"],
+      tiles: [
+        { label: "Memory", value: "8 → 16 GiB", sub: "update in place", heading: `${vm} · update in place`,
+          rows: [{ mark: "~", name: "memory.dedicated", before: "8192", after: "16384", note: "MiB" }], unchanged: [["memory.floating", "0"], ["memory.shared", "0"]] },
+        { label: "Cores", value: "4 → 6", sub: "update in place", heading: `${vm} · update in place`,
+          rows: [{ mark: "~", name: "cpu.cores", before: "4", after: "6" }], unchanged: [["cpu.sockets", "1"], ["cpu.type", "x86-64-v2-AES"]] },
+        { label: "Disk", value: "300 → 400 GiB", sub: "scsi0 on local-lvm", heading: `${vm} · update in place`,
+          rows: [{ mark: "~", name: "disk[0].size", before: "300", after: "400", note: "GiB" }], unchanged: [["disk[0].datastore_id", "local-lvm"], ["disk[0].interface", "scsi0"]] },
+        { label: "Resources", value: "~1", sub: "update in place", heading: "OpenTofu 1.10.6 · 0 to create, 1 to update, 0 to replace, 0 to delete",
+          rows: [{ mark: "~", name: vm, note: "update in place" }], unchanged: [] },
+      ],
+      promise: "Approving applies exactly this saved plan; if anything changes, a new plan needs a new approval.",
+      sha: ["Plan SHA-256", "a3f9c1…7be2"],
+      fields: { "hardware.cores": ["6", "4"], "hardware.memory": ["16 GiB", "8 GiB", "16384 MiB"], "hardware.disks": ["400 GiB", "300 GiB"] },
+      yaml: [["cores: 4", "cores: 6"], ["memory: 8192 ", "memory: 16384"], ["size: 300 }", "size: 400 }"]],
+    } },
+    replace: { label: "A plan that replaces the VM waits", wait: {
+      danger: { title: "This plan replaces the VM", text: "Recreating a VM wipes its disks: nothing on scsi0 is kept. Once approved, Octopushy lifts the VM's protection right before the apply, and the new VM is created protected." },
+      run: { number: 216, title: "Apply", reason: "Push by skorcius", commit: "9c3e7d1", at: minutesAgo(25) },
+      steps: ["plan", "approval", "apply", "verify"],
+      tiles: [
+        { label: "Template", value: "fedora-44 → fedora-45", sub: "forces a replace", tone: "danger", heading: `${vm} · replace`,
+          rows: [{ mark: "±", name: "clone.vm_id", before: "9000", after: "9001", note: "forces replacement" }], unchanged: [["cpu.cores", "4"], ["memory.dedicated", "8192"], ["disk[0].size", "300"]] },
+        { label: "Disks", value: "−1 +1", sub: "scsi0 is wiped, 300 GiB", tone: "danger", heading: `${vm} · replace`,
+          rows: [{ mark: "−", name: "local-lvm:vm-410-disk-0", before: "300 GiB", note: "deleted with the VM" }, { mark: "+", name: "local-lvm:vm-410-disk-0", after: "300 GiB", note: "created empty, from fedora-45" }], unchanged: [] },
+        { label: "Resources", value: "±1", sub: "replace", tone: "danger", heading: "OpenTofu 1.10.6 · 0 to create, 0 to update, 1 to replace, 0 to delete",
+          rows: [{ mark: "±", name: vm, note: "replace" }], unchanged: [] },
+      ],
+      promise: "It waits because destructive is manual, set by home/moraband/falcon. Approving applies exactly this saved plan.",
+      sha: ["Plan SHA-256", "5d80e2…c41a"],
+      fields: { "placement.template": ["fedora-45", "fedora-44"] },
+      yaml: [["template: fedora-44", "template: fedora-45"]],
+    } },
+    action: { label: "An action waits", wait: {
+      run: { number: 217, title: "update-system", reason: "Schedule · Sundays at 05:00", commit: "895ec0a", at: minutesAgo(48) },
+      steps: ["preview", "approval", "run", "verify"],
+      tiles: [
+        { label: "Prepared", value: "2 changed", sub: "since run #190", heading: "update-system · modules/ansible/machine-tools/update-system.yml",
+          rows: [{ mark: "~", name: "kernel", before: "6.17.4", after: "6.17.7" }, { mark: "~", name: "restart", before: "false", after: "true", note: "the kernel changes" }], unchanged: [["release", "44"], ["packages_source", "updates"]] },
+        { label: "Tasks", value: "9", sub: "run as root on falcon", heading: "What the playbook runs, in order",
+          rows: ["Refresh the package metadata", "Upgrade all packages", "Check whether the kernel changed", "Restart the machine", "Wait for SSH", "Record the activity"].map((name) => ({ mark: "", name })), unchanged: [] },
+        { label: "Recipe files", value: "1", sub: "changed since last run", heading: "Changed since the last successful run",
+          rows: [{ mark: "~", name: "modules/ansible/machine-tools/update-system.yml" }], unchanged: [] },
+        { label: "Secrets", value: "1", sub: "store reference", heading: "References only; values are not shown",
+          rows: [{ mark: "", name: "machine_github_token", after: "shared/github/machines-token" }], unchanged: [] },
+      ],
+      promise: "Approving runs this playbook as root on the guest, with the secrets and prepared values listed. Octopushy cannot show what it will change.",
+      sha: ["Preview SHA-256", "0be471…93fd"],
+      fields: {},
+    } },
+    sync: { label: "In sync" },
+  },
+  service: {
+    deploy: { label: "A deploy waits", wait: {
+      run: { number: 214, title: "Deploy", reason: "Change by skorcius", commit: "895ec0a", at: minutesAgo(38) },
+      steps: ["preview", "approval", "deploy", "dns", "verify"],
+      tiles: [
+        { label: "deploy · Image", value: "0.6.30 → 0.6.34", sub: "ghcr.io/open-webui/open-webui", heading: "deploy · ansible · inputs given to the playbook",
+          rows: [{ mark: "~", name: "image", before: "ghcr.io/open-webui/open-webui:0.6.30", after: "ghcr.io/open-webui/open-webui:0.6.34" }], unchanged: [["compose_project", "open-webui"], ["port", "3000"], ["dns_name", "chat.hlab.example.org"], ["env.DEFAULT_MODELS", "qwen3:14b"]] },
+        { label: "deploy · Secrets", value: "2", sub: "store references", heading: "References only; values are not shown",
+          rows: [{ mark: "", name: "env_file", after: "proxmox/moraband/falcon/open-webui/env", note: "delivered as a file" }, { mark: "", name: "webui_secret_key", after: "proxmox/moraband/falcon/open-webui/secret_key" }], unchanged: [] },
+        { label: "dns · Resources", value: "no changes", sub: "the record is already set", heading: "dns · opentofu · 0 to create, 0 to update, 0 to replace, 0 to delete",
+          rows: [], unchanged: [["dns_record.chat", "chat.hlab.example.org → traefik"]] },
+        { label: "verify · Tasks", value: "2", sub: "run on falcon", heading: "verify · ansible",
+          rows: ["Wait until the containers are healthy", "Open https://chat.hlab.example.org/"].map((name) => ({ mark: "", name })), unchanged: [] },
+      ],
+      promise: "Approving covers every stage, as planned and previewed, and applies them in order. Nothing has changed yet. If a stage fails, the ones before it stay applied.",
+      sha: ["Pipeline document SHA-256", "c7a2d9…10e6"],
+      fields: { "inputs.image": ["ghcr.io/open-webui/open-webui:0.6.34", "ghcr.io/open-webui/open-webui:0.6.30"] },
+    } },
+    sync: { label: "In sync" },
+  },
+  node: { guests: { label: "Its guests' runs" } },
+}[RD.kind];
+const caseId = CASES[new URLSearchParams(location.search).get("case")] ? new URLSearchParams(location.search).get("case") : Object.keys(CASES)[0];
+const wait = CASES[caseId].wait ?? null;
+
+// Put the example into the data the page reads: this file is the only one that sees it.
+for (const f of def.sections.flatMap((s) => s.fields)) delete f.pending;
+if (RD.kind !== "node") {
+  res.runs = res.runs.filter((r) => r.status !== "awaiting-approval");
+  res.status = wait ? "awaiting-approval" : "in-sync";
+  res.statusDetail = null;
+}
+if (wait) {
+  res.runs.unshift({ number: wait.run.number, title: wait.run.title, status: "awaiting-approval", createdAt: wait.run.at });
+  for (const [from, to] of wait.yaml ?? []) def.text = def.text.replace(from, to);
+  for (const s of def.sections) for (const f of s.fields) {
+    const change = wait.fields[`${s.id}.${f.key}`];
+    if (change) Object.assign(f, { value: change[0], now: change[1], raw: change[2] ?? f.raw });
+  }
+}
+const main = RD.mount();
+const will = (text) => `<span class="${wait?.danger ? "will will--danger" : "will"}">${text}</span>`;
+
+// ---- The waiting run ------------------------------------------------------------------
+function tileValue(value) {
+  const [before, after] = value.split(" → ");
+  if (after !== undefined) {
+    const unit = /^(\S+) ([A-Za-z]+)$/.exec(after);
+    return `<span class="old">${esc(before)}</span><span class="arrow">→</span>${unit ? `${esc(unit[1])}<span class="unit">${unit[2]}</span>` : esc(after)}`;
+  }
+  return value.split(" ").map((t) => `<span class="${t.startsWith("+") ? "add" : t.startsWith("−") || t.startsWith("±") ? "remove" : ""}">${esc(t)}</span>`).join(" ");
+}
+const markClass = { "+": "add", "−": "remove", "±": "remove" };
+function rowsPanel(tile, showSame) {
+  const row = (r) => `<tr><td class="mark ${markClass[r.mark] ?? ""}">${r.mark}</td><td class="name">${esc(r.name)}</td><td class="old">${esc(r.before ?? "")}</td><td class="arr">${r.before !== undefined || r.after !== undefined ? "→" : ""}</td><td class="new ${r.mark === "+" ? "add" : ""}">${esc(r.after ?? (r.mark === "−" ? "—" : ""))}</td><td class="note">${esc(r.note ?? "")}</td></tr>`;
+  const same = ([name, value]) => `<tr class="same"><td class="mark">=</td><td class="name">${esc(name)}</td><td class="old"></td><td class="arr"></td><td class="new">${esc(value)}</td><td class="note">unchanged</td></tr>`;
+  const body = tile.rows.map(row).join("") + (showSame ? tile.unchanged.map(same).join("") : "");
+  return `<div class="rows-panel"><div class="rows-panel__heading">${esc(tile.heading)}</div>
+    ${body ? `<table class="rows"><tbody>${body}</tbody></table>` : `<p class="muted small">Nothing changes here.</p>`}
+    ${tile.unchanged.length ? `<button type="button" class="link-button" data-same>${showSame ? "− hide unchanged" : `+ ${tile.unchanged.length} unchanged`}</button>` : ""}</div>`;
+}
+let openTile = 0, showSame = false;
+function waitPanel() {
+  const { run, steps, tiles, danger, promise, sha } = wait;
+  const at = steps.indexOf("approval");
+  return `
+    <section class="wait${danger ? " wait--danger" : ""}" aria-label="Waits for your approval">
+      <div class="wait__head">
+        <span class="wait__title">${icon(danger ? "alert" : "hand", 18)}${esc(run.title)} #${run.number} waits for your approval</span>
+        <span class="grow"></span>
+        <a href="#" class="small">Open run #${run.number}</a>
+        <button type="button" class="button button--danger-outline" data-action="reject">${icon("x", 15)}Reject</button>
+        <button type="button" class="button ${danger ? "button--danger" : "button--primary"}" data-action="approve">${icon("check", 15)}${danger ? "Approve replacing" : "Approve"}</button>
+      </div>
+      <div class="wait__body">
+        <div class="wait__meta">
+          <span class="steps">${steps.map((s, i) => `<span class="${i === at ? "is-now" : ""}"><span class="track__segment track__segment--${i < at ? "success" : i === at ? "attention" : "todo"}"></span>${s}</span>`).join("")}</span>
+          <span class="grow"></span>
+          <span>${esc(run.reason)}</span>${RD.commit(run.commit)}<span>planned ${RD.rel(run.at)}</span>
+        </div>
+        ${danger ? `<div class="danger-note">${icon("alert", 18)}<div><b>${esc(danger.title)}</b><p>${esc(danger.text)}</p></div></div>` : ""}
+        <div class="tiles" role="group" aria-label="What changes">${tiles.map((t, i) => `
+          <button type="button" class="tile${t.tone ? ` tile--${t.tone}` : ""}" data-tile="${i}" aria-expanded="${i === openTile}">
+            <span class="tile__label">${esc(t.label)}${icon("chevronDown", 12)}</span>
+            <span class="tile__value">${tileValue(t.value)}</span>
+            <span class="tile__sub">${esc(t.sub)}</span>
+          </button>`).join("")}</div>
+        ${openTile == null ? "" : rowsPanel(tiles[openTile], showSame)}
+        <div class="wait__foot"><p class="grow">${esc(promise)}</p><span>${sha[0]}</span>${RD.chip(sha[1], { mono: true })}</div>
+      </div>
+    </section>`;
+}
+/** The node has no run of its own: it lists its guests' runs that wait or failed, each with what it changes. */
+function guestRuns() {
+  return `
+    <section class="wait" aria-label="Runs of its guests">
+      <div class="wait__head"><span class="wait__title">${icon("hand", 18)}1 guest waits for your approval, 1 failed</span></div>
+      <div class="wait__body"><ul class="guest-runs">
+        <li>
+          <span class="dot" data-tone="attention"></span><a class="mono" href="#">mrb-crt-01</a><span>Apply #213</span>
+          <span class="what"><span class="muted">disk</span> <span class="muted">120 →</span> 160 <span class="muted xs">GiB</span></span>${RD.chip("~1 update in place")}
+          <span class="grow"></span><span class="small muted">Commit 895ec0a · planned 1 h ago</span>
+          <a href="#" class="small">Open run</a>
+          <button type="button" class="button button--small button--danger-outline" data-action="reject">Reject</button>
+          <button type="button" class="button button--small button--primary" data-action="approve">Approve</button>
+        </li>
+        <li>
+          <span class="dot" data-tone="danger"></span><a class="mono" href="#">gocd-mrb-01</a><span>setup #207 failed</span>
+          <span class="muted">SSH did not answer</span>
+          <span class="grow"></span><span class="small muted">Commit 7d20c9e · 26 h ago</span>
+          <a href="#" class="small">Open run</a>
+          <button type="button" class="button button--small" data-action="again">Run again</button>
+        </li>
+      </ul></div>
+    </section>`;
+}
+
+// ---- The strip of figures -------------------------------------------------------------
+const cell = (label, big, small = "") => `<div><span class="xs muted">${label}</span><b>${big}</b><span class="small muted">${small}</span></div>`;
+const after = (key, text) => (wait?.fields[key] ? will(text) : null);
+const glance = {
+  machine: () => [
+    cell("Power", "Running", `up ${RD.duration(res.observed.uptimeSeconds)}`),
+    cell("Cores", res.observed.maxCpu, after("hardware.cores", `6 with #${wait?.run.number}`) ?? "vCPU"),
+    cell("Memory", RD.bytes(res.observed.maxMemoryBytes), after("hardware.memory", `16 GiB with #${wait?.run.number}`) ?? ""),
+    cell("Disk", "300 GiB", after("hardware.disks", `400 GiB with #${wait?.run.number}`) ?? (wait?.danger ? will("wiped by #216") : "local-lvm")),
+    cell("Address", `<span class="mono">${res.accessAddress}</span>`, "static, vmbr1"),
+    cell("SSH, 30 days", `${up.uptime.month}%`, `answers in ${up.elapsedMs} ms`),
+  ],
+  service: () => [
+    cell("Answers", "Up", `${up.elapsedMs} ms`),
+    cell("Uptime, 30 days", `${up.uptime.month}%`),
+    cell("Runs on", `<a href="${RD.href("machine")}">${res.guest.name}</a>`, res.guest.accessAddress),
+    cell("Image", wait ? "0.6.30" : "0.6.34", wait ? will("0.6.34 with #214") : "open-webui"),
+    cell("Last deployed", RD.rel(res.appliedAt), res.appliedCommit.slice(0, 7)),
+  ],
+  node: () => { const h = res.hosts[0]; return [
+    cell("Host", "Online", `up ${RD.duration(h.uptimeSeconds)}`),
+    cell("CPU", RD.pct(h.cpu), `of ${h.maxCpu} cores ${RD.meter(h.cpu)}`),
+    cell("Memory", RD.bytes(h.memoryBytes), `of ${RD.bytes(h.maxMemoryBytes)} ${RD.meter(h.memoryBytes / h.maxMemoryBytes)}`),
+    cell("Guests", res.guests.length, `managed · ${res.unmanaged.length} unmanaged`),
+    cell("Proxmox VE", res.proxmoxVersion, `observed ${RD.rel(res.observedAt)}`),
+  ]; },
+}[RD.kind]();
+
+// ---- The definition, as blocks --------------------------------------------------------
+const block = (s) => `
+  <div class="block">
+    <div>
+      <div class="block__title">${icon(s.icon, 16)}${esc(s.title)}</div>
+      <button type="button" class="link-button block__lines" data-yaml="${s.id}">lines ${s.lines[0]}–${s.lines[1]}</button>
+    </div>
+    <div class="fields">
+      ${s.note ? `<p class="note">${esc(s.note)}</p>` : ""}
+      ${s.fields.map((f) => `
+        <div class="field${f.type === "secret" || f.type === "url" || (f.items?.length > 2) || f.value.length > 30 ? " field--wide" : ""}${f.now ? ` field--pending${wait.danger ? " is-danger" : ""}` : ""}">
+          <div class="field__label">${esc(f.label)}</div>
+          <div class="field__value">${RD.value(f)}</div>
+          ${f.now ? `<div class="field__now">${icon("clock", 12)}now ${esc(f.now)}, until #${wait.run.number} is applied</div>` : ""}
+          ${f.note || f.raw ? `<div class="xs muted">${esc(f.note ?? f.raw)}</div>` : ""}
+        </div>`).join("")}
+    </div>
+  </div>`;
+const pendingCount = def.sections.flatMap((s) => s.fields).filter((f) => f.now).length;
+
+// ---- The side column ------------------------------------------------------------------
+const runs = (n = 5) => `<ul class="list">${res.runs.slice(0, n).map((r) => `
+  <li><span class="dot" data-tone="${RD.tone(r.status)}"></span><span class="grow truncate"><a href="#">#${r.number}</a> ${esc(r.title)}${r.address ? ` <span class="muted">${esc(r.address.split("/").pop())}</span>` : ""}</span><span class="xs muted">${RD.rel(r.createdAt)}</span></li>`).join("")}</ul>`;
+const policy = () => RD.kv([
+  ["Approval", `${RD.badge(res.policy.approval, res.policy.approval === "manual" ? "attention" : "neutral")}`],
+  ...res.policy.actions.map((a) => [a.action, RD.badge(a.approval, "neutral")]),
+  ["Destructive", RD.badge(res.policy.destructive, "attention")],
+]) + `<p class="xs muted" style="margin-top:var(--space-3)">Set by ${esc(res.policy.approvalSetBy)}</p>`;
+
+const side = {
+  machine: () => [
+    RD.card("Configuration", `<ul class="list">${res.configuration.actions.map((a) => { const s = res.configuration.schedules.find((x) => x.action === a.id); const waits = wait?.run.title === a.id; return `
+      <li><span class="grow"><span class="mono">${a.id}</span><span class="xs ${waits ? "will" : "muted"}" style="display:block">${waits ? `#${wait.run.number} waits for approval` : s ? `${s.human} · next ${RD.rel(s.nextAt)}` : a.onChange ? "Runs when the definition changes" : "By hand"}</span></span>${waits ? "" : `<button type="button" class="button button--small" data-action="run">Run</button>`}</li>`; }).join("")}</ul>`, { flush: true, meta: "in sync" }),
+    RD.card("Services", `<ul class="list">${res.services.map((s) => `<li>${RD.svcIcon(s.name)}<a class="grow truncate" href="${RD.href("service")}">${s.name}</a><span class="dot" data-tone="${RD.tone(s.status)}" title="${RD.statusLabel(s.status)}"></span></li>`).join("")}</ul>`, { flush: true, meta: res.services.length }),
+    RD.card("Policy", policy()),
+    RD.card("Access", RD.kv([["SSH key", `v${res.managedAccess.version}, used ${RD.rel(res.managedAccess.lastUsedAt)}`], ["Host key", `pinned, v${res.hostKey.pinned.version}`], ["Agents", "Any agent"]])),
+    RD.card("Runs", runs(), { flush: true }),
+  ],
+  service: () => [
+    RD.card("Stages", `<ul class="list">${res.workflow.stages.map((s) => `<li><span class="grow"><span class="mono">${s.name}</span><span class="xs muted" style="display:block">${esc(s.detail)}</span></span>${RD.chip(s.executor)}</li>`).join("")}</ul>`, { flush: true, meta: res.workflow.reference }),
+    RD.card("Uptime", `${RD.beats(up)}<div class="row row--between xs muted" style="margin-top:var(--space-2)"><span>24 h ago</span><span>${up.uptime.day}% today</span><span>now</span></div>`),
+    RD.card("Policy", policy()),
+    RD.card("Runs", runs(), { flush: true }),
+  ],
+  node: () => [
+    RD.card("Connection", RD.kv([["Trust", `${RD.badge("Trusted", "success")} by ${res.trust.trustedBy}`], ["TLS", RD.badge("Not verified", "warning")], ["Cluster", "—"], ["Snippets", `${res.snippets.user}@${res.snippets.datastore}`]])),
+    RD.card("Issues", `<p>${RD.badge("warning", "warning")} ${esc(res.issues[0].message)}</p>`, { meta: 1 }),
+    RD.card("Policy", policy()),
+    RD.card("Runs of its guests", runs(6), { flush: true }),
+  ],
+}[RD.kind]();
+
+const guests = () => `
+  <section class="sheet" style="margin-bottom:var(--space-5)">
+    <div class="sheet__bar"><b>Guests</b><span class="small muted">${res.guests.length} managed · ${res.unmanaged.length} unmanaged</span></div>
+    <table class="table"><thead><tr><th>Name</th><th>Kind</th><th>VMID</th><th>Size</th><th>Services</th><th>Status</th></tr></thead><tbody>
+      ${res.guests.map((g) => `<tr><td><a class="mono" href="${RD.href("machine")}">${g.name}</a></td><td>${g.kind}</td><td class="num">${g.vmid}</td><td class="num">${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}</td><td class="num">${g.services}</td><td>${RD.status(g.status)}</td></tr>`).join("")}
+      ${res.unmanaged.map((g) => `<tr class="muted"><td class="mono">${g.name}</td><td>${g.kind}</td><td class="num">${g.vmid}</td><td class="num">${g.maxCpu} vCPU · ${RD.bytes(g.maxMemoryBytes)}</td><td>—</td><td>${RD.status(g.template ? "template" : "unmanaged")}</td></tr>`).join("")}
+    </tbody></table>
+  </section>`;
+
+function render() {
+  main.innerHTML = `
+    ${new URLSearchParams(location.search).has("thumb") ? "" : `<div class="proto"><span>Prototype example</span>${Object.entries(CASES).map(([id, c]) => `<a href="?kind=${RD.kind}&case=${id}"${id === caseId ? ' aria-current="true"' : ""}>${c.label}</a>`).join("")}</div>`}
+    <div class="head">
+      <div>
+        <div class="eyebrow">${RD.crumbs()}</div>
+        <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}<span class="mono">${esc(res.address)}</span></h1>
+        <div class="row row--wrap">${RD.status(res.status)}${res.statusDetail ? `<span class="muted">${esc(res.statusDetail)}</span>` : ""}<span class="muted">${esc(res.description)}</span></div>
+      </div>
+      <div class="row"><button type="button" class="button" data-view-yaml>${icon("code", 15)}View YAML</button>${RD.actions()}</div>
+    </div>
+    ${wait ? waitPanel() : RD.kind === "node" ? guestRuns() : ""}
+    <div class="glance">${glance.join("")}</div>
+    <div class="cols">
+      <div>
+        ${RD.kind === "node" ? guests() : ""}
+        <section class="sheet">
+          <div class="sheet__bar">
+            <span class="row row--wrap"><b>Definition</b> <span class="small muted mono">${esc(def.file.split("/").pop())}</span>${pendingCount ? RD.badge(`${pendingCount} ${pendingCount === 1 ? "value is" : "values are"} declared, not applied yet`, wait.danger ? "danger" : "attention") : ""}</span>
+            <button type="button" class="button button--small" data-view-yaml>${icon("code", 14)}View YAML</button>
+          </div>
+          ${def.sections.map(block).join("")}
+        </section>
+      </div>
+      <div class="stack stack--large side">${side.join("")}</div>
+    </div>`;
+}
+render();
+// A tile opens its rows; one at a time, and a second click closes it.
+main.addEventListener("click", (e) => {
+  const tile = e.target.closest("[data-tile]");
+  if (tile) { const i = Number(tile.dataset.tile); openTile = openTile === i ? null : i; showSame = false; render(); return; }
+  if (e.target.closest("[data-same]")) { showSame = !showSame; render(); return; }
+  // The whole file, from the header or the Definition bar. While a run waits, the lines it would apply are marked.
+  if (e.target.closest("[data-view-yaml]")) {
+    const changed = def.sections.flatMap((s) => s.fields).filter((f) => f.now).map((f) => f.line);
+    const note = changed.length ? `<p class="small muted" style="margin-bottom:var(--space-3)">Marked: declared here, not applied until #${wait.run.number} is approved.</p>` : "";
+    RD.drawer("Definition", note + RD.yamlBox(def, changed.length ? { highlight: [Math.min(...changed), Math.max(...changed)] } : undefined));
+  }
+});
+</script>
+</body>
+</html>

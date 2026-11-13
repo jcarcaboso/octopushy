@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blueprint</title>
+<!--
+  06 · Blueprint. The resource as a technical drawing, not a form: thin 1px lines, mono labels, one
+  inline SVG that scales to the width. A machine is a chassis (cores, memory, disk) inside its host,
+  wired to its bridge and gateway, with services plugged in along one edge, secrets arriving from the
+  variable store and a title block in the corner. A service is a flow from the commit through the
+  approval gate and its stages to the guest and the link people open. A node is a rack unit with
+  gauges, guests as blades sized by memory, bridges as rails and datastores as bars. Click (or Enter
+  on) any part: the inspector beside the drawing shows its fields and the YAML lines they come from,
+  marked. The selected part is kept in the hash (#part=disk).
+  Sample data: the node's datastore usage (sample.datastores), drawn as bars and labelled as sample.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-5); }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: var(--space-5); align-items: start; }
+@media (max-width: 1400px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.sheet { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; }
+.sheet__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+.sheet__scroll { overflow-x: auto; }
+.bp { display: block; width: 100%; height: auto; min-width: 46rem; }
+.bp text { font-family: var(--font-mono); font-size: var(--f); fill: var(--text-muted); }
+.bp .big { font-size: var(--F); }
+.bp .tx { fill: var(--text); }
+.bp .strong { fill: var(--text); font-weight: 650; }
+.bp .ln { stroke: var(--text-faint); fill: none; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.bp .ol { stroke: var(--text-faint); fill: var(--surface); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.bp .ol--none { fill: transparent; }
+.bp .dash { stroke-dasharray: 6 4; }
+.bp .ko { paint-order: stroke; stroke: var(--surface); stroke-width: 6px; stroke-linejoin: round; }
+.bp .grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; }
+.bp .part { cursor: pointer; outline: none; }
+.bp .part:hover .ol, .bp .part:focus-visible .ol { stroke: var(--link); }
+.bp .part:hover .ln, .bp .part:focus-visible .ln { stroke: var(--link); }
+.bp .part.sel .ol { stroke: var(--link); fill: var(--accent-soft); }
+.bp .part.sel .ln { stroke: var(--link); }
+.bp .part.sel text { fill: var(--text); }
+.bp .part:focus-visible .ol { stroke-width: 2; }
+.bp .attn .ol, .bp .attn.sel .ol { stroke: var(--attention-fg); fill: var(--attention-bg); }
+.bp .attn.sel .ol { stroke-width: 2; }
+.bp .attn text, .bp .attn.sel text { fill: var(--attention-fg); }
+.bp .wide.sel > .ol:first-child { fill: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.bp .warn { fill: var(--warning-fg); }
+.bp .cell { fill: var(--surface-3); stroke: var(--text-faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.bp .fill-ok { fill: var(--meter-ok); }
+.bp .track { fill: var(--meter-track); }
+.bp .hatch-line { stroke: var(--border-strong); stroke-width: 1; }
+.bp .faded { opacity: 0.7; }
+.fo { display: flex; flex-direction: column; gap: 8px; }
+.fo .button { width: 100%; font-size: 15px; min-height: 32px; }
+.legend { display: flex; gap: var(--space-5); flex-wrap: wrap; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--border); font-size: var(--text-xs); color: var(--text-muted); }
+
+.inspector { position: sticky; top: var(--space-4); }
+.insp__kind { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); text-transform: lowercase; }
+.insp__title { font-size: var(--text-lg); font-weight: 650; overflow-wrap: anywhere; }
+.insp__fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin-top: var(--space-4); }
+.insp__fields dt { font-size: var(--text-xs); color: var(--text-muted); }
+.insp__fields dd { margin: 0; overflow-wrap: anywhere; }
+.insp__note { margin-top: var(--space-3); padding-left: var(--space-3); border-left: 2px solid var(--border-strong); font-size: var(--text-sm); color: var(--text-muted); }
+.insp__actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); }
+.insp__src { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.insp__src .code { max-height: 17rem; position: relative; margin-top: var(--space-2); }
+.insp__src .yaml { font-size: var(--text-xs); }
+.insp__src .yaml__n { width: 2.25rem; }
+@media (max-width: 1400px) { .inspector { position: static; } .insp__fields { grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); } }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const def = res.definition;
+const sec = (id) => def.sections.find((s) => s.id === id);
+const fld = (s, key) => sec(s).fields.find((f) => f.key === key);
+const fl = (s, key) => { const l = fld(s, key).line; return [l, l]; };
+const lineOf = (needle) => { const i = def.text.split("\n").findIndex((l) => l.includes(needle)); return i + 1; };
+const up = res.checks[0];
+
+// ---- SVG builders --------------------------------------------------------------------
+const T = (x, y, s, cls = "", anchor) => `<text x="${x}" y="${y}"${cls ? ` class="${cls}"` : ""}${anchor ? ` text-anchor="${anchor}"` : ""}>${esc(s)}</text>`;
+const R = (x, y, w, h, cls = "ol", extra = "") => `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="${cls}" ${extra}/>`;
+const L = (pts, cls = "ln", extra = "") => `<path d="M${pts.map((p) => p.join(",")).join(" L")}" class="${cls}" ${extra}/>`;
+const dot = (x, y, tone, r = 5) => `<circle cx="${x}" cy="${y}" r="${r}" style="fill:var(--${tone}-fg)"/>`;
+const parts = {};
+/** A selectable part of the drawing; its inspector content goes in `parts`. */
+function P(id, info, inner, cls = "") {
+  parts[id] = info;
+  return `<g class="part ${cls}" data-part="${id}" tabindex="0" role="button" aria-label="${esc(info.title)}">${inner}</g>`;
+}
+const defs = `<defs>
+  <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0 L0 0 0 20" class="grid"/></pattern>
+  <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" class="hatch-line"/></pattern>
+  <marker id="arr" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" style="fill:var(--text-faint)"/></marker>
+</defs>`;
+const svg = (w, h, F, f, body) => `<svg class="bp" viewBox="0 0 ${w} ${h}" style="--F:${F}px;--f:${f}px" role="group" aria-label="Drawing of ${esc(res.name)}">${defs}<rect width="${w}" height="${h}" fill="url(#grid)" opacity="0.55"/>${body}</svg>`;
+const secretShort = (key) => key.split("/").pop();
+
+// ---- The machine ----------------------------------------------------------------------
+function machine() {
+  const hw = sec("hardware"), net = sec("network");
+  let s = "";
+  // host
+  s += P("host", { kind: "host", title: "Host moraband", fields: [["Node", `<a href="${RD.href("node")}">home/moraband</a>`], ["Host", "moraband"], ["Bound", `VMID ${res.binding.vmid}, ${RD.rel(res.binding.boundAt)}`]], lines: fl("placement", "host") },
+    R(16, 40, 530, 500, "ol ol--none dash") + T(32, 66, "host moraband", "big tx") + T(530, 66, "node home/moraband", "", "end"));
+  // chassis
+  s += P("chassis", { kind: "VM", title: `falcon, VM ${res.vmid}`, fields: sec("placement").fields.map((f) => [f.label, RD.value(f)]).concat([["Power", `running, up ${RD.duration(res.observed.uptimeSeconds)}`], ["Status", RD.status(res.status)]]), note: res.description, lines: sec("placement").lines },
+    R(40, 84, 360, 330) + T(56, 110, "falcon", "big strong") + T(384, 110, `vm · vmid ${res.vmid}`, "", "end") + L([[40, 122], [400, 122]]), "wide");
+  // cpu
+  s += P("cpu", { kind: "hardware", title: "4 cores", fields: [["Cores", "4"], ["Proxmox reports", `${res.observed.maxCpu} vCPU`]], lines: fl("hardware", "cores") },
+    T(56, 146, "cpu · 4 cores") + [0, 1, 2, 3].map((i) => R(56 + i * 86, 156, 78, 40) + T(56 + i * 86 + 39, 181, `core ${i}`, "", "middle")).join(""));
+  // memory
+  s += P("memory", { kind: "hardware", title: "8 GiB memory", fields: [["Memory", "8 GiB"], ["In the file", "8192 MiB"], ["Proxmox reports", RD.bytes(res.observed.maxMemoryBytes)]], note: "The file counts memory in MiB; the comment says so.", lines: fl("hardware", "memory") },
+    T(56, 226, "memory · 8 GiB") + R(56, 236, 336, 20) + [1, 2, 3, 4, 5, 6, 7].map((k) => L([[56 + k * 42, 236], [56 + k * 42, 256]])).join(""));
+  // disk
+  const d = fld("hardware", "disks");
+  s += P("disk", { kind: "hardware", title: "300 GiB disk", fields: [["Size", "300 GiB"], ["Volume", `<span class="mono">${esc(res.outputs.disks.scsi0)}</span>`]], note: d.note, lines: fl("hardware", "disks") },
+    T(56, 288, "disk · 300 GiB · local-lvm") +
+    `<path d="M56,306 L56,350 A168,9 0 0 0 392,350 L392,306" class="ol"/><ellipse cx="224" cy="306" rx="168" ry="9" class="ol"/>` +
+    T(224, 336, "scsi0 · local-lvm:vm-410-disk-0", "", "middle"));
+  // access
+  s += P("access", { kind: "access", title: "SSH access", fields: [["Command", `<span class="mono">ssh ops@${res.accessAddress}</span>`], ["Managed key", `v${res.managedAccess.version}, used ${RD.rel(res.managedAccess.lastUsedAt)}`], ["Host key", `pinned v${res.hostKey.pinned.version}`]], lines: sec("access").lines,
+    actions: `<button type="button" class="button button--small" data-action="rotate-key">${icon("refresh", 14)}Rotate key</button>` },
+    R(48, 378, 214, 26) + T(56, 396, `ssh ops@${res.accessAddress}`));
+  // network: port and wire, bridge, gateway, dns
+  s += P("port", { kind: "network", title: "Address 10.1.0.99/24", fields: [["Address", "10.1.0.99/24"], ["Mode", "static"], ["MAC", `<span class="mono">${esc(res.outputs.mac)}</span>`]], note: net.note, lines: [fl("network", "mode")[0], fl("network", "address")[0]] },
+    R(394, 142, 12, 16) + L([[406, 150], [507, 150]]) + T(456, 142, "10.1.0.99/24", "tx", "middle") + T(456, 170, "static", "", "middle"));
+  s += P("bridge", { kind: "network", title: "Bridge vmbr1", fields: [["Bridge", "vmbr1"], ["On host", "moraband"]], note: net.note, lines: fl("network", "bridge") },
+    R(507, 100, 6, 190) + T(510, 92, "vmbr1", "big tx", "middle"));
+  s += P("gateway", { kind: "network", title: "Gateway 10.1.0.1", fields: [["Gateway", "10.1.0.1"]], lines: fl("network", "gateway") },
+    L([[513, 150], [600, 150]]) + R(600, 126, 180, 48) + T(612, 144, "gateway") + T(612, 164, "10.1.0.1", "big tx"));
+  s += P("dns", { kind: "network", title: "DNS servers", fields: [["DNS", RD.value(fld("network", "dns"))]], lines: fl("network", "dns") },
+    L([[513, 222], [600, 222]]) + R(600, 196, 180, 66) + T(612, 214, "dns") + T(612, 234, "10.1.0.178", "big tx") + T(612, 252, "10.1.0.179", "big tx"));
+  // variable store and secrets
+  s += P("store", { kind: "secrets", title: "Variable store", fields: sec("secrets").fields.map((f) => [f.label, RD.value(f)]), lines: sec("secrets").lines },
+    R(600, 316, 180, 72) + T(612, 340, "variable store", "big tx") + T(612, 362, "2 secrets"));
+  const secs = sec("secrets").fields;
+  [[secs[0], 334, "Tailscale auth key"], [secs[1], 372, "GitHub token"]].forEach(([f, y, label]) => {
+    s += P(`secret-${f.key}`, { kind: "secret", title: f.label, fields: [["Store key", RD.value(f)], ["Active version", `v${f.secret.activeVersion}`], ["On the machine", `v${f.secret.activeVersion}, nothing pending`]], lines: [f.line, f.line] },
+      L([[600, y], [400, y]], "ln", 'marker-end="url(#arr)"') + T(414, y - 8, `${label} v${f.secret.activeVersion}`, "ko"));
+  });
+  // services as modules along the bottom edge
+  res.services.forEach((svc, i) => {
+    const x = 40 + i * 90.67, tone = RD.tone(svc.status);
+    const word = { "in-sync": "in sync", "awaiting-approval": "waits", failed: "failed" }[svc.status] ?? svc.status;
+    s += P(`svc-${svc.id}`, { kind: "service", title: svc.name, fields: [["Status", RD.status(svc.status)], ...(svc.statusDetail ? [["Detail", esc(svc.statusDetail)]] : []), ["Link", `<span class="mono">${esc(svc.links[0])}</span>`], ["Workflow", `<span class="mono">${svc.workflow}</span>`], ["Uptime today", `${svc.uptimeDay}%`]],
+      source: "Defined in its own service.yaml, under falcon/services.", actions: `<a class="button button--small" href="${RD.href("service")}">${icon("arrowRight", 14)}Open service</a>` },
+      L([[x + 44, 414], [x + 44, 434]]) + R(x, 434, 88, 54) + T(x + 6, 454, svc.name, "tx") + dot(x + 11, 474, tone, 4) + T(x + 20, 478, word));
+  });
+  s += T(40, 512, "services · 4, plugged in by compose@1");
+  // title block
+  const rows = [
+    ["workflow", "fedora-vm@1.10", { kind: "workflow", title: "fedora-vm@1", fields: [["Reference", "fedora-vm@1"], ["Resolves to", res.workflow.resolved], ["Stages", res.workflow.stages.map((st) => `${st.name} <span class="muted">${st.executor}</span>`).join(", ")]], lines: [lineOf("workflow:"), lineOf("workflow:")] }],
+    ["template", "fedora-44", { kind: "placement", title: "Template fedora-44", fields: [["Template", "fedora-44"], ["On the node", "VMID 9000, a template guest"]], lines: fl("placement", "template") }],
+    ["inputs", "4 values", { kind: "inputs", title: "Inputs", fields: sec("inputs").fields.map((f) => [f.label, RD.value(f)]), note: sec("inputs").note, lines: sec("inputs").lines }],
+    ["schedules", "2", { kind: "schedules", title: "Schedules", fields: res.configuration.schedules.map((x) => [x.action, `${x.human} <span class="muted">· next ${RD.rel(x.nextAt)} · last #${x.lastRunNumber}</span>`]), lines: sec("schedules").lines }],
+    ["policy", "manual", { kind: "policy", title: "Policy", fields: sec("policy").fields.map((f) => [f.label, RD.value(f)]), lines: sec("policy").lines }],
+    ["file", "guest.yaml", { kind: "file", title: "guest.yaml", fields: [["Path", `<span class="mono">${esc(def.file)}</span>`], ["Commit", `${RD.commit(res.revisions.desiredCommit)} in sync`]], lines: [1, def.lineCount] }],
+  ];
+  rows.forEach(([label, value, info], k) => {
+    const y = 440 + k * 26;
+    s += P(`tb-${label}`, info, R(566, y, 218, 26) + L([[648, y], [648, y + 26]]) + T(574, y + 18, label) + T(656, y + 18, value, "tx"));
+  });
+  return svg(800, 600, 13.2, 12.4, s);
+}
+
+// ---- The service ------------------------------------------------------------------------
+function service() {
+  const p = res.pending, wf = res.workflow;
+  let s = "";
+  const img = fld("inputs", "image");
+  s += P("commit", { kind: "commit", title: `Commit ${p.commit.slice(0, 7)}`, fields: [["Change", esc(res.changes[0].message)], ["By", p.author], ["When", RD.rel(res.changes[0].createdAt)], ["Image", `${RD.value(img)} ${RD.badge(img.pending, "attention")}`]], lines: [img.line, img.line] },
+    R(10, 66, 120, 76) + T(22, 88, "commit") + T(22, 112, p.commit.slice(0, 7), "big tx") + T(22, 132, p.author));
+  s += L([[130, 104], [160, 104]], "ln", 'marker-end="url(#arr)"');
+  s += P("gate", { kind: "approval", title: `Deploy #${p.run} waits for approval`, fields: [["Changes", `<span class="mono">${esc(p.summary)}</span>`], ["Waiting", RD.rel(p.since)], ["Approval", RD.badge("manual", "attention")]], note: fld("policy", "approval").note, lines: sec("policy").lines,
+    actions: `<button type="button" class="button button--primary button--small" data-action="approve">${icon("check", 14)}Approve</button><button type="button" class="button button--small" data-action="reject">${icon("x", 14)}Reject</button>` },
+    R(160, 36, 150, 144) + T(172, 60, "approval", "big") + T(172, 82, `waits ${RD.rel(p.since).replace(" ago", "")}`) +
+    `<foreignObject x="172" y="96" width="126" height="76"><div xmlns="http://www.w3.org/1999/xhtml" class="fo"><button type="button" class="button button--primary" data-action="approve">Approve</button><button type="button" class="button" data-action="reject">Reject</button></div></foreignObject>`, "attn");
+  s += L([[310, 104], [340, 104]], "ln", 'marker-end="url(#arr)"');
+  s += P("workflow", { kind: "workflow", title: wf.reference, fields: [["Resolves to", wf.resolved], ["Latest", `${wf.latest} ${RD.badge("update available", "info")}`], ["Manages", wf.manages]], lines: [lineOf("workflow:"), lineOf("workflow:")],
+    actions: `<button type="button" class="button button--small" data-action="update-workflow">Update to ${wf.latest}</button>` },
+    R(324, 40, 512, 124, "ol ol--none dash") + T(336, 28, `workflow ${wf.reference} · ${wf.resolved}`) + T(836, 28, `${wf.latest} exists`, "", "end"));
+  wf.stages.forEach((st, i) => {
+    const x = 340 + i * 170;
+    s += P(`stage-${st.name}`, { kind: "stage", title: `Stage ${st.name}`, fields: [["Executor", RD.chip(st.executor)], ["Does", esc(st.detail)], ["In run #214", "not started; waits for approval"]], source: `Comes from the workflow ${wf.reference}, not from this file.` },
+      R(x, 66, 140, 76) + T(x + 12, 96, st.name, "big tx") + T(x + 12, 122, st.executor));
+    if (i < 2) s += L([[x + 140, 104], [x + 170, 104]], "ln", 'marker-end="url(#arr)"');
+  });
+  // inputs and secrets feed deploy
+  s += P("inputs", { kind: "inputs", title: "Inputs", fields: sec("inputs").fields.map((f) => [f.label, `${RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note ? `<div class="xs muted">${esc(f.note)}</div>` : ""}`]), lines: sec("inputs").lines },
+    R(10, 188, 160, 56) + T(22, 210, "inputs", "big tx") + T(22, 233, `${sec("inputs").fields.length} values`) + L([[170, 215], [350, 215], [350, 142]], "ln", 'marker-end="url(#arr)"'));
+  s += P("store", { kind: "secrets", title: "Variable store", fields: sec("secrets").fields.map((f) => [f.label, RD.value(f)]), lines: sec("secrets").lines },
+    R(10, 262, 160, 70) + T(22, 286, "variable store", "tx") + T(22, 308, "2 secrets"));
+  const sf = sec("secrets").fields;
+  [[sf[0], 280, 375, "env_file"], [sf[1], 314, 405, "webui_secret_key"]].forEach(([f, y, x, label]) => {
+    s += P(`secret-${f.key}`, { kind: "secret", title: f.label, fields: [["Store key", RD.value(f)], ...(f.note ? [["Delivered", f.note.replace("Delivered ", "")]] : [])], lines: [f.line, f.line] },
+      L([[170, y], [x, y], [x, 142]], "ln", 'marker-end="url(#arr)"') + T(180, y - 8, `${label} v${f.secret.activeVersion}`, "ko"));
+  });
+  // where it lands, and the link
+  s += L([[460, 142], [460, 330]], "ln dash", 'marker-end="url(#arr)"') + T(468, 250, "lands on");
+  s += P("guest", { kind: "machine", title: "falcon", fields: [["Address", res.guest.accessAddress], ["Machine", `<span class="mono">${res.guest.address}</span>`]], source: "The service lives under falcon in the repository; its folder says where it runs.",
+    actions: `<a class="button button--small" href="${RD.href("machine")}">${icon("arrowRight", 14)}Open machine</a>` },
+    R(420, 330, 120, 76) + T(432, 352, "machine") + T(432, 374, "falcon", "big tx") + T(432, 395, res.guest.accessAddress));
+  s += L([[580, 142], [580, 296], [740, 296], [740, 330]], "ln dash", 'marker-end="url(#arr)"') + T(588, 250, "sets record");
+  s += L([[790, 142], [790, 330]], "ln dash", 'marker-end="url(#arr)"') + T(798, 250, "checks");
+  s += P("link", { kind: "link", title: "chat.hlab.example.org", fields: [["Link", RD.value(fld("service", "links"))], ["DNS name", "chat.hlab.example.org"], ["Answers", `${RD.badge("Up", "success")} in ${up.elapsedMs} ms`]], note: fld("inputs", "dns_name").note, lines: fl("service", "links"),
+    actions: `<a class="button button--small" href="${esc(res.links[0])}" target="_blank" rel="noopener">${icon("external", 14)}Open</a>` },
+    R(700, 330, 290, 76) + T(712, 355, "link people open") + T(712, 384, "chat.hlab.example.org", "big tx"));
+  const cells = up.daily.map((dv, i) => `<rect x="${550 + i * 4.67}" y="362" width="3.6" height="12" style="fill:${dv >= 99.9 ? "color-mix(in srgb, var(--success-fg) 70%, var(--surface))" : dv >= 99 ? "var(--meter-warning)" : "var(--meter-danger)"}"/>`).join("");
+  s += P("uptime", { kind: "uptime", title: "Uptime of the link", fields: [["30 days", `${up.uptime.month}%`], ["7 days", `${up.uptime.week}%`], ["Today", `${up.uptime.day}%`], ["Last 24 hours", RD.beats(up)], ["Incidents", up.incidents.map((i) => `${esc(i.detail)} <span class="muted">${RD.rel(i.at)}</span>`).join("<br>")]], source: `Measured by ${up.agent}, every 15 min; not in the file.` },
+    L([[540, 368], [700, 368]]) + R(546, 359, 148, 18, "ol ol--none") + cells + T(620, 352, `${up.uptime.month}% · 30 d`, "", "middle") + T(620, 396, `${up.elapsedMs} ms`, "", "middle"));
+  return svg(1000, 416, 16.5, 15.5, s);
+}
+
+// ---- The node ---------------------------------------------------------------------------
+function node() {
+  const h = res.hosts[0], issue = res.issues[0];
+  let s = "";
+  // octopushy and the connection
+  s += R(10, 10, 140, 40) + T(22, 36, "octopushy", "big tx");
+  s += P("connection", { kind: "connection", title: "Connection", fields: sec("connection").fields.map((f) => [f.label, `${RD.value(f)}${f.tone ? ` ${RD.badge("warning", "warning")}` : ""}`]).concat([["Trust", `${RD.badge("Trusted", "success")} by ${res.trust.trustedBy}, ${RD.rel(res.trust.trustedAt)}`]]), note: issue.message, lines: sec("connection").lines,
+    actions: `<button type="button" class="button button--small" data-yaml="connection">${icon("code", 14)}Show line ${issue.line}</button><button type="button" class="button button--small" data-action="trust">${icon("shield", 14)}Trust again</button>` },
+    L([[150, 30], [470, 30], [470, 70]], "ln", 'marker-end="url(#arr)"') + T(166, 22, res.endpoint, "ko") +
+    `<path d="M174,42 L181,55 L167,55 Z" class="warn"/>` + T(188, 55, "tls not verified", "warn"));
+  // title block, top right
+  [[560, 110, "standalone", { kind: "type", title: "Standalone installation", fields: [["Type", "standalone"], ["Cluster", "none"]], lines: fl("connection", "type") }],
+   [670, 140, "policy manual", { kind: "policy", title: "Policy", fields: [["Approval", RD.badge("manual", "attention")]], note: fld("policy", "approval").note, lines: sec("policy").lines }],
+   [810, 180, "installation.yaml", { kind: "file", title: "installation.yaml", fields: [["Path", `<span class="mono">${esc(def.file)}</span>`], ["Lines", def.lineCount]], lines: [1, def.lineCount] }],
+  ].forEach(([x, w, label, info], i) => { s += P(`tb-${i}`, info, R(x, 10, w, 44) + T(x + 10, 38, label, "tx")); });
+  // the rack unit
+  s += P("host", { kind: "host", title: "Host moraband", fields: sec("hosts").fields.map((f) => [f.label, RD.value(f)]).concat([["Proxmox VE", res.proxmoxVersion], ["Up", RD.duration(h.uptimeSeconds)], ["Operations now", `${h.concurrentOperations} of ${h.limit}`]]), lines: sec("hosts").lines },
+    R(10, 70, 980, 510) + [[22, 82], [978, 82], [22, 568], [978, 568]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="3" class="ol"/>`).join("") +
+    T(36, 108, "moraband", "big strong") + T(36, 132, `pve ${res.proxmoxVersion} · up ${RD.duration(h.uptimeSeconds)}`) + L([[10, 148], [990, 148]]), "wide");
+  const gauge = (id, x, w, frac, label, info) => P(id, info, T(x, 104, label) + R(x, 114, w, 14, "track") + `<rect x="${x}" y="114" width="${(w * frac).toFixed(1)}" height="14" class="fill-ok"/>` + R(x, 114, w, 14, "ol ol--none") + [0.25, 0.5, 0.75].map((q) => L([[x + w * q, 128], [x + w * q, 134]])).join(""));
+  s += gauge("cpu", 340, 260, h.cpu, `cpu ${RD.pct(h.cpu)} of ${h.maxCpu} cores`, { kind: "observed", title: "CPU", fields: [["Load", RD.pct(h.cpu)], ["Cores", h.maxCpu]], source: "Observed from Proxmox, not in the definition." });
+  s += gauge("memory", 640, 330, h.memoryBytes / h.maxMemoryBytes, `memory ${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`, { kind: "observed", title: "Memory", fields: [["Used", RD.bytes(h.memoryBytes)], ["Of", RD.bytes(h.maxMemoryBytes)]], source: "Observed from Proxmox, not in the definition." });
+  // blades, sized by memory with a minimum width that fits a label
+  const all = [...res.guests.map((g) => ({ ...g, managed: true, mem: g.memoryBytes })), ...res.unmanaged.map((g) => ({ ...g, managed: false, mem: g.maxMemoryBytes, cores: g.maxCpu }))];
+  const avail = 940 - (all.length - 1) * 6 - 12, MIN = 28;
+  let lo = 0, hi = 100;
+  for (let n = 0; n < 40; n++) { const k = (lo + hi) / 2; all.reduce((a, g) => a + Math.max(MIN, (g.mem / RD.GiB) * k), 0) > avail ? (hi = k) : (lo = k); }
+  const totalMem = all.reduce((a, g) => a + g.mem, 0);
+  s += T(36, 174, `guests, width by memory · ${res.guests.length} managed, ${res.unmanaged.length} unmanaged · ${(totalMem / RD.GiB).toFixed(1)} GiB given of ${RD.bytes(h.maxMemoryBytes)}`);
+  let x = 30, falconX = 0;
+  all.forEach((g, i) => {
+    if (i === res.guests.length) x += 12;
+    const w = Math.max(MIN, (g.mem / RD.GiB) * lo), cx = x + w / 2;
+    const st = g.managed ? g.status : g.template ? "template" : "unmanaged";
+    const wide = w >= 100;
+    const lx = wide ? x + 22 : cx + 5;
+    let inner = R(x, 184, w, 200, g.managed ? "ol" : "ol dash", g.managed ? "" : 'style="fill:url(#hatch)"');
+    if (g.managed) inner += dot(wide ? x + 16 : cx, 200, RD.tone(g.status));
+    inner += `<text x="${lx}" y="378" transform="rotate(-90 ${lx} 378)" class="${g.managed ? "tx" : ""}">${esc(g.name)}${g.template ? " · template" : ` ${g.vmid}`}</text>`;
+    if (wide) inner += T(x + w - 10, 374, RD.bytes(g.mem), "", "end");
+    const info = g.managed
+      ? { kind: g.kind.toLowerCase(), title: g.name, fields: [["Status", RD.status(g.status)], ...(g.statusDetail ? [["Detail", esc(g.statusDetail)]] : []), ["VMID", g.vmid], ["Size", `${g.cores} vCPU · ${RD.bytes(g.mem)}`], ["Services", g.services]], source: "Defined in its own guest.yaml, under moraband/guests.", actions: `<a class="button button--small" href="${RD.href("machine")}">${icon("arrowRight", 14)}Open machine</a>` }
+      : { kind: g.template ? "template" : "unmanaged", title: g.name, fields: [["VMID", g.vmid], ["Kind", g.kind], ["Power", g.status], ["Size", `${g.cores} vCPU · ${RD.bytes(g.mem)}`], ["Tags", g.tags.length ? g.tags.map((t) => RD.chip(t)).join(" ") : "none"]], source: "Found on the host, not defined in the repository.", actions: g.template ? "" : `<button type="button" class="button button--small" data-action="adopt">Adopt</button>` };
+    s += P(`guest-${g.vmid}`, info, inner, g.managed ? "" : "faded");
+    if (g.current) falconX = x + 16 > cx ? cx : x + 16;
+    x += w + 6;
+  });
+  // bridges as rails, falcon's drop onto vmbr1
+  s += P("bridges", { kind: "network", title: "Bridges", fields: [["Bridges", RD.value(fld("hosts", "bridges"))], ["falcon", "on vmbr1, 10.1.0.99"]], lines: fl("hosts", "bridges") },
+    R(30, 406, 860, 4) + T(970, 414, "vmbr0", "big tx", "end") + R(30, 432, 860, 4) + T(970, 440, "vmbr1", "big tx", "end") +
+    L([[falconX, 384], [falconX, 432]]) + `<circle cx="${falconX}" cy="434" r="4" style="fill:var(--text-faint)"/>`);
+  // datastores (sample usage)
+  const ds = res.sample.datastores;
+  ds.forEach((d, i) => {
+    const bx = 36 + i * 476, w = 440;
+    s += P(`ds-${d.name}`, { kind: "datastore", title: `Datastore ${d.name}`, fields: [["Used for", d.role], ["Used", `${RD.bytes(d.usedBytes)} of ${RD.bytes(d.totalBytes)} <span class="muted">(sample)</span>`]], lines: fl("hosts", "datastores") },
+      T(bx, 482, `${d.name} · ${d.role}`, "tx") + T(bx + w, 482, `${RD.bytes(d.usedBytes)} of ${RD.bytes(d.totalBytes)}`, "", "end") + R(bx, 492, w, 14, "track") + `<rect x="${bx}" y="492" width="${(w * d.usedBytes / d.totalBytes).toFixed(1)}" height="14" class="fill-ok"/>` + R(bx, 492, w, 14, "ol ol--none"));
+  });
+  s += T(36, 540, "datastore usage: sample data");
+  s += P("snippets", { kind: "snippets", title: "Snippets", fields: sec("snippets").fields.map((f) => [f.label, RD.value(f)]).concat([["Datastore", res.snippets.datastore], ["Reachable", RD.badge("yes", "success")]]), note: fld("snippets", "user").note, lines: sec("snippets").lines },
+    R(512, 522, 440, 28) + T(524, 541, `snippets · ${res.snippets.user}@${res.snippets.datastore} · reachable`));
+  return svg(1000, 600, 16.5, 15.5, s);
+}
+
+// ---- Page ---------------------------------------------------------------------------------
+const drawing = { machine, service, node }[RD.kind]();
+const DEFAULT = { machine: "chassis", service: "gate", node: "host" }[RD.kind];
+main.innerHTML = `
+  <div class="head">
+    <div>
+      <div class="eyebrow">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}<span class="mono">${esc(res.address)}</span></h1>
+      <div class="row row--wrap">${RD.status(res.status)}<span class="muted">${esc(res.statusDetail ?? res.description)}</span></div>
+    </div>
+    <div class="row">${RD.actions(res, { small: true })}</div>
+  </div>
+  <div class="layout">
+    <section class="sheet">
+      <div class="sheet__bar"><span>${esc(def.file)}</span><button type="button" class="link-button" data-yaml="">${icon("code", 13)} YAML</button></div>
+      <div class="sheet__scroll">${drawing}</div>
+      <div class="legend"><span>Click a part to inspect it</span><span>— solid: declared</span><span>- - dashed: a boundary or what a stage acts on</span>${RD.kind === "node" ? "<span>hatched: unmanaged</span>" : ""}</div>
+    </section>
+    <aside class="card inspector"><div class="card__body" id="insp"></div></aside>
+  </div>`;
+
+const insp = document.getElementById("insp");
+function select(id, { focus = false } = {}) {
+  const info = parts[id] ? parts[id] : parts[DEFAULT];
+  id = parts[id] ? id : DEFAULT;
+  main.querySelectorAll(".part.sel").forEach((g) => g.classList.remove("sel"));
+  const g = main.querySelector(`.part[data-part="${id}"]`);
+  g.classList.add("sel");
+  if (focus) g.focus();
+  insp.innerHTML = `
+    <div class="insp__kind">${esc(info.kind)}</div>
+    <h2 class="insp__title">${esc(info.title)}</h2>
+    <dl class="insp__fields">${info.fields.map(([k, val]) => `<div><dt>${esc(k)}</dt><dd>${val}</dd></div>`).join("")}</dl>
+    ${info.note ? `<p class="insp__note">${esc(info.note)}</p>` : ""}
+    ${info.actions ? `<div class="insp__actions">${info.actions}</div>` : ""}
+    <div class="insp__src">${info.lines
+      ? `<div class="row row--between"><span class="xs muted">${info.lines[0] === info.lines[1] ? `Line ${info.lines[0]}` : `Lines ${info.lines[0]}–${info.lines[1]}`} of ${esc(def.file.split("/").pop())}</span><button type="button" class="link-button xs" id="open-yaml">Open</button></div>
+         <div class="code">${RD.yaml(def.text, { highlight: info.lines, dim: true })}</div>`
+      : `<span class="xs muted">${esc(info.source ?? "Not in the definition.")}</span>`}</div>`;
+  const code = insp.querySelector(".code"), hl = insp.querySelector(".yaml__line--hl");
+  if (code && hl) code.scrollTop = Math.max(0, hl.offsetTop - 48);
+  insp.querySelector("#open-yaml")?.addEventListener("click", () => RD.drawer("Definition", RD.yamlBox(def, { highlight: info.lines })));
+  history.replaceState(null, "", `${location.search}#part=${id}`);
+}
+main.addEventListener("click", (e) => {
+  if (e.target.closest(".fo, [data-action]")) return;
+  const g = e.target.closest(".part");
+  if (g) select(g.dataset.part);
+});
+main.addEventListener("keydown", (e) => {
+  const g = e.target.closest?.(".part");
+  if (g && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); select(g.dataset.part); }
+});
+select((location.hash.match(/part=([\w.-]+)/) ?? [])[1] ?? DEFAULT);
+</script>
+</body>
+</html>

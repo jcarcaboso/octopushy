@@ -1,6 +1,8 @@
 import type { Policy } from "../api/types";
 import { Badge } from "./Badge";
+import { Card } from "./Card";
 import { KeyValue } from "./KeyValue";
+import { LabelList } from "./LabelEditor";
 
 function SetBy({ value }: { value: string }) {
   return <span className="muted small">set by {value}</span>;
@@ -41,5 +43,29 @@ export function PolicyView({ policy }: { policy: Policy | null }) {
         },
       ]}
     />
+  );
+}
+
+/** The policy card of a guest or a service, with the agent labels its runs need. */
+export function PolicyCard({ policy, agentLabels, agentLabelsSetBy }: { policy: Policy | null; agentLabels: string[]; agentLabelsSetBy: string | null }) {
+  return (
+    <Card title="Policy">
+      <div className="stack">
+        <PolicyView policy={policy} />
+        <KeyValue
+          items={[
+            {
+              term: "Agent labels",
+              value: (
+                <span className="inline-group">
+                  <LabelList labels={agentLabels} empty="Any agent" />
+                  {agentLabelsSetBy ? <SetBy value={agentLabelsSetBy} /> : null}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </div>
+    </Card>
   );
 }
