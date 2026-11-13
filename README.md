@@ -240,7 +240,7 @@ Service workflows, the NixOS modules and their tests live in `jcarcaboso/octopus
 
 ## Development
 
-Requirements: .NET SDK **10.0.112** (strictly selected by `global.json`),
+Requirements: a .NET **10** SDK (`global.json` takes the newest 10.0 SDK installed),
 Rust **1.98.1** (tested toolchain, including cargo, rustfmt, and clippy), Node 24,
 pnpm (version pinned in `frontend/package.json`), Python 3, Bash, podman, Git,
 and [just](https://just.systems). The Rust workspace's declared MSRV remains 1.88.

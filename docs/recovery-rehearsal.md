@@ -49,7 +49,7 @@ The fake plan is not executable infrastructure and is never applied.
 
 ## Reproduce locally
 
-Use the repository's pinned .NET SDK and a disposable Docker-compatible engine.
+Use a .NET 10 SDK and a disposable Docker-compatible engine.
 The fixture creates its own container/databases; it never reads deployment
 connection strings or the retained `.dev/` directory.
 
