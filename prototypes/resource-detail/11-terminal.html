@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal</title>
+<!--
+  11 · Terminal. The page is the output of `octopushy describe <address>`, in the mono font, in one
+  full-height panel. Like kubectl describe: section headings, aligned "Key:  value" columns, lists as
+  indented rows, statuses as colored words, secrets as store:<key> (vN), the author's YAML comments as
+  # lines. Four views across the top (1 describe, 2 yaml, 3 runs, 4 events), switched by number keys or
+  a click. j/k or the arrows move a cursor by section, / filters lines, y jumps to the YAML (at the
+  cursor's section), ? shows the keys, and each kind has its own action keys in the bottom bar.
+  The YAML is view 2. Uses no `sample` data. The view is kept in the URL hash.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#main { height: 100vh; display: flex; min-width: 0; }
+/* The log surface stays dark in both themes, so the words take the tone that reads on it:
+   the -fg tones in dark, the paler -border tones in light. */
+.term {
+  --t-success: var(--success-fg); --t-warning: var(--warning-fg); --t-danger: var(--danger-fg);
+  --t-attention: var(--attention-fg); --t-info: var(--info-fg); --t-uncertain: var(--uncertain-fg);
+  --t-neutral: var(--log-text); --t-muted: var(--log-time); --t-link: var(--log-agent-text);
+  --t-line: color-mix(in srgb, var(--log-text) 12%, transparent);
+  --t-cursor: color-mix(in srgb, var(--log-text) 8%, transparent);
+  flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--log-bg); color: var(--log-text);
+  font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.6;
+}
+@media (prefers-color-scheme: light) {
+  .term { --t-success: var(--success-border); --t-warning: var(--warning-border); --t-danger: var(--danger-border);
+    --t-attention: var(--attention-border); --t-info: var(--info-border); --t-uncertain: var(--uncertain-border); }
+}
+.term [data-t="success"] { color: var(--t-success); }
+.term [data-t="warning"] { color: var(--t-warning); }
+.term [data-t="danger"] { color: var(--t-danger); }
+.term [data-t="attention"] { color: var(--t-attention); }
+.term [data-t="info"] { color: var(--t-info); }
+.term [data-t="uncertain"] { color: var(--t-uncertain); }
+.term [data-t="neutral"] { color: var(--t-neutral); }
+.term [data-t="muted"], .term .m { color: var(--t-muted); }
+.term a { color: var(--t-link); }
+.term a:hover { color: var(--t-link); text-decoration: underline; }
+.term button { font: inherit; background: none; border: 0; padding: 0; color: inherit; }
+.term :focus-visible { outline: 1px solid var(--t-link); outline-offset: 1px; border-radius: 2px; }
+.b { font-weight: 700; }
+
+.term__tabs { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-4); height: 2.5rem; border-bottom: 1px solid var(--t-line); flex: none; }
+.term__tab { padding: 0.15rem 0.6rem; border-radius: 3px; color: var(--t-muted); }
+.term__tab:hover { color: var(--log-text); }
+.term__tab kbd { font: inherit; color: var(--t-link); margin-right: 1ch; }
+.term__tab[aria-selected="true"] { background: var(--t-line); color: var(--log-text); }
+.term__where { margin-left: auto; color: var(--t-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding-left: var(--space-4); }
+
+.term__out { flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) 0 var(--space-8); }
+.term__out:focus-visible { outline: none; }
+.term__text { max-width: calc(112ch + 2 * var(--space-4)); }
+.ln { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 var(--space-4) 0 calc(var(--space-4) + var(--hang, 0) * 1ch); text-indent: calc(var(--hang, 0) * -1ch); border-left: 2px solid transparent; min-height: 1.6em; }
+.ln[data-stop] { cursor: pointer; }
+.ln[data-cur], .ln[data-in-cur] { background: var(--t-cursor); }
+.ln[data-cur] { border-left-color: var(--t-link); }
+.ln[data-in-cur] { border-left-color: color-mix(in srgb, var(--t-link) 35%, transparent); }
+.ln--hl { background: color-mix(in srgb, var(--t-link) 14%, transparent); }
+.ln--block { border-left-color: var(--t-attention) !important; background: color-mix(in srgb, var(--t-attention) 9%, transparent); }
+.ln[hidden] { display: none; }
+.prompt { color: var(--t-muted); }
+.prompt b { color: var(--log-text); font-weight: 500; }
+.k { padding: 0 0.3ch; border: 1px solid color-mix(in srgb, currentColor 45%, transparent); border-radius: 3px; }
+.key:hover .k, .key:hover { color: var(--log-text); }
+.yn { color: var(--t-muted); user-select: none; }
+
+.term__bar { display: flex; align-items: center; gap: var(--space-4); padding: 0 var(--space-4); min-height: 2.5rem; border-top: 1px solid var(--t-line); flex: none; color: var(--t-muted); flex-wrap: wrap; }
+.term__bar .key { white-space: nowrap; }
+.term__bar .key kbd { font: inherit; color: var(--t-link); margin-right: 0.6ch; }
+.term__bar .key:hover { color: var(--log-text); }
+.term__bar .sep { width: 1px; height: 1rem; background: var(--t-line); }
+.term__bar .acts kbd { color: var(--t-attention); }
+.term__pos { margin-left: auto; white-space: nowrap; }
+.filter { display: flex; align-items: center; gap: 0.5ch; flex: 1; min-width: 12rem; }
+.filter input { flex: 1; min-width: 0; font: inherit; color: var(--log-text); background: transparent; border: 0; outline: none; caret-color: var(--t-link); }
+.filter[hidden] { display: none; }
+
+.term__help { position: absolute; right: var(--space-6); bottom: 3.5rem; width: min(34rem, calc(100% - 2 * var(--space-6))); background: var(--log-bg); border: 1px solid var(--t-line); border-radius: var(--radius); padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-lg); }
+.term__help[hidden] { display: none; }
+.term__help .ln { padding-left: calc(var(--hang, 0) * 1ch); padding-right: 0; }
+.term { position: relative; }
+.menu { position: absolute; left: var(--space-4); bottom: 3.5rem; background: var(--log-bg); border: 1px solid var(--t-line); border-radius: var(--radius); padding: var(--space-2) 0; box-shadow: var(--shadow-lg); min-width: 30rem; max-width: calc(100% - 2 * var(--space-4)); }
+.menu[hidden] { display: none; }
+.menu button { display: block; width: 100%; text-align: left; padding: 0 var(--space-4); white-space: pre; }
+.menu button:hover, .menu button:focus-visible { background: var(--t-cursor); }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc } = RD;
+const kind = RD.kind;
+const main = RD.mount({ bare: true });
+const def = res.definition;
+const up = res.checks[0];
+const WIDTH = 110;
+
+// ---- Text helpers: plain text for widths, HTML for color --------------------------------
+const sp = (n) => " ".repeat(Math.max(0, n));
+const T = (text, tone) => (tone ? `<span data-t="${tone}">${esc(text)}</span>` : esc(text));
+const M = (text) => `<span class="m">${esc(text)}</span>`;
+const A = (text, href = "#") => `<a href="${href}">${esc(text)}</a>`;
+/** A value: html plus its plain length, so columns line up. */
+const v = (html, len) => ({ h: html, n: len });
+const tv = (text, tone) => v(T(text, tone), String(text).length);
+const st = (s) => tv(RD.statusLabel(s), RD.tone(s));
+const short = (sha) => sha.slice(0, 7);
+const secret = (s) => v(`store:${A(s.key)} ${M(`(v${s.activeVersion})`)}`, 6 + s.key.length + 5);
+const cell = (x, w) => { const c = typeof x === "string" ? tv(x) : x; const t = c.n > w - 1 ? c.h : c.h; return t + sp(w - c.n); };
+const bar = (fraction, width = 20) => { const n = Math.round(fraction * width); const t = fraction > 0.9 ? "danger" : fraction > 0.75 ? "warning" : "info"; return v(`${T("█".repeat(n), t)}${M("░".repeat(width - n))}`, width); };
+/** The 24 hour heartbeat as 48 block characters, each the worse of two 15 minute beats. */
+function beats(c) {
+  const rank = { up: 0, warn: 1, down: 2 }, out = [];
+  for (let i = 0; i < 96; i += 2) out.push([c.beats[i], c.beats[i + 1]].sort((a, b) => rank[b] - rank[a])[0]);
+  let html = "", run = "", cur = null;
+  const flush = () => { if (run) html += T(run, { up: "success", warn: "warning", down: "danger" }[cur]); run = ""; };
+  for (const b of out) { if (b !== cur) { flush(); cur = b; } run += "▇"; }
+  flush();
+  return v(html, 48);
+}
+
+// ---- The describe output: sections of rows, rendered with a key column per section --------
+// A row is ["kv", key, value, comment?] | ["c", comment] | ["sub", key] | ["table", head, rows, widths] | ["raw", html, len]
+const lines = [];   // { html, stop?, sec?, hang?, cls? }
+function render(sections) {
+  for (const s of sections) {
+    if (s.blank !== false && lines.length) lines.push({ html: "", sec: s.id });
+    const keyW = Math.max(12, ...s.rows.filter((r) => r[0] === "kv").map((r) => r[1].length + 3));
+    const ind = s.title ? 2 : 0;
+    if (s.title) lines.push({ html: `${T(s.title + ":", s.tone)}${s.aside ? "  " + s.aside : ""}`, stop: s.id, sec: s.id, cls: s.cls });
+    for (const r of s.rows) {
+      const ri = ind + (r.indent ?? 0);
+      if (r[0] === "kv") {
+        const [, key, val, comment] = r;
+        const value = typeof val === "string" ? tv(val) : val;
+        const at = ri + keyW;
+        let html = sp(ri) + esc(key + ":") + sp(keyW - key.length - 1) + value.h;
+        if (comment && at + value.n + 3 + comment.length <= WIDTH) html += "  " + M("# " + comment);
+        lines.push({ html, sec: s.id, hang: at, cls: s.cls, stop: s.title || lines.some((l) => l.stop === s.id) ? undefined : s.id });
+        if (comment && at + value.n + 3 + comment.length > WIDTH) lines.push({ html: sp(at) + M("# " + comment), sec: s.id, hang: at + 2, cls: s.cls });
+      } else if (r[0] === "c") {
+        lines.push({ html: sp(ri) + M("# " + r[1]), sec: s.id, hang: ri + 2, cls: s.cls });
+      } else if (r[0] === "sub") {
+        lines.push({ html: sp(ri) + esc(r[1] + ":"), sec: s.id, cls: s.cls });
+      } else if (r[0] === "raw") {
+        lines.push({ html: sp(ri) + r[1], sec: s.id, hang: ri + (r[2] ?? 0), cls: s.cls });
+      } else if (r[0] === "table") {
+        const [, head, rows, widths] = r;
+        lines.push({ html: sp(ri) + M(head.map((h, i) => (i < head.length - 1 ? h.padEnd(widths[i]) : h)).join("")), sec: s.id, cls: s.cls });
+        const lastAt = ri + widths.slice(0, -1).reduce((a, b) => a + b, 0);
+        for (const row of rows) lines.push({ html: sp(ri) + row.map((c, i) => (i < row.length - 1 ? cell(c, widths[i]) : (typeof c === "string" ? esc(c) : c.h))).join(""), sec: s.id, hang: lastAt, cls: s.cls });
+      }
+    }
+  }
+}
+const fromDef = (id, map = (f) => [f.label, f.type === "secret" ? secret(f.secret) : f.value, f.note]) => {
+  const s = def.sections.find((x) => x.id === id);
+  return [...(s.note ? [["c", s.note]] : []), ...s.fields.map((f) => ["kv", ...map(f)])];
+};
+const keyed = (f) => [f.key, f.type === "secret" ? secret(f.secret) : f.type === "url" ? v(A(f.value), f.value.length) : f.type === "list" ? v(`[${f.items.map(esc).join(", ")}]`, f.items.join(", ").length + 2) : f.value, f.note];
+const runRow = (r, { target = false } = {}) => [
+  v(A(`#${r.number}`), String(r.number).length + 1), r.title, st(r.status),
+  ...(target ? [r.address.split("/").pop()] : []),
+  RD.rel(r.createdAt), v(M(r.detail ?? ""), (r.detail ?? "").length),
+];
+const recentRuns = (n, target) => ["table", target ? ["RUN", "TITLE", "STATUS", "MACHINE", "STARTED", "DETAIL"] : ["RUN", "TITLE", "STATUS", "STARTED", "DETAIL"], res.runs.slice(0, n).map((r) => runRow(r, { target })), target ? [6, 15, 22, 13, 11, 30] : [6, 15, 22, 11, 30]];
+const uptimeRows = (c, label) => [
+  ["kv", "Check", v(`${esc(c.kind)}  ${A(c.url)}`, c.kind.length + 2 + c.url.length)],
+  ["kv", "Status", v(`${T("Up", "success")}  ${M(`answers in ${c.elapsedMs} ms, checked ${RD.rel(c.checkedAt)} by ${c.agent}`)}`, 4 + 40)],
+  ["kv", "Last 24 h", beats(c)],
+  ["kv", "Uptime", `${c.uptime.day}% day   ${c.uptime.week}% week   ${c.uptime.month}% 30 days`],
+  ...c.incidents.map((i, n) => ["kv", n ? "" : "Incidents", v(`${T(i.state === "down" ? "down" : "slow", i.state === "down" ? "danger" : "warning")} ${i.minutes} min, ${esc(RD.rel(i.at))}  ${M(i.detail)}`, 30)]),
+].map((r) => (r[1] === "" ? ["raw", sp(12) + r[2].h] : r));
+const keyHint = (k, label) => `<button type="button" class="key" data-key="${k}"><span class="k" data-t="attention">${esc(k)}</span> ${esc(label)}</button>`;
+
+function describe() {
+  const common = (extra) => ({ id: "summary", rows: [
+    ["kv", "Name", v(`<span class="b">${esc(res.name)}</span>`, res.name.length)],
+    ["kv", "Address", res.address],
+    ...extra,
+  ] });
+  if (kind === "machine") {
+    const c = res.configuration, o = res.observed, rv = res.revisions;
+    const lastOf = (a) => res.runs.find((r) => r.title === a);
+    return [
+      common([
+        ["kv", "Kind", v(`machine ${M("(VM on " )}${A(res.host, RD.href("node"))}${M(")")}`, 19 + res.host.length)],
+        ["kv", "Status", v(`${T("In sync", "success")}  ${M(`checked ${short(rv.checkedCommit)} ${RD.rel(rv.checkedAt)}`)}`, 9 + 24)],
+        ["kv", "Workflow", `${res.workflow.reference}  resolved ${res.workflow.resolved}, latest ${res.workflow.latest}`],
+        ["kv", "Definition", v(A(def.file), def.file.length)],
+        ["c", res.description],
+      ]),
+      { id: "placement", title: "Placement", rows: fromDef("placement", (f) => [f.label, f.link ? v(A(f.value, RD.href(f.link)), f.value.length) : f.value, f.note]) },
+      { id: "hardware", title: "Hardware", rows: [
+        ["kv", "Cores", v(`4                   ${M(`observed ${o.maxCpu}`)}`, 30)],
+        ["kv", "Memory", v(`8 GiB ${M("(8192 MiB)")}    ${M(`observed ${RD.bytes(o.maxMemoryBytes)}`)}`, 34)],
+        ["kv", "Disk", "300 GiB", "the system disk, on moraband's local-lvm"],
+      ] },
+      { id: "network", title: "Network", rows: fromDef("network", (f) => [f.label, f.type === "list" ? `[${f.items.join(", ")}]` : f.value, f.note]) },
+      { id: "inputs", title: "Inputs", rows: fromDef("inputs", keyed) },
+      { id: "secrets", title: "Secrets", rows: fromDef("secrets", keyed) },
+      { id: "access", title: "Access", rows: [
+        ["kv", "SSH", `${res.definition.sections.find((s) => s.id === "access").fields[1].value}@${res.accessAddress}`],
+        ["kv", "Managed key", v(`v${res.managedAccess.version} ${T("active", "success")}  ${M(res.managedAccess.fingerprint)}`, 12 + res.managedAccess.fingerprint.length)],
+        ["kv", "", v(M(`used ${RD.rel(res.managedAccess.lastUsedAt)}, v1 removed ${RD.rel(res.managedAccess.keys[1].removedAt)}`), 40)],
+        ["kv", "Host key", v(`v${res.hostKey.pinned.version} ${T("pinned", "success")}  ${M(res.hostKey.pinned.fingerprint)}`, 12 + 50)],
+        ["kv", "Agents", "any agent"],
+      ].map((r) => (r[1] === "" ? ["raw", sp(14) + r[2].h] : r)) },
+      { id: "schedules", title: "Configure actions", aside: M(`applied ${c.appliedAction} at ${short(c.appliedCommit)}, ${RD.rel(c.appliedAt)}`), rows: [
+        ["table", ["ACTION", "WHEN", "NEXT", "LAST RUN", "POLICY"], c.actions.map((a) => {
+          const s = c.schedules.find((x) => x.action === a.id), last = lastOf(a.id), pol = res.policy.actions.find((p) => p.action === a.id);
+          return [v(A(a.id), a.id.length), s ? s.human : a.onChange ? "on change" : "by hand", s ? RD.rel(s.nextAt) : "—",
+            last ? v(`${A(`#${last.number}`)} ${T(RD.statusLabel(last.status).toLowerCase(), RD.tone(last.status))} ${M(RD.rel(last.createdAt))}`, String(last.number).length + 2 + RD.statusLabel(last.status).length + 1 + RD.rel(last.createdAt).length) : tv("—", "muted"),
+            a.destructive ? tv("destructive", "danger") : pol ? tv(`approval ${pol.approval}`) : tv("")];
+        }), [16, 22, 11, 30, 20]],
+      ] },
+      { id: "services", title: "Services", aside: M(`${res.services.length} on this machine`), rows: [
+        ["table", ["NAME", "STATUS", "UPTIME", "LINK"], res.services.map((s) => [v(A(s.name, s.id === "open-webui" ? RD.href("service") : "#"), s.name.length), st(s.status), `${s.uptimeDay}%`, v(M(s.links[0]), s.links[0].length)]), [14, 22, 9, 40]],
+      ] },
+      { id: "proxmox", title: "Proxmox", aside: M(`observed on ${o.host}`), rows: [
+        ["kv", "Power", v(`${T(o.status, "success")}  ${M(`up ${RD.duration(o.uptimeSeconds)}`)}`, 7 + 12)],
+        ["kv", "VM", `${o.kind} ${o.vmid} "${o.name}", ${o.maxCpu} cores, ${RD.bytes(o.maxMemoryBytes)}`],
+        ["kv", "Tags", `[${o.tags.join(", ")}]`],
+        ["kv", "Outputs", `ipv4 ${res.outputs.ipv4}  mac ${res.outputs.mac}  scsi0 ${res.outputs.disks.scsi0}`],
+        ["kv", "Bound", v(`${A(res.binding.installation, RD.href("node"))} vmid ${res.binding.vmid}  ${M(RD.rel(res.binding.boundAt))}`, 30)],
+      ] },
+      { id: "revisions", title: "Revisions", rows: [
+        ["kv", "Desired", v(`${T(short(rv.desiredCommit), "info")}  ${M("in Git")}`, 15)],
+        ["kv", "Checked", v(`${T(short(rv.checkedCommit), "info")}  ${M(RD.rel(rv.checkedAt))}`, 16)],
+        ["kv", "Applied", v(`${T(short(rv.appliedCommit), "info")}  ${M(`${RD.rel(rv.appliedAt)}, apply #171`)}`, 26)],
+        ["kv", "Verified", v(`${T("yes", "success")}      ${M(RD.rel(rv.verifiedAt))}`, 16)],
+      ] },
+      { id: "uptime", title: "Uptime", aside: M("SSH"), rows: uptimeRows(up) },
+      { id: "policy", title: "Policy", rows: [
+        ["kv", "Approval", res.policy.approval, `set by ${res.policy.approvalSetBy}`],
+        ["kv", "Destructive", res.policy.destructive],
+        ...res.policy.actions.map((a) => ["kv", a.action, `approval ${a.approval}`]),
+      ] },
+      { id: "runs", title: "Recent runs", aside: M(`${res.runs.length} in all, press 3`), rows: [recentRuns(4)] },
+    ];
+  }
+  if (kind === "service") {
+    const p = res.pending, w = res.workflow;
+    const inputs = def.sections.find((s) => s.id === "inputs").fields;
+    return [
+      { id: "waiting", title: "Waiting for approval", tone: "attention", cls: "ln--block", blank: false, aside: M(`since ${RD.rel(p.since)}`), rows: [
+        ["kv", "Run", v(`${A(`#${p.run}`)} deploy  ${M("preview done, approval next")}`, 36)],
+        ["kv", "Change", v(`image ${T("0.6.30", "danger")} → ${T("0.6.34", "success")}`, 22)],
+        ["kv", "Commit", v(`${T(short(p.commit), "info")} by ${esc(p.author)}`, 7 + 4 + p.author.length)],
+        ["kv", "Then", "deploy → dns → verify"],
+        ["raw", sp(12) + `${keyHint("a", "approve")}   ${keyHint("x", "reject")}`],
+      ] },
+      common([
+        ["kv", "Kind", v(`service ${M("on ")}${A(res.guest.name, RD.href("machine"))} ${M(res.guest.accessAddress)}`, 30)],
+        ["kv", "Status", st(res.status)],
+        ["kv", "Workflow", v(`${w.reference}  resolved ${w.resolved}, ${T(`${w.latest} available`, "info")}`, 30)],
+        ["kv", "Definition", v(A(def.file), def.file.length)],
+        ["kv", "Deployed", v(`${T(short(res.appliedCommit), "info")}  ${M(RD.rel(res.appliedAt))}`, 20)],
+        ["c", res.description],
+      ]),
+      { id: "uptime", title: "Link", aside: A(res.links[0]), rows: uptimeRows(up) },
+      { id: "stages", title: "Stages", aside: M(w.reference), rows: [
+        ["table", ["STAGE", "EXECUTOR", "WHAT IT DOES"], w.stages.map((s) => [s.name, s.executor, v(M(s.detail), s.detail.length)]), [10, 12, 70]],
+      ] },
+      { id: "inputs", title: "Inputs", rows: [
+        ...inputs.filter((f) => !f.label.startsWith("env")).map((f) => f.pending
+          ? ["kv", f.key, v(`${esc(f.value)}  ${T("← waits, 0.6.30 is live", "attention")}`, f.value.length + 25)]
+          : ["kv", f.key, f.value, f.note]),
+        ["sub", "env"],
+        ...inputs.filter((f) => f.label.startsWith("env")).map((f) => Object.assign(["kv", f.key, f.value], { indent: 2 })),
+      ] },
+      { id: "secrets", title: "Secrets", rows: fromDef("secrets", keyed) },
+      { id: "policy", title: "Policy", rows: [
+        ["kv", "Approval", res.policy.approval, "a deploy waits for approval"],
+        ["kv", "Destructive", res.policy.destructive, `set by ${res.policy.destructiveSetBy}`],
+      ] },
+      { id: "runs", title: "Recent runs", aside: M(`${res.runs.length} in all, press 3`), rows: [recentRuns(4)] },
+    ];
+  }
+  // node
+  const h = res.hosts[0], is = res.issues[0];
+  const conn = def.sections.find((s) => s.id === "connection").fields;
+  return [
+    common([
+      ["kv", "Kind", "node (standalone Proxmox installation)"],
+      ["kv", "Status", v(`${T("Warning", "warning")}  ${M(res.statusDetail)}`, 9 + res.statusDetail.length)],
+      ["kv", "Proxmox VE", res.proxmoxVersion],
+      ["kv", "Observed", v(`${esc(RD.rel(res.observedAt))}  ${M("1 host, 9 guests")}`, 25)],
+      ["kv", "Definition", v(A(def.file), def.file.length)],
+      ["c", res.description],
+    ]),
+    { id: "issues", title: "Issues", tone: "warning", aside: M("1"), rows: [
+      ["raw", `${T("warning", "warning")}  ${A(`${def.file.split("/").pop()}:${is.line}`)}  ${esc(is.message)}`, 9],
+    ] },
+    { id: "connection", title: "Connection", rows: [
+      ["kv", "Endpoint", v(A(res.endpoint), res.endpoint.length)],
+      ["kv", "TLS", tv("not verified", "warning"), "tls.verify is false"],
+      ["kv", "Read-only token", secret(conn[3].secret)],
+      ["kv", "Privileged token", secret(conn[4].secret)],
+      ["kv", "Trust", v(`${T("trusted", "success")} by ${esc(res.trust.trustedBy)}  ${M(RD.rel(res.trust.trustedAt))}`, 30)],
+    ] },
+    { id: "hosts", title: `Host ${h.name}`, aside: T("online", "success"), rows: [
+      ["kv", "CPU", v(`${bar(h.cpu).h}  ${RD.pct(h.cpu)} of ${h.maxCpu} cores`, 20 + 18)],
+      ["kv", "Memory", v(`${bar(h.memoryBytes / h.maxMemoryBytes).h}  ${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`, 20 + 22)],
+      ["kv", "Uptime", RD.duration(h.uptimeSeconds)],
+      ["kv", "Operations", `${h.concurrentOperations} running, limit ${h.limit}`],
+      ["kv", "Datastores", "images local, disks local-lvm, snippets local"],
+      ["kv", "Bridges", "[vmbr0, vmbr1]"],
+    ] },
+    { id: "guests", title: "Guests", aside: v(`${M(`${res.guests.length} managed: `)}${T("1 waits", "attention")}${M(", ")}${T("1 failed", "danger")}`).h, rows: [
+      ["table", ["NAME", "VMID", "KIND", "POWER", "SIZE", "SERVICES", "STATUS"], res.guests.map((g) => [
+        v(A(g.name, g.current ? RD.href("machine") : "#"), g.name.length), String(g.vmid), g.kind, tv(g.power, g.power === "running" ? "success" : "muted"),
+        `${g.cores} vCPU ${RD.bytes(g.memoryBytes)}`, String(g.services),
+        v(`${T(RD.statusLabel(g.status), RD.tone(g.status))}${g.statusDetail ? "  " + M(g.statusDetail.split(" ").slice(0, 2).join(" ")) : ""}`, 0)]), [15, 7, 11, 10, 16, 10, 40]],
+    ] },
+    { id: "unmanaged", title: "Unmanaged guests", aside: M(`${res.unmanaged.length}, not in Git`), rows: [
+      ["table", ["NAME", "VMID", "KIND", "POWER", "SIZE", "TAGS"], res.unmanaged.map((g) => [
+        g.name, String(g.vmid), g.kind, tv(g.status, g.status === "running" ? "success" : "muted"), `${g.maxCpu} vCPU ${RD.bytes(g.maxMemoryBytes)}`,
+        v(M(g.template ? "template" : g.tags.length ? `[${g.tags.join(", ")}]` : "—"), 10)]), [15, 7, 11, 10, 16, 20]],
+    ] },
+    { id: "snippets", title: "Snippets", rows: [
+      ["kv", "SSH user", res.snippets.user, "uploads cloud-init snippets over SSH"],
+      ["kv", "Datastore", res.snippets.datastore],
+      ["kv", "Key", v(M(res.snippets.fingerprint), res.snippets.fingerprint.length)],
+      ["kv", "Reachable", v(`${T("yes", "success")}  ${M("from moraband")}`, 18)],
+    ] },
+    { id: "uptime", title: "Uptime", aside: M("Proxmox API"), rows: uptimeRows(up) },
+    { id: "policy", title: "Policy", rows: [["kv", "Approval", res.policy.approval, "every change on this installation waits for approval"], ["kv", "Destructive", res.policy.destructive]] },
+    { id: "runs", title: "Runs of its guests", aside: M("press 3"), rows: [recentRuns(4, true)] },
+  ];
+}
+
+// ---- The other views ---------------------------------------------------------------
+function yamlLines() {
+  const out = [], n = def.lineCount, w = String(n).length;
+  def.text.split("\n").forEach((line, i) => {
+    const m = line.match(/^(\s*(?:- )?)(#.*|[\w.-]+:(?=\s|$))?(.*)$/);
+    let body = esc(line);
+    if (m) {
+      const [, indent, head = "", rest] = m;
+      const c = rest.match(/^(.*?)(\s+#.*)$/);
+      const tail = c ? `${esc(c[1])}${M(c[2])}` : esc(rest);
+      body = head.startsWith("#") ? esc(indent) + M(head + rest) : esc(indent) + (head ? T(head, "info") : "") + tail;
+    }
+    const top = /^[\w]/.test(line);
+    out.push({ html: `<span class="yn">${String(i + 1).padStart(w)}  </span>${body}`, stop: top ? `y${i + 1}` : undefined, line: i + 1, hang: w + 2 });
+  });
+  return out;
+}
+function runsLines() {
+  const target = kind === "node";
+  const head = ["RUN", "TITLE", ...(target ? ["MACHINE"] : ["OPERATION"]), "STATUS", "STAGES", "COMMIT", "STARTED", "TOOK", "DETAIL"];
+  const widths = [6, 15, target ? 13 : 11, 22, 8, 9, 11, 8];
+  const stages = (r) => v(r.steps.map((s) => (s.status === "todo" ? M("·") : T("■", RD.tone(s.status)))).join(""), r.steps.length);
+  const out = [{ html: M(head.map((h, i) => (i < head.length - 1 ? h.padEnd(widths[i]) : h)).join("")) }];
+  for (const r of res.runs) {
+    const cells = [v(A(`#${r.number}`), String(r.number).length + 1), r.title, target ? r.address.split("/").pop() : r.operation, st(r.status),
+      stages(r), r.commit ? tv(short(r.commit), "info") : "—", RD.rel(r.createdAt), r.seconds ? RD.duration(r.seconds) : "—"];
+    const at = widths.reduce((a, b) => a + b, 0);
+    out.push({ html: cells.map((c, i) => cell(c, widths[i])).join("") + M(r.detail ?? ""), stop: `r${r.number}`, hang: at });
+  }
+  out.push({ html: "" }, { html: M(`${res.runs.length} runs. Enter opens the run.`) });
+  return out;
+}
+function eventsLines() {
+  const out = [{ html: M("TIME".padEnd(18) + "TYPE".padEnd(10) + "EVENT") }];
+  for (const e of res.events) {
+    const future = new Date(e.at).getTime() > RD.NOW;
+    out.push({ html: `${M(RD.clock(e.at).padEnd(18))}${esc(e.type.padEnd(10))}${T(e.title, e.tone === "neutral" ? null : e.tone)}  ${M(e.detail)}${future ? "  " + M("(next)") : ""}`, stop: `e${e.at}`, hang: 28 });
+  }
+  return out;
+}
+
+// ---- State, views, cursor, filter ---------------------------------------------------
+const VIEWS = [["describe", "describe"], ["yaml", "yaml"], ["runs", "runs"], ["events", "events"]];
+const prompts = {
+  describe: `octopushy describe ${res.address}`,
+  yaml: `octopushy get ${res.address} -o yaml`,
+  runs: `octopushy runs ${res.address}`,
+  events: `octopushy events ${res.address}`,
+};
+const ACTS = {
+  machine: [["p", "plan", "Plan now"], ["e", "edit", "Edit"], ["r", "run an action", null]],
+  service: [["a", "approve", "Approve"], ["x", "reject", "Reject"], ["d", "deploy", "Deploy"]],
+  node: [["o", "observe", "Observe now"]],
+}[kind];
+let state = { view: "describe", cur: null, filter: "", hl: null };
+const viewFromHash = () => { const h = location.hash.slice(1); return VIEWS.some(([id]) => id === h) ? h : "describe"; };
+state.view = viewFromHash();
+
+main.innerHTML = `
+  <section class="term" aria-label="${esc(res.address)}">
+    <div class="term__tabs" role="tablist">${VIEWS.map(([id], i) => `<button type="button" class="term__tab" role="tab" data-view="${id}"><kbd>${i + 1}</kbd>${id}</button>`).join("")}
+      <span class="term__where">${RD.crumbs()}</span></div>
+    <div class="term__out" tabindex="0"><div class="term__text"></div></div>
+    <div class="term__bar">
+      <button type="button" class="key" data-key="j"><kbd>j/k</kbd>move</button>
+      <button type="button" class="key" data-key="/"><kbd>/</kbd>filter</button>
+      <button type="button" class="key" data-key="y"><kbd>y</kbd>yaml</button>
+      <button type="button" class="key" data-key="?"><kbd>?</kbd>keys</button>
+      <span class="sep"></span>
+      <span class="acts row" style="gap:var(--space-4)">${ACTS.map(([k, l]) => `<button type="button" class="key" data-key="${k}"><kbd>${k}</kbd>${l}</button>`).join("")}</span>
+      <label class="filter" hidden><span data-t="info">/</span><input type="text" aria-label="Filter lines" spellcheck="false" placeholder="filter lines, Enter keeps, Esc clears"></label>
+      <span class="term__pos"></span>
+    </div>
+    <div class="menu" hidden role="menu"></div>
+    <div class="term__help" hidden role="dialog" aria-label="Keys"></div>
+  </section>`;
+const $ = (s) => main.querySelector(s);
+const out = $(".term__out"), text = $(".term__text"), pos = $(".term__pos"), filterBox = $(".filter"), filterInput = $(".filter input"), help = $(".term__help"), menu = $(".menu");
+
+let current = [];
+function build() {
+  if (state.view === "describe") { lines.length = 0; render(describe()); current = lines.slice(); }
+  else current = { yaml: yamlLines, runs: runsLines, events: eventsLines }[state.view]();
+  const head = [{ html: `<span class="prompt">$ <b>${esc(prompts[state.view])}</b></span>` }, { html: "" }];
+  text.innerHTML = [...head, ...current].map((l) => `<div class="ln${l.cls ? " " + l.cls : ""}${state.hl && l.line >= state.hl[0] && l.line <= state.hl[1] ? " ln--hl" : ""}"${l.stop ? ` data-stop="${esc(l.stop)}"` : ""}${l.sec ? ` data-sec="${esc(l.sec)}"` : ""}${l.line ? ` data-line="${l.line}"` : ""}${l.hang ? ` style="--hang:${l.hang}"` : ""}>${l.html}</div>`).join("");
+  main.querySelectorAll(".term__tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.view === state.view)));
+  const stops = stopsList();
+  if (!stops.some((s) => s.dataset.stop === state.cur)) state.cur = state.hl ? `y${state.hl[0]}` : stops[0]?.dataset.stop ?? null;
+  if (state.hl && !stops.some((s) => s.dataset.stop === state.cur)) state.cur = stops.filter((s) => +s.dataset.line <= state.hl[0]).pop()?.dataset.stop ?? stops[0]?.dataset.stop;
+  applyFilter();
+  paintCursor(true);
+}
+const stopsList = () => [...text.querySelectorAll(".ln[data-stop]")].filter((l) => !l.hidden);
+function paintCursor(scroll) {
+  text.querySelectorAll("[data-cur], [data-in-cur]").forEach((l) => { l.removeAttribute("data-cur"); l.removeAttribute("data-in-cur"); });
+  const stops = stopsList();
+  const el = stops.find((s) => s.dataset.stop === state.cur);
+  if (el) {
+    el.setAttribute("data-cur", "");
+    if (state.view === "describe") text.querySelectorAll(`.ln[data-sec="${CSS.escape(state.cur)}"]:not([data-stop])`).forEach((l) => l.textContent.trim() && l.setAttribute("data-in-cur", ""));
+    if (scroll) el.scrollIntoView({ block: "nearest" });
+  }
+  const i = stops.indexOf(el);
+  const unit = { describe: "section", yaml: "key", runs: "run", events: "event" }[state.view];
+  pos.textContent = `${unit} ${i + 1}/${stops.length}${state.filter ? `  ·  /${state.filter}` : ""}`;
+}
+function move(d) {
+  const stops = stopsList(); if (!stops.length) return;
+  const i = stops.findIndex((s) => s.dataset.stop === state.cur);
+  state.cur = stops[Math.max(0, Math.min(stops.length - 1, i + d))].dataset.stop;
+  paintCursor(true);
+}
+function applyFilter() {
+  const q = state.filter.toLowerCase();
+  const all = [...text.querySelectorAll(".ln")];
+  all.forEach((l, i) => { l.hidden = i > 1 && !!q && !l.textContent.toLowerCase().includes(q); });
+  if (q && state.view === "describe") {
+    // A heading stays when one of its lines matches, so a match keeps its context.
+    for (const l of all.filter((x) => x.hasAttribute("data-sec") && !x.hidden)) { const h = text.querySelector(`.ln[data-stop="${CSS.escape(l.dataset.sec)}"]`); if (h) h.hidden = false; }
+    all.forEach((l) => { if (!l.textContent.trim() && l.dataset.sec) l.hidden = true; });
+  }
+}
+function setView(view, { hl = null } = {}) {
+  state.view = view; state.hl = hl;
+  if (location.hash.slice(1) !== view) history.replaceState(null, "", view === "describe" ? location.pathname + location.search : `#${view}`);
+  build();
+  out.scrollTop = 0;
+  if (hl) text.querySelector(`.ln[data-line="${hl[0]}"]`)?.scrollIntoView({ block: "center" });
+}
+function openFilter() { filterBox.hidden = false; filterInput.value = state.filter; filterInput.focus(); }
+function closeFilter(clear) { if (clear) { state.filter = ""; filterInput.value = ""; applyFilter(); paintCursor(); } filterBox.hidden = true; out.focus(); }
+function toggleHelp(show = help.hidden) {
+  help.hidden = !show;
+  if (!show) return;
+  const k = (key, what) => `<div class="ln" style="--hang:12"><span data-t="info">${esc(key.padEnd(12))}</span>${esc(what)}</div>`;
+  help.innerHTML = [
+    `<div class="ln m">Keys</div>`,
+    k("1 2 3 4", "describe, yaml, runs, events"),
+    k("j k ↓ ↑", "next or previous section, key, run or event"),
+    k("g G", "first, last"),
+    k("/", "filter the lines; Enter keeps it, Esc clears it"),
+    k("y", "the YAML, at the section under the cursor"),
+    k("Enter", "open what the cursor is on"),
+    ...ACTS.map(([key, label]) => `<div class="ln" style="--hang:12"><span data-t="attention">${esc(key.padEnd(12))}</span>${esc(label)}</div>`),
+    k("?  Esc", "close this"),
+    `<div class="ln m">Everything also works with the mouse.</div>`,
+  ].join("");
+}
+function runMenu(show = menu.hidden) {
+  menu.hidden = !show;
+  if (!show) return;
+  const acts = res.configuration.actions;
+  menu.innerHTML = `<div class="ln m" style="padding:0 var(--space-4)">run which action?</div>` + acts.map((a, i) => `<button type="button" role="menuitem" data-run="${a.id}"><span data-t="attention">${i + 1}</span>  ${esc(a.id.padEnd(16))}${M(a.description)}${a.destructive ? "  " + T("destructive", "danger") : ""}</button>`).join("");
+  menu.querySelector("button").focus();
+}
+function action(k) {
+  if (k === "r") return runMenu();
+  const a = ACTS.find(([key]) => key === k);
+  if (a) RD.toast(`${a[2]}: not wired in a prototype`);
+}
+function jumpYaml() {
+  let hl = null;
+  if (state.view === "describe" && state.cur) {
+    const ids = { hardware: "hardware", placement: "placement", network: "network", inputs: "inputs", secrets: "secrets", schedules: "schedules", policy: "policy", access: "access", connection: "connection", hosts: "hosts", snippets: "snippets", issues: "connection", waiting: "inputs" };
+    const s = def.sections.find((x) => x.id === ids[state.cur]);
+    if (s) hl = state.cur === "waiting" ? [s.fields.find((f) => f.pending).line, s.fields.find((f) => f.pending).line] : state.cur === "issues" ? [res.issues[0].line, res.issues[0].line] : s.lines;
+  }
+  setView("yaml", { hl });
+}
+function key(k) {
+  if (k === "?") return toggleHelp();
+  if (k === "/") return openFilter();
+  if (k === "j" || k === "ArrowDown") return move(1);
+  if (k === "k" || k === "ArrowUp") return move(-1);
+  if (k === "g" || k === "Home") return move(-1e9);
+  if (k === "G" || k === "End") return move(1e9);
+  if (k === "y") return jumpYaml();
+  if (k === "Enter") {
+    if (state.view === "runs" && state.cur) return RD.toast(`Run ${state.cur.replace("r", "#")}: not wired in a prototype`);
+    if (state.view === "describe" && state.cur === "waiting") return RD.toast("Run #214: not wired in a prototype");
+    return;
+  }
+  const n = "1234".indexOf(k);
+  if (n >= 0) return setView(VIEWS[n][0]);
+  if (ACTS.some(([a]) => a === k)) return action(k);
+}
+
+addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target === filterInput) {
+    if (e.key === "Escape") { e.preventDefault(); closeFilter(true); }
+    else if (e.key === "Enter") { e.preventDefault(); closeFilter(false); }
+    return;
+  }
+  if (document.querySelector(".drawer")) return;
+  if (!menu.hidden) {
+    const n = parseInt(e.key, 10), acts = res.configuration.actions;
+    if (n >= 1 && n <= acts.length) { e.preventDefault(); runMenu(false); RD.toast(`Run ${acts[n - 1].id}: not wired in a prototype`); out.focus(); return; }
+    if (e.key === "Escape" || e.key === "r") { e.preventDefault(); runMenu(false); out.focus(); return; }
+    return;
+  }
+  if (e.key === "Escape") { if (!help.hidden) toggleHelp(false); else if (state.filter) closeFilter(true); return; }
+  if (e.target.closest("button, a") && e.key === "Enter") return;
+  const handled = ["?", "/", "j", "k", "g", "G", "y", "Enter", "1", "2", "3", "4", "ArrowDown", "ArrowUp", "Home", "End", ...ACTS.map(([a]) => a)];
+  if (handled.includes(e.key)) { e.preventDefault(); key(e.key); }
+});
+filterInput.addEventListener("input", () => { state.filter = filterInput.value; applyFilter(); const s = stopsList(); if (!s.some((x) => x.dataset.stop === state.cur)) state.cur = s[0]?.dataset.stop ?? null; paintCursor(); });
+main.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-view]"); if (tab) return setView(tab.dataset.view);
+  const k = e.target.closest("[data-key]"); if (k) { e.preventDefault(); return key(k.dataset.key); }
+  const r = e.target.closest("[data-run]"); if (r) { runMenu(false); return RD.toast(`Run ${r.dataset.run}: not wired in a prototype`); }
+  if (!menu.hidden && !e.target.closest(".menu")) runMenu(false);
+  if (e.target.closest("a")) { if (e.target.closest("a").getAttribute("href") === "#") e.preventDefault(); return; }
+  const ln = e.target.closest(".ln");
+  if (ln && text.contains(ln)) {
+    const stop = ln.dataset.stop ?? ln.dataset.sec;
+    if (stop && stopsList().some((s) => s.dataset.stop === stop)) { state.cur = stop; paintCursor(); }
+  }
+});
+addEventListener("hashchange", () => { if (viewFromHash() !== state.view) setView(viewFromHash()); });
+build();
+out.focus({ preventScroll: true });
+</script>
+</body>
+</html>

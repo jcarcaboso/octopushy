@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { Issue } from "../api/types";
 import { CopyButton } from "./CopyButton";
 
@@ -45,10 +45,19 @@ interface Props {
   file: string | null;
   text: string | null;
   issues?: Issue[];
+  /** First and last 1-based line to mark, inclusive; the first is scrolled into view. */
+  highlight?: [number, number] | null;
 }
 
 /** A definition file, read-only, with line numbers; lines with issues are marked. */
-export function DefinitionView({ file, text, issues = [] }: Props) {
+export function DefinitionView({ file, text, issues = [], highlight = null }: Props) {
+  const first = useRef<HTMLSpanElement>(null);
+  const start = highlight?.[0];
+  // After a frame: in a dialog, the lines are laid out only once the dialog has opened.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => first.current?.scrollIntoView?.({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [start]);
   if (text === null) {
     return <p className="muted">The definition text is not available for the current revision.</p>;
   }
@@ -70,10 +79,12 @@ export function DefinitionView({ file, text, issues = [] }: Props) {
             const n = i + 1;
             const lineIssues = marks.get(n);
             const severity = lineIssues?.some((x) => x.severity === "error") ? "error" : lineIssues ? "warning" : null;
+            const marked = highlight !== null && n >= highlight[0] && n <= highlight[1];
             return (
               <Fragment key={n}>
                 <span
-                  className={severity ? `definition__line definition__line--${severity}` : "definition__line"}
+                  ref={marked && n === highlight[0] ? first : undefined}
+                  className={["definition__line", severity ? `definition__line--${severity}` : "", marked ? "definition__line--marked" : ""].filter(Boolean).join(" ")}
                   title={lineIssues?.map((x) => x.message).join("\n")}
                 >
                   <span className="definition__number" aria-hidden="true">

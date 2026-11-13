@@ -2,6 +2,8 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InstallationDetail, InstallationSummary, InstallationTrust, Inventory } from "../api/types";
+import { guest } from "../test/inventory";
+import { runDetail } from "../test/runs";
 import { mockApi, problem, renderAt } from "../test/utils";
 import { InstallationPage } from "./InstallationPage";
 import { InventoryPage } from "./InventoryPage";
@@ -136,5 +138,50 @@ describe("installation trust", () => {
     renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory" });
 
     expect(await screen.findByRole("link", { name: "Needs trust" })).toHaveAttribute("href", `/installations/${id}#trust`);
+  });
+});
+
+describe("installation page", () => {
+  const trusted = { untrusted: [], trustedAt: "2026-10-27T10:00:00Z", trustedBy: "ops" };
+
+  it("lists its guests' runs that wait for approval and the guests that failed, each linked to its run", async () => {
+    const waiting = { ...runDetail().run, id: "run-49", number: 49, detail: "Approval is manual." };
+    const failedRun = { ...runDetail().run, id: "run-44", number: 44, status: "failed" };
+    const guests = [
+      { ...guest("bb", []), activeRun: waiting, status: "awaiting-approval" },
+      { ...guest("media", []), lastRun: failedRun, status: "failed", statusDetail: "Run #44 failed." },
+      guest("pbs", []),
+    ];
+    mockApi({ [`GET /api/installations/${id}`]: () => detail({ ...summary(trusted), guests }) });
+    renderPage();
+
+    const panel = await screen.findByRole("region", { name: "Runs of its guests" });
+    expect(within(panel).getByRole("heading")).toHaveTextContent("1 guest waits for your approval, 1 failed");
+    const rows = within(panel).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Provision #49");
+    expect(within(rows[0]).getByRole("link", { name: "Open run" })).toHaveAttribute("href", "/runs/run-49");
+    expect(rows[1]).toHaveTextContent("Provision #44 failed");
+    expect(within(rows[1]).getByRole("link", { name: "Open run" })).toHaveAttribute("href", "/runs/run-44");
+  });
+
+  it("shows no runs panel when nothing waits or failed, and its figures and one host in them", async () => {
+    const host = { name: "pve01", declared: true, online: true, cpu: 0.25, maxCpu: 8, memoryBytes: 16 * 1024 ** 3, maxMemoryBytes: 64 * 1024 ** 3,
+      uptimeSeconds: 86400 * 3, concurrentOperations: 2, endpoint: endpoint };
+    mockApi({
+      [`GET /api/installations/${id}`]: () =>
+        detail({ ...summary(trusted), hosts: [host], guests: [guest("pbs", [])], unmanagedCount: 1, proxmoxVersion: "9.0.11", observedAt: "2026-11-13T08:00:00Z" }),
+    });
+    renderPage();
+
+    const figure = async (label: string) => (await screen.findByText(label, { selector: ".glance__label" })).parentElement!;
+    expect(await figure("Host")).toHaveTextContent("Onlineup 3 d");
+    expect(within(await figure("CPU")).getByRole("meter", { name: "CPU in use" })).toHaveAttribute("aria-valuenow", "25");
+    expect(await figure("Memory")).toHaveTextContent("64.0 GiB");
+    expect(await figure("Guests")).toHaveTextContent("1managed · 1 unmanaged");
+    expect(await figure("Proxmox VE")).toHaveTextContent("9.0.11");
+    expect(screen.queryByRole("region", { name: "Runs of its guests" })).toBeNull();
+    // One declared host is in the figures; its table is left out.
+    expect(screen.queryByRole("heading", { name: "Hosts" })).toBeNull();
   });
 });

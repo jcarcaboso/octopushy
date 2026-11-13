@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Readme</title>
+<!--
+  14 · Readme. The page is a short document Octopushy writes from the definition, for someone who
+  has never seen this machine: a name, one lead sentence, then small sections of plain sentences.
+  Every value is an inline chip or link, so the eye can jump from value to value; a chip that
+  comes from the definition opens the YAML at its line. The comments the author wrote in the YAML
+  are quoted, set apart, in the author's voice. A sticky margin holds the status, the actions,
+  "On this page" and "View source". Uses no `sample` data.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.page { display: grid; grid-template-columns: minmax(0, 68ch) 14rem; gap: var(--space-8) 4.5rem; justify-content: center; align-items: start; padding-bottom: 6rem; }
+@media (max-width: 1240px) { .page { gap: var(--space-8) 2.5rem; grid-template-columns: minmax(0, 68ch) 12.5rem; } }
+@media (max-width: 860px) { .page { grid-template-columns: minmax(0, 1fr); } .margin { position: static; order: -1; } }
+
+/* The document */
+.doc { font-size: 1.0625rem; line-height: 1.75; color: var(--text); min-width: 0; padding-top: var(--space-6); }
+.doc .crumbs { font-size: var(--text-sm); color: var(--text-muted); margin-bottom: var(--space-3); }
+.doc h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; display: flex; align-items: center; gap: var(--space-3); }
+.doc .lead { font-size: 1.25rem; line-height: 1.65; margin-top: var(--space-4); }
+.doc .lead + p { margin-top: var(--space-3); color: var(--text-muted); }
+.doc section { margin-top: 2.75rem; scroll-margin-top: var(--space-6); }
+.doc h2 { display: flex; align-items: baseline; gap: var(--space-3); font-size: 1.3125rem; font-weight: 650; letter-spacing: -0.01em; margin-bottom: var(--space-2); }
+.doc h2 .src { margin-left: auto; font-size: var(--text-xs); font-weight: 400; letter-spacing: 0; color: var(--text-faint); border: 0; background: none; padding: 0; font-family: var(--font-mono); }
+.doc h2 .src:hover { color: var(--link); text-decoration: underline; }
+.doc p + p { margin-top: var(--space-3); }
+.doc a { color: var(--link); }
+
+/* Inline values: a chip in the line of text */
+.v { display: inline; font: inherit; font-size: 0.86em; line-height: 1; padding: 0.18em 0.45em; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); white-space: nowrap; vertical-align: 0.06em; }
+.v--mono { font-family: var(--font-mono); font-size: 0.8em; }
+.v--wrap { white-space: normal; overflow-wrap: anywhere; }
+button.v { cursor: pointer; }
+button.v:hover { border-color: var(--link); color: var(--link); }
+.v[data-tone] { background: var(--tone-bg); border-color: var(--tone-border); color: var(--tone-fg); }
+a.v { color: var(--link); text-decoration: none; }
+a.v:hover { border-color: var(--link); }
+.v svg { vertical-align: -0.12em; margin-left: 0.25em; }
+.inline-meter { display: inline-block; width: 3.5rem; vertical-align: 0.15em; margin: 0 0.3em; }
+
+/* The author's comments, quoted */
+.note { margin: var(--space-4) 0; padding: var(--space-1) 0 var(--space-1) var(--space-5); border-left: 3px solid var(--border-strong); color: var(--text-muted); font-style: italic; font-size: 1.0625rem; line-height: 1.65; }
+.note footer { margin-top: var(--space-1); font-style: normal; font-size: var(--text-sm); color: var(--text-faint); }
+.note footer button { font: inherit; color: var(--link); background: none; border: 0; padding: 0; }
+.note footer button:hover { text-decoration: underline; }
+
+/* A marked note: something that needs a person, or a warning */
+.callout { margin: var(--space-5) 0 0; padding: var(--space-4) var(--space-5); border: 1px solid var(--tone-border); border-left-width: 4px; border-radius: var(--radius); background: var(--tone-bg); }
+.callout__head { display: flex; align-items: center; gap: var(--space-2); color: var(--tone-fg); font-weight: 650; font-size: var(--text-lg); }
+.callout p { margin-top: var(--space-2); }
+.callout .row { margin-top: var(--space-4); }
+
+/* Compact lists inside the document: fixed columns, not prose */
+.ls { margin-top: var(--space-3); border-top: 1px solid var(--border); font-size: 0.9375rem; line-height: 1.5; }
+.ls > li { display: grid; gap: var(--space-3); align-items: baseline; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.ls .sub { display: block; font-size: var(--text-sm); color: var(--text-muted); }
+.ls .dot { transform: translateY(-0.05em); }
+.ls--svc > li { grid-template-columns: 0.75rem 8.5rem minmax(0, 1fr) max-content; }
+.ls--act > li { grid-template-columns: 9rem minmax(0, 1fr) 9.5rem; }
+.ls--guest > li { grid-template-columns: 0.75rem 8.5rem 6rem minmax(0, 1fr) max-content; }
+.ls--hist > li { grid-template-columns: 6.5rem 0.75rem minmax(0, 1fr) 5rem; }
+.ls--stage { counter-reset: stage; }
+.ls--stage > li { grid-template-columns: 1.75rem 5.5rem minmax(0, 1fr) max-content; }
+.ls--stage > li::before { counter-increment: stage; content: counter(stage); display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 1px solid var(--border-strong); font-size: var(--text-xs); color: var(--text-muted); align-self: center; }
+.ls .when { text-align: right; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ls .date { font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .ls--svc > li, .ls--guest > li { grid-template-columns: 0.75rem minmax(0, 1fr) max-content; }
+  .ls--svc > li > :nth-child(3), .ls--guest > li > :nth-child(3), .ls--guest > li > :nth-child(4) { display: none; }
+  .ls--act > li { grid-template-columns: minmax(0, 1fr); }
+  .ls .when { text-align: left; }
+}
+.figure { margin-top: var(--space-4); }
+.figure .row { margin-top: var(--space-1); font-size: var(--text-xs); color: var(--text-muted); }
+
+/* The margin */
+.margin { position: sticky; top: 0; padding-top: calc(var(--space-6) + 2.6rem); display: flex; flex-direction: column; gap: var(--space-6); font-size: var(--text-sm); }
+.margin h3 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-2); }
+.margin .state p { margin-top: var(--space-2); color: var(--text-muted); line-height: 1.45; }
+.margin .acts { display: flex; flex-direction: column; gap: var(--space-2); align-items: stretch; }
+.margin .acts .button { justify-content: flex-start; }
+.toc { border-left: 1px solid var(--border); }
+.toc a { display: block; padding: 0.2rem 0 0.2rem var(--space-3); margin-left: -1px; border-left: 2px solid transparent; color: var(--text-muted); line-height: 1.4; }
+.toc a:hover { color: var(--text); text-decoration: none; }
+.toc a[aria-current="true"] { color: var(--text); border-left-color: var(--accent); font-weight: 500; }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const def = res.definition;
+const fileName = def.file.split("/").pop();
+const sec = (id) => def.sections.find((s) => s.id === id);
+const fld = (sid, key) => sec(sid).fields.find((f) => f.key === key);
+
+// ---- Inline values --------------------------------------------------------------------
+// From the definition: a chip that opens the YAML at its line.
+const d = (sid, key, text, { mono = true, wrap = false } = {}) => {
+  const f = fld(sid, key);
+  return `<button type="button" class="v${mono ? " v--mono" : ""}${wrap ? " v--wrap" : ""}" data-src="${f.line}" title="${esc(fileName)}, line ${f.line}">${esc(text ?? f.value)}</button>`;
+};
+// A value found by its text in the YAML, for keys the sections do not list (the workflow).
+const dt = (needle, text) => { const n = def.text.split("\n").findIndex((l) => l.includes(needle)) + 1; return `<button type="button" class="v v--mono" data-src="${n}" title="${esc(fileName)}, line ${n}">${esc(text)}</button>`; };
+// Observed or derived by Octopushy: a plain chip.
+const o = (text, { mono = false, tone } = {}) => `<span class="v${mono ? " v--mono" : ""}"${tone ? ` data-tone="${tone}"` : ""}>${esc(text)}</span>`;
+const lk = (text, href = "#", { mono = false, ext = false } = {}) => `<a class="v${mono ? " v--mono" : ""}" href="${href}">${esc(text)}${ext ? icon("external", 12) : ""}</a>`;
+const and = (xs) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+const words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+const num = (n) => words[n] ?? String(n);
+const Num = (n) => { const w = num(n); return w[0].toUpperCase() + w.slice(1); };
+
+const note = (text, line) => `<blockquote class="note"><p>“${esc(text.replace(/\.$/, ""))}.”</p><footer>The author’s comment, <button type="button" data-src="${line}">${esc(fileName)} line ${line}</button></footer></blockquote>`;
+const src = (from, to = from) => `<button type="button" class="src" data-src="${from}-${to}" title="Show these lines of ${esc(fileName)}">${from === to ? `line ${from}` : `lines ${from}–${to}`}</button>`;
+const srcOf = (...ids) => { const ls = ids.map((i) => sec(i).lines); return src(Math.min(...ls.map((l) => l[0])), Math.max(...ls.map((l) => l[1]))); };
+const runOf = (n) => (RD.data.machine.runs.concat(RD.data.service.runs, RD.data.node.runs)).find((r) => r.number === n);
+
+const history = () => {
+  const past = res.events.filter((e) => new Date(e.at).getTime() <= RD.NOW).slice(0, 6);
+  return `<ul class="ls ls--hist">${past.map((e) => `
+    <li><span class="date">${esc(RD.day(e.at))}</span><span class="dot" data-tone="${e.tone}"></span>
+      <span>${esc(e.title)}${e.run ? ` <a href="#">#${e.run}</a>` : ""}<span class="sub">${esc(e.detail)}</span></span>
+      <span class="when">${RD.rel(e.at)}</span></li>`).join("")}</ul>`;
+};
+
+// ---- The document, per kind --------------------------------------------------------------
+const docs = {
+  machine() {
+    const c = res.configuration, m = res.managedAccess, svc = res.services;
+    const count = (st) => svc.filter((s) => s.status === st).length;
+    const lastRun = (title) => res.runs.find((r) => r.title === title);
+    return {
+      lead: `<p class="lead"><b>falcon</b> is a ${d("placement", "type", "VM", { mono: false })} on <a href="${RD.href("node")}">moraband</a> with ${d("hardware", "cores", "4 cores", { mono: false })}, ${d("hardware", "memory", "8 GiB", { mono: false })} of memory and a ${d("hardware", "disks", "300 GiB", { mono: false })} disk.</p>
+        <p>${esc(res.description)} It is built from the template ${d("placement", "template")} with the workflow ${dt("workflow:", "fedora-vm@1")}, which resolves to ${o("1.10", { mono: true })}, the latest. Proxmox knows it as VMID ${d("placement", "vmid")} and reports it ${o("running", { tone: "success" })} for ${o(RD.duration(res.observed.uptimeSeconds))}.</p>
+        ${note(fld("hardware", "disks").note, fld("hardware", "disks").line)}`,
+      sections: [
+        { id: "network", title: "Network", src: srcOf("network"), html: `
+          <p>It has the ${d("network", "mode", "static", { mono: false })} address ${d("network", "address")} on the bridge ${d("network", "bridge")}. Its gateway is ${d("network", "gateway")} and it asks ${d("network", "dns", "10.1.0.178")} and ${d("network", "dns", "10.1.0.179")} for DNS.</p>
+          ${note(sec("network").note, sec("network").line + 1)}` },
+        { id: "purpose", title: "What it is for", src: srcOf("inputs", "secrets"), html: `
+          ${note(sec("inputs").note, sec("inputs").line + 1)}
+          <p>Its profile is ${d("inputs", "machine_profile")}, with the feature ${d("inputs", "machine_features", "tailscale")} and the project categories ${and(fld("inputs", "machine_project_categories").items.map((x) => d("inputs", "machine_project_categories", x)))}. It joins the fleet with ${d("inputs", "machine_fleet_enrollment_link", "fleet.hlab.example.org/enroll", { mono: true })}.</p>
+          <p>It reads two secrets from the variable store: the ${d("secrets", "machine_tailscale_auth_key", "Tailscale auth key", { mono: false })} at ${o("v3", { mono: true })} and the ${d("secrets", "machine_github_token", "GitHub token", { mono: false })} at ${o("v1", { mono: true })}. Both are in the store.</p>` },
+        { id: "services", title: "What runs on it", src: "", html: `
+          <p>${Num(svc.length)} services run on falcon. ${Num(count("in-sync"))} are in sync, ${num(count("awaiting-approval"))} waits for approval and ${num(count("failed"))} failed.</p>
+          <ul class="ls ls--svc">${svc.map((s) => `
+            <li><span class="dot" data-tone="${RD.tone(s.status)}"></span>
+              ${s.id === "open-webui" ? `<a href="${RD.href("service")}">${s.name}</a>` : `<a href="#">${s.name}</a>`}
+              <span class="muted truncate">${esc(s.statusDetail ?? s.links[0].replace(/^https?:\/\//, "").replace(/\/$/, ""))}</span>
+              <span class="when">${RD.statusLabel(s.status)}</span></li>`).join("")}</ul>` },
+        { id: "updates", title: "How it stays up to date", src: srcOf("schedules"), html: `
+          <p>Octopushy configures falcon with ${num(c.actions.length)} actions of ${o("fedora-vm@1.10", { mono: true })}. ${o(c.appliedAction, { mono: true })} ran last, ${o(RD.rel(c.appliedAt))} from commit ${o(c.appliedCommit.slice(0, 7), { mono: true })}, and falcon is ${o("in sync", { tone: "success" })}.</p>
+          <ul class="ls ls--act">${c.actions.map((a) => {
+            const s = c.schedules.find((x) => x.action === a.id);
+            const r = s ? runOf(s.lastRunNumber) : lastRun(a.id);
+            const when = s ? `${d("schedules", a.id, s.human, { mono: false })}` : a.onChange ? "When the definition changes" : "By hand";
+            return `<li><span class="mono">${a.id}</span>
+              <span>${when}${a.destructive ? ` ${o("destructive", { tone: "danger" })}` : ""}<span class="sub">${esc(a.description)}</span></span>
+              <span class="when">${r ? `ran ${RD.rel(r.createdAt)}, <a href="#">#${r.number}</a>` : "never ran"}${s ? `<span class="sub">next ${RD.rel(s.nextAt)}</span>` : ""}</span></li>`;
+          }).join("")}</ul>` },
+        { id: "policy", title: "Who approves changes", src: srcOf("policy"), html: `
+          <p>Every change to falcon waits for a person: approval is ${d("policy", "approval")}, and destructive actions are ${d("policy", "destructive")} too. One action is the exception: ${o("update-tools", { mono: true })} runs ${d("policy", "update-tools")}, so the daily schedule needs nobody. These rules are set in falcon’s own definition; any agent may run its work.</p>` },
+        { id: "access", title: "How to reach it", src: srcOf("access"), html: `
+          <p>Connect over SSH as ${d("access", "user")} at ${d("access", "address")}: ${o("ssh ops@10.1.0.99", { mono: true })}.</p>
+          <p>Octopushy signs in with its managed key ${o(`v${m.version}`, { mono: true })}, promoted by ${o(m.keys[0].promotedBy)} ${o(RD.rel(m.keys[0].promotedAt))} and last used ${o(RD.rel(m.lastUsedAt))}. Key v1 was removed. The host key is pinned at ${o(`v${res.hostKey.pinned.version}`, { mono: true })}, ${o(res.hostKey.pinned.fingerprint.slice(0, 18) + "…", { mono: true })}.</p>` },
+        { id: "history", title: "Recent history", src: "", html: history() },
+      ],
+    };
+  },
+
+  service() {
+    const up = res.checks[0], p = res.pending, wf = res.workflow;
+    const slow = up.incidents.find((i) => i.state === "warn"), down = up.incidents.find((i) => i.state === "down");
+    return {
+      lead: `<p class="lead"><b>open-webui</b> is a service on <a href="${RD.href("machine")}">falcon</a>, opened at ${lk("chat.hlab.example.org", res.links[0], { ext: true })}.</p>
+        <p>${esc(res.description)} It runs in the compose project ${d("inputs", "compose_project")} and answers on port ${d("inputs", "port")}.</p>
+        <div class="callout" data-tone="attention" id="approval">
+          <div class="callout__head">${icon("hand", 18)}A deploy waits for your approval</div>
+          <p>Deploy <a href="#">#${p.run}</a> changes the image from ${o("0.6.30", { mono: true })} to ${o("0.6.34", { mono: true, tone: "attention" })}. ${esc(p.author)} made the change in ${o(p.commit.slice(0, 7), { mono: true })}, ${RD.rel(p.since)}. Nothing runs until someone approves it.</p>
+          <div class="row"><button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button></div>
+        </div>`,
+      sections: [
+        { id: "deploy", title: "How it is deployed", src: src(2, 2), html: `
+          <p>It is deployed with the workflow ${dt("workflow:", "compose@1")}, which resolves to ${o("1.4", { mono: true })}; ${o("1.5 is available", { tone: "warning" })}. The workflow runs three stages, in this order:</p>
+          <ol class="ls ls--stage">${wf.stages.map((s) => `<li><span class="mono">${s.name}</span><span>${esc(s.detail)}</span><span class="when">${esc(s.executor)}</span></li>`).join("")}</ol>
+          <p style="margin-top:var(--space-4)">The last deploy finished ${o(RD.rel(res.appliedAt))} from ${o(res.appliedCommit.slice(0, 7), { mono: true })}.</p>` },
+        { id: "settings", title: "Its settings", src: srcOf("inputs"), html: `
+          <p>It runs the image ${d("inputs", "image", "ghcr.io/open-webui/open-webui", { wrap: true })} at ${d("inputs", "image", "0.6.34")}, which is not deployed yet. Its name is ${d("inputs", "dns_name")}.</p>
+          ${note(fld("inputs", "dns_name").note, fld("inputs", "dns_name").line)}
+          <p>Three environment variables are set: ${d("inputs", "OLLAMA_BASE_URL", "OLLAMA_BASE_URL=http://ollama:11434")} points at its neighbour ${lk("ollama")}, ${d("inputs", "ENABLE_SIGNUP", "ENABLE_SIGNUP=false")} closes sign-up, and ${d("inputs", "DEFAULT_MODELS", "DEFAULT_MODELS=qwen3:14b")} picks the model.</p>` },
+        { id: "secrets", title: "Its secrets", src: srcOf("secrets"), html: `
+          <p>It reads two secrets. The ${d("secrets", "env_file", "env file", { mono: false })} at ${o("v4", { mono: true })} is delivered as a file; the ${d("secrets", "webui_secret_key", "secret key", { mono: false })} at ${o("v1", { mono: true })} is an input. Both are in the variable store.</p>` },
+        { id: "health", title: "Its health", src: "", html: `
+          <p>The link ${o("answers", { tone: "success" })}, now in ${o(`${up.elapsedMs} ms`)}; ${o(`${up.uptime.month}%`)} over 30 days. It was slow for ${o(`${slow.minutes} min`, { tone: "warning" })} ${RD.rel(slow.at)} and down for ${o(`${down.minutes} min`, { tone: "danger" })} ${RD.rel(down.at)}, when deploy #201 restarted it.</p>
+          <div class="figure">${RD.beats(up)}<div class="row row--between"><span>24 h ago</span><span>now</span></div></div>` },
+        { id: "policy", title: "Who approves changes", src: srcOf("policy"), html: `
+          <p>Approval is ${d("policy", "approval")}, set on this service. Destructive changes are ${o("manual")} too, set by falcon.</p>
+          ${note(fld("policy", "approval").note, fld("policy", "approval").line)}` },
+        { id: "history", title: "Recent history", src: "", html: history() },
+      ],
+    };
+  },
+
+  node() {
+    const h = res.hosts[0], g = res.guests, issue = res.issues[0];
+    const count = (st) => g.filter((x) => x.status === st).length;
+    return {
+      lead: `<p class="lead"><b>moraband</b> is a ${d("connection", "type", "standalone", { mono: false })} Proxmox installation with one host, ${o("moraband", { mono: true })}, on Proxmox VE ${o(res.proxmoxVersion, { mono: true })}.</p>
+        <p>${esc(res.description)} Octopushy manages ${num(g.length)} machines on it, and sees ${num(res.unmanaged.length)} more it does not manage.</p>`,
+      sections: [
+        { id: "connection", title: "How Octopushy connects", src: srcOf("connection"), html: `
+          <p>Octopushy talks to the API at ${d("connection", "endpoint")}. It reads with the ${d("connection", "readOnlyToken", "read-only token", { mono: false })} and changes things with the ${d("connection", "privilegedToken", "privileged token", { mono: false })}, both at ${o("v2", { mono: true })} in the store.</p>
+          <p>${o(res.trust.trustedBy)} trusted this endpoint ${o(RD.rel(res.trust.trustedAt))}. It was last observed ${o(RD.rel(res.observedAt))}, and the host was ${o("online", { tone: "success" })}.</p>
+          <div class="callout" data-tone="warning">
+            <div class="callout__head">${icon("alert", 18)}The certificate is not checked</div>
+            <p>${d("connection", "tls", "tls.verify: false")} means Octopushy accepts any certificate at this endpoint, so it cannot tell the real host from another one at that address. Pin or verify the certificate to clear this warning.</p>
+            <div class="row"><button type="button" class="button" data-src="${issue.line}">${icon("code", 15)}Show line ${issue.line}</button><button type="button" class="button button--ghost" data-action="edit">${icon("pencil", 15)}Edit the definition</button></div>
+          </div>` },
+        { id: "capacity", title: "Its capacity", src: srcOf("hosts"), html: `
+          <p>The host has ${o(`${h.maxCpu} cores`)}, ${o(RD.pct(h.cpu))}<span class="inline-meter">${RD.meter(h.cpu)}</span>in use, and ${o(RD.bytes(h.maxMemoryBytes))} of memory, ${o(RD.bytes(h.memoryBytes))}<span class="inline-meter">${RD.meter(h.memoryBytes / h.maxMemoryBytes)}</span>in use. It has been up for ${o(RD.duration(h.uptimeSeconds))}.</p>
+          <p>Images go to ${d("hosts", "datastores", "local")}, disks to ${d("hosts", "datastores", "local-lvm")}. Machines can use the bridges ${d("hosts", "bridges", "vmbr0")} and ${d("hosts", "bridges", "vmbr1")}. It runs ${d("hosts", "limits", "1 operation", { mono: false })} at a time; none runs now.</p>` },
+        { id: "guests", title: "The machines on it", src: "", html: `
+          <p>${Num(g.length)} machines are managed here. ${Num(count("in-sync"))} are in sync, ${num(count("awaiting-approval"))} waits for approval and ${num(count("failed"))} failed.</p>
+          <ul class="ls ls--guest">${g.map((x) => `
+            <li><span class="dot" data-tone="${RD.tone(x.status)}"></span>
+              ${x.current ? `<a class="mono" href="${RD.href("machine")}">${x.name}</a>` : `<a class="mono" href="#">${x.name}</a>`}
+              <span class="muted">${x.kind} ${x.vmid}</span>
+              <span class="muted">${x.statusDetail ? esc(x.statusDetail) : `${x.cores} core${x.cores === 1 ? "" : "s"} · ${RD.bytes(x.memoryBytes)} · ${x.services} service${x.services === 1 ? "" : "s"}`}</span>
+              <span class="when">${RD.statusLabel(x.status)}</span></li>`).join("")}</ul>
+          <p style="margin-top:var(--space-4)">Proxmox also runs ${num(res.unmanaged.length)} guests that Octopushy does not manage: ${and(res.unmanaged.map((u) => o(u.template ? `${u.name} (template)` : u.name, { mono: true })))}.</p>` },
+        { id: "snippets", title: "Snippets", src: srcOf("snippets"), html: `
+          <p>Octopushy signs in over SSH as ${d("snippets", "user")} and puts cloud-init snippets on the datastore ${d("hosts", "datastores", "local")}. The host answers.</p>
+          ${note(fld("snippets", "user").note, fld("snippets", "user").line)}` },
+        { id: "policy", title: "Who approves changes", src: srcOf("policy"), html: `
+          <p>Approval is ${d("policy", "approval")} for everything on moraband, and machines inherit it unless they set their own.</p>
+          ${note(fld("policy", "approval").note, fld("policy", "approval").line)}` },
+        { id: "history", title: "Recent history", src: "", html: `<p>moraband has no runs of its own: these are its machines’ runs, and what Octopushy saw.</p>${history()}` },
+      ],
+    };
+  },
+};
+
+const doc = docs[RD.kind]();
+const stateText = {
+  machine: () => `In sync with ${RD.commit(res.revisions.desiredCommit)}, checked ${RD.rel(res.revisions.checkedAt)}.`,
+  service: () => `Deploy #${res.pending.run} waits for approval: ${esc(res.pending.summary)}.`,
+  node: () => esc(res.statusDetail) + ".",
+}[RD.kind]();
+
+main.innerHTML = `
+  <div class="page">
+    <article class="doc">
+      <div class="crumbs">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}${esc(res.name)}</h1>
+      ${doc.lead}
+      ${doc.sections.map((s) => `
+        <section id="${s.id}">
+          <h2>${esc(s.title)}${s.src}</h2>
+          ${s.html}
+        </section>`).join("")}
+    </article>
+    <aside class="margin" aria-label="About this page">
+      <div class="state">${RD.status(res.status)}<p>${stateText}</p></div>
+      <div class="acts">${RD.actions(res, { small: true })}</div>
+      <nav aria-label="On this page"><h3>On this page</h3><div class="toc">${doc.sections.map((s) => `<a href="#${s.id}">${esc(s.title)}</a>`).join("")}</div></nav>
+      <div><h3>Source</h3><button type="button" class="button button--small" data-yaml="">${icon("code", 14)}View source</button><p class="xs muted mono break" style="margin-top:var(--space-2)">${esc(fileName)} · ${def.lineCount} lines</p></div>
+    </aside>
+  </div>`;
+
+// A value or heading link opens the YAML with its lines marked.
+addEventListener("click", (e) => {
+  const t = e.target.closest?.("[data-src]");
+  if (!t) return;
+  const [a, b] = t.dataset.src.split("-").map(Number);
+  const el = RD.drawer("Definition", RD.yamlBox(def, { highlight: [a, b || a] }));
+  el.querySelector(".yaml__line--hl")?.scrollIntoView({ block: "center" });
+});
+
+// "On this page" follows the reading position.
+const links = [...main.querySelectorAll(".toc a")];
+const spy = () => {
+  let current = links[0];
+  for (const a of links) if (document.getElementById(a.hash.slice(1)).getBoundingClientRect().top < 160) current = a;
+  if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) current = links[links.length - 1];
+  links.forEach((a) => a.setAttribute("aria-current", String(a === current)));
+};
+addEventListener("scroll", spy, { passive: true });
+spy();
+</script>
+</body>
+</html>

@@ -1,13 +1,14 @@
 import { Play } from "lucide-react";
 import { isNotFound } from "../api/client";
 import { Link, useNavigate, useParams } from "react-router";
-import { usePlanGuest, useGuest } from "../api/queries";
-import type { GuestDetail, ObservedGuest } from "../api/types";
+import { usePlanGuest, useGuest, useUptime } from "../api/queries";
+import type { GuestDetail } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
-import { DefinitionView } from "../components/DefinitionView";
+import { DefinitionSheet, ViewYamlButton } from "../components/DefinitionSheet";
+import { Glance } from "../components/Glance";
 import { IssueList } from "../components/IssueList";
 import { GuestConfigurationCard } from "../components/GuestConfiguration";
 import { ManagedAccessCard } from "../components/ManagedAccess";
@@ -16,7 +17,7 @@ import { KeyValue } from "../components/KeyValue";
 import { LabelList } from "../components/LabelEditor";
 import { Commit } from "../components/Mono";
 import { PageHeader } from "../components/PageHeader";
-import { PolicyView } from "../components/PolicyView";
+import { PolicyCard } from "../components/PolicyView";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { ServicesCard } from "../components/ServicesCard";
@@ -24,74 +25,103 @@ import { ChangeActions, RecentChanges } from "../components/ChangeActions";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
-import { formatBytes, machineNoun } from "../lib/format";
+import { readDefinition, type DefinitionField, type DefinitionSection } from "../lib/definition";
+import { formatBytes, humanize, machineNoun } from "../lib/format";
+import { formatPercent, percentOf } from "../lib/inventory";
 import { formatUptime } from "../lib/time";
+import { WaitingRun } from "./run/WaitingRun";
 
-function ObservedVm({ vm, noun }: { vm: ObservedGuest | null; noun: string }) {
-  if (!vm) return <p className="muted">Not observed: the installation has not reported a {noun} with this VMID.</p>;
-  const memory = vm.maxMemoryBytes;
-  const cpu = vm.maxCpu;
+/** What Octopushy knows of the guest beyond its definition: workflow, revisions, identity, and what Proxmox reports. */
+function State({ guest, noun }: { guest: GuestDetail; noun: string }) {
+  const vm = guest.guest.observed;
+  const binding = guest.binding;
+  const at = (value: string | null) => (value ? <> <RelativeTime value={value} /></> : null);
   return (
     <KeyValue
       items={[
-        { term: "VMID", value: <span className="num">{vm.vmid}</span> },
-        { term: "Name", value: <span className="mono">{vm.name ?? "—"}</span> },
-        { term: "Host", value: <span className="mono">{vm.host ?? "—"}</span> },
-        { term: "Power", value: vm.status ?? "—" },
-        { term: "CPU / memory", value: <span className="num">{cpu ?? "—"} vCPU · {formatBytes(memory)}</span> },
-        { term: "Uptime", value: <span className="num">{formatUptime(vm.uptimeSeconds)}</span> },
-        { term: "Template", value: vm.template ? "Yes" : "No" },
-        { term: "Tags", value: <LabelList labels={vm.tags} /> },
-      ]}
-    />
-  );
-}
-
-function Revisions({ guest }: { guest: GuestDetail }) {
-  return (
-    <KeyValue
-      items={[
+        { term: "Workflow", value: <WorkflowLabel workflow={guest.guest.workflow} /> },
         { term: "Desired", value: <Commit commit={guest.desiredCommit} /> },
-        {
-          term: "Checked",
-          value: (
-            <span>
-              <Commit commit={guest.checkedCommit} /> {guest.checkedAt ? <RelativeTime value={guest.checkedAt} /> : null}
-            </span>
-          ),
-        },
-        {
-          term: "Applied",
-          value: (
-            <span>
-              <Commit commit={guest.appliedCommit} /> {guest.appliedAt ? <RelativeTime value={guest.appliedAt} /> : null}
-            </span>
-          ),
-        },
+        { term: "Checked", value: <span><Commit commit={guest.checkedCommit} />{at(guest.checkedAt)}</span> },
+        { term: "Applied", value: <span><Commit commit={guest.appliedCommit} />{at(guest.appliedAt)}</span> },
         { term: "Verified", value: <RelativeTime value={guest.verifiedAt} empty="Never" /> },
-        {
-          term: "In sync",
-          value: guest.inSync ? <Badge tone="success">Yes</Badge> : <Badge tone="neutral">No</Badge>,
-        },
+        { term: "In sync", value: guest.inSync ? <Badge tone="success">Yes</Badge> : <Badge tone="neutral">No</Badge> },
+        ...(binding
+          ? [
+              { term: "Installation", value: <span className="mono">{binding.installation}</span> },
+              { term: "VMID", value: <span className="num">{binding.vmid}</span> },
+              { term: "Bound", value: <RelativeTime value={binding.boundAt} /> },
+            ]
+          : [
+              {
+                term: "Bound",
+                value: <span className="muted">Not yet. The address binds to its installation and VMID after the first successful apply.</span>,
+              },
+            ]),
+        ...(vm
+          ? [
+              ...(binding ? [] : [{ term: "VMID", value: <span className="num">{vm.vmid}</span> }]),
+              { term: "Name", value: <span className="mono">{vm.name ?? "—"}</span> },
+              { term: "Host", value: <span className="mono">{vm.host ?? "—"}</span> },
+              { term: "Template", value: vm.template ? "Yes" : "No" },
+              { term: "Tags", value: <LabelList labels={vm.tags} /> },
+            ]
+          : [{ term: `Observed ${noun}`, value: <span className="muted">Not observed: the installation has not reported a {noun} with this VMID.</span> }]),
       ]}
     />
   );
 }
 
-function Identity({ guest }: { guest: GuestDetail }) {
-  if (!guest.binding) {
-    return (
-      <p className="muted">
-        Not bound yet. The address binds to its installation and VMID after the first successful apply.
-      </p>
-    );
-  }
+function field(sections: DefinitionSection[] | null, section: string, key: string): DefinitionField | undefined {
+  return sections?.find((s) => s.id === section)?.fields.find((f) => f.key === key);
+}
+
+function text(f: DefinitionField | undefined): string | null {
+  return f?.value.kind === "text" ? f.value.text : null;
+}
+
+/** The declared disks: one as written, several summed when they are all in GiB. */
+function disks(sections: DefinitionSection[] | null): { value: string; note: string | null } | null {
+  const all = sections?.find((s) => s.id === "hardware")?.fields.filter((f) => f.key.startsWith("disks")) ?? [];
+  const sizes = all.map(text).filter((t): t is string => t !== null);
+  if (sizes.length === 0) return null;
+  if (sizes.length === 1) return { value: sizes[0], note: all[0].value.kind === "text" ? (all[0].value.raw ?? null) : null };
+  const gib = sizes.map((t) => /^(\d+(?:\.\d+)?) GiB$/.exec(t)?.[1]);
+  const total = gib.every(Boolean) ? `${gib.reduce((sum, n) => sum + Number(n), 0)} GiB` : sizes[0];
+  return { value: total, note: `${sizes.length} disks` };
+}
+
+/** The guest's figures: power, size, address and how its SSH answers. */
+function GuestGlance({ data, sections }: { data: GuestDetail; sections: DefinitionSection[] | null }) {
+  const { data: uptime } = useUptime();
+  const { guest } = data;
+  const vm = guest.observed;
+  const ssh = uptime?.checks.find((c) => c.kind === "guest-ssh" && c.resource === guest.address);
+  const cores = vm?.maxCpu ?? text(field(sections, "hardware", "cores"));
+  const memory = vm?.maxMemoryBytes ? formatBytes(vm.maxMemoryBytes) : text(field(sections, "hardware", "memory"));
+  const disk = disks(sections);
+  const network = [text(field(sections, "network", "mode")), text(field(sections, "network", "bridge"))].filter(Boolean).join(", ");
   return (
-    <KeyValue
-      items={[
-        { term: "Installation", value: <span className="mono">{guest.binding.installation}</span> },
-        { term: "VMID", value: <span className="num">{guest.binding.vmid}</span> },
-        { term: "Bound", value: <RelativeTime value={guest.binding.boundAt} /> },
+    <Glance
+      cells={[
+        {
+          label: "Power",
+          value: vm ? humanize(vm.status ?? "unknown") : "Not observed",
+          note: vm?.uptimeSeconds ? `up ${formatUptime(vm.uptimeSeconds)}` : null,
+        },
+        cores !== null && cores !== undefined ? { label: "Cores", value: cores, note: vm?.maxCpu ? "observed" : "declared" } : null,
+        memory ? { label: "Memory", value: memory, note: vm?.maxMemoryBytes ? "observed" : "declared" } : null,
+        disk ? { label: "Disk", value: disk.value, note: disk.note } : null,
+        guest.accessAddress ? { label: "Address", value: <span className="mono">{guest.accessAddress}</span>, note: network || null } : null,
+        ssh
+          ? {
+              label: "SSH, 30 days",
+              value: formatPercent(percentOf([ssh], "month")),
+              note:
+                ssh.status === "up" && ssh.elapsedMs !== null
+                  ? `answers in ${ssh.elapsedMs} ms`
+                  : (ssh.detail ?? (ssh.status === "down" ? "Down" : "Not checked yet")),
+            }
+          : null,
       ]}
     />
   );
@@ -109,6 +139,7 @@ export function GuestPage() {
 
   const { guest } = data;
   const noun = machineNoun(guest.type, guest.observed?.kind);
+  const sections = data.definitionText === null ? null : readDefinition(data.definitionText, "guest");
 
   return (
     <>
@@ -131,6 +162,7 @@ export function GuestPage() {
         }
         actions={
           <>
+            {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
             {data.missingSince || data.retiredAt ? null : <ChangeActions resourceId={guest.id} kind="guest" />}
             <button
               type="button"
@@ -159,52 +191,38 @@ export function GuestPage() {
             The {noun} was removed and verified absent.
           </Callout>
         ) : null}
+        {guest.activeRun?.status === "awaiting-approval" ? <WaitingRun run={guest.activeRun} /> : null}
+        <GuestGlance data={data} sections={sections} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <Card title="Definition" id="definition">
-              <DefinitionView file={data.definitionFile} text={data.definitionText} issues={data.issues} />
-            </Card>
-            <Card title="Issues" meta={data.issues.length || undefined} id="issues">
-              <IssueList issues={data.issues} />
-            </Card>
+            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="guest" issues={data.issues} />
+            {data.issues.length > 0 ? (
+              <Card title="Issues" meta={data.issues.length} id="issues">
+                <IssueList issues={data.issues} />
+              </Card>
+            ) : null}
             <RecentChanges resourceId={guest.id} />
-            {data.services.length > 0 ? <ServicesCard services={data.services} /> : null}
             <Card title="Runs" flush id="runs">
               <RunTable runs={data.runs} label={`Runs of ${guest.name}`} showAddress={false} />
             </Card>
           </div>
           <div className="stack stack--large">
-            <Card title="Workflow">
-              <WorkflowLabel workflow={guest.workflow} />
-            </Card>
-            <Card title="Policy">
-              <PolicyView policy={data.policy} />
-            </Card>
-            <Card title="Agent labels">
-              <div className="stack stack--small">
-                <LabelList labels={data.agentLabels} empty="Any agent" />
-                {data.agentLabelsSetBy ? <span className="muted small">set by {data.agentLabelsSetBy}</span> : null}
-              </div>
-            </Card>
             {data.configuration ? <GuestConfigurationCard id={guest.id} configuration={data.configuration} /> : null}
+            {data.services.length > 0 ? <ServicesCard services={data.services} /> : null}
+            <PolicyCard policy={data.policy} agentLabels={data.agentLabels} agentLabelsSetBy={data.agentLabelsSetBy} />
             {data.managedAccess ? <ManagedAccessCard id={guest.id} access={data.managedAccess} /> : null}
             {data.hostKey ? <ManagedHostKeyCard hostKey={data.hostKey} /> : null}
-            <Card title="Identity">
-              <Identity guest={data} />
+            <Card title="State">
+              <State guest={data} noun={noun} />
             </Card>
-            <Card title="Revisions">
-              <Revisions guest={data} />
-            </Card>
-            <Card title={`Observed ${noun}`}>
-              <ObservedVm vm={guest.observed} noun={noun} />
-            </Card>
-            <Card title="Outputs">
-              {data.outputs === null || data.outputs === undefined ? (
-                <p className="muted">No outputs recorded yet. They appear after a successful apply.</p>
-              ) : (
-                <JsonBlock value={data.outputs} />
-              )}
-            </Card>
+            {data.outputs === null || data.outputs === undefined ? null : (
+              <Card>
+                <details className="outputs">
+                  <summary>Outputs</summary>
+                  <JsonBlock value={data.outputs} />
+                </details>
+              </Card>
+            )}
           </div>
         </div>
       </div>

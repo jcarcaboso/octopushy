@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Three panes</title>
+<!--
+  13 · Three panes. Like the Variables page: the siblings on the left (the other guests of the node,
+  the other services of the machine, the other nodes), with the path above as the way up, so you
+  never go back to the Inventory to reach a neighbour. In the middle, the resource as a list of topic
+  rows in fixed columns: topic, a summary in chips, a dot when it is not fine. On the right, the
+  selected topic in full, with Details / YAML / History tabs where they apply: the YAML tab is the
+  definition with that topic's lines marked. The first topic that needs attention is selected first.
+  Arrow keys move through the topics; topic and tab are kept in the URL hash. Below 1100px the
+  siblings fold into a dropdown. Uses no `sample` data.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#main { height: 100vh; display: grid; grid-template-columns: 14rem minmax(24rem, 30rem) minmax(0, 1fr); min-width: 0; }
+.pane { min-width: 0; min-height: 0; overflow-y: auto; border-right: 1px solid var(--border); }
+.pane:last-child { border-right: 0; }
+
+/* Left: siblings */
+.sibs { background: var(--surface-2); padding: var(--space-5) var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+.up { padding: 0 var(--space-2); font-size: var(--text-sm); color: var(--text-muted); }
+.up a { display: inline-flex; align-items: center; gap: var(--space-1); }
+.up b { display: block; color: var(--text); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-top: var(--space-4); }
+.search { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2); height: 2rem; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text-muted); }
+.search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--text-sm); }
+.search:focus-within { border-color: var(--focus); }
+.sib { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); width: 100%; padding: 0.45rem var(--space-2); border: 0; border-radius: var(--radius); background: none; color: var(--text); text-align: left; }
+.sib:hover { background: var(--surface-3); }
+.sib[aria-current] { background: var(--accent-soft); font-weight: 550; }
+.sib span:last-child { font-size: var(--text-xs); color: var(--text-muted); font-weight: 400; }
+.sib-select { display: none; }
+
+/* Middle: the resource */
+.res { padding: var(--space-5) 0 var(--space-6); }
+.res__head { padding: 0 var(--space-5) var(--space-4); border-bottom: 1px solid var(--border); }
+.res__head h1 { font-size: var(--text-xl); display: flex; align-items: center; gap: var(--space-3); margin: 2px 0 var(--space-2); }
+.res__head .eyebrow { font-size: var(--text-xs); }
+.res__actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); }
+.topics { padding: var(--space-2) var(--space-2) 0; }
+.topic { display: grid; grid-template-columns: 1rem 6.5rem minmax(0, 1fr) 0.5rem; align-items: center; gap: var(--space-3); width: 100%; padding: 0.7rem var(--space-3); border: 0; border-radius: var(--radius); background: none; color: var(--text); text-align: left; position: relative; }
+.topic + .topic::before { content: ""; position: absolute; left: var(--space-3); right: var(--space-3); top: 0; height: 1px; background: var(--border); }
+.topic:hover { background: var(--surface-3); }
+.topic[aria-selected="true"] { background: var(--accent-soft); }
+.topic[aria-selected="true"]::before, .topic[aria-selected="true"] + .topic::before { display: none; }
+.topic > svg { color: var(--text-muted); }
+.topic[aria-selected="true"] > svg { color: var(--link); }
+.topic__name { font-weight: 550; }
+.topic .chips { row-gap: 4px; }
+
+/* Right: the topic */
+.detail { background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.detail__head { position: sticky; top: 0; z-index: 1; background: var(--surface); padding: var(--space-5) var(--space-6) 0; border-bottom: 1px solid var(--border); }
+.detail__head h2 { font-size: var(--text-xl); display: flex; align-items: center; gap: var(--space-3); }
+.detail__head .tabs { border-bottom: 0; margin-top: var(--space-3); }
+.detail__lede { color: var(--text-muted); margin-top: var(--space-1); }
+.detail__body { padding: var(--space-5) var(--space-6) var(--space-8); }
+.block { margin-bottom: var(--space-6); }
+.block > h3 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-3); display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.block > h3 .link-button { text-transform: none; letter-spacing: 0; font-size: var(--text-xs); }
+.note { color: var(--text-muted); font-size: var(--text-sm); }
+.fields { display: grid; grid-template-columns: minmax(9rem, max-content) minmax(0, 1fr); }
+.fields > * { padding: var(--space-2) 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.fields > dt { color: var(--text-muted); padding-right: var(--space-4); }
+.fields > dd { overflow-wrap: anywhere; }
+.fields > dd .note { font-size: var(--text-xs); margin-top: 2px; }
+.list > li { display: grid; grid-template-columns: var(--cols); align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.list > li.head { color: var(--text-muted); font-size: var(--text-xs); }
+.list .sub, .history .sub { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+.ask { padding: var(--space-4); border: 1px solid var(--attention-border); background: var(--attention-bg); border-radius: var(--radius-lg); margin-bottom: var(--space-6); }
+.ask b { font-size: var(--text-lg); display: block; }
+.ask .row { margin-top: var(--space-3); }
+.issue { padding: var(--space-4); border: 1px solid var(--warning-border); background: var(--warning-bg); border-radius: var(--radius-lg); margin-bottom: var(--space-6); display: flex; gap: var(--space-3); }
+.issue svg { color: var(--warning-fg); margin-top: 2px; }
+.big { font-size: var(--text-2xl); font-weight: 600; }
+.meterline { display: grid; grid-template-columns: 5rem minmax(0, 1fr) 9rem; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; }
+.meterline > :last-child { text-align: right; }
+.history > li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) 6rem; gap: var(--space-3); align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+.history .dot { transform: translateY(-1px); }
+.empty { color: var(--text-muted); padding: var(--space-4) 0; }
+
+@media (max-width: 1100px) {
+  #main { grid-template-columns: 24rem minmax(0, 1fr); }
+  .topic .chip:nth-child(n+3) { display: none; }
+  .sibs { display: none; }
+  .sib-select { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-5) var(--space-4); border-bottom: 1px solid var(--border); }
+  .sib-select select { font: inherit; color: var(--text); background: var(--surface) var(--select-chevron) no-repeat right 0.6rem center; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0.35rem 2rem 0.35rem 0.6rem; appearance: none; }
+  .topic { grid-template-columns: 1rem 6.5rem minmax(0, 1fr) 0.5rem; }
+}
+@media (max-width: 860px) {
+  #main { height: auto; grid-template-columns: minmax(0, 1fr); }
+  .pane { overflow: visible; border-right: 0; }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const kind = RD.kind;
+const main = RD.mount({ bare: true });
+const def = res.definition;
+const up = res.checks[0];
+const short = (s) => s.slice(0, 7);
+const sec = (id) => def.sections.find((s) => s.id === id);
+
+// ---- Small builders -----------------------------------------------------------------
+const chip = (t, o) => RD.chip(t, o);
+const block = (title, body, aside = "") => `<section class="block"><h3><span>${esc(title)}</span>${aside}</h3>${body}</section>`;
+const fields = (pairs) => `<dl class="fields">${pairs.map(([k, v, note]) => `<dt>${esc(k)}</dt><dd>${v}${note ? `<div class="note"># ${esc(note)}</div>` : ""}</dd>`).join("")}</dl>`;
+const fromDef = (id) => { const s = sec(id); return (s.note ? `<p class="note" style="margin-bottom:var(--space-2)"># ${esc(s.note)}</p>` : "") + fields(s.fields.map((f) => [f.label, f.link ? `<a href="${RD.href(f.link)}">${esc(f.value)}</a>` : RD.value(f) + (f.raw && f.type !== "number" ? ` <span class="muted small mono">${esc(f.raw)}</span>` : ""), f.note])); };
+const list = (cols, head, items) => `<ul class="list" style="--cols:${cols}">${head ? `<li class="head">${head.map((h) => `<span>${esc(h)}</span>`).join("")}</li>` : ""}${items.map((r) => `<li>${r.join("")}</li>`).join("")}</ul>`;
+const S = (h, cls = "") => `<span class="${cls}">${h}</span>`;
+const runs = (rs, target) => list(`3rem minmax(0,1fr) ${target ? "7rem " : ""}9.5rem 4.5rem`, null, rs.map((r) => [S(`<a href="#">#${r.number}</a>`, "num"), S(`${esc(r.title)}<span class="sub truncate">${esc(r.detail ?? r.reason)}</span>`, "truncate"), ...(target ? [S(esc(r.address.split("/").pop()), "mono small truncate")] : []), S(RD.status(r.status)), S(RD.rel(r.createdAt), "small muted num")]));
+const secretLine = (key, v, extra = "") => `<span class="row"><span class="muted" style="display:inline-flex">${icon("lock", 13)}</span><a href="#" class="mono small break">${esc(key)}</a>${RD.chip(`v${v}`)}${extra}</span>`;
+const uptime = (c, label) => `
+  <div class="row row--between" style="margin-bottom:var(--space-2)"><span><span class="big">${c.uptime.month}%</span> <span class="small muted">30 days</span></span><span class="small muted">${esc(label)} answers in ${c.elapsedMs} ms</span></div>
+  ${RD.beats(c)}
+  <div class="row row--between xs muted" style="margin-top:var(--space-1)"><span>24 h ago</span><span>${c.uptime.day}% today · ${c.uptime.week}% this week</span><span>now</span></div>`;
+const incidents = (c) => list("4.5rem minmax(0,1fr) 5.5rem", null, c.incidents.map((i) => [S(RD.badge(i.state === "down" ? "Down" : "Slow", i.state === "down" ? "danger" : "warning")), S(`${i.minutes} min · <span class="muted">${esc(i.detail)}</span>`, "small"), S(RD.rel(i.at), "small muted num")]));
+/** History items: runs, changes and events, newest first. */
+const hist = ({ runs: rs = [], changes = [], events = [] }) => {
+  const items = [
+    ...rs.map((r) => ({ at: r.createdAt, tone: RD.tone(r.status), html: `<a href="#">#${r.number}</a> ${esc(r.title)} · ${esc(RD.statusLabel(r.status).toLowerCase())}<span class="sub">${esc(r.detail ?? r.reason)}${r.commit ? ` · ${short(r.commit)}` : ""}</span>` })),
+    ...changes.map((c) => ({ at: c.createdAt, tone: "info", html: `${esc(c.message)}<span class="sub">Change by ${esc(c.author)} · ${short(c.commit)}</span>` })),
+    ...events.map((e) => ({ at: e.at, tone: e.tone, html: `${esc(e.title)}<span class="sub">${esc(e.detail)}</span>` })),
+  ].sort((a, b) => new Date(b.at) - new Date(a.at));
+  return items.length ? `<ul class="history">${items.map((i) => `<li><span class="dot" data-tone="${i.tone}"></span><span>${i.html}</span><span class="small muted num" style="text-align:right">${RD.rel(i.at)}</span></li>`).join("")}</ul>` : `<p class="empty">Nothing has touched it yet.</p>`;
+};
+const evOf = (...types) => res.events.filter((e) => types.includes(e.type) && new Date(e.at).getTime() <= RD.NOW);
+
+// ---- Topics per kind. tone: null when fine. lines: the YAML lines it covers. --------------------
+const TOPICS = {
+  machine: () => {
+    const o = res.observed, rv = res.revisions, c = res.configuration, ma = res.managedAccess;
+    const waiting = res.services.filter((s) => s.status === "awaiting-approval").length, failed = res.services.filter((s) => s.status === "failed").length;
+    return [
+      { id: "health", name: "Health", icon: "activity", chips: [chip("Running", { tone: "success" }), chip(`up ${RD.duration(o.uptimeSeconds)}`), chip(`SSH ${up.uptime.month}%`)],
+        lede: "Is falcon up, and does it match its definition?",
+        details: () => block("SSH", uptime(up, "SSH")) + block("Incidents", incidents(up)) + block("Sync", fields([["State", RD.status("in-sync")], ["Desired", RD.commit(rv.desiredCommit)], ["Checked", `${RD.commit(rv.checkedCommit)} <span class="muted small">${RD.rel(rv.checkedAt)}</span>`], ["Applied", `${RD.commit(rv.appliedCommit)} <span class="muted small">${RD.rel(rv.appliedAt)}</span>`], ["Verified", RD.rel(rv.verifiedAt)]])),
+        history: () => hist({ events: evOf("uptime") }) },
+      { id: "hardware", name: "Hardware", icon: "cpu", chips: [chip("4 vCPU"), chip("8 GiB"), chip("300 GiB disk"), chip("VMID 410", { mono: true })], lines: [sec("placement").lines[0], sec("hardware").lines[1]],
+        lede: "The VM as declared, beside what Proxmox reports.",
+        details: () => block("Placement", fromDef("placement"), `<button type="button" class="link-button" data-tab="yaml">lines ${sec("placement").lines.join("–")}</button>`) +
+          block("Declared and observed", list("7rem minmax(0,1fr) minmax(0,1fr)", ["", "Declared", "Proxmox"], [[S("Cores", "muted"), S("4"), S(`${o.maxCpu}`)], [S("Memory", "muted"), S(`8 GiB <span class="muted small">8192 MiB</span>`), S(RD.bytes(o.maxMemoryBytes))], [S("Disk", "muted"), S(`300 GiB<span class="sub"># the system disk, on moraband's local-lvm</span>`), S(`<span class="mono small">${res.outputs.disks.scsi0}</span>`)], [S("Power", "muted"), S("—", "muted"), S(RD.badge("Running", "success"))], [S("Tags", "muted"), S("—", "muted"), S(`<span class="chips">${o.tags.map((t) => chip(t, { mono: true })).join("")}</span>`)]])),
+        history: () => hist({ runs: res.runs.filter((r) => r.operation === "provision"), changes: res.changes.filter((c) => c.message.startsWith("Memory")) }) },
+      { id: "network", name: "Network", icon: "network", chips: [chip("10.1.0.99/24", { mono: true }), chip("vmbr1", { mono: true }), chip("static")], lines: sec("network").lines,
+        lede: "How falcon is addressed on moraband's network.",
+        details: () => block("Declared", fromDef("network")) + block("Proxmox reports", fields([["IPv4", `<span class="mono">${res.outputs.ipv4}</span>`], ["MAC", `<span class="mono">${res.outputs.mac}</span>`]])),
+        history: () => hist({}) },
+      { id: "inputs", name: "Inputs", icon: "wrench", chips: [chip("ai-node", { mono: true }), chip("tailscale", { mono: true }), chip("4 categories")], lines: sec("inputs").lines,
+        lede: `What the workflow ${res.workflow.reference} is given.`,
+        details: () => block("Inputs", fromDef("inputs")),
+        history: () => hist({ runs: res.runs.filter((r) => r.number === 156), changes: res.changes.filter((c) => c.message.includes("tailscale")) }) },
+      { id: "secrets", name: "Secrets", icon: "key", chips: [chip("2 secrets"), chip("in use")], lines: sec("secrets").lines,
+        lede: "Read from the store when an action runs. falcon runs the active version of both.",
+        details: () => block("Secrets", list("minmax(0,1fr) 6rem", null, c.secrets.map((s, i) => [S(`<span class="sub" style="margin-bottom:2px">${esc(sec("secrets").fields[i].key)}</span>${secretLine(s.key, s.activeVersion)}`), S(s.pending ? RD.badge("Restart pending", "attention") : `<span class="small muted">running v${s.startedVersion}</span>`)]))),
+        history: () => hist({ events: evOf("secret") }) },
+      { id: "maintenance", name: "Maintenance", icon: "calendar", chips: [chip("4 actions"), chip("2 schedules"), chip(`next ${RD.rel(c.schedules[0].nextAt)}`)], lines: sec("schedules").lines,
+        lede: `The configure actions of ${c.workflow}, and when they run. Last: ${c.appliedAction} at ${short(c.appliedCommit)}, ${RD.rel(c.appliedAt)}.`,
+        details: () => block("Actions", list("minmax(0,1fr) 4.5rem", null, c.actions.map((a) => { const s = c.schedules.find((x) => x.action === a.id); return [
+          S(`<span class="mono">${esc(a.id)}</span>${a.destructive ? ` ${RD.badge("destructive", "danger")}` : ""}<span class="sub">${esc(a.description)}</span><span class="sub">${s ? `${esc(s.human)} · next ${RD.rel(s.nextAt)} · last #${s.lastRunNumber} ${esc(s.lastRunDetail)}` : a.onChange ? "When the definition changes" : "By hand"}</span>`),
+          S(`<button type="button" class="button button--small${a.destructive ? " button--danger-outline" : ""}" data-action="run">${icon("play", 13)}Run</button>`)]; }))),
+        history: () => hist({ runs: res.runs.filter((r) => r.operation === "configure") }) },
+      { id: "services", name: "Services", icon: "globe", tone: failed ? "danger" : waiting ? "attention" : null, chips: [chip(`${res.services.length} services`), ...(waiting ? [chip(`${waiting} waits`, { tone: "attention" })] : []), ...(failed ? [chip(`${failed} failed`, { tone: "danger" })] : [])],
+        lede: `${res.services.length} services run on falcon. langfuse failed its last deploy; open-webui waits for approval.`,
+        details: () => block("Services", list("1.75rem minmax(0,1fr) auto", null, res.services.map((s) => [RD.svcIcon(s.name), S(`<a href="${s.kind === "service" ? RD.href("service") : "#"}">${esc(s.name)}</a><span class="sub mono truncate">${esc(s.links[0])}</span>${s.statusDetail ? `<span class="sub">${esc(s.statusDetail)}</span>` : ""}`, "truncate"), S(RD.status(s.status))]))),
+        history: () => hist({}) },
+      { id: "access", name: "Access", icon: "terminal", chips: [chip(`ops@${res.accessAddress}`, { mono: true }), chip(`key v${ma.version}`)], lines: sec("access").lines,
+        lede: "How agents reach falcon over SSH, and how they know it is falcon.",
+        details: () => block("Declared", fromDef("access")) + block("Managed key", fields([["Version", `v${ma.version} ${RD.badge("Active", "success")}`], ["Fingerprint", `<span class="mono small">${ma.fingerprint}</span>`], ["Last used", RD.rel(ma.lastUsedAt)], ["Promoted", `${RD.rel(ma.keys[0].promotedAt)} by ${ma.keys[0].promotedBy}`]])) + block("Host key", fields([["Pinned", `v${res.hostKey.pinned.version}, ${RD.rel(res.hostKey.pinned.createdAt)}`], ["Fingerprint", `<span class="mono small">${res.hostKey.pinned.fingerprint}</span>`]])) + block("Agents", `<p>Any agent <span class="muted small">(no labels set)</span></p>`),
+        history: () => hist({ events: evOf("key") }) },
+      { id: "policy", name: "Policy", icon: "shield", chips: [chip("approval manual"), chip("1 override")], lines: sec("policy").lines,
+        lede: "When a change waits for someone to approve it.",
+        details: () => block("Policy", fields([["Approval", RD.badge("manual", "attention"), null], ["Destructive", RD.badge("manual", "attention")], ...res.policy.actions.map((a) => [a.action, RD.badge(a.approval, "neutral")])]) + `<p class="note" style="margin-top:var(--space-3)">All set by ${esc(res.policy.approvalSetBy)}.</p>`),
+        history: () => hist({}) },
+      { id: "runs", name: "Runs", icon: "runs", chips: [chip(`${res.runs.length} runs`), chip(`last ${RD.rel(res.runs[0].createdAt)}`)],
+        lede: "Everything Octopushy did to falcon.",
+        details: () => block("Runs", runs(res.runs)) },
+    ];
+  },
+  service: () => {
+    const p = res.pending, w = res.workflow;
+    return [
+      { id: "approval", name: "Waiting", icon: "hand", tone: "attention", chips: [chip(`#${p.run}`, { tone: "attention" }), chip("image 0.6.30 → 0.6.34"), chip(RD.rel(p.since))], lines: [sec("inputs").fields.find((f) => f.pending).line, sec("inputs").fields.find((f) => f.pending).line],
+        title: "Waiting for approval", lede: "The policy of this service holds every deploy until someone approves it.",
+        details: () => `<div class="ask"><b>Deploy #${p.run}: image 0.6.30 → 0.6.34</b><span class="small muted">${esc(p.author)} committed ${short(p.commit)} ${RD.rel(p.since)}. Approving runs deploy, dns and verify.</span>
+            <div class="row"><button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button></div></div>` +
+          block("What changes", fields([["image", `${RD.chip("0.6.30", { mono: true })} → ${RD.chip("0.6.34", { mono: true, tone: "attention" })}<div class="note mono">ghcr.io/open-webui/open-webui</div>`], ["Commit", `${RD.commit(p.commit)} by ${esc(p.author)}`]])) +
+          block("Then", list("4.5rem minmax(0,1fr) 5.5rem", null, w.stages.map((s) => [S(esc(s.name), "mono"), S(esc(s.detail), "small muted"), S(chip(s.executor))]))),
+        history: () => hist({ runs: res.runs.filter((r) => r.number === p.run), changes: res.changes.filter((c) => c.status === "awaiting-approval") }) },
+      { id: "health", name: "Health", icon: "activity", chips: [chip("Up", { tone: "success" }), chip(`${up.elapsedMs} ms`), chip(`${up.uptime.month}% 30 d`)],
+        lede: `${res.links[0]} answers. 0.6.30 is live, deployed ${RD.rel(res.appliedAt)}.`,
+        details: () => block("The link", uptime(up, "The link")) + block("Incidents", incidents(up)) + block("Runs on", fields([["Machine", `<a href="${RD.href("machine")}">${esc(res.guest.name)}</a> <span class="mono small muted">${res.guest.accessAddress}</span>`], ["Link", `<a href="#" class="mono">${res.links[0]}</a>`], ["Check", `${up.kind} by ${up.agent}, ${RD.rel(up.checkedAt)}`]])),
+        history: () => hist({ events: evOf("uptime") }) },
+      { id: "stages", name: "Stages", icon: "workflow", chips: [chip(w.reference, { mono: true }), chip(`${w.latest} available`, { tone: "info" })], lines: [2, 2],
+        lede: `${w.reference} resolves to ${w.resolved}; ${w.latest} is out.`,
+        details: () => block("Stages", list("4.5rem 5.5rem minmax(0,1fr)", null, w.stages.map((s) => [S(esc(s.name), "mono"), S(chip(s.executor)), S(esc(s.detail), "small")]))) + block("Workflow", fields([["Reference", `<span class="mono">${w.reference}</span>`], ["Resolved", w.resolved], ["Latest", `${w.latest} ${RD.badge("Update available", "info")}`]])),
+        history: () => hist({ runs: res.runs.filter((r) => r.status === "failed") }) },
+      { id: "inputs", name: "Inputs", icon: "wrench", chips: [chip("0.6.34", { mono: true }), chip(":3000", { mono: true }), chip("3 env")], lines: sec("inputs").lines,
+        lede: `What ${w.reference} is given.`,
+        details: () => block("Inputs", fromDef("inputs")),
+        history: () => hist({ runs: res.runs.filter((r) => r.number === 201 || r.number === 188), changes: res.changes }) },
+      { id: "secrets", name: "Secrets", icon: "key", chips: [chip("2 secrets"), chip("1 file")], lines: sec("secrets").lines,
+        lede: "Delivered to falcon by the deploy stage.",
+        details: () => block("Secrets", list("minmax(0,1fr)", null, sec("secrets").fields.map((f) => [S(`<span class="sub" style="margin-bottom:2px">${esc(f.key)}${f.note ? ` · ${esc(f.note.toLowerCase())}` : ""}</span>${secretLine(f.secret.key, f.secret.activeVersion)}`)]))),
+        history: () => hist({ events: evOf("secret") }) },
+      { id: "policy", name: "Policy", icon: "shield", chips: [chip("approval manual")], lines: sec("policy").lines,
+        lede: "When a deploy waits for someone to approve it.",
+        details: () => block("Policy", fields([["Approval", RD.badge("manual", "attention"), "a deploy waits for approval"], ["Destructive", RD.badge("manual", "attention")]]) + `<p class="note" style="margin-top:var(--space-3)">Approval is set by this service; destructive by ${esc(res.policy.destructiveSetBy)}.</p>`),
+        history: () => hist({}) },
+      { id: "runs", name: "Runs", icon: "runs", chips: [chip(`${res.runs.length} runs`), chip("1 failed")],
+        lede: "Every deploy of open-webui.",
+        details: () => block("Runs", runs(res.runs)) },
+    ];
+  },
+  node: () => {
+    const h = res.hosts[0], is = res.issues[0];
+    const conn = sec("connection").fields;
+    const waits = res.guests.filter((g) => g.status === "awaiting-approval").length, failed = res.guests.filter((g) => g.status === "failed").length;
+    return [
+      { id: "issues", name: "Issues", icon: "alert", tone: "warning", chips: [chip("1 warning", { tone: "warning" }), chip("tls.verify", { mono: true })], lines: [is.line, is.line],
+        lede: "What Octopushy found wrong with the definition or the installation.",
+        details: () => `<div class="issue">${icon("alert", 16)}<div><b>${esc(is.message)}</b><div class="small"><button type="button" class="link-button mono" data-tab="yaml">${esc(def.file.split("/").pop())}:${is.line}</button></div></div></div>` + block("What to do", `<p class="note">Give Proxmox a certificate Octopushy can check, then set <span class="mono">tls.verify</span> to true.</p>`),
+        history: () => hist({ events: evOf("trust") }) },
+      { id: "capacity", name: "Capacity", icon: "cpu", chips: [chip(`CPU ${RD.pct(h.cpu)}`), chip(`${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`)], lines: sec("hosts").lines,
+        lede: `Host ${h.name}, observed ${RD.rel(res.observedAt)}.`,
+        details: () => block(`Host ${h.name}`, `<div class="meterline"><span class="muted">CPU</span>${RD.meter(h.cpu)}<span class="num">${RD.pct(h.cpu)} of ${h.maxCpu} cores</span></div><div class="meterline"><span class="muted">Memory</span>${RD.meter(h.memoryBytes / h.maxMemoryBytes)}<span class="num">${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}</span></div>`) +
+          block("Host", fields([["State", `${RD.badge("Online", "success")} <span class="muted small">up ${RD.duration(h.uptimeSeconds)}</span>`], ["Operations", `${h.concurrentOperations} running, limit ${h.limit}`], ["Proxmox VE", res.proxmoxVersion]])) + block("Declared", fromDef("hosts")),
+        history: () => hist({ events: evOf("observe", "uptime") }) },
+      { id: "guests", name: "Guests", icon: "server", tone: failed ? "danger" : null, chips: [chip(`${res.guests.length} managed`), chip(`${waits} waits`, { tone: "attention" }), chip(`${failed} failed`, { tone: "danger" })],
+        lede: `${res.guests.length} guests defined in Git under home/moraband.`,
+        details: () => block("Managed guests", list("minmax(0,1fr) 2.5rem 4rem 9.5rem", null, res.guests.map((g) => [S(`<a href="${g.current ? RD.href("machine") : "#"}" class="mono">${esc(g.name)}</a><span class="sub">${g.kind} · ${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}${g.statusDetail ? ` · ${esc(g.statusDetail)}` : ""}</span>`, "truncate"), S(g.vmid, "num muted small"), S(g.power, `small ${g.power === "running" ? "" : "muted"}`), S(RD.status(g.status))]))),
+        history: () => hist({ runs: res.runs }) },
+      { id: "unmanaged", name: "Unmanaged", icon: "box", chips: [chip(`${res.unmanaged.length} guests`), chip("1 template")],
+        title: "Unmanaged guests", lede: "On the host, but not in Git. Octopushy only watches them.",
+        details: () => block("Unmanaged guests", list("minmax(0,1fr) 2.5rem 4rem 9.5rem", null, res.unmanaged.map((g) => [S(`<span class="mono">${esc(g.name)}</span><span class="sub">${g.kind} · ${g.maxCpu} vCPU · ${RD.bytes(g.maxMemoryBytes)}${g.tags.length ? ` · ${g.tags.join(", ")}` : ""}</span>`), S(g.vmid, "num muted small"), S(g.status, "small muted"), S(g.template ? RD.badge("Template", "neutral") : RD.status("unmanaged"))]))) },
+      { id: "connection", name: "Connection", icon: "link", tone: "warning", chips: [chip("10.1.0.50:8006", { mono: true }), chip("trusted", { tone: "success" }), chip("TLS not verified", { tone: "warning" })], lines: sec("connection").lines,
+        lede: "How Octopushy reaches the Proxmox API, and why it trusts it.",
+        details: () => block("Declared", fields(conn.map((f) => [f.label, f.tone ? RD.badge(f.value, f.tone) : RD.value(f), f.note]))) + block("Trust", fields([["Trusted", `by ${esc(res.trust.trustedBy)}, ${RD.rel(res.trust.trustedAt)}`], ["Endpoints", `<span class="mono small">${res.trust.endpoints.join(", ")}</span>`], ["Untrusted", "none"]])) + block("Proxmox API", uptime(up, "The API")),
+        history: () => hist({ events: evOf("trust", "uptime") }) },
+      { id: "snippets", name: "Snippets", icon: "file", chips: [chip(`${res.snippets.user}@${res.snippets.datastore}`, { mono: true }), chip("reachable")], lines: sec("snippets").lines,
+        lede: "Where cloud-init snippets go, and how they get there.",
+        details: () => block("Declared", fromDef("snippets")) + block("Observed", fields([["Datastore", res.snippets.datastore], ["Key", `<span class="mono small">${res.snippets.fingerprint}</span>`], ["Created", RD.rel(res.snippets.createdAt)], ["Reachable", res.snippets.hosts.map((x) => `${x.name} ${RD.badge("Yes", "success")}`).join(" ")]])),
+        history: () => hist({}) },
+      { id: "policy", name: "Policy", icon: "shield", chips: [chip("approval manual")], lines: sec("policy").lines,
+        lede: "The default for every guest and service under home/moraband.",
+        details: () => block("Policy", fields([["Approval", RD.badge("manual", "attention"), "every change on this installation waits for approval"], ["Destructive", RD.badge("manual", "attention")]])),
+        history: () => hist({}) },
+      { id: "runs", name: "Runs", icon: "runs", chips: [chip(`${res.runs.length} runs`), chip("1 waits", { tone: "attention" }), chip("1 failed", { tone: "danger" })],
+        title: "Runs of its guests", lede: "A node has no runs of its own; these are its guests'.",
+        details: () => block("Runs", runs(res.runs, true)) },
+    ];
+  },
+};
+const topics = TOPICS[kind]();
+const tabsOf = (t) => [["details", "Details"], ...(t.lines ? [["yaml", "YAML"]] : []), ...(t.history ? [["history", "History"]] : [])];
+const firstDefault = (topics.find((t) => t.tone) ?? topics[0]).id;
+function parseHash() {
+  const [id, tab] = location.hash.slice(1).split("/");
+  const t = topics.find((x) => x.id === id) ?? topics.find((x) => x.id === firstDefault);
+  return { topic: t.id, tab: tabsOf(t).some(([x]) => x === tab) ? tab : "details" };
+}
+let state = parseHash();
+
+// ---- Panes --------------------------------------------------------------------------
+const parent = { machine: ["home/moraband", "node", "Guests of moraband"], service: ["home/moraband/falcon", "machine", "Services on falcon"], node: ["home", null, "Nodes in home"] }[kind];
+const parentLink = parent[1] ? `<a href="${RD.href(parent[1])}">${icon("chevronRight", 14).replace("m9 18 6-6-6-6", "m15 18-6-6 6-6")}<span class="mono">${parent[0]}</span></a>` : `<a href="#">${icon("chevronRight", 14).replace("m9 18 6-6-6-6", "m15 18-6-6 6-6")}<span class="mono">${parent[0]}</span></a>`;
+const sibHref = (s) => (s.current ? RD.href(kind) : "#");
+
+main.innerHTML = `
+  <nav class="pane sibs" aria-label="${esc(parent[2])}">
+    <div class="up"><a href="#">Inventory</a><div>${parentLink}</div><b>${esc(parent[2])}</b></div>
+    <label class="search">${icon("search", 14)}<input type="search" placeholder="Filter" aria-label="Filter ${esc(parent[2])}"></label>
+    <div class="sib-list">${res.siblings.map((s) => `<a class="sib" href="${sibHref(s)}"${s.current ? ' aria-current="page"' : ' data-sib'} data-name="${esc(s.name)}"><span class="dot" data-tone="${RD.tone(s.status)}" title="${RD.statusLabel(s.status)}"></span><span class="truncate${kind === "service" ? "" : " mono"}">${esc(s.name)}</span><span>${esc(s.kind)}</span></a>`).join("")}</div>
+  </nav>
+  <section class="pane res" aria-label="${esc(res.name)}">
+    <label class="sib-select"><span class="small muted">${parentLink} · ${esc(parent[2].toLowerCase())}</span><select aria-label="${esc(parent[2])}">${res.siblings.map((s) => `<option${s.current ? " selected" : ""}>${esc(s.name)} · ${esc(RD.statusLabel(s.status).toLowerCase())}</option>`).join("")}</select></label>
+    <header class="res__head">
+      <div class="eyebrow muted">${esc(res.noun)}</div>
+      <h1>${kind === "service" ? RD.svcIcon(res.name) : ""}<span class="mono">${esc(res.name)}</span>${RD.status(res.status)}</h1>
+      ${res.statusDetail ? `<p class="small muted" style="margin-top:var(--space-2)">${esc(res.statusDetail)}</p>` : ""}
+      <div class="res__actions">${RD.actions(res, { small: true })}</div>
+    </header>
+    <div class="topics" role="tablist" aria-orientation="vertical" aria-label="Topics"></div>
+  </section>
+  <section class="pane detail" role="tabpanel"></section>`;
+const $ = (s) => main.querySelector(s);
+const topicsEl = $(".topics"), detail = $(".detail");
+
+function drawTopics() {
+  topicsEl.innerHTML = topics.map((t) => `<button type="button" class="topic" role="tab" id="tp-${t.id}" data-topic="${t.id}" aria-selected="${t.id === state.topic}" tabindex="${t.id === state.topic ? 0 : -1}">
+      ${icon(t.icon, 16)}<span class="topic__name">${esc(t.name)}</span><span class="chips">${t.chips.join("")}</span>${t.tone ? `<span class="dot" data-tone="${t.tone}" title="Needs attention"></span>` : "<span></span>"}</button>`).join("");
+}
+function drawDetail() {
+  const t = topics.find((x) => x.id === state.topic);
+  const tabs = tabsOf(t);
+  let body;
+  if (state.tab === "yaml") body = `<p class="note" style="margin-bottom:var(--space-3)">Lines ${t.lines[0]}${t.lines[1] !== t.lines[0] ? `–${t.lines[1]}` : ""} of the definition are this topic.</p>${RD.yamlBox(def, { highlight: t.lines })}`;
+  else if (state.tab === "history") body = t.history();
+  else body = t.details();
+  detail.setAttribute("aria-labelledby", `tp-${t.id}`);
+  detail.innerHTML = `
+    <div class="detail__head">
+      <h2>${esc(t.title ?? t.name)}${t.tone ? RD.badge({ attention: "Waits for you", warning: "Warning", danger: "Needs attention" }[t.tone], t.tone) : ""}</h2>
+      <p class="detail__lede">${esc(t.lede)}</p>
+      ${tabs.length > 1 ? `<div class="tabs" role="tablist">${tabs.map(([id, label]) => `<button type="button" class="tab" role="tab" data-tab="${id}" aria-selected="${id === state.tab}">${label}</button>`).join("")}</div>` : `<div style="height:var(--space-4)"></div>`}
+    </div>
+    <div class="detail__body">${body}</div>`;
+  detail.scrollTop = 0;
+  if (state.tab === "yaml") requestAnimationFrame(() => detail.querySelector(".yaml__line--hl")?.scrollIntoView({ block: "center" }));
+}
+function go(next, { focus = false } = {}) {
+  state = { ...state, ...next };
+  const t = topics.find((x) => x.id === state.topic);
+  if (!tabsOf(t).some(([x]) => x === state.tab)) state.tab = "details";
+  history.replaceState(null, "", `#${state.topic}${state.tab === "details" ? "" : "/" + state.tab}`);
+  drawTopics(); drawDetail();
+  const el = topicsEl.querySelector(`[data-topic="${state.topic}"]`);
+  if (focus) el.focus(); else el.scrollIntoView({ block: "nearest" });
+}
+main.addEventListener("click", (e) => {
+  const sib = e.target.closest("[data-sib]"); if (sib) { e.preventDefault(); return RD.toast(`Open ${sib.dataset.name}: not wired in a prototype`); }
+  const t = e.target.closest("[data-topic]"); if (t) return go({ topic: t.dataset.topic, tab: state.tab });
+  const tab = e.target.closest("[data-tab]"); if (tab) return go({ tab: tab.dataset.tab });
+});
+$(".search input").addEventListener("input", (e) => {
+  const q = e.target.value.toLowerCase();
+  main.querySelectorAll(".sib").forEach((s) => { s.hidden = !s.dataset.name.toLowerCase().includes(q); });
+});
+$(".sib-select select").addEventListener("change", (e) => { const s = res.siblings[e.target.selectedIndex]; if (!s.current) { RD.toast(`Open ${s.name}: not wired in a prototype`); e.target.selectedIndex = res.siblings.findIndex((x) => x.current); } });
+addEventListener("keydown", (e) => {
+  if (e.target.closest?.("input, textarea, select") || document.querySelector(".drawer") || e.metaKey || e.ctrlKey || e.altKey) return;
+  const d = { ArrowDown: 1, ArrowUp: -1, Home: -99, End: 99 }[e.key];
+  if (d) {
+    e.preventDefault();
+    const i = topics.findIndex((t) => t.id === state.topic);
+    return go({ topic: topics[Math.max(0, Math.min(topics.length - 1, i + d))].id }, { focus: true });
+  }
+  const h = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+  if (h) {
+    const tabs = tabsOf(topics.find((t) => t.id === state.topic)).map(([x]) => x);
+    const i = tabs.indexOf(state.tab) + h;
+    if (i >= 0 && i < tabs.length) { e.preventDefault(); go({ tab: tabs[i] }); }
+  }
+});
+addEventListener("hashchange", () => { const s = parseHash(); if (s.topic !== state.topic || s.tab !== state.tab) { state = s; drawTopics(); drawDetail(); } });
+drawTopics(); drawDetail();
+</script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Source map</title>
+<!--
+  07 · Source map. The readable view and the YAML side by side, linked, so the file is always in
+  sight but never has to be read. Three full-height columns: an outline (the file's sections, then
+  what Octopushy records that is not in the file), the selected entry as readable fields, and the
+  YAML with that entry's lines lit and the rest dimmed. Hovering or focusing a field marks its exact
+  line; clicking a line selects the section and field it belongs to. A record that is not in the file
+  quiets the YAML, or lights the lines that govern it (policy for an approval, schedules for
+  maintenance). Arrow keys move through the outline; below 1200px the YAML is a toggle.
+  Uses sample data: the node's datastores (res.sample.datastores) under Capacity.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#main { height: 100vh; display: flex; flex-direction: column; min-height: 0; }
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border); }
+.top h1 { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xl); margin-top: 2px; flex-wrap: wrap; }
+.top__detail { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-muted); font-weight: 400; }
+.yaml-toggle { display: none; }
+.yaml-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+
+.cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 14rem minmax(0, 1fr) minmax(22rem, 32%); position: relative; }
+
+/* Outline */
+.outline { border-right: 1px solid var(--border); overflow-y: auto; padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; gap: var(--space-5); }
+.outline:focus-visible { outline-offset: -2px; }
+.group__label { padding: 0 var(--space-2) var(--space-2); }
+.entry { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 2.25rem; padding: 0 var(--space-2); border: 0; border-radius: var(--radius); background: transparent; color: var(--text-muted); text-align: left; }
+.entry svg { color: var(--text-faint); }
+.entry:hover { background: var(--surface-3); color: var(--text); }
+.entry[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: 550; }
+.entry[aria-selected="true"] svg { color: var(--link); }
+.entry__count { margin-left: auto; font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; font-weight: 400; }
+.entry .badge { margin-left: auto; }
+.outline__hint { margin-top: auto; padding: 0 var(--space-2); }
+
+/* The readable pane */
+.pane { overflow-y: auto; padding: var(--space-6) var(--space-8) var(--space-8); }
+.pane__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
+.pane__head h2 { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xl); }
+.pane__head h2 svg { color: var(--text-muted); }
+.pane__sub { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-sm); }
+.note { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-5); border-left: 2px solid var(--yaml-comment); background: var(--surface-2); color: var(--text-muted); font-size: var(--text-sm); max-width: 70ch; }
+.note svg { margin-top: 3px; color: var(--yaml-comment); }
+
+.fields { border-top: 1px solid var(--border); }
+.field { display: grid; grid-template-columns: 9rem minmax(0, 1fr) 2rem; gap: var(--space-4); align-items: baseline; padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--border); border-radius: var(--radius-sm); cursor: default; }
+.field:hover, .field:focus-visible, .field.is-pointed { background: var(--surface-2); }
+.field:focus-visible { outline-offset: -2px; }
+.field.is-pointed { box-shadow: inset 2px 0 0 var(--accent); }
+.field__label { color: var(--text-muted); font-size: var(--text-sm); }
+.field__value { font-size: var(--text-lg); overflow-wrap: anywhere; min-width: 0; }
+.field__value:has(.chips), .field__value:has(a) { font-size: var(--text-md); }
+.field__extra { margin-top: 2px; font-size: var(--text-sm); color: var(--text-muted); }
+.field__extra .mono { color: var(--text-faint); }
+.field__issue { margin-top: var(--space-2); display: flex; gap: var(--space-2); align-items: flex-start; color: var(--warning-fg); font-size: var(--text-sm); }
+.field__issue svg { margin-top: 2px; }
+.field__line { text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint); }
+.field:hover .field__line, .field.is-pointed .field__line, .field:focus-visible .field__line { color: var(--link); }
+
+/* Records (not in the file) */
+.block { margin-bottom: var(--space-6); }
+.block > h3 { font-size: var(--text-md); font-weight: 600; margin-bottom: var(--space-3); }
+.figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-bottom: var(--space-4); }
+.figures b { display: block; font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.axis { display: flex; justify-content: space-between; margin-top: var(--space-1); font-size: var(--text-xs); color: var(--text-faint); }
+.rows { border-top: 1px solid var(--border); }
+.rowline { display: grid; gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--border); min-width: 0; }
+.rowline[data-line] { border-radius: var(--radius-sm); }
+.rowline[data-line]:hover, .rowline.is-pointed { background: var(--surface-2); }
+.runs .rowline { grid-template-columns: 0.75rem 3.25rem minmax(0, 1fr) 9.5rem 4.5rem; }
+.runs .track__segment { width: 1.6rem; }
+.svc .rowline { grid-template-columns: 1.75rem minmax(0, 1fr) 5.5rem 11rem; }
+.svc .rowline > .badge, .guests .rowline > .badge, .stages .rowline > .badge { justify-self: end; }
+.maint .rowline { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.guests .rowline { grid-template-columns: minmax(0, 1fr) 3rem 8rem 10.5rem; }
+.stages .rowline { grid-template-columns: 2rem minmax(0, 1fr) 8rem; }
+.kv2 { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: var(--space-3) var(--space-4); }
+.kv2 dt { color: var(--text-muted); font-size: var(--text-sm); }
+.kv2 dd { min-width: 0; overflow-wrap: anywhere; }
+.waiting { padding: var(--space-4) var(--space-5); border: 1px solid var(--attention-border); border-radius: var(--radius-lg); background: var(--attention-bg); margin-bottom: var(--space-6); }
+.waiting__title { font-size: var(--text-lg); font-weight: 600; }
+.issue { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--warning-border); border-radius: var(--radius); background: var(--warning-bg); color: var(--text); margin-bottom: var(--space-5); }
+.issue > svg { color: var(--warning-fg); margin-top: 2px; }
+.step-n { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 1px solid var(--border-strong); font-size: var(--text-xs); color: var(--text-muted); }
+.cap { display: grid; grid-template-columns: 6rem minmax(0, 1fr) 9rem; gap: var(--space-4); align-items: center; padding: var(--space-2) 0; }
+
+/* The source column */
+.source { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--border); background: var(--code-bg); color: var(--code-text); }
+.source__bar > .truncate { flex: 1; }
+.source__bar > .row { flex: none; }
+.source__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4); border-bottom: 1px solid var(--code-border); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); min-height: 2.75rem; white-space: nowrap; }
+.source__body { position: relative; flex: 1; min-height: 0; overflow: auto; font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.6; }
+.source__note { position: sticky; top: 0; left: 0; z-index: 1; display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--code-border); background: var(--surface-2); color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-sm); }
+.source__note svg { margin-top: 3px; flex: none; }
+.source .yaml__line { transition: opacity 0.15s, background 0.15s; }
+.source .yaml__line.is-linked { cursor: pointer; }
+.source .yaml__line.is-linked:hover { background: var(--surface-3); opacity: 1; }
+.source .yaml__line--hl.is-linked:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.source .yaml__line.is-pointed { background: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: inset 3px 0 0 var(--link); opacity: 1; }
+.source.is-quiet .yaml { opacity: 0.55; }
+.source__foot { padding: var(--space-2) var(--space-4); border-top: 1px solid var(--code-border); font-size: var(--text-xs); color: var(--text-faint); }
+
+@media (max-width: 1200px) {
+  .yaml-toggle { display: inline-flex; }
+  .cols { grid-template-columns: 14rem minmax(0, 1fr); }
+  .source { display: none; position: absolute; top: 0; right: 0; bottom: 0; width: min(32rem, 92%); z-index: 5; box-shadow: var(--shadow-lg); }
+  body.yaml-open .source { display: flex; }
+  .pane { padding: var(--space-5) var(--space-6); }
+}
+@media (max-width: 860px) {
+  #main { height: auto; min-height: 100vh; }
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .outline { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); gap: var(--space-4); }
+  .outline__hint { display: none; }
+  .group ul { display: flex; gap: 2px; }
+  .entry { white-space: nowrap; }
+  .field, .kv2 { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .field__line { display: none; }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount({ bare: true });
+const def = res.definition;
+const up = res.checks[0];
+const sec = (id) => def.sections.find((s) => s.id === id);
+const fileName = def.file.split("/").pop();
+
+// ---- Outline entries: the file's sections, then what Octopushy records ---------------------
+const fileEntries = def.sections.map((s) => ({ id: s.id, title: s.title, icon: s.icon, count: s.fields.length, section: s }));
+const statusEntry = { id: "status", title: "Status and health", icon: "activity" };
+const runsEntry = { id: "runs", title: "Runs", icon: "runs", count: res.runs.length };
+const records = {
+  machine: () => [
+    { ...statusEntry, governs: { lines: sec("access").lines, note: "The SSH check connects to the access address in the file. Its results are Octopushy's own." } },
+    { id: "maintenance", title: "Maintenance", icon: "calendar", count: res.configuration.actions.length, governs: { lines: sec("schedules").lines, note: "The schedules in the file set when maintenance runs." } },
+    { id: "services", title: "Services", icon: "globe", count: res.services.length, quiet: "Each service has its own service.yaml, under services/ next to this file." },
+    { id: "access-keys", title: "Access and keys", icon: "key", governs: { lines: sec("access").lines, note: "The file names the address and user. The keys are Octopushy's: it creates, rotates and pins them." } },
+    { ...runsEntry, quiet: "Octopushy records each plan, apply and configure it starts." },
+  ],
+  service: () => [
+    { id: "stages", title: "Stages", icon: "workflow", mark: ["Waits", "attention"], governs: { lines: sec("policy").lines, note: "Approval is manual in the policy, so deploy #214 waits for you." } },
+    { ...statusEntry, governs: { lines: [sec("service").fields[1].line, sec("service").fields[1].line], note: "The check opens the link in the file. Its results are Octopushy's own." } },
+    { ...runsEntry, quiet: "Octopushy records each deploy it starts." },
+  ],
+  node: () => [
+    { ...statusEntry, mark: ["1", "warning"], governs: { lines: [res.issues[0].line, res.issues[0].line], note: "The warning comes from this line: tls.verify is false." } },
+    { id: "guests", title: "Guests", icon: "server", count: res.guests.length + res.unmanaged.length, quiet: "Each managed guest has its own guest.yaml under guests/; unmanaged ones are what Proxmox reports." },
+    { id: "capacity", title: "Capacity", icon: "cpu", governs: { lines: sec("hosts").lines, note: "The file names the host's datastores, bridges and how many operations run at once. The figures come from Proxmox." } },
+    { id: "trust", title: "Trust", icon: "shield", governs: { lines: sec("connection").lines, note: "Trust is given to the endpoint in the file, and kept while it stays the same." } },
+    { ...runsEntry, title: "Runs of its guests", quiet: "A node has no runs of its own: these are its guests' runs." },
+  ],
+}[RD.kind]();
+const entries = [...fileEntries, ...records];
+const defaults = { machine: "network", service: "stages", node: "connection" };
+let selected = entries.find((e) => e.id === location.hash.slice(1))?.id ?? defaults[RD.kind];
+
+// ---- Small views -----------------------------------------------------------------------
+const issueAt = (line) => res.issues.filter((i) => i.line === line);
+function field(f) {
+  const extra = [f.note ? esc(f.note) : "", f.raw ? `<span class="mono">${esc(f.raw)}</span>` : ""].filter(Boolean).join(" · ");
+  return `
+    <div class="field" tabindex="0" data-line="${f.line}">
+      <div class="field__label">${esc(f.label)}</div>
+      <div class="field__value">
+        ${f.tone ? RD.badge(f.value, f.tone) : RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention", "hand")}` : ""}
+        ${extra ? `<div class="field__extra">${extra}</div>` : ""}
+        ${issueAt(f.line).map((i) => `<div class="field__issue">${icon("alert", 14)}<span>${esc(i.message)}</span></div>`).join("")}
+      </div>
+      <span class="field__line" title="Line ${f.line}">${f.line}</span>
+    </div>`;
+}
+const head = (title, ic, sub, right = "") => `
+  <div class="pane__head">
+    <div><h2>${icon(ic, 18)}${esc(title)}</h2>${sub ? `<div class="pane__sub">${sub}</div>` : ""}</div>
+    <div class="row">${right}</div>
+  </div>`;
+
+function sectionView(s) {
+  return head(s.title, s.icon, `${s.fields.length} ${s.fields.length === 1 ? "field" : "fields"} · lines ${s.lines[0]}–${s.lines[1]} of <span class="mono">${esc(fileName)}</span>`)
+    + (s.note ? `<p class="note">${icon("info", 14)}<span>${esc(s.note)}</span></p>` : "")
+    + `<div class="fields">${s.fields.map(field).join("")}</div>`;
+}
+
+const checkBlock = (c, title) => `
+  <section class="block">
+    <h3>${title} <span class="small muted mono">${esc(c.url)}</span></h3>
+    <div class="figures">
+      <div><span class="xs muted">Last 24 hours</span><b>${c.uptime.day}%</b></div>
+      <div><span class="xs muted">7 days</span><b>${c.uptime.week}%</b></div>
+      <div><span class="xs muted">30 days</span><b>${c.uptime.month}%</b></div>
+    </div>
+    ${RD.beats(c)}<div class="axis"><span>24 h ago</span><span>answers in ${c.elapsedMs} ms · checked ${RD.rel(c.checkedAt)}</span><span>now</span></div>
+    <div style="margin-top:var(--space-4)">${RD.days(c)}</div><div class="axis"><span>30 days ago</span><span>today</span></div>
+  </section>`;
+const incidents = (c) => c.incidents.length ? `
+  <section class="block"><h3>Incidents</h3><div class="rows">${c.incidents.map((i) => `
+    <div class="rowline" style="grid-template-columns:1rem minmax(0,1fr) auto"><span class="dot" data-tone="${i.state === "down" ? "danger" : "warning"}"></span>
+      <span>${i.state === "down" ? "Down" : "Slow"} for ${i.minutes} min <span class="muted">· ${esc(i.detail)}</span></span><span class="xs muted">${RD.clock(i.at)}</span></div>`).join("")}</div></section>` : "";
+
+const runRows = (runs) => `<div class="rows runs">${runs.map((r) => `
+  <div class="rowline">
+    <span class="dot" data-tone="${RD.tone(r.status)}" title="${RD.statusLabel(r.status)}"></span>
+    <a href="#" class="num">#${r.number}</a>
+    <span class="truncate">${esc(r.title)}${r.address ? ` <span class="muted">${esc(r.address.split("/").pop())}</span>` : ""}<span class="xs muted" style="display:block">${esc(r.detail ?? "")}</span></span>
+    ${RD.track(r)}
+    <span class="xs muted" style="text-align:right">${RD.rel(r.createdAt)}</span>
+  </div>`).join("")}</div>`;
+
+const views = {
+  status() {
+    if (RD.kind === "machine") return head("Status and health", "activity", "Recorded by Octopushy, not in the file")
+      + `<dl class="kv2 block"><dt>Status</dt><dd>${RD.status(res.status)}</dd><dt>Power</dt><dd>Running, up ${RD.duration(res.observed.uptimeSeconds)}</dd><dt>Applied</dt><dd>${RD.commit(res.revisions.appliedCommit)} <span class="muted small">${RD.rel(res.revisions.appliedAt)}, verified ${RD.rel(res.revisions.verifiedAt)}</span></dd></dl>`
+      + checkBlock(up, "SSH") + incidents(up);
+    if (RD.kind === "service") return head("Status and health", "activity", "Recorded by Octopushy, not in the file")
+      + `<dl class="kv2 block"><dt>Status</dt><dd>${RD.status(res.status)} <span class="muted small">${esc(res.statusDetail)}</span></dd><dt>Deployed</dt><dd>${RD.commit(res.appliedCommit)} <span class="muted small">${RD.rel(res.appliedAt)}</span></dd>
+         <dt>Response time</dt><dd><div class="row">${RD.spark(up.latency, { width: 260, height: 32 })}<span class="small muted">${up.elapsedMs} ms now</span></div></dd></dl>`
+      + checkBlock(up, "Link") + incidents(up);
+    const h = res.hosts[0], i = res.issues[0];
+    return head("Status and health", "activity", "Recorded by Octopushy, not in the file")
+      + `<div class="issue">${icon("alert", 16)}<div><b>${esc(i.message)}</b><div class="small muted"><button type="button" class="link-button mono" data-goto="${i.line}">${esc(fileName)}, line ${i.line}</button></div></div></div>`
+      + `<dl class="kv2 block"><dt>Status</dt><dd>${RD.status(res.status)} <span class="muted small">${esc(res.statusDetail)}</span></dd><dt>Host</dt><dd>Online, up ${RD.duration(h.uptimeSeconds)}</dd><dt>Observed</dt><dd>${RD.rel(res.observedAt)}, Proxmox VE ${res.proxmoxVersion}</dd></dl>`
+      + checkBlock(up, "Proxmox API") + incidents(up);
+  },
+  runs: () => head(RD.kind === "node" ? "Runs of its guests" : "Runs", "runs", `${res.runs.length} recorded by Octopushy`) + runRows(res.runs),
+  maintenance() {
+    const c = res.configuration, lineOf = (a) => sec("schedules").fields.find((f) => f.key === a)?.line;
+    return head("Maintenance", "calendar", `Workflow ${esc(c.workflow)} · applied ${esc(c.appliedAction)} ${RD.rel(c.appliedAt)}`, `${RD.status("in-sync")}`)
+      + `<div class="rows maint block">${c.actions.map((a) => { const s = c.schedules.find((x) => x.action === a.id); return `
+        <div class="rowline"${s ? ` data-line="${lineOf(a.id)}"` : ""}>
+          <span><span class="mono">${a.id}</span>${a.destructive ? ` ${RD.badge("destructive", "danger")}` : ""}<span class="xs muted" style="display:block">${esc(a.description)}</span></span>
+          <span class="small">${s ? `${esc(s.human)} <span class="muted">· next ${RD.rel(s.nextAt)}</span><span class="xs muted" style="display:block">Last #${s.lastRunNumber}: ${esc(s.lastRunDetail)}</span>` : `<span class="muted">${a.onChange ? "When the definition changes" : "By hand"}</span>`}</span>
+          <button type="button" class="button button--small" data-action="run">${icon("play", 13)}Run</button>
+        </div>`; }).join("")}</div>`;
+  },
+  services: () => head("Services", "globe", `${res.services.length} on ${esc(res.name)}`)
+    + `<div class="rows svc">${res.services.map((s) => `
+      <div class="rowline">${RD.svcIcon(s.name)}<span class="truncate"><a href="${RD.href("service")}">${esc(s.name)}</a><span class="xs mono muted truncate" style="display:block">${esc(s.links[0])}</span></span><span class="small muted num">${s.uptimeDay}% today</span>${RD.status(s.status)}</div>`).join("")}</div>`,
+  "access-keys"() {
+    const m = res.managedAccess, k = res.hostKey.pinned, a = sec("access");
+    return head("Access and keys", "key", "The address and user are in the file; the keys are Octopushy's")
+      + `<div class="rows block">${a.fields.map((f) => `<div class="rowline" data-line="${f.line}" style="grid-template-columns:9rem minmax(0,1fr)"><span class="muted small">${esc(f.label)}</span><span class="mono">${esc(f.value)}</span></div>`).join("")}</div>`
+      + `<section class="block"><h3>Managed SSH key</h3><dl class="kv2"><dt>Active</dt><dd>${RD.chip(`v${m.version}`)} <span class="small muted">used ${RD.rel(m.lastUsedAt)}</span></dd><dt>Fingerprint</dt><dd class="mono small">${esc(m.fingerprint)}</dd>
+         <dt>Versions</dt><dd class="chips">${m.keys.map((x) => RD.chip(`v${x.version} ${x.state}`, { tone: x.state === "active" ? "success" : "muted" })).join("")}</dd><dt>Rotated</dt><dd>${RD.rel(m.keys[0].promotedAt)} by ${esc(m.keys[0].promotedBy)}</dd></dl></section>`
+      + `<section class="block"><h3>Host key</h3><dl class="kv2"><dt>Pinned</dt><dd>${RD.chip(`v${k.version}`)} <span class="small muted">${RD.rel(k.createdAt)}</span></dd><dt>Fingerprint</dt><dd class="mono small">${esc(k.fingerprint)}</dd></dl></section>`;
+  },
+  stages() {
+    const p = res.pending, w = res.runs[0], last = res.runs.find((r) => r.status === "succeeded"), pol = sec("policy").fields[0];
+    return head("Stages", "workflow", `Workflow ${esc(res.workflow.reference)}, resolved ${res.workflow.resolved} · ${res.workflow.latest} is out`)
+      + `<div class="waiting"><div class="row row--between row--wrap"><div><span class="badge" data-tone="attention">${icon("hand", 13)}Waits for you</span>
+           <div class="waiting__title" style="margin-top:var(--space-2)">Deploy #${p.run}: ${esc(p.summary)}</div>
+           <div class="small muted">Change by ${esc(p.author)} · ${RD.commit(p.commit)} · ${RD.rel(p.since)}</div></div>
+           <div class="row"><button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button></div></div>
+         <div class="row small muted" style="margin-top:var(--space-3)">${RD.track(w)}<span>stopped at approval, before deploy</span></div>
+         <div class="xs muted" style="margin-top:var(--space-2)" data-line="${pol.line}">Waits because approval is <b>${pol.value}</b> in the policy, line ${pol.line}</div></div>`
+      + `<section class="block"><h3>Stages <span class="small muted">· last run #${last.number}, ${RD.rel(last.createdAt)}</span></h3><div class="rows stages">${res.workflow.stages.map((s, i) => { const st = last.steps.find((x) => x.name === s.name)?.status ?? "todo"; return `
+          <div class="rowline"><span class="step-n">${i + 1}</span><span><span class="mono">${s.name}</span> ${RD.chip(s.executor)}<span class="small muted" style="display:block">${esc(s.detail)}</span></span>${RD.status(st)}</div>`; }).join("")}</div></section>`;
+  },
+  guests: () => head("Guests", "server", `${res.guests.length} managed · ${res.unmanaged.length} unmanaged`)
+    + `<section class="block"><h3>Managed</h3><div class="rows guests">${res.guests.map((g) => `
+      <div class="rowline"><span class="truncate"><a class="mono" href="${RD.href("machine")}">${g.name}</a><span class="xs muted" style="display:block">${g.kind}${g.statusDetail ? ` · ${esc(g.statusDetail)}` : ""}</span></span><span class="small num muted">${g.vmid}</span><span class="small num">${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}</span>${RD.status(g.status)}</div>`).join("")}</div></section>`
+    + `<section class="block"><h3>Unmanaged</h3><div class="rows guests">${res.unmanaged.map((g) => `
+      <div class="rowline muted"><span class="truncate"><span class="mono">${g.name}</span><span class="xs" style="display:block">${g.kind}</span></span><span class="small num">${g.vmid}</span><span class="small num">${g.maxCpu} vCPU · ${RD.bytes(g.maxMemoryBytes)}</span>${RD.status(g.template ? "template" : "unmanaged")}</div>`).join("")}</div></section>`,
+  capacity() {
+    const h = res.hosts[0], lim = sec("hosts").fields.find((f) => f.key === "limits");
+    const cap = (label, frac, text) => `<div class="cap"><span class="muted small">${label}</span>${RD.meter(frac)}<span class="small num">${text}</span></div>`;
+    return head("Capacity", "cpu", `Host ${esc(h.name)} · ${esc(res.sample.cpuModel)}`)
+      + `<section class="block"><h3>Host</h3>${cap("CPU", h.cpu, `${RD.pct(h.cpu)} of ${h.maxCpu} cores`)}${cap("Memory", h.memoryBytes / h.maxMemoryBytes, `${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`)}
+         <div class="rows" style="margin-top:var(--space-3)"><div class="rowline" data-line="${lim.line}" style="grid-template-columns:9rem minmax(0,1fr)"><span class="muted small">Operations</span><span>${h.concurrentOperations} running, at most ${h.limit} at once</span></div></div></section>`
+      + `<section class="block"><h3>Datastores</h3>${res.sample.datastores.map((d) => cap(d.name, d.usedBytes / d.totalBytes, `${RD.bytes(d.usedBytes)} of ${RD.bytes(d.totalBytes)}`)).join("")}</section>`;
+  },
+  trust() {
+    const t = res.trust;
+    return head("Trust", "shield", "Recorded by Octopushy when you trusted the endpoint")
+      + `<dl class="kv2 block"><dt>Trusted</dt><dd>${RD.badge("Trusted", "success", "shield")} <span class="small muted">by ${esc(t.trustedBy)}, ${RD.rel(t.trustedAt)}</span></dd>
+         <dt>Endpoints</dt><dd class="chips">${t.endpoints.map((e) => RD.chip(e, { mono: true })).join("")}</dd>
+         <dt>Untrusted</dt><dd class="muted">None</dd><dt>TLS</dt><dd>${RD.badge("Not verified", "warning", "alert")} <span class="small muted">the certificate is not checked</span></dd>
+         <dt>Snippets</dt><dd><span class="mono">${res.snippets.user}@${res.snippets.datastore}</span> <span class="small muted">key ${RD.rel(res.snippets.createdAt)}, host reachable</span></dd>
+         <dt>Snippet key</dt><dd class="mono small">${esc(res.snippets.fingerprint)}</dd></dl>`;
+  },
+};
+
+// ---- Render ---------------------------------------------------------------------------
+const group = (label, list) => `
+  <div class="group"><div class="section-label group__label">${label}</div><ul>${list.map((e) => `
+    <li><button type="button" class="entry" role="option" id="o-${e.id}" data-id="${e.id}" tabindex="-1">${icon(e.icon, 15)}<span class="truncate">${esc(e.title)}</span>${e.mark ? RD.badge(e.mark[0], e.mark[1]) : e.count != null ? `<span class="entry__count">${e.count}</span>` : ""}</button></li>`).join("")}</ul></div>`;
+
+const svc = RD.kind === "service";
+main.innerHTML = `
+  <header class="top">
+    <div style="min-width:0">
+      <div class="xs">${RD.crumbs()}</div>
+      <h1>${svc ? RD.svcIcon(res.name) : ""}<span class="mono">${esc(res.address)}</span>${RD.status(res.status)}
+        ${res.statusDetail && !svc ? `<span class="top__detail">${esc(res.statusDetail)}</span>` : ""}
+        ${svc ? `<span class="top__detail">Deploy #${res.pending.run}: ${esc(res.pending.summary)}<button type="button" class="button button--primary button--small" data-action="approve">Approve</button><button type="button" class="button button--small" data-action="reject">Reject</button></span>` : ""}
+      </h1>
+    </div>
+    <div class="row"><button type="button" class="button button--small yaml-toggle" aria-pressed="false">${icon("code", 14)}YAML</button>${RD.actions(res, { small: true })}</div>
+  </header>
+  <div class="cols">
+    <nav class="outline" role="listbox" aria-label="Outline" tabindex="0">
+      ${group("In the file", fileEntries)}
+      ${group("Octopushy records", records)}
+      <p class="xs faint outline__hint">↑ ↓ to move</p>
+    </nav>
+    <section class="pane" aria-live="polite"></section>
+    <aside class="source" aria-label="YAML">
+      <div class="source__bar"><span class="truncate">${icon("file", 13)} ${esc(def.file)}</span><span class="row"><span class="lines"></span><button type="button" class="button button--small" data-copy>${icon("copy", 13)}Copy</button></span></div>
+      <div class="source__body"></div>
+      <div class="source__foot">Click a line to read it on the left</div>
+    </aside>
+  </div>`;
+
+const outline = main.querySelector(".outline"), pane = main.querySelector(".pane"), source = main.querySelector(".source"), body = main.querySelector(".source__body");
+const lineH = () => body.querySelector(".yaml__line")?.offsetHeight ?? 22;
+const sectionOfLine = (n) => def.sections.find((s) => n >= s.lines[0] && n <= s.lines[1]);
+
+function select(id, { focus = false, field: fieldLine } = {}) {
+  const e = entries.find((x) => x.id === id);
+  if (!e) return;
+  selected = id;
+  history.replaceState(null, "", `#${id}`);
+  outline.querySelectorAll(".entry").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.id === id)));
+  outline.setAttribute("aria-activedescendant", `o-${id}`);
+  if (focus) outline.querySelector(`[data-id="${id}"]`).focus();
+  pane.innerHTML = e.section ? sectionView(e.section) : views[id]();
+  pane.scrollTop = 0;
+
+  // The YAML: the section lit, or the lines that govern a record, or quiet with a note.
+  const range = e.section?.lines ?? e.governs?.lines ?? [0, 0];
+  const note = e.section ? "" : e.governs ? e.governs.note : e.quiet;
+  source.classList.toggle("is-quiet", !e.section && !e.governs);
+  body.innerHTML = (note ? `<div class="source__note">${icon(e.governs ? "info" : "eye", 14)}<span>${e.governs ? "" : "<b>Not in the file.</b> "}${esc(note)}</span></div>` : "")
+    + RD.yaml(def.text, { highlight: range, dim: true });
+  body.querySelectorAll(".yaml__line").forEach((l) => { if (sectionOfLine(+l.dataset.line)) l.classList.add("is-linked"); });
+  main.querySelector(".lines").textContent = range[0] ? (range[0] === range[1] ? `line ${range[0]}` : `lines ${range[0]}–${range[1]}`) : "";
+  const first = body.querySelector(".yaml__line--hl");
+  body.scrollTo({ top: first ? Math.max(0, first.offsetTop - 3 * lineH() - (note ? body.querySelector(".source__note").offsetHeight : 0)) : 0, behavior: "smooth" });
+
+  if (fieldLine) {
+    const f = pane.querySelector(`[data-line="${fieldLine}"]`);
+    if (f) { f.classList.add("is-pointed"); f.scrollIntoView({ block: "nearest" }); f.focus({ preventScroll: true }); point(fieldLine); }
+  }
+}
+
+// One line marked at a time, from a hovered or focused field.
+function point(n) {
+  body.querySelectorAll(".yaml__line.is-pointed").forEach((l) => l.classList.remove("is-pointed"));
+  if (!n) return;
+  const l = body.querySelector(`.yaml__line[data-line="${n}"]`);
+  if (!l) return;
+  l.classList.add("is-pointed");
+  const top = l.offsetTop, h = l.offsetHeight, noteH = body.querySelector(".source__note")?.offsetHeight ?? 0;
+  if (top < body.scrollTop + noteH || top + h > body.scrollTop + body.clientHeight) body.scrollTo({ top: top - noteH - 3 * h, behavior: "smooth" });
+}
+const lineOf = (el) => el?.closest?.("[data-line]")?.dataset.line;
+pane.addEventListener("mouseover", (e) => { const n = lineOf(e.target); if (n) point(n); });
+pane.addEventListener("mouseout", (e) => { if (lineOf(e.target) && !e.relatedTarget?.closest?.("[data-line]")) point(pane.querySelector(":focus")?.closest("[data-line]")?.dataset.line); });
+pane.addEventListener("focusin", (e) => { pane.querySelectorAll(".is-pointed").forEach((x) => x !== e.target && x.classList.remove("is-pointed")); point(lineOf(e.target)); });
+pane.addEventListener("focusout", () => point(null));
+pane.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) { point(g.dataset.goto); openYaml(true); } });
+
+// Clicking a YAML line selects its section and the field on that line.
+body.addEventListener("click", (e) => {
+  const l = e.target.closest(".yaml__line.is-linked");
+  if (!l) return;
+  const n = +l.dataset.line, s = sectionOfLine(n);
+  const f = s.fields.find((x) => x.line === n);
+  select(s.id, { field: f ? n : null });
+});
+
+outline.addEventListener("click", (e) => { const b = e.target.closest(".entry"); if (b) select(b.dataset.id, { focus: true }); });
+outline.addEventListener("keydown", (e) => {
+  const i = entries.findIndex((x) => x.id === selected);
+  const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: entries.length - 1 }[e.key];
+  if (to == null) return;
+  e.preventDefault();
+  select(entries[Math.max(0, Math.min(entries.length - 1, to))].id, { focus: true });
+});
+
+// Below 1200px the YAML column is a toggle.
+const toggle = main.querySelector(".yaml-toggle");
+function openYaml(on) { document.body.classList.toggle("yaml-open", on); toggle.setAttribute("aria-pressed", String(on)); }
+toggle.onclick = () => openYaml(!document.body.classList.contains("yaml-open"));
+
+select(selected);
+</script>
+</body>
+</html>

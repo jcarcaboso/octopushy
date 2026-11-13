@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph</title>
+<!--
+  16 · Graph. The resource is the centre of what it depends on and what depends on it. A hand-placed
+  graph (inline SVG with a viewBox, laid out per kind, no force layout) puts the resource in a large
+  centre node with its status and three key facts, and its relations around it as smaller nodes on
+  labelled edges. Clicking a node, or moving with Tab or the arrow keys, selects it and fills the
+  side panel with readable fields and, for what comes from the definition, its YAML lines. The
+  centre's panel holds the summary, the actions and "View definition". Uses no `sample` data.
+  Edges mix --border-strong with --text-faint: --border-strong alone is under 3:1 on the surface.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-5); }
+.head h1 { font-size: var(--text-2xl); margin: var(--space-1) 0 var(--space-2); display: flex; align-items: center; gap: var(--space-3); }
+.hint { font-size: var(--text-sm); color: var(--text-muted); display: flex; gap: var(--space-2); align-items: center; }
+kbd { font-family: var(--font-mono); font-size: var(--text-xs); padding: 0 0.35rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: var(--space-5); align-items: start; }
+@media (max-width: 1180px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.canvas { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-3); }
+.canvas svg { display: block; width: 100%; height: auto; font-family: var(--font-sans); }
+
+/* Graph marks */
+.edge { stroke: color-mix(in srgb, var(--border-strong) 45%, var(--text-faint)); stroke-width: 1.5; fill: none; }
+.edge--dash { stroke-dasharray: 5 4; }
+.edge--on { stroke: var(--link); stroke-width: 2; }
+.edge[data-tone] { stroke: var(--tone-fg); }
+.el rect { fill: var(--surface); }
+.el text { font-size: 14px; fill: var(--text-muted); text-anchor: middle; dominant-baseline: central; }
+.el--on text { fill: var(--link); }
+.gn { cursor: pointer; outline: none; }
+.gn rect.box { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1; }
+.gn[data-tone] rect.box { fill: var(--tone-bg); stroke: var(--tone-border); }
+.gn:hover rect.box { stroke: var(--text-faint); }
+.gn[aria-pressed="true"] rect.box { stroke: var(--focus); stroke-width: 2.5; }
+.gn:focus-visible rect.box { stroke: var(--focus); stroke-width: 2.5; stroke-dasharray: 4 3; }
+.gn .cap { font-size: 13.5px; fill: var(--text-muted); }
+.gn[data-tone] .cap { fill: var(--tone-fg); }
+.gn .name { font-size: 16px; font-weight: 600; fill: var(--text); }
+.gn .pill { font-size: 14px; fill: var(--text); font-family: var(--font-mono); }
+.gn .go { fill: var(--link); }
+.gn--centre rect.box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.gn--centre .title { font-size: 26px; font-weight: 700; fill: var(--text); }
+.gn--centre .fact { font-size: 15px; font-weight: 600; fill: var(--text); }
+.gn--centre .factl { font-size: 13.5px; fill: var(--text-muted); }
+.gn--centre .st { font-size: 14px; font-weight: 600; }
+.dotm { fill: var(--tone-fg); }
+.cluster { fill: none; stroke: var(--border-strong); stroke-dasharray: 2 4; stroke-width: 1.5; }
+.cluster-label { font-size: 14px; fill: var(--text-muted); font-weight: 600; }
+
+/* Side panel */
+.panel { position: sticky; top: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.panel__head { padding: var(--space-4) var(--space-4) var(--space-3); border-bottom: 1px solid var(--border); }
+.panel__cap { font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.panel__title { font-size: var(--text-xl); font-weight: 650; margin-top: var(--space-1); overflow-wrap: anywhere; display: flex; align-items: center; gap: var(--space-2); }
+.panel__rel { margin-top: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }
+.panel__body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+.panel__body .kv { grid-template-columns: minmax(6.5rem, max-content) minmax(0, 1fr); font-size: var(--text-md); }
+.panel__body p { color: var(--text-muted); }
+.panel .note { border-left: 3px solid var(--border-strong); padding-left: var(--space-3); color: var(--text-muted); font-style: italic; }
+.panel .acts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.panel h3 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-2); }
+.excerpt .code { font-size: var(--text-xs); }
+.excerpt .code__bar button { font: inherit; color: var(--link); background: none; border: 0; padding: 0; }
+.excerpt .code__bar button:hover { text-decoration: underline; }
+.callout { padding: var(--space-3); border: 1px solid var(--tone-border); border-radius: var(--radius); background: var(--tone-bg); }
+.callout p { color: var(--text); margin-bottom: var(--space-3); }
+.minilist li { display: grid; grid-template-columns: 0.75rem minmax(0, 1fr) max-content; gap: var(--space-2); align-items: baseline; padding: 0.25rem 0; }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const def = res.definition;
+const fileName = def.file.split("/").pop();
+const sec = (id) => def.sections.find((s) => s.id === id);
+const fld = (sid, key) => sec(sid).fields.find((f) => f.key === key);
+const lineOf = (needle) => def.text.split("\n").findIndex((l) => l.includes(needle)) + 1;
+const mono = (t, tone) => RD.chip(t, { mono: true, tone });
+const runNo = (n) => [...RD.data.machine.runs, ...RD.data.service.runs, ...RD.data.node.runs].find((r) => r.number === n);
+
+// ---- Panel pieces ---------------------------------------------------------------------
+function excerpt(a, b = a) {
+  const t = document.createElement("template");
+  t.innerHTML = RD.yaml(def.text, { highlight: [a, b] });
+  t.content.querySelectorAll(".yaml__line").forEach((l) => { const n = +l.dataset.line; if (n < a - 1 || n > b + 1) l.remove(); });
+  return `<div class="excerpt"><h3>In the definition</h3><div class="code"><div class="code__bar"><span>${esc(fileName)} · ${a === b ? `line ${a}` : `lines ${a}–${b}`}</span><button type="button" data-src="${a}-${b}">Open file</button></div>${t.innerHTML}</div></div>`;
+}
+const noteOf = (text) => text ? `<p class="note">“${esc(text.replace(/\.$/, ""))}.”</p>` : "";
+const openLink = (kind, label) => `<a class="button button--small" href="${RD.href(kind)}">${icon("arrowRight", 14)}${esc(label)}</a>`;
+const approve = (text) => `<div class="callout" data-tone="attention"><p>${text}</p><div class="acts"><button type="button" class="button button--primary button--small" data-action="approve">${icon("check", 14)}Approve</button><button type="button" class="button button--small" data-action="reject">${icon("x", 14)}Reject</button></div></div>`;
+const centrePanel = (pairs, extra = "") => [RD.kv(pairs), extra, `<div class="acts">${RD.actions(res, { small: true })}</div>`, `<div><button type="button" class="button button--small" data-yaml="">${icon("code", 14)}View definition</button></div>`];
+const runLine = (r, note) => `<div class="row row--wrap small"><a href="#">#${r.number}</a><span>${esc(r.title)}</span>${RD.track(r)}<span class="muted">${note ?? `${RD.statusLabel(r.status).toLowerCase()} ${RD.rel(r.finishedAt ?? r.createdAt)}`}</span></div>`;
+const meterRow = (label, text, f) => `<div style="display:grid;grid-template-columns:4.5rem 1fr;gap:var(--space-2);align-items:center"><span class="muted">${label}</span><span>${text}${RD.meter(f)}</span></div>`;
+
+// ---- The graph, per kind ---------------------------------------------------------------
+// A node: id, x, y (its centre), w, h, cap, name, rel (the edge's label), dot/box tone, edge style, and its panel.
+function graph() {
+  const k = RD.kind;
+  if (k === "machine") {
+    const c = res.configuration, up = res.checks[0], node = RD.data.node, tpl = node.unmanaged.find((u) => u.name === "fedora-44");
+    const sec2 = (key, f, cap) => { const s = c.secrets.find((x) => x.key === f.secret.key); return { id: key, x: 750, y: key === "s1" ? 230 : 350, cap: `secret · v${s.activeVersion}`, name: f.label, rel: "reads", panel: () => [RD.kv([["Store key", `<span class="mono break">${esc(s.key)}</span>`], ["Active", `v${s.activeVersion}`], ["Started with", `v${s.startedVersion}`], ["Pending", s.pending ? "Yes" : "No"]]), excerpt(f.line)] }; };
+    return {
+      centre: { x: 430, y: 290, w: 270, h: 140, cap: "VM", facts: [["4 cores", "cpu"], ["8 GiB", "memory"], ["10.1.0.99", "address"]] },
+      centrePanel: () => centrePanel([["Status", RD.status(res.status)], ["Address", mono(res.address)], ["Power", `running, up ${RD.duration(res.observed.uptimeSeconds)}`], ["Hardware", "4 cores · 8 GiB · 300 GiB"], ["Workflow", `${mono("fedora-vm@1.10")}`], ["Commit", RD.commit(res.revisions.desiredCommit)]], `<p>${esc(res.description)}</p>`),
+      nodes: [
+        { id: "host", x: 430, y: 70, cap: "node", name: "moraband", dot: "warning", rel: "runs on", href: "node",
+          panel: () => [RD.kv([["Type", "Standalone Proxmox"], ["Status", RD.status(node.status)], ["Proxmox VE", node.proxmoxVersion], ["CPU", RD.pct(node.hosts[0].cpu)], ["VMID here", "410"]]), excerpt(fld("placement", "host").line, fld("placement", "vmid").line), openLink("node", "Open moraband")] },
+        { id: "bridge", x: 110, y: 90, cap: "bridge · gw 10.1.0.1", name: "vmbr1", rel: "connected to",
+          panel: () => [RD.kv(sec("network").fields.map((f) => [f.label, f.type === "list" ? RD.value(f) : mono(f.value)])), noteOf(sec("network").note), excerpt(...sec("network").lines)] },
+        { id: "tpl", x: 110, y: 230, cap: "template", name: "fedora-44", rel: "built from",
+          panel: () => [RD.kv([["VMID", String(tpl.vmid)], ["On", "moraband"], ["Size", `${tpl.maxCpu} cores · ${RD.bytes(tpl.maxMemoryBytes)}`], ["Managed", "No, a template"]]), excerpt(fld("placement", "template").line)] },
+        { id: "wf", x: 110, y: 350, cap: "workflow · 1.10, latest", name: "fedora-vm@1", rel: "built from",
+          panel: () => [RD.kv([["Reference", mono(res.workflow.reference)], ["Resolved", `${res.workflow.resolved}, the latest`], ...res.workflow.stages.map((s) => [`Stage ${s.name}`, `${esc(s.executor)}<div class="xs muted mono break">${esc(s.detail)}</div>`])]), `<div><h3>Actions</h3><ul class="minilist">${c.actions.map((a) => `<li><span class="dot" data-tone="${a.destructive ? "danger" : "neutral"}"></span><span class="mono">${a.id}</span><span class="xs muted">${c.schedules.find((s) => s.action === a.id)?.human ?? (a.onChange ? "on change" : "by hand")}</span></li>`).join("")}</ul></div>`, excerpt(lineOf("workflow:"))] },
+        { id: "agent", x: 750, y: 90, cap: "agent", name: up.agent, rel: "checked by",
+          panel: () => [RD.kv([["Checks", mono(up.url)], ["Last", `${RD.rel(up.checkedAt)}, ${up.elapsedMs} ms`], ["Uptime", `${up.uptime.day}% today · ${up.uptime.month}% in 30 days`], ["Agent labels", "None: any agent may run its work"]]), RD.beats(up)] },
+        sec2("s1", fld("secrets", "machine_tailscale_auth_key")),
+        sec2("s2", fld("secrets", "machine_github_token")),
+        ...res.services.map((s, i) => ({ id: `svc-${s.id}`, x: 145 + i * 190, y: 550, w: 170, cap: `service · ${{ "awaiting-approval": "waits", "in-sync": "in sync", failed: "failed" }[s.status]}`, name: s.name, dot: RD.tone(s.status), bus: "hosts", href: s.id === "open-webui" ? "service" : null,
+          panel: () => [RD.kv([["Status", RD.status(s.status)], ["Detail", esc(s.statusDetail ?? "—")], ["Workflow", mono(s.workflow)], ["Link", `<a href="#" class="mono break">${esc(s.links[0])}</a>`], ["Uptime today", `${s.uptimeDay}%`]]), s.id === "open-webui" ? openLink("service", "Open open-webui") : ""] })),
+      ],
+      busY: 460,
+    };
+  }
+  if (k === "service") {
+    const p = res.pending, wf = res.workflow, up = res.checks[0], r201 = runNo(201), r214 = runNo(214), ollama = RD.data.machine.services.find((s) => s.id === "ollama");
+    const secNode = (f, y) => ({ id: `sec-${f.key}`, x: 760, y, cap: `secret · v${f.secret.activeVersion}`, name: f.label.toLowerCase(), rel: "reads",
+      panel: () => [RD.kv([["Store key", `<span class="mono break">${esc(f.secret.key)}</span>`], ["Active", `v${f.secret.activeVersion}`], ["Delivered", f.note ? "as a file" : "as an input"]]), excerpt(f.line)] });
+    return {
+      centre: { x: 410, y: 300, w: 244, h: 140, cap: "service", facts: [["0.6.30", "image"], ["3000", "port"], [`${up.uptime.month}%`, "30 days"]] },
+      centrePanel: () => centrePanel([["Status", RD.status(res.status)], ["Address", mono(res.address)], ["Link", `<a class="mono break" href="${res.links[0]}">${res.links[0]}</a>`], ["Last deploy", `${RD.rel(res.appliedAt)}, ${RD.commit(res.appliedCommit)}`]], `<p>${esc(res.description)}</p>`),
+      nodes: [
+        { id: "machine", x: 410, y: 70, cap: "machine · in sync", name: "falcon", dot: "success", rel: "deployed on", href: "machine",
+          panel: () => [RD.kv([["Type", "VM on moraband"], ["Address", mono(res.guest.accessAddress)], ["Status", RD.status("in-sync")], ["Services", "4"]]), openLink("machine", "Open falcon")] },
+        { id: "wf", x: 105, y: 90, cap: "workflow · 1.4, 1.5 exists", name: wf.reference, rel: "deployed with", box: "warning",
+          panel: () => [RD.kv([["Reference", mono(wf.reference)], ["Resolved", wf.resolved], ["Latest", RD.badge(wf.latest, "warning")]]), `<p>The next deploy resolves to 1.5.</p>`, excerpt(lineOf("workflow:"))] },
+        ...wf.stages.map((s, i) => ({ id: `stage-${s.name}`, x: 105, y: 205 + i * 90, h: 52, cap: `stage ${i + 1} · ${s.executor}`, name: s.name, chain: i === 0 ? "wf" : `stage-${wf.stages[i - 1].name}`,
+          panel: () => [RD.kv([["Order", `${i + 1} of ${wf.stages.length}`], ["Runs with", s.executor], ["Does", esc(s.detail)], ["Last run", `#201, ${RD.statusLabel(r201.steps.find((x) => x.name === s.name)?.status ?? "succeeded").toLowerCase()}`]]), runLine(r201)] })),
+        secNode(fld("secrets", "env_file"), 90),
+        secNode(fld("secrets", "webui_secret_key"), 175),
+        { id: "pending", x: 760, y: 300, w: 180, h: 72, cap: `deploy #${p.run} · waits`, name: "0.6.30 → 0.6.34", box: "attention", rel: "waits for approval", relTone: "attention", relText: "open-webui waits for this approval",
+          panel: () => [approve(`Deploy #${p.run} changes the image from 0.6.30 to 0.6.34. Nothing runs until someone approves it.`), RD.kv([["Change", esc(p.summary)], ["Commit", `${RD.commit(p.commit)} by ${esc(p.author)}`], ["Waiting", RD.rel(p.since)], ["Policy", "approval is manual"]]), runLine(r214, "stopped at approval"), excerpt(fld("inputs", "image").line)] },
+        { id: "ollama", x: 760, y: 470, cap: "service · in sync", name: "ollama", dot: "success", rel: "talks to",
+          panel: () => [RD.kv([["Address", mono(ollama.address)], ["Status", RD.status(ollama.status)], ["Link", mono(ollama.links[0])], ["Through", mono("OLLAMA_BASE_URL")]]), `<p>open-webui reaches it at http://ollama:11434, on the same machine.</p>`, excerpt(fld("inputs", "OLLAMA_BASE_URL").line)] },
+        { id: "dns", x: 330, y: 560, cap: "DNS name", name: res.names[0].name, w: 210, rel: "named",
+          panel: () => [RD.kv([["Name", mono(res.names[0].name)], ["Set by", "the dns stage"], ["Points at", "traefik"]]), noteOf(fld("inputs", "dns_name").note), excerpt(fld("inputs", "dns_name").line)] },
+        { id: "link", x: 590, y: 560, cap: `link · up, ${up.elapsedMs} ms`, name: "chat.hlab.example.org", w: 210, dot: "success", rel: "opened at",
+          panel: () => [RD.kv([["Link", `<a class="mono break" href="${res.links[0]}">${res.links[0]}</a>`], ["Answers in", `${up.elapsedMs} ms`], ["Uptime", `${up.uptime.day}% today · ${up.uptime.month}% in 30 days`], ["Checked by", up.agent]]), RD.beats(up), excerpt(fld("service", "links").line)] },
+      ],
+      extraEdges: [["stage-dns", "dns", "sets", 245]],
+    };
+  }
+  // node
+  const h = res.hosts[0];
+  const tok = (f, y, rel) => ({ id: `tok-${f.key}`, x: 100, w: 170, y, cap: `token · v${f.secret.activeVersion}`, name: f.label.toLowerCase(), rel,
+    panel: () => [RD.kv([["Store key", `<span class="mono break">${esc(f.secret.key)}</span>`], ["Active", `v${f.secret.activeVersion}`]]), excerpt(f.line)] });
+  return {
+    centre: { x: 430, y: 240, w: 270, h: 136, cap: "Proxmox installation", facts: [[RD.pct(h.cpu), "CPU"], [`${Math.round(h.memoryBytes / RD.GiB)} / ${Math.round(h.maxMemoryBytes / RD.GiB)}`, "GiB memory"], ["9", "guests"]] },
+    centrePanel: () => centrePanel([["Status", RD.status(res.status)], ["Detail", esc(res.statusDetail)], ["Proxmox VE", res.proxmoxVersion], ["Observed", RD.rel(res.observedAt)]], `<p>${esc(res.description)}</p>`),
+    nodes: [
+      { id: "lab", x: 430, y: 55, cap: "lab · 3 installations", name: "home", rel: "part of",
+        panel: () => [`<ul class="minilist">${res.siblings.map((s) => `<li><span class="dot" data-tone="${RD.tone(s.status)}"></span><span class="mono">${s.name}</span><span class="xs muted">${RD.statusLabel(s.status)}</span></li>`).join("")}</ul>`] },
+      { id: "endpoint", x: 100, w: 170, y: 90, cap: "endpoint · TLS not verified", name: "10.1.0.50:8006", box: "warning", rel: "reached at",
+        panel: () => [`<div class="callout" data-tone="warning"><p style="margin:0">${esc(res.issues[0].message)}</p></div>`, RD.kv([["URL", mono(res.endpoint)], ["Trusted by", `${res.trust.trustedBy}, ${RD.rel(res.trust.trustedAt)}`], ["TLS", RD.badge("Not verified", "warning")]]), excerpt(fld("connection", "endpoint").line, fld("connection", "tls").line), `<div class="acts"><button type="button" class="button button--small" data-action="edit">${icon("pencil", 14)}Edit the definition</button></div>`] },
+      tok(fld("connection", "readOnlyToken"), 190, "reads with"),
+      tok(fld("connection", "privilegedToken"), 290, "changes with"),
+      { id: "host", x: 750, y: 100, cap: `host · online, up ${RD.duration(h.uptimeSeconds).split(" ")[0]} d`, name: h.name, dot: "success", rel: "runs on host",
+        panel: () => [`<div class="stack stack--small">${meterRow("CPU", `${RD.pct(h.cpu)} of ${h.maxCpu} cores`, h.cpu)}${meterRow("Memory", `${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`, h.memoryBytes / h.maxMemoryBytes)}</div>`, RD.kv(sec("hosts").fields.map((f) => [f.label, f.type === "list" ? RD.value(f) : esc(f.value)])), excerpt(...sec("hosts").lines)] },
+      { id: "snip", x: 750, y: 220, cap: "snippets · user octopushy", name: res.snippets.datastore, rel: "snippets on",
+        panel: () => [RD.kv([["Datastore", mono(res.snippets.datastore)], ["SSH user", mono(res.snippets.user)], ["Host key", `<span class="mono break">${res.snippets.fingerprint}</span>`], ["Reachable", "Yes"]]), noteOf(fld("snippets", "user").note), excerpt(...sec("snippets").lines)] },
+      ...res.guests.map((g, i) => ({ id: `g-${g.name}`, x: 108 + (i % 3) * 158, y: 475 + Math.floor(i / 3) * 60, w: 146, h: 42, pill: true, name: g.name, dot: RD.tone(g.status), cluster: "managed", href: g.current ? "machine" : null,
+        panel: () => [RD.kv([["Kind", `${g.kind} ${g.vmid}`], ["Status", RD.status(g.status)], ["Detail", esc(g.statusDetail ?? "—")], ["Size", `${g.cores} core${g.cores === 1 ? "" : "s"} · ${RD.bytes(g.memoryBytes)}`], ["Services", String(g.services)], ["Power", g.power]]), g.status === "awaiting-approval" ? approve("Apply #213 grows the disk from 120 to 160 GiB.") : "", g.current ? openLink("machine", "Open falcon") : ""] })),
+      ...res.unmanaged.map((u, i) => ({ id: `u-${u.name}`, x: 605 + (i % 2) * 155, y: 475 + Math.floor(i / 2) * 60, w: 145, h: 42, pill: true, name: u.name, dot: u.status === "running" ? "success" : "muted", cluster: "unmanaged", cap: u.kind,
+        panel: () => [RD.kv([["Kind", `${u.kind} ${u.vmid}${u.template ? ", template" : ""}`], ["Power", u.status], ["Size", `${u.maxCpu} cores · ${RD.bytes(u.maxMemoryBytes)}`], ["Tags", u.tags.length ? u.tags.map((t) => mono(t)).join(" ") : "—"]]), `<p>Octopushy sees it but does not manage it.</p>`] })),
+    ],
+    clusters: [
+      { id: "managed", x: 25, y: 410, w: 480, h: 180, label: `Managed · ${res.guests.length}`, rel: "manages" },
+      { id: "unmanaged", x: 520, y: 410, w: 320, h: 180, label: `Unmanaged · ${res.unmanaged.length}`, rel: "sees" },
+    ],
+  };
+}
+
+const G = graph();
+const C = { id: "centre", ...G.centre, name: res.name };
+const all = [C, ...G.nodes];
+const byId = Object.fromEntries(all.map((n) => [n.id, n]));
+all.forEach((n) => { n.w ??= 180; n.h ??= 60; });
+
+// The point where the line from a's centre to (bx, by) leaves a's box.
+function exit(a, bx, by, pad = 3) {
+  const dx = bx - a.x, dy = by - a.y;
+  const t = Math.min(dx ? (a.w / 2 + pad) / Math.abs(dx) : Infinity, dy ? (a.h / 2 + pad) / Math.abs(dy) : Infinity);
+  return [a.x + dx * t, a.y + dy * t];
+}
+const label = (x, y, text, on) => { const w = text.length * 7.4 + 12; return `<g class="el" data-for="${on}"><rect x="${x - w / 2}" y="${y - 10}" width="${w}" height="20" rx="4"/><text x="${x}" y="${y}">${esc(text)}</text></g>`; };
+function edge(a, b, text, { dash = false, tone } = {}) {
+  const [x1, y1] = exit(a, b.x, b.y), [x2, y2] = exit(b, a.x, a.y);
+  return `<g data-edge="${a.id} ${b.id}"><line class="edge${dash ? " edge--dash" : ""}"${tone ? ` data-tone="${tone}"` : ""} x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>${text ? label((x1 + x2) / 2, (y1 + y2) / 2, text, `${a.id} ${b.id}`) : ""}</g>`;
+}
+function drawNode(n) {
+  const x0 = n.x - n.w / 2, y0 = n.y - n.h / 2, tx = x0 + (n.dot ? 30 : 14);
+  const dot = n.dot ? `<circle class="dotm" data-tone="${n.dot}" cx="${x0 + 16}" cy="${n.pill ? n.y : n.y + 8}" r="5"/>` : "";
+  const go = n.href ? `<text class="go" x="${x0 + n.w - 12}" y="${n.y + (n.pill ? 5 : 12)}" text-anchor="end" font-size="15">→</text>` : "";
+  const body = n.pill
+    ? `<text class="pill" x="${tx}" y="${n.y + 5}">${esc(n.name)}</text>`
+    : `<text class="cap" x="${x0 + 14}" y="${n.y - 8}">${esc(n.cap)}</text><text class="name" x="${tx}" y="${n.y + 13}">${esc(n.name)}</text>`;
+  return `<g class="gn" tabindex="0" role="button" aria-pressed="false" data-id="${n.id}"${n.box ? ` data-tone="${n.box}"` : ""} aria-label="${esc((n.cap ? n.cap + ": " : "") + n.name)}"><rect class="box" x="${x0}" y="${y0}" width="${n.w}" height="${n.h}" rx="${n.pill ? 8 : 10}"/>${dot}${body}${go}</g>`;
+}
+function drawCentre(n) {
+  const x0 = n.x - n.w / 2, y0 = n.y - n.h / 2, st = RD.tone(res.status);
+  const fw = (n.w - 28) / 3;
+  return `<g class="gn gn--centre" tabindex="0" role="button" aria-pressed="false" data-id="centre" aria-label="${esc(res.name)}, ${RD.statusLabel(res.status)}">
+    <rect class="box" x="${x0}" y="${y0}" width="${n.w}" height="${n.h}" rx="14"/>
+    <text class="cap" x="${x0 + 16}" y="${y0 + 24}">${esc(n.cap)}</text>
+    <text class="title" x="${x0 + 16}" y="${y0 + 54}">${esc(res.name)}</text>
+    <circle class="dotm" data-tone="${st}" cx="${x0 + 21}" cy="${y0 + 75}" r="5"/>
+    <text class="st" x="${x0 + 32}" y="${y0 + 80}" style="fill:var(--${st}-fg)">${esc(RD.statusLabel(res.status))}</text>
+    <line x1="${x0 + 14}" x2="${x0 + n.w - 14}" y1="${y0 + 94}" y2="${y0 + 94}" style="stroke:var(--border-strong)"/>
+    ${n.facts.map(([v, l], i) => `<text class="fact" x="${x0 + 16 + i * fw}" y="${y0 + 115}">${esc(v)}</text><text class="factl" x="${x0 + 16 + i * fw}" y="${y0 + 131}">${esc(l)}</text>`).join("")}
+  </g>`;
+}
+
+const parts = [];
+// Clusters (node): a dashed box around the guests, joined to the centre.
+for (const cl of G.clusters ?? []) {
+  const box = { id: cl.id, x: cl.x + cl.w / 2, y: cl.y + cl.h / 2, w: cl.w, h: cl.h };
+  parts.push(`<rect class="cluster" x="${cl.x}" y="${cl.y}" width="${cl.w}" height="${cl.h}" rx="12"/><text class="cluster-label" x="${cl.x + 16}" y="${cl.y + 26}">${esc(cl.label)}</text>`);
+  parts.push(edge(C, box, cl.rel));
+}
+// A bus for many children (machine's services).
+const busKids = G.nodes.filter((n) => n.bus);
+if (busKids.length) {
+  const y = G.busY, top = C.y + C.h / 2 + 3, xs = busKids.map((n) => n.x);
+  parts.push(`<g data-edge="centre ${busKids.map((n) => n.id).join(" ")}"><path class="edge" d="M${C.x},${top} V${y} M${Math.min(...xs)},${y} H${Math.max(...xs)} ${busKids.map((n) => `M${n.x},${y} V${n.y - n.h / 2 - 3}`).join(" ")}"/>${label(C.x, (top + y) / 2, busKids[0].bus, "centre")}</g>`);
+}
+for (const n of G.nodes) {
+  if (n.rel) parts.push(edge(C, n, n.rel, { tone: n.relTone }));
+  if (n.chain) parts.push(edge(byId[n.chain], n, ""));
+}
+// A routed edge: right out of a, across to x, then down into b.
+for (const [ai, bi, t, vx] of G.extraEdges ?? []) {
+  const a = byId[ai], b = byId[bi], x1 = a.x + a.w / 2 + 3, y2 = b.y - b.h / 2 - 3;
+  parts.push(`<g data-edge="${ai} ${bi}"><path class="edge edge--dash" d="M${x1},${a.y} H${vx} V${y2}"/>${label(vx, (a.y + y2) / 2 + 40, t, `${ai} ${bi}`)}</g>`);
+}
+parts.push(drawCentre(C), ...G.nodes.map(drawNode));
+
+const initial = RD.kind === "service" ? "pending" : "centre";
+main.innerHTML = `
+  <div class="head">
+    <div>
+      <div class="eyebrow">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name, true) : ""}${esc(res.name)}</h1>
+      <div class="row row--wrap">${RD.status(res.status)}${res.statusDetail ? `<span class="muted">${esc(res.statusDetail)}</span>` : `<span class="muted">${esc(res.description)}</span>`}</div>
+    </div>
+    <div class="hint">Select a node to see it. <kbd>Tab</kbd> or <kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> move.</div>
+  </div>
+  <div class="layout">
+    <div class="canvas"><svg viewBox="0 0 860 ${RD.kind === "node" ? 615 : 600}" role="group" aria-label="${esc(res.name)} and what it is connected to">${parts.join("")}</svg></div>
+    <aside class="panel" aria-live="polite"></aside>
+  </div>`;
+
+const svg = main.querySelector(".canvas svg"), panel = main.querySelector(".panel");
+const relOf = (n) => n.rel ?? n.bus ?? (n.chain ? "next stage" : n.cluster ? (n.cluster === "managed" ? "manages" : "sees") : "");
+function select(id, focus = false) {
+  const n = byId[id];
+  svg.querySelectorAll(".gn").forEach((g) => g.setAttribute("aria-pressed", String(g.dataset.id === id)));
+  svg.querySelectorAll("[data-edge]").forEach((e) => {
+    const on = e.dataset.edge.split(" ").includes(id) || (id === "centre" && e.dataset.edge.startsWith("centre"));
+    e.querySelectorAll(".edge").forEach((l) => l.classList.toggle("edge--on", on && !l.dataset.tone));
+    e.querySelectorAll(".el").forEach((l) => l.classList.toggle("el--on", on));
+  });
+  const isC = id === "centre";
+  const body = isC ? G.centrePanel() : n.panel();
+  panel.innerHTML = `
+    <div class="panel__head">
+      <div class="panel__cap">${esc(isC ? res.noun : (n.cap ?? "guest").split(" · ")[0])}</div>
+      <div class="panel__title">${n.dot ? `<span class="dot" data-tone="${n.dot}"></span>` : ""}<span${n.pill || !isC ? ' class="mono"' : ""}>${esc(n.name)}</span></div>
+      ${isC ? `<div class="panel__rel mono">${esc(res.address)}</div>` : `<div class="panel__rel">${n.relText ? esc(n.relText) : `${esc(res.name)} <b>${esc(relOf(n))}</b> ${esc(n.name)}`}</div>`}
+    </div>
+    <div class="panel__body">${body.filter(Boolean).join("")}</div>`;
+  if (focus) svg.querySelector(`.gn[data-id="${id}"]`).focus();
+}
+svg.addEventListener("click", (e) => { const g = e.target.closest(".gn"); if (g) select(g.dataset.id); });
+svg.addEventListener("focusin", (e) => { const g = e.target.closest(".gn"); if (g && g.getAttribute("aria-pressed") !== "true") select(g.dataset.id); });
+svg.addEventListener("keydown", (e) => {
+  const g = e.target.closest(".gn"); if (!g) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const n = byId[g.dataset.id]; if (n.href) location.href = RD.href(n.href); return; }
+  const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] }[e.key];
+  if (!dir) return;
+  e.preventDefault();
+  const a = byId[g.dataset.id];
+  let best = null, score = Infinity;
+  for (const b of all) {
+    if (b === a) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, along = dx * dir[0] + dy * dir[1], across = Math.abs(dx * dir[1] + dy * dir[0]);
+    if (along <= 0) continue;
+    const s = along + across * 2;
+    if (s < score) { score = s; best = b; }
+  }
+  if (best) select(best.id, true);
+});
+// "Open the file here" in an excerpt opens the whole file with those lines marked.
+addEventListener("click", (e) => {
+  const t = e.target.closest?.("[data-src]");
+  if (!t) return;
+  const [a, b] = t.dataset.src.split("-").map(Number);
+  RD.drawer("Definition", RD.yamlBox(def, { highlight: [a, b || a] })).querySelector(".yaml__line--hl")?.scrollIntoView({ block: "center" });
+});
+select(initial);
+</script>
+</body>
+</html>

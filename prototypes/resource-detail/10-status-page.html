@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status page</title>
+<!--
+  10 · Status page. Health first, like a public status page; the configuration is demoted to the
+  end. A banner says the condition in words, then the uptime of the main check (24 hours of beats,
+  30 days, three percentages, response time), then the components one row each, then incidents and
+  the changes around them with their cause, and last a collapsed "About" with the definition as
+  readable values and View YAML. Only the main check has a history; other components show only
+  what the data has (status, today's percentage, the results of past runs).
+  Uses sample data: none.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+.page { max-width: 62rem; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-8); }
+.top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: calc(-1 * var(--space-4)); }
+.top__id { display: flex; align-items: center; gap: var(--space-3); min-width: 0; flex-wrap: wrap; }
+
+.banner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-5); align-items: center; padding: var(--space-6); border: 1px solid var(--tone-border); border-radius: var(--radius-lg); background: var(--tone-bg); }
+.banner__icon { display: grid; place-items: center; width: 3.5rem; height: 3.5rem; border-radius: 50%; color: var(--tone-fg); background: color-mix(in srgb, var(--tone-fg) 14%, transparent); }
+.banner h1 { font-size: 1.75rem; font-weight: 650; letter-spacing: -0.015em; }
+.banner h1 .sep { color: var(--text-muted); font-weight: 400; margin: 0 0.35rem; }
+.banner h1 .tone { color: var(--tone-fg); }
+.banner p { margin-top: var(--space-1); color: var(--text-muted); }
+.banner p b { color: var(--text); font-weight: 500; }
+.banner__actions { display: flex; gap: var(--space-2); }
+
+h2.h { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: var(--text-lg); margin-bottom: var(--space-3); }
+h2.h span { font-size: var(--text-sm); font-weight: 400; color: var(--text-muted); }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.uptime { padding: var(--space-5) var(--space-6) var(--space-6); display: grid; gap: var(--space-6); }
+.uptime__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.figs > div { padding-right: var(--space-4); }
+.figs > div + div { padding-left: var(--space-5); border-left: 1px solid var(--border); }
+.figs b { display: block; font-size: 2.25rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.bar-label { display: flex; justify-content: space-between; font-size: var(--text-sm); margin-bottom: var(--space-2); }
+.uptime .beats { height: 2.25rem; }
+.axis { display: flex; justify-content: space-between; margin-top: var(--space-1); font-size: var(--text-xs); color: var(--text-faint); }
+.latency { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-6); align-items: end; }
+.latency .spark { width: 100%; height: 48px; }
+.latency .spark path { vector-effect: non-scaling-stroke; }
+.latency dl { display: grid; grid-template-columns: repeat(3, auto); gap: 0 var(--space-5); }
+.latency dt { font-size: var(--text-xs); color: var(--text-muted); }
+.latency dd { font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; grid-row: 2; }
+
+.comp { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.3fr) 11rem 6.5rem; gap: var(--space-5); align-items: center; padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border); min-height: 3.5rem; }
+.comp:last-child { border-bottom: 0; }
+.comp__group { padding: var(--space-3) var(--space-5) var(--space-1); }
+.comp__name { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-weight: 500; }
+.comp__name svg { color: var(--text-muted); }
+.comp__what { font-size: var(--text-sm); color: var(--text-muted); min-width: 0; }
+.comp__bar { min-width: 0; }
+.comp__bar .beats { height: 1.25rem; }
+.comp__today { font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.comp__word { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); font-size: var(--text-sm); font-weight: 550; color: var(--tone-fg); white-space: nowrap; }
+.comp__word .dot { background: var(--tone-fg); }
+.runsq { display: flex; gap: 3px; align-items: center; }
+.runsq i { width: 14px; height: 14px; border-radius: 3px; background: var(--tone-fg); }
+.runsq i[data-tone="muted"] { background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
+
+.days { display: grid; gap: var(--space-5); }
+.day { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--space-5); }
+.day__date { font-size: var(--text-sm); color: var(--text-muted); padding-top: var(--space-3); }
+.day__date b { display: block; color: var(--text); font-weight: 600; }
+.day__list { border-left: 1px solid var(--border); padding-left: var(--space-5); display: grid; gap: var(--space-2); }
+.ev { display: grid; grid-template-columns: 0.75rem minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline; padding: var(--space-2) 0; }
+.ev .dot { transform: translateY(-1px); }
+.ev__time { font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.inc { padding: var(--space-3) var(--space-4); border: 1px solid var(--tone-border); border-left: 3px solid var(--tone-fg); border-radius: var(--radius); background: color-mix(in srgb, var(--tone-bg) 60%, var(--surface)); }
+.inc__title { display: flex; justify-content: space-between; gap: var(--space-3); font-weight: 600; }
+.inc__cause { margin-top: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }
+.inc__cause b { color: var(--text); font-weight: 500; }
+
+.about summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-5); }
+.about summary::-webkit-details-marker { display: none; }
+.about summary svg { color: var(--text-muted); transition: transform 0.15s; }
+.about[open] summary svg.chev { transform: rotate(90deg); }
+.about summary:hover { background: var(--surface-2); border-radius: var(--radius-lg); }
+.about__body { padding: 0 var(--space-5) var(--space-5); border-top: 1px solid var(--border); }
+.about__bar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-4) 0; flex-wrap: wrap; }
+.about__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5) var(--space-8); }
+.asec h3 { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); font-weight: 600; margin-bottom: var(--space-2); }
+.asec h3 svg { color: var(--text-muted); }
+.asec .kv { font-size: var(--text-sm); grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr); }
+.asec__note { font-size: var(--text-sm); color: var(--text-muted); margin-bottom: var(--space-2); }
+
+@media (max-width: 1200px) { .banner h1 { font-size: 1.5rem; } }
+@media (max-width: 900px) {
+  .comp { grid-template-columns: minmax(0, 1fr) 9rem 7rem; }
+  .comp__what { display: none; }
+  .about__grid { grid-template-columns: minmax(0, 1fr); }
+  .banner { grid-template-columns: auto minmax(0, 1fr); }
+  .banner__actions { grid-column: 1 / -1; }
+}
+@media (max-width: 640px) {
+  .figs b { font-size: var(--text-xl); }
+  .day { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .latency { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount();
+const def = res.definition;
+const up = res.checks[0];
+const sec = (id) => def.sections.find((s) => s.id === id);
+const lat = up.latency.filter((x) => x != null);
+const avg = Math.round(lat.reduce((a, b) => a + b, 0) / lat.length), slowest = Math.max(...lat);
+const runLink = (text) => esc(text).replace(/#(\d+)/g, '<a href="#">#$1</a>');
+const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+
+// ---- Banner --------------------------------------------------------------------------------
+const banner = {
+  machine: () => ({ tone: "success", icon: "circleCheck",
+    title: `${esc(res.name)} answers`,
+    sub: `Since <b>${RD.day(up.since)}</b>, ${RD.rel(up.since)}, when it was ${lower(up.incidents[0].detail)} · SSH on <span class="mono">${res.accessAddress}</span> in ${up.elapsedMs} ms, checked ${RD.rel(up.checkedAt)}` }),
+  service: () => ({ tone: "attention", icon: "hand",
+    title: `${esc(res.name)} answers<span class="sep">·</span><span class="tone">a deploy waits for you</span>`,
+    sub: `Deploy #${res.pending.run}: <b>${esc(res.pending.summary)}</b>, change by ${esc(res.pending.author)} ${RD.rel(res.pending.since)} · answers since ${RD.day(up.since)}`,
+    actions: `<button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button>` }),
+  node: () => ({ tone: "warning", icon: "alert",
+    title: `${esc(res.name)} is online<span class="sep">·</span><span class="tone">1 warning</span>`,
+    sub: `<b>${esc(res.issues[0].message)}</b> · the API answers in ${up.elapsedMs} ms, host up ${RD.duration(res.hosts[0].uptimeSeconds)}` }),
+}[RD.kind]();
+
+// ---- Components ------------------------------------------------------------------------------
+const WORD = { "in-sync": "In sync", "awaiting-approval": "Waits", failed: "Failed", succeeded: "Passed", up: "Up", todo: "Not run" };
+const word = (status, text) => `<span class="comp__word" data-tone="${RD.tone(status)}"><span class="dot"></span>${text ?? WORD[status] ?? RD.statusLabel(status)}</span>`;
+const today = (p) => `<span class="comp__today"${p < 99 ? ` style="color:var(--${p === 0 ? "danger" : "warning"}-fg)"` : ""}>${p}% today</span>`;
+const comp = (name, what, bar, status) => `<div class="comp"><div class="comp__name">${name}</div><div class="comp__what truncate">${what}</div><div class="comp__bar">${bar}</div>${status}</div>`;
+const group = (label) => `<div class="comp__group section-label">${label}</div>`;
+const mainBar = `${RD.beats(up)}`;
+
+const components = {
+  machine: () => [
+    group("Access"),
+    comp(`${icon("terminal", 15)}SSH`, `<span class="mono">${esc(up.url)}</span>`, mainBar, word("up")),
+    group("Services"),
+    ...res.services.map((s) => comp(`${RD.svcIcon(s.name)}<a href="${RD.href("service")}" class="truncate">${esc(s.name)}</a>`, `<span class="mono">${esc(s.links[0])}</span>${s.statusDetail ? ` · ${esc(s.statusDetail)}` : ""}`, today(s.uptimeDay), word(s.status))),
+  ],
+  service() {
+    const done = res.runs.filter((r) => r.finishedAt).slice(0, 5), last = done[0];
+    const squares = (name) => `<span class="runsq" aria-label="${name} in the last ${done.length} runs">${done.slice().reverse().map((r) => { const st = r.steps.find((x) => x.name === name)?.status ?? "todo"; return `<i data-tone="${st === "todo" ? "muted" : RD.tone(st)}" title="#${r.number}: ${st === "todo" ? "not run" : st}"></i>`; }).join("")}</span>`;
+    const st = (name) => last.steps.find((x) => x.name === name)?.status ?? "todo";
+    return [
+      group("Reached at"),
+      comp(`${icon("link", 15)}Link`, `<a href="#" class="mono">${esc(up.url)}</a>`, mainBar, word("up")),
+      comp(`${icon("globe", 15)}<span class="mono truncate">${esc(res.names[0].name)}</span>`, `DNS record, set by the ${res.names[0].stage} stage`, `<span class="comp__today">set in #${last.number}</span>`, word(st("dns"), "Set")),
+      group(`Stages · last run #${last.number}, ${RD.rel(last.createdAt)}`),
+      ...res.workflow.stages.map((s) => comp(`${icon("workflow", 15)}<span class="mono">${s.name}</span>`, `${esc(s.executor)} · ${esc(s.detail)}`, squares(s.name), word(st(s.name)))),
+    ];
+  },
+  node() {
+    const h = res.hosts[0];
+    return [
+      group("Proxmox"),
+      comp(`${icon("activity", 15)}Proxmox API`, `<span class="mono">${esc(up.url)}</span>`, mainBar, word("up")),
+      comp(`${icon("server", 15)}Host <span class="mono">${esc(h.name)}</span>`, `CPU ${RD.pct(h.cpu)} of ${h.maxCpu} cores · memory ${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)}`, `<span class="comp__today">up ${RD.duration(h.uptimeSeconds)}</span>`, word("up", "Online")),
+      group(`Managed guests · ${res.unmanaged.length} unmanaged not shown`),
+      ...res.guests.map((g) => comp(`${icon(g.kind === "VM" ? "monitor" : "box", 15)}<a href="${RD.href("machine")}" class="mono truncate">${esc(g.name)}</a>`, g.statusDetail ? esc(g.statusDetail) : `${g.kind} ${g.vmid} · ${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}`, today(g.uptimeDay), word(g.status))),
+    ];
+  },
+}[RD.kind]();
+const compSummary = { machine: () => `${res.services.filter((s) => s.status === "in-sync").length + 1} of ${res.services.length + 1} in sync or up`, service: () => "Link up · last run passed", node: () => `${res.guests.filter((g) => g.status === "in-sync").length} of ${res.guests.length} guests in sync` }[RD.kind]();
+
+// ---- Incidents and changes, by day ---------------------------------------------------------------
+const what = { machine: "SSH did not answer", service: "The link was down", node: "The Proxmox API was down" }[RD.kind];
+const items = [
+  ...up.incidents.map((i) => ({ at: i.at, incident: i })),
+  ...res.events.filter((e) => e.type !== "uptime" && new Date(e.at).getTime() <= RD.NOW).map((e) => ({ at: e.at, event: e })),
+].sort((a, b) => b.at.localeCompare(a.at));
+const byDay = [];
+for (const it of items) {
+  const d = RD.day(it.at);
+  (byDay.at(-1)?.day === d ? byDay.at(-1) : (byDay.push({ day: d, at: it.at, list: [] }), byDay.at(-1))).list.push(it);
+}
+const hhmm = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+function item(it) {
+  if (it.incident) {
+    const i = it.incident, end = new Date(new Date(i.at).getTime() + i.minutes * 60000).toISOString(), down = i.state === "down";
+    return `<div class="inc" data-tone="${down ? "danger" : "warning"}">
+      <div class="inc__title"><span>${down ? `${what} for ${i.minutes} min` : `Slow answers for ${i.minutes} min`}</span><span class="ev__time">${hhmm(i.at)}–${hhmm(end)}</span></div>
+      <div class="inc__cause">${/#\d+/.test(i.detail) ? `Cause: <b>${runLink(i.detail)}</b>` : down ? `Cause: <b>${esc(i.detail)}</b>` : esc(i.detail)}</div></div>`;
+  }
+  const e = it.event;
+  return `<div class="ev"><span class="dot" data-tone="${e.tone}"></span><span>${e.run ? `<a href="#">#${e.run}</a> ` : ""}${esc(e.title)} <span class="small muted">· ${runLink(e.detail)}</span></span><span class="ev__time">${hhmm(e.at)}</span></div>`;
+}
+
+// ---- About: the definition, read ----------------------------------------------------------------
+const asec = (s) => `<section class="asec"><h3>${icon(s.icon, 14)}${esc(s.title)} <button type="button" class="link-button xs" data-yaml="${s.id}" style="margin-left:auto;font-weight:400">lines ${s.lines[0]}–${s.lines[1]}</button></h3>
+  ${s.note ? `<p class="asec__note">${esc(s.note)}</p>` : ""}${RD.kv(s.fields.map((f) => [f.label, `${f.tone ? RD.badge(f.value, f.tone) : RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note || f.raw ? `<div class="xs muted">${esc(f.note ?? f.raw)}</div>` : ""}`]))}</section>`;
+
+// ---- Page ---------------------------------------------------------------------------------------
+main.innerHTML = `<div class="page">
+  <div class="top">
+    <div class="top__id"><span class="small">${RD.crumbs()}</span></div>
+    <div class="row">${RD.actions(res, { small: true })}</div>
+  </div>
+
+  <section class="banner" data-tone="${banner.tone}">
+    <span class="banner__icon">${icon(banner.icon, 28)}</span>
+    <div style="min-width:0"><h1>${banner.title}</h1><p>${banner.sub}</p></div>
+    ${banner.actions ? `<div class="banner__actions">${banner.actions}</div>` : ""}
+  </section>
+
+  <section>
+    <h2 class="h">Uptime <span>${{ machine: "SSH", service: "Link", node: "Proxmox API" }[RD.kind]} · <span class="mono">${esc(up.url)}</span> · checked by ${esc(up.agent)}</span></h2>
+    <div class="panel uptime">
+      <div class="figs">
+        <div><span class="small muted">24 hours</span><b>${up.uptime.day}%</b></div>
+        <div><span class="small muted">7 days</span><b>${up.uptime.week}%</b></div>
+        <div><span class="small muted">30 days</span><b>${up.uptime.month}%</b></div>
+      </div>
+      <div><div class="bar-label"><span>Last 24 hours</span><span class="muted">every 15 min</span></div>${RD.beats(up)}<div class="axis"><span>24 h ago</span><span>now</span></div></div>
+      <div><div class="bar-label"><span>Last 30 days</span><span class="muted">one bar a day</span></div>${RD.days(up)}<div class="axis"><span>${RD.day(new Date(RD.NOW - 29 * 86400000).toISOString())}</span><span>today</span></div></div>
+      <div><div class="bar-label"><span>Response time, last 24 hours</span></div>
+        <div class="latency">${RD.spark(up.latency, { width: 720, height: 48 }).replace("<svg ", '<svg preserveAspectRatio="none" ')}
+          <dl><dt>Now</dt><dd>${up.elapsedMs} ms</dd><dt>Average</dt><dd>${avg} ms</dd><dt>Slowest</dt><dd>${slowest} ms</dd></dl></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="h">Components <span>${compSummary}</span></h2>
+    <div class="panel">${components.join("")}</div>
+  </section>
+
+  <section>
+    <h2 class="h">Incidents and changes <span>${up.incidents.length} ${up.incidents.length === 1 ? "incident" : "incidents"} in 30 days</span></h2>
+    <div class="days">${byDay.map((d) => `
+      <div class="day"><div class="day__date"><b>${d.day}</b>${RD.rel(d.at)}</div><div class="day__list">${d.list.map(item).join("")}</div></div>`).join("")}</div>
+  </section>
+
+  <section class="panel">
+    <details class="about">
+      <summary>${icon("chevronRight", 16).replace("<svg ", '<svg class="chev" ')}<b>About ${esc(res.name)}</b><span class="small muted">${esc(res.description)}</span></summary>
+      <div class="about__body">
+        <div class="about__bar"><span class="small muted">The definition, <span class="mono">${esc(def.file)}</span></span><button type="button" class="button button--small" data-yaml="">${icon("code", 14)}View YAML</button></div>
+        <div class="about__grid">${def.sections.map(asec).join("")}</div>
+      </div>
+    </details>
+  </section>
+</div>`;
+</script>
+</body>
+</html>

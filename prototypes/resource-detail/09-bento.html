@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bento</title>
+<!--
+  09 · Bento. The Overview page's language, used for one resource: a grid of tiles of different
+  sizes that fills the screen, each saying one thing with a large figure or a small graphic and at
+  most two lines under it. Nothing is a table, nothing scrolls on a 1440×900 screen. A tile opens its
+  full detail in the drawer. The definition is one tile among the others: its file, its sections as
+  chips and who changed it last; it opens the readable definition, with a switch to the YAML.
+  Uses sample data: none.
+-->
+<link rel="icon" href="../../frontend/public/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../frontend/src/styles/tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#main { min-height: 100vh; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-6); max-width: var(--content-max); margin: 0 auto; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.head h1 { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xl); margin-top: 2px; flex-wrap: wrap; }
+.head__detail { font-size: var(--text-sm); color: var(--text-muted); font-weight: 400; }
+
+.bento { flex: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(min-content, 1fr); gap: var(--space-4); }
+.tile { position: relative; display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; padding: var(--space-4) var(--space-5) var(--space-5); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.tile:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.tile:focus-visible { outline-offset: 2px; }
+.tile--w2 { grid-column: span 2; }
+.tile--w3 { grid-column: span 3; }
+.tile[data-tone] { border-color: var(--tone-border); background: color-mix(in srgb, var(--tone-bg) 70%, var(--surface)); }
+.tile[data-tone]:hover { background: var(--tone-bg); }
+.tile__label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-muted); font-weight: 500; }
+.tile__label svg { color: var(--text-faint); }
+.tile[data-tone] .tile__label svg { color: var(--tone-fg); }
+.tile__open { margin-left: auto; opacity: 0; transition: opacity 0.15s; color: var(--text-muted); display: inline-flex; }
+.tile:hover .tile__open, .tile:focus-visible .tile__open { opacity: 1; }
+.tile__body { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--space-3); min-width: 0; }
+.tile__foot { margin-top: auto; }
+
+.big { font-size: 2.5rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.big small { font-size: var(--text-lg); font-weight: 500; color: var(--text-muted); letter-spacing: 0; margin-left: 0.2rem; }
+.mid { font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; overflow-wrap: anywhere; }
+.sub { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.45; }
+.sub b { color: var(--text); font-weight: 500; }
+.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.trio .big { font-size: 2rem; }
+.trio span { display: block; }
+.axis { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--text-faint); margin-top: var(--space-1); }
+.split { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-6); align-items: center; }
+
+.dots { display: grid; gap: var(--space-2); }
+.dots > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; font-size: var(--text-sm); }
+.steps { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.step { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.step .track__segment { width: 4.5rem; height: 8px; border-radius: 4px; }
+.history { display: flex; gap: 4px; align-items: center; }
+.history i { width: 10px; height: 10px; border-radius: 2px; background: var(--tone-fg); }
+.stage-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.stage { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); min-width: 0; }
+.stage__name { display: flex; align-items: center; gap: var(--space-2); font-family: var(--font-mono); }
+
+.rings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
+.ring { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-4); align-items: center; }
+.ring__svg { position: relative; width: 5.5rem; height: 5.5rem; }
+.ring__svg svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring__svg b { position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ring .mid { font-size: var(--text-xl); }
+
+.segbar { display: flex; gap: 3px; height: 12px; }
+.segbar span { border-radius: 3px; background: var(--seg); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); font-size: var(--text-sm); color: var(--text-muted); }
+.legend > span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.legend i { width: 10px; height: 10px; border-radius: 2px; background: var(--seg); }
+.legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.needs { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-6); align-items: center; }
+.needs ul { display: grid; gap: var(--space-2); }
+.needs li { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: var(--space-2); align-items: start; font-size: var(--text-sm); }
+.needs li svg { color: var(--tone-fg); margin-top: 3px; }
+.approve { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); flex-wrap: wrap; }
+
+/* Drawer content */
+.dsec { padding: var(--space-4) 0; border-bottom: 1px solid var(--border); }
+.dsec:first-child { padding-top: 0; }
+.dsec:last-child { border-bottom: 0; }
+.dsec h3 { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); font-weight: 600; margin-bottom: var(--space-3); }
+.dsec h3 svg { color: var(--text-muted); }
+.dnote { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: var(--space-3); max-width: 65ch; }
+.dlist > li { display: grid; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+.dlist > li:last-child { border-bottom: 0; }
+.dfig { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-bottom: var(--space-4); }
+.dfig b { display: block; font-size: var(--text-xl); font-weight: 600; }
+.drawer .tabs { margin-bottom: var(--space-4); }
+
+@media (max-width: 1280px) {
+  .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: auto; grid-auto-flow: dense; }
+  .tile--w3 { grid-column: span 2; }
+  .tile { min-height: 11rem; }
+}
+@media (max-width: 640px) {
+  #main { padding: var(--space-4); }
+  .bento { grid-template-columns: minmax(0, 1fr); }
+  .tile--w2, .tile--w3 { grid-column: auto; }
+  .rings, .stage-row { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="nav.js"></script>
+<script>
+const { res, esc, icon } = RD;
+const main = RD.mount({ bare: true });
+const def = res.definition;
+const up = res.checks[0];
+const sec = (id) => def.sections.find((s) => s.id === id);
+
+// ---- Small graphics ----------------------------------------------------------------------
+const steps = (r, names) => `<div class="steps">${r.steps.filter((s) => !names || names.includes(s.name)).map((s) => `
+  <div class="step"><span class="track__segment track__segment--${s.status === "todo" ? "todo" : RD.tone(s.status)}"></span><span class="xs muted">${s.name}</span></div>`).join("")}</div>`;
+const history = (runs) => `<span class="history" aria-label="Last ${runs.length} runs">${runs.slice().reverse().map((r) => `<i data-tone="${RD.tone(r.status)}" title="#${r.number} ${RD.statusLabel(r.status)}"></i>`).join("")}</span>`;
+function ring(frac, figure, label, sub) {
+  const C = 2 * Math.PI * 26;
+  return `<div class="ring"><div class="ring__svg"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="26" fill="none" stroke="var(--meter-track)" stroke-width="7"/>
+    <circle cx="32" cy="32" r="26" fill="none" stroke="var(--meter-ok)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/></svg><b>${RD.pct(frac)}</b></div>
+    <div><div class="xs muted">${label}</div><div class="mid">${figure}</div><div class="sub">${sub}</div></div></div>`;
+}
+const SEG = { success: "color-mix(in srgb, var(--success-fg) 70%, var(--surface))", attention: "var(--attention-fg)", danger: "var(--meter-danger)", muted: "var(--text-muted)" };
+const segbar = (parts) => `<div class="segbar" role="img" aria-label="${parts.map((p) => `${p.n} ${p.label}`).join(", ")}">${parts.filter((p) => p.n).map((p) => `<span style="flex:${p.n};--seg:${SEG[p.tone]}"></span>`).join("")}</div>
+  <div class="legend">${parts.map((p) => `<span><i style="--seg:${SEG[p.tone]}"></i><span><b>${p.n}</b> ${p.label}</span></span>`).join("")}</div>`;
+function countdown(iso) {
+  const ms = new Date(iso).getTime() - Date.now(), m = Math.max(0, Math.round(ms / 60000));
+  return m >= 48 * 60 ? `${Math.floor(m / 1440)}<small>d</small> ${Math.floor((m % 1440) / 60)}<small>h</small>` : `${Math.floor(m / 60)}<small>h</small> ${m % 60}<small>min</small>`;
+}
+const policyChips = () => `<div class="chips">${[["Approval", res.policy.approval], ["Destructive", res.policy.destructive], ...res.policy.actions.map((a) => [a.action, a.approval])]
+  .map(([k, v]) => `<span class="chip" data-tone="${v === "manual" ? "attention" : "success"}">${esc(k)} · ${esc(v)}</span>`).join("")}</div>`;
+const fileName = def.file.split("/").pop();
+
+// ---- Drawer contents -----------------------------------------------------------------------
+const dsec = (title, ic, body, note) => `<section class="dsec"><h3>${icon(ic, 15)}${esc(title)}</h3>${note ? `<p class="dnote">${esc(note)}</p>` : ""}${body}</section>`;
+const fieldsKv = (s) => RD.kv(s.fields.map((f) => [f.label, `${f.tone ? RD.badge(f.value, f.tone) : RD.value(f)}${f.pending ? ` ${RD.badge(f.pending, "attention")}` : ""}${f.note || f.raw ? `<div class="xs muted">${esc(f.note ?? f.raw)}</div>` : ""}`]));
+const sectionD = (s) => dsec(s.title, s.icon, fieldsKv(s) + `<div style="margin-top:var(--space-3)"><button type="button" class="link-button xs" data-yaml="${s.id}">lines ${s.lines[0]}–${s.lines[1]} in the YAML</button></div>`, s.note);
+const runsD = (runs) => `<ul class="dlist">${runs.map((r) => `<li style="grid-template-columns:0.75rem 3rem minmax(0,1fr) auto 4.5rem"><span class="dot" data-tone="${RD.tone(r.status)}"></span><a href="#">#${r.number}</a>
+  <span class="truncate">${esc(r.title)}${r.address ? ` <span class="muted">${esc(r.address.split("/").pop())}</span>` : ""}<span class="xs muted" style="display:block">${esc(r.detail ?? "")} · ${esc(r.reason)}</span></span>${RD.track(r)}<span class="xs muted" style="text-align:right">${RD.rel(r.createdAt)}</span></li>`).join("")}</ul>`;
+const checkD = (c, what) => dsec(what, "activity", `
+  <div class="dfig"><div><span class="xs muted">24 hours</span><b>${c.uptime.day}%</b></div><div><span class="xs muted">7 days</span><b>${c.uptime.week}%</b></div><div><span class="xs muted">30 days</span><b>${c.uptime.month}%</b></div></div>
+  ${RD.beats(c)}<div class="axis"><span>24 h ago</span><span>now</span></div>
+  <div style="margin-top:var(--space-4)">${RD.days(c)}</div><div class="axis"><span>30 days ago</span><span>today</span></div>
+  <div class="row" style="margin-top:var(--space-4)">${RD.spark(c.latency, { width: 420, height: 36 })}<span class="small muted">${c.elapsedMs} ms now</span></div>`, `${c.url} · checked ${RD.rel(c.checkedAt)} by ${c.agent}`)
+  + (c.incidents.length ? dsec("Incidents", "alert", `<ul class="dlist">${c.incidents.map((i) => `<li style="grid-template-columns:0.75rem minmax(0,1fr) auto"><span class="dot" data-tone="${i.state === "down" ? "danger" : "warning"}"></span><span>${i.state === "down" ? "Down" : "Slow"} for ${i.minutes} min <span class="muted">· ${esc(i.detail)}</span></span><span class="xs muted">${RD.clock(i.at)}</span></li>`).join("")}</ul>`) : "");
+const policyD = () => dsec("Policy", "shield", RD.kv([["Approval", RD.badge(res.policy.approval, "attention")], ["Destructive", RD.badge(res.policy.destructive, "attention")], ...res.policy.actions.map((a) => [a.action, RD.badge(a.approval, "success")]), ["Set by", esc(res.policy.approvalSetBy)]]))
+  + sectionD(sec("policy"));
+function definitionD() {
+  return `<div class="tabs" role="tablist"><button type="button" class="tab" role="tab" aria-selected="true" data-view="read">Readable</button><button type="button" class="tab" role="tab" aria-selected="false" data-view="yaml">YAML</button></div>
+    <div data-pane="read"><p class="small muted mono break" style="margin-bottom:var(--space-3)">${esc(def.file)}</p>${def.sections.map(sectionD).join("")}</div>
+    <div data-pane="yaml" hidden>${RD.yamlBox(def)}</div>`;
+}
+const changed = () => {
+  const c = res.changes[0];
+  if (!c) return `<span>Trusted by <b>${esc(res.trust.trustedBy)}</b> ${RD.rel(res.trust.trustedAt)}; no changes since</span>`;
+  return `<span>Changed by <b>${esc(c.author)}</b> ${RD.rel(c.createdAt)}: ${esc(c.message)}${c.status === "awaiting-approval" ? " (waits)" : ""}</span>`;
+};
+const defTile = (w) => ({ id: "definition", title: "Definition", icon: "file", w, body: `
+  <div><div class="mid mono">${esc(fileName)}</div><div class="sub mono truncate">${esc(def.file.split("/").slice(0, -1).join("/"))}/</div></div>
+  <div class="chips">${def.sections.map((s) => RD.chip(s.title)).join("")}</div>
+  <div class="sub">${changed()}</div>`, drawer: definitionD });
+
+// ---- The tiles, per kind ------------------------------------------------------------------
+const tiles = {
+  machine() {
+    const c = res.configuration, sch = c.schedules.slice().sort((a, b) => a.nextAt.localeCompare(b.nextAt)), last = res.runs[0], m = res.managedAccess, inc = up.incidents[0];
+    const hw = (k) => sec("hardware").fields.find((f) => f.key === k).value;
+    return [
+      { id: "health", title: "Health", icon: "activity", w: 2, body: `
+        <div class="split"><div class="big">${up.uptime.month}<small>%</small></div><div class="sub">SSH answered for 30 days, <b>${up.elapsedMs} ms</b> now<br>Down ${inc.minutes} min, ${RD.rel(inc.at)}: ${esc(inc.detail.charAt(0).toLowerCase() + inc.detail.slice(1))}</div></div>
+        <div>${RD.days(up)}<div class="axis"><span>30 days ago</span><span>today</span></div></div>`, drawer: () => checkD(up, "SSH") },
+      { id: "size", title: "Size", icon: "cpu", body: `
+        <div class="trio"><div><span class="big">${hw("cores")}</span><span class="xs muted">cores</span></div><div><span class="big">${hw("memory").split(" ")[0]}<small>GiB</small></span><span class="xs muted">memory</span></div><div><span class="big">${hw("disks").split(" ")[0]}<small>GiB</small></span><span class="xs muted">disk</span></div></div>
+        <div class="sub">VM ${res.vmid} on <a href="${RD.href("node")}">${res.host}</a>, from ${res.template}</div>`, drawer: () => sectionD(sec("hardware")) + sectionD(sec("placement")) },
+      { id: "network", title: "Network", icon: "network", body: `
+        <div class="mid mono">${res.accessAddress}<span class="muted" style="font-weight:400">/24</span></div>
+        <div class="sub">${sec("network").fields[1].value} on <b>${sec("network").fields[0].value}</b> · gateway <span class="mono">${sec("network").fields[3].value}</span></div>`, drawer: () => sectionD(sec("network")) },
+      { id: "next", title: "Next", icon: "clock", body: `
+        <div class="big" data-countdown="${sch[0].nextAt}">${countdown(sch[0].nextAt)}</div>
+        <div class="sub"><b class="mono">${sch[0].action}</b>, ${sch[0].human.toLowerCase()}<br>Then <span class="mono">${sch[1].action}</span> ${RD.rel(sch[1].nextAt)}</div>`,
+        drawer: () => dsec("Schedules", "calendar", `<ul class="dlist">${c.actions.map((a) => { const s = c.schedules.find((x) => x.action === a.id); return `<li style="grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto"><span><span class="mono">${a.id}</span>${a.destructive ? ` ${RD.badge("destructive", "danger")}` : ""}<span class="xs muted" style="display:block">${esc(a.description)}</span></span><span>${s ? `${s.human} · next ${RD.rel(s.nextAt)}<span class="xs muted" style="display:block">last #${s.lastRunNumber}: ${esc(s.lastRunDetail)}</span>` : `<span class="muted">${a.onChange ? "When the definition changes" : "By hand"}</span>`}</span><button type="button" class="button button--small" data-action="run">Run</button></li>`; }).join("")}</ul>`) + sectionD(sec("schedules")) },
+      { id: "last-run", title: "Last run", icon: "runs", w: 2, body: `
+        <div class="row row--between row--wrap"><div class="mid">#${last.number} ${esc(last.title)}</div>${RD.status(last.status)}</div>
+        ${steps(last)}
+        <div class="row row--between row--wrap"><span class="sub">${esc(last.detail)} · ${RD.duration(last.seconds)} · ${RD.rel(last.createdAt)} by ${esc(last.reason.toLowerCase())}</span>${history(res.runs)}</div>`, drawer: () => dsec("Runs", "runs", runsD(res.runs)) },
+      { id: "services", title: "Services", icon: "globe", body: `
+        <div class="dots">${res.services.map((s) => `<div><span class="dot" data-tone="${RD.tone(s.status)}"></span><a href="${RD.href("service")}" class="truncate">${esc(s.name)}</a><span class="xs" style="color:var(--${RD.tone(s.status)}-fg)">${RD.statusLabel(s.status).replace("Waiting for approval", "Waits")}</span></div>`).join("")}</div>`,
+        drawer: () => dsec("Services", "globe", `<ul class="dlist">${res.services.map((s) => `<li style="grid-template-columns:auto minmax(0,1fr) 5rem auto">${RD.svcIcon(s.name)}<span><a href="${RD.href("service")}">${s.name}</a><span class="xs muted mono" style="display:block">${esc(s.links[0])}</span>${s.statusDetail ? `<span class="xs muted" style="display:block">${esc(s.statusDetail)}</span>` : ""}</span><span class="xs muted num">${s.uptimeDay}% today</span>${RD.status(s.status)}</li>`).join("")}</ul>`) },
+      { id: "access", title: "Access", icon: "key", body: `
+        <div class="row" style="gap:var(--space-4)"><div class="big">v${m.version}</div><div class="chips">${m.keys.map((k) => RD.chip(`v${k.version} ${k.state}`, { tone: k.state === "active" ? "success" : "muted" })).join("")}</div></div>
+        <div class="sub">Managed key for <span class="mono">${sec("access").fields[1].value}@${res.accessAddress}</span>, used ${RD.rel(m.lastUsedAt)}<br>Host key pinned, v${res.hostKey.pinned.version}</div>`,
+        drawer: () => dsec("Managed SSH key", "key", RD.kv([["Active", `v${m.version}, rotated ${RD.rel(m.keys[0].promotedAt)} by ${m.keys[0].promotedBy}`], ["Fingerprint", `<span class="mono small">${m.fingerprint}</span>`], ["Last used", RD.rel(m.lastUsedAt)]]))
+          + dsec("Host key", "lock", RD.kv([["Pinned", `v${res.hostKey.pinned.version}, ${RD.rel(res.hostKey.pinned.createdAt)}`], ["Fingerprint", `<span class="mono small">${res.hostKey.pinned.fingerprint}</span>`]])) + sectionD(sec("access")) },
+      { id: "policy", title: "Policy", icon: "shield", body: `${policyChips()}<div class="sub">Every change waits for you, except <span class="mono">update-tools</span></div>`, drawer: policyD },
+      defTile(2),
+    ];
+  },
+  service() {
+    const p = res.pending, w = res.runs[0], last = res.runs.find((r) => r.status === "succeeded"), slow = up.incidents.find((i) => i.state === "warn");
+    const img = sec("inputs").fields.find((f) => f.key === "image");
+    const [from, to] = p.summary.match(/[\d.]+ → [\d.]+/)[0].split(" → ");
+    return [
+      { id: "approval", title: "Waits for you", icon: "hand", w: 3, tone: "attention", body: `
+        <div class="approve"><div><div class="mid">Deploy #${p.run}: image ${from} → ${to}</div><div class="sub">Change by <b>${esc(p.author)}</b> ${RD.rel(p.since)} · commit <span class="mono">${p.commit.slice(0, 7)}</span> · approval is manual</div></div>
+          <div class="row"><button type="button" class="button button--primary" data-action="approve">${icon("check", 15)}Approve</button><button type="button" class="button" data-action="reject">${icon("x", 15)}Reject</button></div></div>
+        ${steps(w)}`,
+        drawer: () => dsec(`Deploy #${p.run}`, "rocket", RD.kv([["Change", esc(p.summary)], ["By", `${esc(p.author)}, ${RD.rel(p.since)}`], ["Commit", RD.commit(p.commit)], ["Steps", RD.track(w)], ["Why it waits", "Approval is manual in this service's policy"]])
+          + `<div class="row" style="margin-top:var(--space-4)"><button type="button" class="button button--primary" data-action="approve">Approve</button><button type="button" class="button" data-action="reject">Reject</button></div>`) + sectionD(sec("inputs")) },
+      { id: "where", title: "Where", icon: "link", body: `
+        <a href="#" class="mid mono" style="font-size:var(--text-lg)">${esc(res.names[0].name)}</a>
+        <div class="sub">On <a href="${RD.href("machine")}">${res.guest.name}</a>, <span class="mono">${res.guest.accessAddress}:${sec("inputs").fields.find((f) => f.key === "port").value}</span><br>The dns stage sets the name</div>`,
+        drawer: () => sectionD(sec("service")) + dsec("Names", "globe", RD.kv(res.names.map((n) => [n.name, `set by the ${n.stage} stage`])) ) },
+      { id: "health", title: "Health", icon: "activity", w: 2, body: `
+        <div class="split"><div class="big">${up.uptime.month}<small>%</small></div><div class="sub">The link answered for 30 days, <b>${up.elapsedMs} ms</b> now<br>Slow for ${slow.minutes} min ${RD.rel(slow.at)}</div></div>
+        <div>${RD.spark(up.latency, { width: 520, height: 40 }).replace("<svg ", '<svg preserveAspectRatio="none" style="width:100%" ')}<div class="axis"><span>Response time, 24 h ago</span><span>now</span></div></div>`, drawer: () => checkD(up, "Link") },
+      { id: "version", title: "Version", icon: "tag", body: `
+        <div class="row" style="align-items:baseline;gap:var(--space-3)"><div class="big">${from}</div><span class="muted">→</span><span class="mid" style="color:var(--attention-fg)">${to}</span></div>
+        <div class="sub">${to} waits for approval<br><span class="mono">${esc(img.value.split(":")[0])}</span></div>`, drawer: () => sectionD(sec("inputs")) },
+      { id: "secrets", title: "Secrets", icon: "lock", body: `
+        <div class="dots">${sec("secrets").fields.map((f) => `<div><span class="muted" style="display:inline-flex">${icon("key", 14)}</span><span class="truncate">${esc(f.label)}</span>${RD.chip(`v${f.secret.activeVersion}`)}</div>`).join("")}</div>
+        <div class="sub">The env file is delivered as a file</div>`, drawer: () => sectionD(sec("secrets")) },
+      { id: "stages", title: "Stages", icon: "workflow", w: 2, body: `
+        <div class="stage-row">${res.workflow.stages.map((s) => { const st = last.steps.find((x) => x.name === s.name).status; return `<div class="stage"><div class="stage__name"><span class="dot" data-tone="${RD.tone(st)}"></span>${s.name}</div><div class="xs muted" style="margin-top:4px">${s.executor}</div></div>`; }).join("")}</div>
+        <div class="sub">All three passed in #${last.number}, ${RD.rel(last.createdAt)} · workflow ${res.workflow.reference}, ${res.workflow.latest} is out</div>`,
+        drawer: () => dsec("Stages", "workflow", `<ul class="dlist">${res.workflow.stages.map((s, i) => `<li style="grid-template-columns:1.5rem minmax(0,1fr) auto"><span class="muted">${i + 1}</span><span><span class="mono">${s.name}</span> ${RD.chip(s.executor)}<span class="xs muted" style="display:block">${esc(s.detail)}</span></span>${RD.status(last.steps.find((x) => x.name === s.name).status)}</li>`).join("")}</ul>`) + dsec("Runs", "runs", runsD(res.runs)) },
+      { id: "policy", title: "Policy", icon: "shield", body: `${policyChips()}<div class="sub">A deploy waits for approval</div>`, drawer: policyD },
+      defTile(1),
+    ];
+  },
+  node() {
+    const h = res.hosts[0], i = res.issues[0];
+    const waiting = res.guests.find((g) => g.status === "awaiting-approval"), failed = res.guests.find((g) => g.status === "failed");
+    const count = (s) => res.guests.filter((g) => g.status === s).length;
+    return [
+      { id: "needs", title: "Needs you", icon: "alert", w: 2, tone: "warning", body: `
+        <div class="needs"><div class="big">3</div><ul>
+          <li data-tone="warning">${icon("alert", 14)}<span>${esc(i.message)}</span></li>
+          <li data-tone="attention">${icon("hand", 14)}<span><a href="${RD.href("machine")}" class="mono">${waiting.name}</a>: ${esc(waiting.statusDetail)}</span></li>
+          <li data-tone="danger">${icon("circleX", 14)}<span><a href="${RD.href("machine")}" class="mono">${failed.name}</a>: ${esc(failed.statusDetail)}</span></li></ul></div>`,
+        drawer: () => dsec("Warning", "alert", `<p>${esc(i.message)}</p><p class="xs muted mono" style="margin-top:var(--space-2)">${esc(i.file)}, line ${i.line}</p>`)
+          + dsec("Waits for approval", "hand", runsD(res.runs.filter((r) => r.status === "awaiting-approval")) + `<div class="row" style="margin-top:var(--space-3)"><button type="button" class="button button--primary button--small" data-action="approve">Approve</button><button type="button" class="button button--small" data-action="reject">Reject</button></div>`)
+          + dsec("Failed", "circleX", runsD(res.runs.filter((r) => r.status === "failed"))) },
+      { id: "capacity", title: "Capacity", icon: "cpu", w: 2, body: `
+        <div class="rings">${ring(h.cpu, `${h.maxCpu} cores`, "CPU", "")}${ring(h.memoryBytes / h.maxMemoryBytes, `${RD.bytes(h.memoryBytes)}`, "Memory", `of ${RD.bytes(h.maxMemoryBytes)}`)}</div>`,
+        drawer: () => dsec(`Host ${h.name}`, "server", RD.kv([["CPU", `${RD.pct(h.cpu)} of ${h.maxCpu} cores ${RD.meter(h.cpu)}`], ["Memory", `${RD.bytes(h.memoryBytes)} of ${RD.bytes(h.maxMemoryBytes)} ${RD.meter(h.memoryBytes / h.maxMemoryBytes)}`], ["Operations", `${h.concurrentOperations} running, at most ${h.limit}`]])) + sectionD(sec("hosts")) },
+      { id: "guests", title: "Guests", icon: "server", w: 2, body: `
+        <div class="row" style="align-items:baseline;gap:var(--space-3)"><span class="big">${res.guests.length}</span><span class="muted">managed, ${res.unmanaged.length} unmanaged</span></div>
+        ${segbar([{ n: count("in-sync"), label: "in sync", tone: "success" }, { n: count("awaiting-approval"), label: "waiting", tone: "attention" }, { n: count("failed"), label: "failed", tone: "danger" }, { n: res.unmanaged.length, label: "unmanaged", tone: "muted" }])}`,
+        drawer: () => dsec("Managed", "server", `<ul class="dlist">${res.guests.map((g) => `<li style="grid-template-columns:minmax(0,1fr) 3rem 7.5rem auto"><span><a class="mono" href="${RD.href("machine")}">${g.name}</a><span class="xs muted" style="display:block">${g.kind}${g.statusDetail ? ` · ${esc(g.statusDetail)}` : ""}</span></span><span class="num muted">${g.vmid}</span><span class="num">${g.cores} vCPU · ${RD.bytes(g.memoryBytes)}</span>${RD.status(g.status)}</li>`).join("")}</ul>`)
+          + dsec("Unmanaged", "circleDot", `<ul class="dlist">${res.unmanaged.map((g) => `<li class="muted" style="grid-template-columns:minmax(0,1fr) 3rem 7.5rem auto"><span class="mono">${g.name}</span><span class="num">${g.vmid}</span><span class="num">${g.maxCpu} vCPU · ${RD.bytes(g.maxMemoryBytes)}</span>${RD.status(g.template ? "template" : "unmanaged")}</li>`).join("")}</ul>`) },
+      { id: "connection", title: "Connection", icon: "link", body: `
+        <div class="mid mono" style="font-size:var(--text-lg)">${res.endpoint.replace("https://", "").replace(/\/$/, "")}</div>
+        <div class="row row--wrap">${RD.badge("Trusted", "success", "shield")}${RD.badge("TLS not verified", "warning", "alert")}</div>
+        <div class="sub">Trusted by <b>${esc(res.trust.trustedBy)}</b> ${RD.rel(res.trust.trustedAt)}</div>`,
+        drawer: () => dsec("Trust", "shield", RD.kv([["Trusted", `by ${res.trust.trustedBy}, ${RD.rel(res.trust.trustedAt)}`], ["Endpoints", res.trust.endpoints.map((e) => RD.chip(e, { mono: true })).join(" ")], ["Snippets", `<span class="mono">${res.snippets.user}@${res.snippets.datastore}</span>`]])) + sectionD(sec("connection")) + sectionD(sec("snippets")) },
+      { id: "proxmox", title: "Proxmox", icon: "server", body: `
+        <div class="big">${res.proxmoxVersion}</div>
+        <div class="sub">Host up ${RD.duration(h.uptimeSeconds)}<br>Observed ${RD.rel(res.observedAt)}</div>`,
+        drawer: () => dsec("Proxmox VE", "server", RD.kv([["Version", res.proxmoxVersion], ["Type", "Standalone"], ["Host", `${h.name}, online, up ${RD.duration(h.uptimeSeconds)}`], ["Observed", RD.rel(res.observedAt)]])) + checkD(up, "Proxmox API") },
+      { id: "runs", title: "Recent runs", icon: "runs", w: 2, body: `
+        <div class="dots">${res.runs.slice(0, 4).map((r) => `<div><span class="dot" data-tone="${RD.tone(r.status)}"></span><span class="truncate"><a href="#">#${r.number}</a> ${esc(r.title)} <span class="mono muted">${esc(r.address.split("/").pop())}</span></span><span class="xs muted">${RD.rel(r.createdAt)}</span></div>`).join("")}</div>`,
+        drawer: () => dsec("Runs of its guests", "runs", runsD(res.runs)) },
+      defTile(2),
+    ];
+  },
+}[RD.kind]();
+
+// ---- Render -------------------------------------------------------------------------------
+main.innerHTML = `
+  <header class="head">
+    <div style="min-width:0">
+      <div class="xs">${RD.crumbs()}</div>
+      <h1>${RD.kind === "service" ? RD.svcIcon(res.name) : ""}<span class="mono">${esc(res.address)}</span>${RD.status(res.status)}<span class="head__detail">${esc(res.description)}</span></h1>
+    </div>
+    <div class="row">${RD.actions(res, { small: true })}</div>
+  </header>
+  <div class="bento">${tiles.map((t) => `
+    <article class="tile${t.w ? ` tile--w${t.w}` : ""}" ${t.tone ? `data-tone="${t.tone}"` : ""} tabindex="0" role="button" aria-label="${esc(t.title)}: open details" data-tile="${t.id}">
+      <div class="tile__label">${icon(t.icon, 15)}${esc(t.title)}<span class="tile__open">${icon("arrowRight", 15)}</span></div>
+      <div class="tile__body">${t.body}</div>
+    </article>`).join("")}
+  </div>`;
+
+function open(id) {
+  const t = tiles.find((x) => x.id === id);
+  const el = RD.drawer(t.title, t.drawer());
+  // The definition's switch between the readable view and the YAML.
+  el.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll("[data-view]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    el.querySelectorAll("[data-pane]").forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.view));
+  }));
+}
+const bento = main.querySelector(".bento");
+bento.addEventListener("click", (e) => {
+  if (e.target.closest("a, button")) return;
+  const t = e.target.closest(".tile");
+  if (t) open(t.dataset.tile);
+});
+bento.addEventListener("keydown", (e) => {
+  const t = e.target.closest?.(".tile");
+  if (t && e.target === t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(t.dataset.tile); }
+});
+setInterval(() => main.querySelectorAll("[data-countdown]").forEach((el) => (el.innerHTML = countdown(el.dataset.countdown))), 30_000);
+</script>
+</body>
+</html>

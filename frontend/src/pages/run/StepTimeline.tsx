@@ -7,11 +7,11 @@ import { JsonBlock } from "../../components/CodeBlock";
 import { RelativeTime } from "../../components/RelativeTime";
 import { useNow } from "../../components/useNow";
 import { statusStyle } from "../../components/status";
-import { buildRunOverview } from "../../lib/changes";
 import { humanize } from "../../lib/format";
 import { summarizePlan } from "../../lib/plan";
 import { elapsed, formatDuration } from "../../lib/time";
 import { ApprovalPanel } from "./ApprovalPanel";
+import { approvalProps } from "./approval";
 import { AttemptList } from "./AttemptList";
 import { ConfigurePreviewView } from "./ConfigurePreview";
 import { PlanChanges } from "./PlanChanges";
@@ -71,20 +71,7 @@ function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
   const canRetryStage = detail.run.operation === "pipeline" && detail.run.status === "failed" && step.status === "failed"
     && Boolean(step.stage) && ["apply", "playbook"].includes(step.name) && !lostChange;
   const plan = step.plan ? summarizePlan(step.plan) : null;
-  if (step.kind === "approval") {
-    const planStep = detail.steps.find((s) => s.name === "plan");
-    return (
-      <ApprovalPanel
-        runId={detail.run.id}
-        step={step}
-        plan={planStep?.plan && detail.run.operation !== "pipeline" ? summarizePlan(planStep.plan) : null}
-        overview={step.status === "awaiting-approval" ? buildRunOverview(detail.steps) : []}
-        configure={detail.run.operation === "configure" || detail.run.operation === "rotate-access"}
-        pipeline={detail.run.operation === "pipeline"}
-        rotation={detail.run.operation === "rotate-access"}
-      />
-    );
-  }
+  if (step.kind === "approval") return <ApprovalPanel {...approvalProps(detail, step)} />;
   return (
     <>
       {plan ? <PlanChanges plan={plan} /> : null}

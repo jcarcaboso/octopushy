@@ -11,7 +11,7 @@ import type { PlanSummary } from "../../lib/plan";
 import { ChangeOverview } from "./ChangeOverview";
 import { PlanCountsLine } from "./PlanChanges";
 
-interface Props {
+export interface ApprovalPanelProps {
   runId: string;
   step: Step;
   plan: PlanSummary | null;
@@ -55,7 +55,7 @@ function Decided({ step, configure, pipeline }: { step: Step; configure: boolean
   );
 }
 
-export function ApprovalPanel({ runId, step, plan, overview = [], configure = false, pipeline = false, rotation = false }: Props) {
+export function ApprovalPanel({ runId, step, plan, overview = [], configure = false, pipeline = false, rotation = false }: ApprovalPanelProps) {
   const approve = useApproveStep();
   const reject = useRejectStep();
   const [note, setNote] = useState("");

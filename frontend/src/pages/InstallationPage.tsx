@@ -1,17 +1,19 @@
-import { Eye, ShieldCheck } from "lucide-react";
+import { Eye, Hand, ShieldCheck, TriangleAlert } from "lucide-react";
 import { isNotFound } from "../api/client";
 import { Link, useParams } from "react-router";
 import { useInstallation, useObserveInstallation, useTrustInstallation } from "../api/queries";
-import type { InstallationSummary, ObservedGuest } from "../api/types";
+import type { InstallationDetail, InstallationSummary, ObservedGuest } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
-import { DefinitionView } from "../components/DefinitionView";
+import { DefinitionSheet, ViewYamlButton } from "../components/DefinitionSheet";
+import { Glance } from "../components/Glance";
 import { GuestTable } from "../components/GuestTable";
 import { ObserveError } from "../components/ObserveError";
 import { HostTable } from "../components/HostTable";
 import { IssueList } from "../components/IssueList";
 import { KeyValue } from "../components/KeyValue";
+import { Meter } from "../components/Meter";
 import { LabelList } from "../components/LabelEditor";
 import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
@@ -20,7 +22,8 @@ import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { SnippetAccessCard } from "../components/SnippetAccess";
 import { WaitingNote } from "../components/WaitingNote";
-import { humanize, plural } from "../lib/format";
+import { formatBytes, humanize, operationLabel, plural } from "../lib/format";
+import { formatUptime } from "../lib/time";
 import { folderLink } from "./variables/folders";
 
 function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
@@ -122,6 +125,103 @@ function TrustCallout({ installation }: { installation: InstallationSummary }) {
   );
 }
 
+/** The runs of its guests that wait for approval, and the guests whose last run failed. Nothing when there are none. */
+function GuestRuns({ installation }: { installation: InstallationSummary }) {
+  const waiting = installation.guests.filter((g) => g.activeRun?.status === "awaiting-approval");
+  const failed = installation.guests.filter((g) => g.status === "failed");
+  if (waiting.length === 0 && failed.length === 0) return null;
+  const title = [
+    waiting.length > 0 ? `${plural(waiting.length, "guest")} ${waiting.length === 1 ? "waits" : "wait"} for your approval` : null,
+    failed.length > 0 ? (waiting.length > 0 ? `${failed.length} failed` : `${plural(failed.length, "guest")} failed`) : null,
+  ].filter(Boolean).join(", ");
+  const Icon = waiting.length > 0 ? Hand : TriangleAlert;
+  const rows = [...waiting.map((guest) => ({ guest, run: guest.activeRun!, failed: false })), ...failed.map((guest) => ({ guest, run: guest.lastRun, failed: true }))];
+  return (
+    <section className={waiting.length > 0 ? "wait" : "wait wait--danger"} aria-label="Runs of its guests">
+      <header className="wait__head">
+        <h2 className="wait__title">
+          <Icon size={18} aria-hidden="true" />
+          {title}
+        </h2>
+      </header>
+      <ul className="wait__body wait-list">
+        {rows.map(({ guest, run, failed }) => (
+          <li key={guest.id}>
+            <Link to={`/guests/${guest.id}`} className="mono">
+              {guest.name}
+            </Link>
+            {run ? (
+              <span>
+                {operationLabel(run.operation)} #{run.number}
+                {failed ? " failed" : null}
+              </span>
+            ) : null}
+            <span className="wait-list__detail">{failed ? (guest.statusDetail ?? run?.detail) : (run?.detail ?? run?.waiting)}</span>
+            {run ? (
+              <>
+                <span className="small muted">
+                  <RelativeTime value={run.createdAt} />
+                </span>
+                <Link to={`/runs/${run.id}`} className="small">
+                  Open run
+                </Link>
+              </>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The installation's figures: its hosts, what they use, its guests and its Proxmox version. */
+function InstallationGlance({ data }: { data: InstallationDetail }) {
+  const { installation } = data;
+  const hosts = installation.hosts;
+  const online = hosts.filter((h) => h.online).length;
+  const sum = (values: (number | null)[]) => values.reduce<number>((total, v) => total + (v ?? 0), 0);
+  const cores = sum(hosts.map((h) => h.maxCpu));
+  const busy = sum(hosts.map((h) => (h.cpu !== null && h.maxCpu !== null ? h.cpu * h.maxCpu : null)));
+  const memory = sum(hosts.map((h) => h.maxMemoryBytes));
+  const used = sum(hosts.map((h) => h.memoryBytes));
+  const host = hosts.length === 1 ? hosts[0] : null;
+  return (
+    <Glance
+      cells={[
+        host
+          ? {
+              label: "Host",
+              value: host.online === null ? "Not observed" : host.online ? "Online" : "Offline",
+              note: host.uptimeSeconds ? `up ${formatUptime(host.uptimeSeconds)}` : host.name,
+            }
+          : hosts.length > 1
+            ? { label: "Hosts", value: `${online} of ${hosts.length} online`, note: hosts.map((h) => h.name).join(", ") }
+            : null,
+        cores > 0
+          ? { label: "CPU", value: plural(cores, "core"), note: hosts.some((h) => h.cpu !== null) ? <Meter label="CPU in use" fraction={busy / cores} /> : null }
+          : null,
+        memory > 0
+          ? {
+              label: "Memory",
+              value: formatBytes(memory),
+              note: hosts.some((h) => h.memoryBytes !== null) ? <Meter label="Memory in use" fraction={used / memory} text={`${formatBytes(used)} used`} /> : null,
+            }
+          : null,
+        installation.managed || installation.guests.length > 0
+          ? { label: "Guests", value: installation.guests.length, note: `managed · ${installation.unmanagedCount} unmanaged` }
+          : null,
+        installation.proxmoxVersion
+          ? {
+              label: "Proxmox VE",
+              value: installation.proxmoxVersion,
+              note: installation.observedAt ? <>observed <RelativeTime value={installation.observedAt} /></> : null,
+            }
+          : null,
+      ]}
+    />
+  );
+}
+
 export function InstallationPage() {
   const { id = "" } = useParams();
   const { data, error, isPending } = useInstallation(id);
@@ -162,6 +262,7 @@ export function InstallationPage() {
         }
         actions={
           <>
+            {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
             <button
               type="button"
               className="button button--primary"
@@ -187,11 +288,10 @@ export function InstallationPage() {
         <ErrorMessage error={observe.error} />
         <WaitingNote text={installation.observeWaiting} />
         <ObserveError installation={installation} />
+        <GuestRuns installation={installation} />
+        <InstallationGlance data={data} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <Card title="Hosts" flush>
-              <HostTable hosts={installation.hosts} label="Hosts" />
-            </Card>
             <Card title="Guests" meta={installation.guests.length} flush>
               <GuestTable guests={installation.guests} label="Declared guests" />
             </Card>
@@ -203,9 +303,12 @@ export function InstallationPage() {
             >
               <ObservedVms vms={data.observedGuests} observed={Boolean(installation.observedAt)} />
             </Card>
-            <Card title="Definition" id="definition">
-              <DefinitionView file={data.definitionFile} text={data.definitionText} issues={data.issues} />
-            </Card>
+            {installation.hosts.length === 1 && installation.hosts[0].declared ? null : (
+              <Card title="Hosts" flush>
+                <HostTable hosts={installation.hosts} label="Hosts" />
+              </Card>
+            )}
+            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="installation" issues={data.issues} />
           </div>
           <div className="stack stack--large">
             <Card title="Connection">
