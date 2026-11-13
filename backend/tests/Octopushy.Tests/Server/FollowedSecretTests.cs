@@ -100,6 +100,22 @@ public class FollowedSecretTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_value_saved_as_active_starts_the_onChange_action_as_a_promotion_does()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (agent, http) = await ConfiguredAsync(server);
+        using var _ = http;
+        (await http.PutAsJsonAsync("/api/variables", new { key = Shared, value = "saved-git-key", expectedCurrentVersion = 1 })).EnsureSuccessStatusCode();
+
+        await ScheduleAsync(server);
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Equal(RunReasons.Secret, run.Reason);
+        Assert.Equal("A store value this guest's setup uses changed: app/git-key v1 to v2.", run.ReasonDetail);
+        var playbook = await FinishAsync(server, agent);
+        Assert.Equal("saved-git-key", playbook.Secrets[SecretNames.AnsibleFile("git_key_src")]);
+    }
+
+    [Fact]
     public async Task A_failed_run_is_not_repeated_for_the_same_version()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

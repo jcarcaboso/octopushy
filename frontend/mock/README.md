@@ -48,6 +48,9 @@ default.
 Also worth a look: [/guests/bb](http://127.0.0.1:5176/guests/bb), [/services/web-app](http://127.0.0.1:5176/services/web-app),
 [/installations/pve01](http://127.0.0.1:5176/installations/pve01), [/changes/change-bb-resize](http://127.0.0.1:5176/changes/change-bb-resize)
 and [/editor/draft-pbs-schedule](http://127.0.0.1:5176/editor/draft-pbs-schedule).
+[/variables?folder=proxmox/moraband/apps-mrb-01/outline](http://127.0.0.1:5176/variables?folder=proxmox/moraband/apps-mrb-01/outline)
+holds an env file and a YAML file stored as secrets, with previous, candidate and revoked versions. Revealing returns the
+stored value, saving a value makes it active at once, and a stale `expectedCurrentVersion` answers 409.
 
 ## Adding a scenario
 

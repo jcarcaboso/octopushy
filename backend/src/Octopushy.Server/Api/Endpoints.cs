@@ -570,17 +570,19 @@ public static partial class Endpoints
             foreach (var entry in entries.Where(e => !e.Key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal)))
             {
                 var revoked = await db.StoreVersions.AnyAsync(v => v.Key == entry.Key && v.Version == entry.CurrentVersion && v.RevokedAt != null, ct);
+                var value = entry.Visibility == Visibilities.Plain ? await store.GetPlainAsync(entry.Key, ct) : null;
                 visible.Add(new VariableDto(
                     entry.Key,
                     entry.Visibility,
                     entry.Description,
                     entry.CurrentVersion,
                     entry.UpdatedAt,
-                    entry.Visibility == Visibilities.Plain ? await store.GetPlainAsync(entry.Key, ct) : null,
+                    value,
                     uses.GetValueOrDefault(entry.Key) ?? [],
                     entry.LatestVersion,
                     revoked,
-                    null));
+                    // A secret is opened here only to count its lines; its value stays on the server.
+                    entry.Visibility == Visibilities.Plain ? VariableStore.Lines(value) : await store.ActiveLinesAsync(entry.Key, ct)));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -591,7 +593,7 @@ public static partial class Endpoints
         })
         .WithName("listVariables");
 
-        group.MapPut("", async (VariableUpdate update, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
+        group.MapPut("", async (VariableUpdate update, HttpContext http, RunEngine engine, OrchestratorSignal signal, CancellationToken ct) =>
         {
             await engine.ExecuteAsync(async (db, services) =>
             {
@@ -599,11 +601,12 @@ public static partial class Endpoints
                 if (update.Value is not null)
                 {
                     var existing = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == update.Key, ct);
-                    await store.SetAsync(update.Key, update.Value, update.Visibility ?? existing?.Visibility ?? Visibilities.Secret, update.Description, ct);
+                    await store.SetAsync(update.Key, update.Value, update.Visibility ?? existing?.Visibility ?? Visibilities.Secret, update.Description, ct,
+                        actor: http.User.Identity?.Name ?? "administrator", note: update.Note, expectedCurrentVersion: update.ExpectedCurrentVersion);
                 }
                 else
                 {
-                    await store.DescribeAsync(update.Key, update.Description, ct);
+                    await store.DescribeAsync(update.Key, update.Description, ct, update.ExpectedCurrentVersion);
                 }
                 return true;
             }, ct);
@@ -658,7 +661,7 @@ public static partial class Endpoints
             await engine.ExecuteAsync(async (_, services) =>
             {
                 await services.GetRequiredService<VariableStore>().PromoteAsync(
-                    request.Key, request.Version, request.ExpectedCurrentVersion, request.VerificationNote ?? string.Empty,
+                    request.Key, request.Version, request.ExpectedCurrentVersion, request.VerificationNote,
                     http.User.Identity?.Name ?? "administrator", ct);
                 return true;
             }, ct);

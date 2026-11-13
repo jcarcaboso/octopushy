@@ -254,39 +254,76 @@ on("DELETE", "/api/agents/tokens/{id}", ({ params }) => {
 
 on("GET", "/api/variables", () => data.variables);
 on("GET", "/api/variables/versions", ({ query }) => data.variableVersions(query.get("key") ?? ""));
+const now = () => new Date().toISOString();
+const findVariable = (key: unknown) => data.variables.entries.find((v) => v.key === key);
+/** The version that is active now, or 0 for a key that does not exist yet; as the server compares it. */
+const activeNow = (key: string) => (findVariable(key) ? (data.variableActive.get(key) ?? 0) : 0);
+function newVersion(key: string, value: string, status: "active" | "candidate", note: unknown) {
+  const history = data.variableHistory.get(key) ?? [];
+  const version = (history[0]?.version ?? 0) + 1;
+  const active = status === "active";
+  if (active) for (const v of history) if (v.status === "active") v.status = "previous";
+  history.unshift({ version, status, createdAt: now(), activatedAt: active ? now() : null, activatedBy: active ? user : null,
+    activationNote: active && typeof note === "string" ? note : null, revokedAt: null, revokedBy: null, revocationNote: null, usedBy: [], value });
+  data.variableHistory.set(key, history);
+  if (active) data.variableActive.set(key, version);
+  return version;
+}
 on("PUT", "/api/variables", ({ body }) => {
   const key = String(body.key);
-  const existing = data.variables.entries.find((v) => v.key === key);
-  const visibility = (body.visibility as string) ?? existing?.visibility ?? "secret";
-  const value = visibility === "secret" ? null : ((body.value as string) ?? existing?.value ?? null);
-  const version = existing ? Number(existing.version) + (body.value !== null ? 1 : 0) : 1;
-  const entry = { key, visibility, description: (body.description as string) ?? existing?.description ?? null, version, latestVersion: version,
-    updatedAt: new Date().toISOString(), value, usedBy: existing?.usedBy ?? [], revoked: false };
-  if (existing) Object.assign(existing, entry);
-  else data.variables.entries.push(entry);
+  const existing = findVariable(key);
+  const expected = body.expectedCurrentVersion;
+  if (typeof expected === "number" && expected !== activeNow(key)) {
+    return problem(409, expected === 0 ? `'${key}' is already set.` : `v${activeNow(key)} of '${key}' became active meanwhile.`);
+  }
+  const visibility = (body.visibility as string | null) ?? existing?.visibility ?? "secret";
+  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null };
+  entry.description = (body.description as string | null) ?? null;
+  if (typeof body.value === "string") {
+    entry.visibility = visibility;
+    newVersion(key, body.value, "active", body.note);
+  }
+  if (!existing) data.variables.entries.push(entry);
+  data.summarizeVariable(entry);
   data.variables.missing = data.variables.missing.filter((m) => m.key !== key);
 });
 on("DELETE", "/api/variables", ({ query }) => {
-  data.variables.entries = data.variables.entries.filter((v) => v.key !== query.get("key"));
+  const key = query.get("key") ?? "";
+  data.variables.entries = data.variables.entries.filter((v) => v.key !== key);
+  data.variableActive.delete(key);
 });
 on("POST", "/api/variables/reveal", ({ body }) => ({
   values: (body.keys as string[]).map((key) => {
-    const existing = data.variables.entries.find((v) => v.key === key);
-    return { key, value: existing ? (existing.value ?? `mock-secret-of-${key}`) : null };
+    const active = (data.variableHistory.get(key) ?? []).find((v) => v.version === data.variableActive.get(key) && v.status === "active");
+    return { key, value: active?.value ?? null };
   }),
 }));
 on("POST", "/api/variables/candidates", ({ body }) => {
-  const existing = data.variables.entries.find((v) => v.key === body.key);
+  const existing = findVariable(body.key);
   if (!existing) return notFound("key");
-  existing.latestVersion = Number(existing.latestVersion) + 1;
-  return { version: existing.latestVersion };
+  const version = newVersion(existing.key, String(body.value), "candidate", null);
+  data.summarizeVariable(existing);
+  return { version };
 });
 on("POST", "/api/variables/promote", ({ body }) => {
-  const existing = data.variables.entries.find((v) => v.key === body.key);
+  const existing = findVariable(body.key);
   if (!existing) return notFound("key");
-  existing.version = Number(body.version);
+  if (body.expectedCurrentVersion !== activeNow(existing.key)) return problem(409, `v${activeNow(existing.key)} of '${existing.key}' became active meanwhile.`);
+  const history = data.variableHistory.get(existing.key) ?? [];
+  const target = history.find((v) => v.version === body.version);
+  if (!target || target.status === "revoked") return problem(400, `v${String(body.version)} cannot be made active.`);
+  for (const v of history) if (v.status === "active") v.status = "previous";
+  Object.assign(target, { status: "active", activatedAt: now(), activatedBy: user, activationNote: typeof body.verificationNote === "string" ? body.verificationNote : null });
+  data.variableActive.set(existing.key, target.version);
+  data.summarizeVariable(existing);
 });
-on("POST", "/api/variables/revoke", () => undefined);
+on("POST", "/api/variables/revoke", ({ body }) => {
+  const existing = findVariable(body.key);
+  const target = existing && (data.variableHistory.get(existing.key) ?? []).find((v) => v.version === body.version);
+  if (!existing || !target) return notFound("version");
+  Object.assign(target, { status: "revoked", revokedAt: now(), revokedBy: user, revocationNote: String(body.reason) });
+  data.summarizeVariable(existing);
+});
 
 // The lab repository
 

@@ -103,7 +103,7 @@ provisioning has not caught up either.
 ### Shared store values
 
 **Decided November 3, 2026.** One store key can hold a credential many guests use, such as a Git
-SSH key, a GitHub CLI `hosts.yml` or a GitLab CLI config. Promoting a new version of it reaches
+SSH key, a GitHub CLI `hosts.yml` or a GitLab CLI config. A new active version of it reaches
 every guest that names it. Such a key goes under `shared/`, by convention ([store keys](workflows.md#store-keys)):
 
 ```yaml
@@ -121,16 +121,16 @@ follows, the version active now, the one it was last attempted with, and **Run p
 run is owed. "Attempted" is deliberate: a run that failed still counts, because a failure is not
 repeated for the same version, so the machine may still hold the older value. Before revoking the
 old credential upstream, check that each guest's newest run with the new version succeeded. Each guest's own `policy.approval` applies, so a guest with manual approval waits
-for a person, as for a commit. A promotion configures every guest that follows the key, each
+for a person, as for a commit. A new active version configures every guest that follows the key, each
 independently: one failing does not hold back another.
 
 | Case | What happens |
 |---|---|
-| **Staged candidate.** | Nothing. Only the active version counts, so a candidate starts nothing until it is promoted |
-| **Rollback.** An older version is promoted again | A change like any other: one run, with that older version. As a commit rollback configures the commit it returned to, the value that is active is the one delivered |
-| **Revoked or deleted.** The active version is revoked, or the key is removed | Nothing. There is nothing to deliver, and a run would only block. The record keeps the version it had, so promoting a working version afterwards starts the run |
-| **Failure.** | Each version gets one automatic run. A failed run is not repeated for the same version: it waits for the next promotion, a commit, or a person |
-| **Active run.** Any run is active or waiting on the guest | The change waits, like a commit's. If that run is of the `setup` action and pinned the new version, because the promotion came before its first step went out, it delivered it, and nothing more is owed. Otherwise the run starts once the guest is free |
+| **Staged candidate.** | Nothing. Only the active version counts, so a candidate starts nothing until it is made active |
+| **Rollback.** An older version is made active again | A change like any other: one run, with that older version. As a commit rollback configures the commit it returned to, the value that is active is the one delivered |
+| **Revoked or deleted.** The active version is revoked, or the key is removed | Nothing. There is nothing to deliver, and a run would only block. The record keeps the version it had, so making a working version active afterwards starts the run |
+| **Failure.** | Each version gets one automatic run. A failed run is not repeated for the same version: it waits for the next active version, a commit, or a person |
+| **Active run.** Any run is active or waiting on the guest | The change waits, like a commit's. If that run is of the `setup` action and pinned the new version, because the new version became active before its first step went out, it delivered it, and nothing more is owed. Otherwise the run starts once the guest is free |
 | **Uncertain run.** | Holds the change with everything else until a person closes it |
 | **Schedule.** | A scheduled run, or one a person starts, of the `setup` action delivers what is active and is recorded the same way, so nothing is owed after it. A schedule of another action does not count, even though it takes the new version too: the `setup` action is the one that converges a guest. A firing while the store's run is active is skipped, as with any overlap |
 | **A commit too.** | A commit that changes the guest's configure inputs runs the action once, recording the store's versions at the same time, so one change of each makes one run |

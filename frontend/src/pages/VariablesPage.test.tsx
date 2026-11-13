@@ -21,6 +21,7 @@ function entry(overrides: Partial<Variable> = {}): Variable {
     updatedAt: createdAt,
     value: null,
     usedBy: ["recipe/site-a"],
+    lines: 1,
     ...overrides,
   };
 }
@@ -32,7 +33,7 @@ function version(number: number, status: string, overrides: Partial<VariableVers
     createdAt,
     activatedAt: status === "active" || status === "previous" ? createdAt : null,
     activatedBy: status === "active" || status === "previous" ? "alice" : null,
-    activationNote: status === "active" || status === "previous" ? "Checked the provider API externally" : null,
+    activationNote: status === "active" || status === "previous" ? "Checked the provider API" : null,
     revokedAt: status === "revoked" ? createdAt : null,
     revokedBy: status === "revoked" ? "bob" : null,
     revocationNote: status === "revoked" ? "Retired credential" : null,
@@ -41,140 +42,257 @@ function version(number: number, status: string, overrides: Partial<VariableVers
   };
 }
 
-function variables(current = entry()) {
-  return { entries: [current], missing: [], system: [] };
+function Address() {
+  return <output data-testid="address">{useLocation().search}</output>;
 }
 
-function renderPage() {
-  return renderAt(<VariablesPage />, { path: "/variables", route: "/variables" });
+function renderPage(route = "/variables") {
+  return renderAt(
+    <>
+      <VariablesPage />
+      <Address />
+    </>,
+    { path: "/variables", route },
+  );
 }
 
-async function openVersions(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: `Versions of ${key}` }));
-  return screen.getByRole("dialog", { name: `Versions of ${key}` });
-}
+const address = () => decodeURIComponent(screen.getByTestId("address").textContent ?? "");
+const list = () => screen.findByRole("region", { name: "Variable store entries" });
+const pane = () => screen.findByRole("region", { name: "Selected entry" });
+const tree = () => screen.getByRole("navigation", { name: "Folders" });
+const revealOf = (values: Record<string, string | null>) => ({ body }: { body: unknown }) => ({
+  values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: values[k] ?? null })),
+});
+const opened = (k: string) => `/variables?key=${encodeURIComponent(k)}`;
 
-describe("VariablesPage credential lifecycle", () => {
-  beforeEach(() => window.localStorage.setItem(viewStorageKey, "all"));
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    window.localStorage.clear();
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.localStorage.clear();
+});
+
+describe("VariablesPage entry pane", () => {
+  const store = (current = entry()) => ({ entries: [current, entry({ key: "proxmox/site-b/api-token", version: 1, latestVersion: 1 })], missing: [], system: [] });
+
+  it("opens the entry named in the address, with nothing open without one", async () => {
+    mockApi({ "GET /api/variables": () => store() });
+    const { unmount } = renderPage();
+    expect(await screen.findByText("No entry open")).toBeInTheDocument();
+    unmount();
+
+    renderPage(opened(key));
+    const selected = await pane();
+    expect(within(selected).getByRole("heading", { name: "api-token" })).toBeInTheDocument();
+    expect(within(selected).getByText("proxmox/site-a/")).toBeInTheDocument();
+    expect(within(selected).getByText("v3 active")).toBeInTheDocument();
+    expect(within(selected).getByText("Latest v4")).toBeInTheDocument();
   });
 
-  it("stages secret replacements without changing the active version or using PUT", async () => {
+  it("modifies a secret from its revealed value and saves it active with the note and the expected version", async () => {
     const user = userEvent.setup();
-    let latestVersion = 3;
+    let saved = false;
     const { requests } = mockApi({
-      "GET /api/variables": () => variables(entry({ latestVersion })),
-      "POST /api/variables/candidates": () => {
-        latestVersion = 4;
-        return { version: 4 };
+      "GET /api/variables": () => store(entry(saved ? { version: 5, latestVersion: 5 } : {})),
+      "POST /api/variables/reveal": revealOf({ [key]: "old-token" }),
+      "PUT /api/variables": () => {
+        saved = true;
       },
     });
-    renderPage();
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Modify" }));
 
-    await user.click(await screen.findByRole("button", { name: `Update ${key}` }));
-    const dialog = screen.getByRole("dialog", { name: `Update ${key}` });
-    expect(within(dialog).getByText(/active version stays unchanged/)).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText("Value"), "new-private-credential");
-    await user.click(within(dialog).getByRole("button", { name: "Stage candidate" }));
+    const box = await within(selected).findByLabelText("Value");
+    expect(box).toHaveValue("old-token");
+    expect(requests.filter((r) => r.path.endsWith("/reveal")).map((r) => r.body)).toEqual([{ keys: [key] }]);
+    expect(within(selected).getByRole("button", { name: "Save and make active" })).toBeDisabled();
+    expect(within(selected).getByText("Nothing is changed yet.")).toBeInTheDocument();
+    expect(within(selected).getByText(/Saved as v5 and active right away/)).toHaveTextContent("get a setup run");
 
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: `Update ${key}` })).not.toBeInTheDocument());
-    const table = screen.getByRole("region", { name: "Variable store entries" });
-    expect(within(table).getByText("v3")).toBeInTheDocument();
-    expect(await within(table).findByText("Latest: v4")).toBeInTheDocument();
-    expect(requests.find((request) => request.path.endsWith("/candidates"))?.body).toEqual({
+    await user.clear(box);
+    await user.type(box, "new-token");
+    expect(within(selected).getByText("1 line changed.")).toBeInTheDocument();
+    await user.type(within(selected).getByLabelText("Note, optional"), "Rotated after the audit");
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+
+    await waitFor(() => expect(requests.find((r) => r.method === "PUT")?.body).toEqual({
       key,
-      value: "new-private-credential",
+      value: "new-token",
+      visibility: "secret",
       description: "API credential",
-    });
-    expect(requests.some((request) => request.method === "PUT")).toBe(false);
-    expect(document.body).not.toHaveTextContent("new-private-credential");
-    expect(screen.queryByDisplayValue("new-private-credential")).not.toBeInTheDocument();
+      note: "Rotated after the audit",
+      expectedCurrentVersion: 3,
+    }));
+    await waitFor(() => expect(within(selected).queryByLabelText("Value")).not.toBeInTheDocument());
+    expect(address()).toBe(`?key=${key}`);
+    expect(await within(selected).findByText("v5 active")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("new-token");
+    expect(document.body).not.toHaveTextContent("old-token");
   });
 
-  it("keeps description-only secret updates on PUT without sending a value", async () => {
+  it("shows the server's message when another version became active meanwhile, and refreshes", async () => {
+    const user = userEvent.setup();
+    let loads = 0;
+    mockApi({
+      "GET /api/variables": () => {
+        loads += 1;
+        return store();
+      },
+      "PUT /api/variables": () => problem(409, "v4 became active meanwhile."),
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), "replacement");
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+
+    const alert = await within(selected).findByRole("alert");
+    expect(alert).toHaveTextContent("v4 became active meanwhile.");
+    expect(alert).not.toHaveTextContent("replacement");
+    const before = loads;
+    await user.click(within(alert).getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(loads).toBeGreaterThan(before));
+    expect(within(selected).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(selected).getByLabelText("Value")).toHaveValue("replacement");
+  });
+
+  it("asks before leaving an editor with changes, and stays when told to", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    window.localStorage.setItem(viewStorageKey, "all");
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), "unsaved");
+
+    const other = within(await list()).getByRole("link", { name: /site-b/ });
+    await user.click(other);
+    let dialog = screen.getByRole("dialog", { name: "Drop the changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
+    expect(address()).toBe(`?key=${key}`);
+    expect(within(selected).getByLabelText("Value")).toHaveValue("unsaved");
+
+    await user.click(within(selected).getByRole("button", { name: "Close the entry" }));
+    dialog = screen.getByRole("dialog", { name: "Drop the changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Drop them" }));
+    expect(address()).toBe("");
+    expect(await screen.findByText("No entry open")).toBeInTheDocument();
+  });
+
+  it("leaves an editor without changes at once", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    window.localStorage.setItem(viewStorageKey, "all");
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.click(within(await list()).getByRole("link", { name: /site-b/ }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(address()).toBe("?key=proxmox/site-b/api-token");
+  });
+
+  it("saves a replacement as a candidate without changing the active version", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({
-      "GET /api/variables": () => variables(),
-      "PUT /api/variables": () => undefined,
+      "GET /api/variables": () => store(),
+      "POST /api/variables/candidates": () => ({ version: 5 }),
     });
-    renderPage();
-    await user.click(await screen.findByRole("button", { name: `Update ${key}` }));
-    await user.clear(screen.getByLabelText(/Description/));
-    await user.type(screen.getByLabelText(/Description/), "Updated description");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), "candidate-value");
+    await user.click(within(selected).getByRole("button", { name: "Save as a candidate" }));
 
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(requests.find((request) => request.method === "PUT")?.body).toEqual({
+    expect(await within(selected).findByText(/Saved as v5, a candidate/)).toBeInTheDocument();
+    expect(requests.find((r) => r.path.endsWith("/candidates"))?.body).toEqual({ key, value: "candidate-value", description: "API credential" });
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
+    expect(document.body).not.toHaveTextContent("candidate-value");
+  });
+
+  it("never echoes a rejected value in errors", async () => {
+    const user = userEvent.setup();
+    const credential = "do-not-echo-this-credential";
+    mockApi({
+      "GET /api/variables": () => store(),
+      "PUT /api/variables": () => problem(400, `Rejected ${credential}`),
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), credential);
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+    const alert = await within(selected).findByRole("alert");
+    expect(alert).toHaveTextContent("The value could not be saved.");
+    expect(alert).not.toHaveTextContent(credential);
+  });
+
+  it("modifies a plain value without revealing anything", async () => {
+    const user = userEvent.setup();
+    const plain = entry({ key: "region", visibility: "plain", value: "eu-west", version: 1, latestVersion: 1 });
+    const { requests } = mockApi({ "GET /api/variables": () => ({ entries: [plain], missing: [], system: [] }), "PUT /api/variables": () => undefined });
+    renderPage(opened("region"));
+    const selected = await pane();
+    expect(within(selected).queryByRole("button", { name: "Versions" })).not.toBeInTheDocument();
+    expect(within(selected).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Modify" }));
+    const box = within(selected).getByLabelText("Value");
+    await user.clear(box);
+    await user.type(box, "eu-central");
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+    await waitFor(() => expect(requests.find((r) => r.method === "PUT")?.body).toMatchObject({ key: "region", value: "eu-central", visibility: "plain", expectedCurrentVersion: 1 }));
+    expect(requests.some((r) => r.path.endsWith("/reveal"))).toBe(false);
+  });
+
+  it("reports what changed in an env file and warns about its problems", async () => {
+    const user = userEvent.setup();
+    const env = "PORT=3000\nSMTP_PASSWORD=old";
+    mockApi({
+      "GET /api/variables": () => store(entry({ lines: 2 })),
+      "POST /api/variables/reveal": revealOf({ [key]: env }),
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    expect(within(selected).getByText("Concealed. 2 lines.")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Modify" }));
+    const box = await within(selected).findByLabelText("Value");
+    expect(within(selected).getByText("Reads as .env with 2 variables, no problems.")).toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, "PORT=3000{Enter}SMTP_PASSWORD=new{Enter}SMTP_PORT=587{Enter}oops");
+    expect(within(selected).getByText("SMTP_PASSWORD changed, SMTP_PORT added.")).toBeInTheDocument();
+    expect(within(selected).getByText("Line 4: there is no = between the name and the value")).toBeInTheDocument();
+    expect(within(selected).getByRole("button", { name: "Save and make active" })).toBeEnabled();
+  });
+
+  it("edits the description without sending a value", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({ "GET /api/variables": () => store(), "PUT /api/variables": () => undefined });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    expect(within(selected).getByText("recipe/site-a")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Edit the description" }));
+    const field = within(selected).getByRole("textbox", { name: "Description" });
+    await user.clear(field);
+    await user.type(field, "Updated description");
+    await user.click(within(selected).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests.find((r) => r.method === "PUT")?.body).toEqual({
       key,
       value: null,
       visibility: null,
       description: "Updated description",
-    });
-    expect(requests.some((request) => request.path.endsWith("/candidates"))).toBe(false);
+    }));
   });
+});
 
-  it("creates an initial active secret through PUT", async () => {
-    const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => ({ entries: [], missing: [], system: [] }),
-      "PUT /api/variables": () => undefined,
-    });
-    renderPage();
-    await user.click((await screen.findAllByRole("button", { name: "Set a variable" }))[0]);
-    await user.type(screen.getByLabelText("Key"), key);
-    await user.type(screen.getByLabelText("Value"), "initial-private-credential");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+describe("VariablesPage versions", () => {
+  const variables = (current = entry()) => ({ entries: [current], missing: [], system: [] });
 
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(requests.find((request) => request.method === "PUT")?.body).toEqual({
-      key,
-      value: "initial-private-credential",
-      visibility: "secret",
-      description: null,
-    });
-    await waitFor(() => expect(screen.queryByDisplayValue("initial-private-credential")).not.toBeInTheDocument());
-  });
+  async function openVersions(user: ReturnType<typeof userEvent.setup>) {
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Versions" }));
+    return selected;
+  }
 
-  it("still edits plain values immediately", async () => {
-    const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => variables(entry({ visibility: "plain", value: "old-value" })),
-      "PUT /api/variables": () => undefined,
-    });
-    renderPage();
-    await user.click(await screen.findByRole("button", { name: `Update ${key}` }));
-    await user.clear(screen.getByLabelText("Value"));
-    await user.type(screen.getByLabelText("Value"), "replacement");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(requests.find((request) => request.method === "PUT")?.body).toMatchObject({ key, value: "replacement", visibility: "plain" });
-    expect(screen.queryByRole("button", { name: `Versions of ${key}` })).not.toBeInTheDocument();
-  });
-
-  it("never echoes a rejected credential in errors and clears it when closed", async () => {
-    const user = userEvent.setup();
-    const credential = "do-not-echo-this-credential";
-    mockApi({
-      "GET /api/variables": () => variables(),
-      "POST /api/variables/candidates": () => problem(400, `Rejected ${credential}`),
-    });
-    renderPage();
-    await user.click(await screen.findByRole("button", { name: `Update ${key}` }));
-    await user.type(screen.getByLabelText("Value"), credential);
-    await user.click(screen.getByRole("button", { name: "Stage candidate" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("The candidate could not be staged.");
-    expect(screen.getByRole("alert")).not.toHaveTextContent(credential);
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    await user.click(screen.getByRole("button", { name: `Update ${key}` }));
-    expect(screen.getByLabelText("Value")).toHaveValue("");
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("requires an operator confirmation note and promotes against the active, not latest, version", async () => {
+  it("makes a candidate active with an optional note, against the active version", async () => {
     const user = userEvent.setup();
     let promoted = false;
     const { requests } = mockApi({
@@ -185,173 +303,196 @@ describe("VariablesPage credential lifecycle", () => {
         version(2, "previous"),
         version(1, "revoked"),
       ],
-      "POST /api/variables/promote": () => { promoted = true; },
+      "POST /api/variables/promote": () => {
+        promoted = true;
+      },
     });
-    renderPage();
-    const dialog = await openVersions(user);
-    await user.click(await within(dialog).findByRole("button", { name: "Promote v4" }));
-    expect(within(dialog).getByText("Operator confirmation, not automated verification")).toBeInTheDocument();
-    expect(within(dialog).getByText(/confirmation of externally performed checks/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/does not automatically verify the credential/)).toBeInTheDocument();
-    const confirm = within(dialog).getByRole("button", { name: "Confirm promotion" });
-    expect(confirm).toBeDisabled();
-    await user.type(within(dialog).getByLabelText(/Operator confirmation note/), "   ");
-    expect(confirm).toBeDisabled();
-    expect(requests.some((request) => request.path.endsWith("/promote"))).toBe(false);
-    await user.type(within(dialog).getByLabelText(/Operator confirmation note/), "Provider API checks completed ");
-    await user.click(confirm);
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    expect(await within(selected).findByText("run/example/step")).toBeInTheDocument();
+    expect(within(selected).getAllByText(/alice/).length).toBeGreaterThan(0);
+    expect(within(selected).getByText("Retired credential")).toBeInTheDocument();
+    expect(within(selected).queryByRole("button", { name: "Revoke v1" })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(requests.some((request) => request.path.endsWith("/promote"))).toBe(true));
-    expect(requests.find((request) => request.path.endsWith("/promote"))?.body).toEqual({
+    await user.click(within(selected).getByRole("button", { name: "Make active v4" }));
+    await user.click(within(selected).getByRole("button", { name: "Make v4 active" }));
+    await waitFor(() => expect(requests.find((r) => r.path.endsWith("/promote"))?.body).toEqual({
       key,
       version: 4,
       expectedCurrentVersion: 3,
-      verificationNote: "Provider API checks completed",
-    });
-    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Confirm promotion" })).not.toBeInTheDocument());
-    expect(within(screen.getByRole("region", { name: "Variable store entries" })).getByText("v4")).toBeInTheDocument();
-    expect(new URLSearchParams(requests.find((request) => request.path.endsWith("/versions"))?.search).get("key")).toBe(key);
-    expect(within(dialog).getByText("run/example/step")).toBeInTheDocument();
-    expect(within(dialog).getAllByText("alice").length).toBeGreaterThan(0);
-    expect(within(dialog).getByText("bob")).toBeInTheDocument();
-    expect(within(dialog).getByText("Retired credential")).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Revoke v1" })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Promote v1" })).not.toBeInTheDocument();
+      verificationNote: null,
+    }));
+    expect(new URLSearchParams(requests.find((r) => r.path.endsWith("/versions"))?.search).get("key")).toBe(key);
+    expect(await within(selected).findByText("v4 active")).toBeInTheDocument();
   });
 
-  it("shows promotion conflicts and lets the operator reload before retrying", async () => {
+  it("makes a previous version active again with a note", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/variables": () => variables(),
+      "GET /api/variables/versions": () => [version(3, "active"), version(2, "previous")],
+      "POST /api/variables/promote": () => undefined,
+    });
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    await user.click(await within(selected).findByRole("button", { name: "Make active again v2" }));
+    const note = within(selected).getByLabelText("Note, optional");
+    expect(note).toHaveFocus();
+    await user.type(note, "Rolling back");
+    await user.click(within(selected).getByRole("button", { name: "Make v2 active" }));
+    await waitFor(() => expect(requests.find((r) => r.path.endsWith("/promote"))?.body).toEqual({
+      key,
+      version: 2,
+      expectedCurrentVersion: 3,
+      verificationNote: "Rolling back",
+    }));
+  });
+
+  it("shows a conflict when making a version active, and reloads", async () => {
     const user = userEvent.setup();
     mockApi({
       "GET /api/variables": () => variables(),
       "GET /api/variables/versions": () => [version(4, "candidate"), version(3, "active")],
       "POST /api/variables/promote": () => problem(409, "Active version changed"),
     });
-    renderPage();
-    const dialog = await openVersions(user);
-    await user.click(await within(dialog).findByRole("button", { name: "Promote v4" }));
-    await user.type(within(dialog).getByLabelText(/Operator confirmation note/), "External checks done");
-    await user.click(within(dialog).getByRole("button", { name: "Confirm promotion" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The version could not be promoted.");
-    expect(within(dialog).getByRole("alert")).toHaveTextContent(/Reload versions and review/);
-    await user.click(within(dialog).getByRole("button", { name: "Reload versions" }));
-    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText(/Operator confirmation note/)).not.toBeInTheDocument();
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    await user.click(await within(selected).findByRole("button", { name: "Make active v4" }));
+    await user.click(within(selected).getByRole("button", { name: "Make v4 active" }));
+    const alert = await within(selected).findByRole("alert");
+    expect(alert).toHaveTextContent("Active version changed");
+    await user.click(within(alert).getByRole("button", { name: "Refresh" }));
+    expect(within(selected).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(selected).queryByLabelText("Note, optional")).not.toBeInTheDocument();
   });
 
-  it("allows an explicit rollback promotion of a non-revoked previous version", async () => {
-    const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => variables(),
-      "GET /api/variables/versions": () => [version(4, "candidate"), version(3, "active"), version(2, "previous")],
-      "POST /api/variables/promote": () => undefined,
-    });
-    renderPage();
-    const dialog = await openVersions(user);
-    await user.click(await within(dialog).findByRole("button", { name: "Promote v2" }));
-    const note = within(dialog).getByLabelText(/Operator confirmation note/);
-    expect(note).toHaveFocus();
-    await user.type(note, "Externally checked the previous credential for rollback");
-    await user.click(within(dialog).getByRole("button", { name: "Confirm promotion" }));
-
-    await waitFor(() => expect(requests.find((request) => request.path.endsWith("/promote"))?.body).toEqual({
-      key,
-      version: 2,
-      expectedCurrentVersion: 3,
-      verificationNote: "Externally checked the previous credential for rollback",
-    }));
-  });
-
-  it("requires a revocation reason, warns about delivered and upstream credentials, and refreshes status", async () => {
+  it("requires a reason to revoke and shows the revoked state", async () => {
     const user = userEvent.setup();
     let revoked = false;
     const { requests } = mockApi({
-      "GET /api/variables": () => variables(entry({ revoked })),
+      "GET /api/variables": () => variables(entry({ revoked, lines: revoked ? null : 1 })),
       "GET /api/variables/versions": () => [version(4, "candidate"), version(3, revoked ? "revoked" : "active")],
-      "POST /api/variables/revoke": () => { revoked = true; },
+      "POST /api/variables/revoke": () => {
+        revoked = true;
+      },
     });
-    renderPage();
-    const dialog = await openVersions(user);
-    await user.click(await within(dialog).findByRole("button", { name: "Revoke v3" }));
-    expect(within(dialog).getByText(/Revocation blocks future assignments/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/cannot retract already delivered credentials/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/does not revoke the upstream provider token/)).toBeInTheDocument();
-    const confirm = within(dialog).getByRole("button", { name: "Confirm revocation" });
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    await user.click(await within(selected).findByRole("button", { name: "Revoke v3" }));
+    expect(within(selected).getByText(/cannot retract already delivered credentials/)).toBeInTheDocument();
+    const confirm = within(selected).getByRole("button", { name: "Revoke v3" });
     expect(confirm).toBeDisabled();
-    await user.type(within(dialog).getByLabelText(/Revocation reason/), "   ");
+    await user.type(within(selected).getByLabelText("Reason for revoking"), "   ");
     expect(confirm).toBeDisabled();
-    await user.type(within(dialog).getByLabelText(/Revocation reason/), "Credential retired ");
+    await user.type(within(selected).getByLabelText("Reason for revoking"), "Credential retired ");
     await user.click(confirm);
+    await waitFor(() => expect(requests.find((r) => r.path.endsWith("/revoke"))?.body).toEqual({ key, version: 3, reason: "Credential retired" }));
+    expect(await within(selected).findByText("The active version is revoked")).toBeInTheDocument();
+    expect(within(selected).getByText("v3 revoked")).toBeInTheDocument();
+  });
+});
 
-    await waitFor(() => expect(requests.some((request) => request.path.endsWith("/revoke"))).toBe(true));
-    expect(requests.find((request) => request.path.endsWith("/revoke"))?.body).toEqual({
-      key,
-      version: 3,
-      reason: "Credential retired",
-    });
-    expect(await within(dialog).findByText("The active version is revoked")).toBeInTheDocument();
-    expect(within(dialog).getByText("run/example/step")).toBeInTheDocument();
-    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Revoke v3" })).not.toBeInTheDocument());
+describe("VariablesPage new entry", () => {
+  const store = () => ({
+    entries: [entry(), entry({ key: "proxmox/site-a/ca", visibility: "plain", value: "cert", version: 1, latestVersion: 1 })],
+    missing: [{ key: "dns/technitium/admin-password", usedBy: ["guest/krb-dns-01"] }],
+    system: [],
   });
 
-  it("keeps failed revocations visible and clears the reason on close", async () => {
+  it("starts inside the current folder, saves with the key required to be new, and opens the new key", async () => {
     const user = userEvent.setup();
-    mockApi({
-      "GET /api/variables": () => variables(),
-      "GET /api/variables/versions": () => [version(3, "active")],
-      "POST /api/variables/revoke": () => problem(500, "Unavailable"),
-    });
-    renderPage();
-    const dialog = await openVersions(user);
-    await user.click(await within(dialog).findByRole("button", { name: "Revoke v3" }));
-    await user.type(within(dialog).getByLabelText(/Revocation reason/), "Retired");
-    await user.click(within(dialog).getByRole("button", { name: "Confirm revocation" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The version could not be revoked.");
-    expect(within(dialog).getByLabelText(/Revocation reason/)).toHaveValue("Retired");
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
-    const reopened = await openVersions(user);
-    await user.click(await within(reopened).findByRole("button", { name: "Revoke v3" }));
-    expect(within(reopened).getByLabelText(/Revocation reason/)).toHaveValue("");
-    expect(within(reopened).queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("excludes system keys from entries, missing keys, history controls, and new keys", async () => {
-    const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => ({
-        entries: [entry(), entry({ key: "system/entry" })],
-        missing: [{ key: "system/missing", usedBy: [] }],
-        system: [{ key: "system/server", visibility: "secret", updatedAt: createdAt }],
-      }),
-    });
-    renderPage();
-    await screen.findByRole("button", { name: `Update ${key}` });
-    expect(document.body).not.toHaveTextContent("system/entry");
-    expect(document.body).not.toHaveTextContent("system/missing");
-    expect(document.body).not.toHaveTextContent("system/server");
+    const { requests } = mockApi({ "GET /api/variables": () => store(), "PUT /api/variables": () => undefined });
+    renderPage("/variables?folder=proxmox/site-a");
+    await list();
     await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    await user.type(screen.getByLabelText("Key"), "system/forbidden");
-    await user.type(screen.getByLabelText("Value"), "never-sent");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(requests.every((request) => request.method === "GET")).toBe(true);
+    const form = await screen.findByRole("region", { name: "New entry" });
+    const field = within(form).getByLabelText<HTMLInputElement>("Key");
+    expect(field).toHaveValue("proxmox/site-a/");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe("proxmox/site-a/".length);
+    await user.type(within(form).getByLabelText("Value"), "private-value");
+    expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await user.type(field, "backup/token");
+    await user.click(within(form).getByRole("button", { name: "Plain" }));
+    await user.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests.find((r) => r.method === "PUT")?.body).toEqual({
+      key: "proxmox/site-a/backup/token",
+      value: "private-value",
+      visibility: "plain",
+      description: null,
+      expectedCurrentVersion: 0,
+    }));
+    await waitFor(() => expect(address()).toBe("?folder=proxmox/site-a/backup&key=proxmox/site-a/backup/token"));
+  });
+
+  it("offers to open a key that is already set instead of saving it", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage("/variables?folder=proxmox/site-a");
+    await list();
+    await user.click(screen.getByRole("button", { name: "Set a variable" }));
+    const form = await screen.findByRole("region", { name: "New entry" });
+    await user.type(within(form).getByLabelText("Key"), "ca");
+    await user.type(within(form).getByLabelText("Value"), "x");
+    expect(within(form).getByText("This key is already set.")).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(within(form).getByRole("button", { name: "Open it" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Drop the changes?" })).getByRole("button", { name: "Drop them" }));
+    expect(address()).toBe("?folder=proxmox/site-a&key=proxmox/site-a/ca");
+  });
+
+  it("starts from a key that is referenced but not set, from every folder", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage("/variables?folder=proxmox/site-a");
+    const strip = await screen.findByRole("region", { name: "Referenced keys that are not set" });
+    expect(strip).toHaveTextContent("1 key is referenced but not set");
+    expect(strip).toHaveTextContent("dns/technitium/admin-password");
+    expect(strip).toHaveTextContent("Used by guest/krb-dns-01");
+    await user.type(screen.getByRole("searchbox", { name: "Search all keys" }), "nothing-matches");
+    expect(strip).toHaveTextContent("dns/technitium/admin-password");
+    await user.click(within(strip).getByRole("button", { name: "Set dns/technitium/admin-password" }));
+    expect(within(await screen.findByRole("region", { name: "New entry" })).getByLabelText("Key")).toHaveValue("dns/technitium/admin-password");
+  });
+
+  it("starts from an empty key at the root and in All keys, and refuses keys the server would", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({ "GET /api/variables": () => store() });
+    renderPage();
+    await list();
+    await user.click(screen.getByRole("button", { name: "Set a variable" }));
+    let form = await screen.findByRole("region", { name: "New entry" });
+    expect(within(form).getByLabelText("Key")).toHaveValue("");
+    await user.click(within(form).getAllByRole("button", { name: "Cancel" })[0]);
+
+    await user.click(screen.getByRole("button", { name: "All keys" }));
+    await user.click(screen.getByRole("button", { name: "Set a variable" }));
+    form = await screen.findByRole("region", { name: "New entry" });
+    const field = within(form).getByLabelText("Key");
+    expect(field).toHaveValue("");
+    await user.type(within(form).getByLabelText("Value"), "never-sent");
+    await user.type(field, "proxmox/.hidden");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.clear(field);
+    await user.type(field, "system/forbidden");
+    expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(requests.every((r) => r.method === "GET")).toBe(true);
   });
 });
 
 describe("VariablesPage folders", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    window.localStorage.clear();
-  });
-
   const siteAToken = "proxmox/site-a/api-token";
   const siteACa = "proxmox/site-a/ca";
   const siteBToken = "proxmox/site-b/api-token";
 
-  function store(overrides: { entries?: Variable[]; missing?: { key: string; usedBy: string[] }[] } = {}) {
+  function store(overrides: { entries?: Variable[] } = {}) {
     return {
       entries: [
         entry({ key: siteAToken }),
         entry({ key: siteACa, visibility: "plain", value: "visible-certificate", description: "Root CA", version: 1, latestVersion: 1, usedBy: [] }),
-        entry({ key: siteBToken, version: 2, latestVersion: 2, revoked: true, description: null, usedBy: ["recipe/site-b"] }),
+        entry({ key: siteBToken, version: 2, latestVersion: 2, revoked: true, lines: null, description: null, usedBy: ["recipe/site-b"] }),
         entry({ key: "solo", visibility: "plain", value: "1", description: null, version: 1, latestVersion: 1, usedBy: [] }),
       ],
       missing: [],
@@ -360,222 +501,149 @@ describe("VariablesPage folders", () => {
     };
   }
 
-  function Address() {
-    return <output data-testid="address">{useLocation().search}</output>;
-  }
-
-  function renderFolder(route = "/variables") {
-    return renderAt(
-      <>
-        <VariablesPage />
-        <Address />
-      </>,
-      { path: "/variables", route },
-    );
-  }
-
-  const entriesTable = () => screen.findByRole("region", { name: "Variable store entries" });
-  const address = () => screen.getByTestId("address").textContent;
-
   it("opens at the root with folders first and a single-segment key as an entry", async () => {
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder();
-    const rows = within(await entriesTable()).getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("proxmox");
-    expect(rows[1]).toHaveTextContent("3 entries");
-    expect(rows[2]).toHaveTextContent("solo");
+    renderPage();
+    const items = within(await list()).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("proxmox");
+    expect(items[0]).toHaveTextContent("3 entries");
+    expect(items[1]).toHaveTextContent("solo");
     expect(screen.getByRole("button", { name: "Folders" })).toHaveAttribute("aria-current", "page");
+    expect(within(tree()).getByRole("link", { name: /Entries/ })).toHaveAttribute("aria-current", "page");
     expect(document.body).not.toHaveTextContent(siteAToken);
   });
 
-  it("moves through folders by row and path, and opens one from a link", async () => {
+  it("moves through folders by the list, the tree and the path", async () => {
     const user = userEvent.setup();
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder();
-    await user.click(await screen.findByRole("link", { name: "proxmox" }));
-    await user.click(screen.getByRole("link", { name: "site-a" }));
+    renderPage();
+    await user.click(within(await list()).getByRole("link", { name: /proxmox/ }));
+    await user.click(within(await list()).getByRole("link", { name: /site-a/ }));
     expect(address()).toBe("?folder=proxmox/site-a");
     const here = screen.getByRole("navigation", { name: "Folder" });
     expect(within(here).getByText("site-a")).toHaveAttribute("aria-current", "page");
-    expect(await within(await entriesTable()).findByText("api-token")).toHaveAttribute("title", siteAToken);
+    expect(within(tree()).getByRole("link", { name: /site-a/ })).toHaveAttribute("aria-current", "page");
+    expect(within(await list()).getByRole("link", { name: /api-token/ })).toHaveAttribute("title", siteAToken);
 
-    await user.click(within(here).getByRole("link", { name: "proxmox" }));
-    expect(screen.getByRole("link", { name: "site-b" })).toBeInTheDocument();
+    await user.click(within(tree()).getByRole("link", { name: /site-b/ }));
+    expect(address()).toBe("?folder=proxmox/site-b");
     await user.click(within(screen.getByRole("navigation", { name: "Folder" })).getByRole("link", { name: "Entries" }));
-    expect(screen.getByRole("link", { name: "proxmox" })).toBeInTheDocument();
+    expect(address()).toBe("?folder=");
     expect(screen.queryByRole("navigation", { name: "Folder" })).not.toBeInTheDocument();
+  });
+
+  it("expands and collapses folders in the tree", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage();
+    await list();
+    expect(within(tree()).queryByRole("link", { name: /site-a/ })).not.toBeInTheDocument();
+    await user.click(within(tree()).getByRole("button", { name: "Expand proxmox" }));
+    expect(within(tree()).getByRole("link", { name: /site-a 2/ })).toBeInTheDocument();
+    await user.click(within(tree()).getByRole("button", { name: "Collapse proxmox" }));
+    expect(within(tree()).queryByRole("link", { name: /site-a/ })).not.toBeInTheDocument();
+  });
+
+  it("opens an entry from the list, marks it, and keeps the folder in the address", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage("/variables?folder=proxmox/site-a");
+    const rows = await list();
+    expect(within(within(rows).getByRole("link", { name: /api-token/ })).getByText("Concealed")).toBeInTheDocument();
+    expect(within(rows).getByText("visible-certificate")).toBeInTheDocument();
+    await user.click(within(rows).getByRole("link", { name: /api-token/ }));
+    expect(address()).toBe(`?folder=proxmox/site-a&key=${siteAToken}`);
+    expect(within(rows).getByRole("link", { name: /api-token/ })).toHaveAttribute("aria-current", "true");
+    expect(within(await pane()).getByRole("heading", { name: "api-token" })).toBeInTheDocument();
+  });
+
+  it("copies the full key from the pane", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("isSecureContext", true);
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage(opened(siteAToken));
+    await user.click(within(await pane()).getByRole("button", { name: `Copy ${siteAToken}` }));
+    expect(await navigator.clipboard.readText()).toBe(siteAToken);
   });
 
   it("shows a key that is also a folder as both", async () => {
     const consoleError = vi.spyOn(console, "error");
     mockApi({ "GET /api/variables": () => store({ entries: [entry({ key: "a/b" }), entry({ key: "a/b/c" })] }) });
-    renderFolder("/variables?folder=a");
-    const table = await entriesTable();
-    expect(within(table).getByRole("link", { name: "b" })).toBeInTheDocument();
-    expect(within(table).getByRole("button", { name: "Update a/b" })).toBeInTheDocument();
+    renderPage("/variables?folder=a");
+    const rows = await list();
+    expect(within(rows).getByRole("link", { name: /^b 1 entry/ })).toBeInTheDocument();
+    expect(within(rows).getByRole("link", { name: /^b .*v3/ })).toHaveAttribute("title", "a/b");
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
 
-  it("rolls revoked entries and newer versions up to folder rows", async () => {
+  it("rolls revoked entries and newer versions up to folder rows, and marks them on entries", async () => {
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder("/variables?folder=proxmox");
-    const table = await entriesTable();
-    const siteA = within(table).getByRole("row", { name: /site-a/ });
+    renderPage("/variables?folder=proxmox");
+    const rows = await list();
+    const siteA = within(rows).getByRole("link", { name: /site-a/ });
     expect(within(siteA).getByText("1 with a newer version")).toBeInTheDocument();
     expect(within(siteA).queryByText(/revoked/)).not.toBeInTheDocument();
-    const siteB = within(table).getByRole("row", { name: /site-b/ });
+    const siteB = within(rows).getByRole("link", { name: /site-b/ });
     expect(siteB).toHaveTextContent("1 entry");
     expect(within(siteB).getByText("1 revoked")).toBeInTheDocument();
-  });
-
-  it("keeps secrets concealed and full keys on the controls inside a folder", async () => {
-    const user = userEvent.setup();
-    vi.stubGlobal("isSecureContext", true);
-    mockApi({
-      "GET /api/variables": () => store(),
-      "GET /api/variables/versions": () => [version(3, "active")],
-    });
-    renderFolder("/variables?folder=proxmox/site-a");
-    const table = await entriesTable();
-    expect(within(within(table).getByRole("row", { name: /api-token/ })).getByText("Concealed")).toBeInTheDocument();
-    expect(within(table).getByText("visible-certificate")).toBeInTheDocument();
-
-    await user.click(within(table).getByRole("button", { name: `Copy ${siteAToken}` }));
-    expect(await navigator.clipboard.readText()).toBe(siteAToken);
-
-    await user.click(within(table).getByRole("button", { name: `Versions of ${siteAToken}` }));
-    expect(screen.getByRole("dialog", { name: `Versions of ${siteAToken}` })).toBeInTheDocument();
-  });
-
-  it("shows keys that are not set from every folder and during a search", async () => {
-    const user = userEvent.setup();
-    const missing = "dns/technitium/admin-password";
-    mockApi({ "GET /api/variables": () => store({ missing: [{ key: missing, usedBy: ["guest/krb-dns-01"] }] }) });
-    renderFolder("/variables?folder=proxmox/site-a");
-    const card = await screen.findByRole("region", { name: "Referenced keys that are not set" });
-    expect(card).toHaveTextContent(missing);
-    await user.type(screen.getByRole("searchbox", { name: "Search all keys" }), "nothing-matches-this");
-    expect(card).toHaveTextContent(missing);
-
-    await user.click(within(card).getByRole("button", { name: "Set" }));
-    expect(screen.getByLabelText("Key")).toHaveValue(missing);
   });
 
   it("remembers All keys with only the view's name, and lets a folder link override it once", async () => {
     const user = userEvent.setup();
     mockApi({ "GET /api/variables": () => store() });
-    const { unmount } = renderFolder();
+    const { unmount } = renderPage();
     await user.click(await screen.findByRole("button", { name: "All keys" }));
-    expect(within(await entriesTable()).getByText(siteAToken)).toBeInTheDocument();
+    expect(within(await list()).getByRole("link", { name: /api-token.*proxmox\/site-a\// })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Folders" })).not.toBeInTheDocument();
     expect(window.localStorage.length).toBe(1);
     expect(window.localStorage.getItem(viewStorageKey)).toBe("all");
     unmount();
 
-    const again = renderFolder();
-    expect(within(await entriesTable()).getByText(siteAToken)).toBeInTheDocument();
+    const again = renderPage();
+    expect(await screen.findByText("4 keys")).toBeInTheDocument();
     again.unmount();
 
-    renderFolder("/variables?folder=proxmox");
-    expect(await screen.findByRole("link", { name: "site-a" })).toBeInTheDocument();
-    expect(window.localStorage.getItem(viewStorageKey)).toBe("all");
+    renderPage("/variables?folder=proxmox");
+    expect(within(await list()).getByRole("link", { name: /site-a/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "All keys" }));
     expect(address()).toBe("");
-    expect(within(await entriesTable()).getByText(siteAToken)).toBeInTheDocument();
   });
 
   it("ignores a stored view it does not know", async () => {
     window.localStorage.setItem(viewStorageKey, "something-else");
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder();
-    expect(await screen.findByRole("link", { name: "proxmox" })).toBeInTheDocument();
+    renderPage();
+    expect(within(await list()).getByRole("link", { name: /proxmox/ })).toBeInTheDocument();
   });
 
   it("searches every folder by key, description, and consumer, never values or the URL", async () => {
     const user = userEvent.setup();
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder("/variables?folder=proxmox/site-a");
-    await entriesTable();
+    renderPage("/variables?folder=proxmox/site-a");
+    await list();
     const box = screen.getByRole("searchbox", { name: "Search all keys" });
 
     await user.type(box, "SITE-B");
-    let table = await entriesTable();
-    expect(within(table).getByText(siteBToken)).toBeInTheDocument();
-    expect(within(table).queryByText(siteAToken)).not.toBeInTheDocument();
+    expect(within(await list()).getByRole("link", { name: /api-token/ })).toHaveAttribute("title", siteBToken);
     expect(screen.queryByRole("navigation", { name: "Folder" })).not.toBeInTheDocument();
     expect(screen.getByText("1 of 4")).toBeInTheDocument();
     expect(address()).toBe("?folder=proxmox/site-a");
 
     await user.clear(box);
     await user.type(box, "root ca");
-    expect(within(await entriesTable()).getByText(siteACa)).toBeInTheDocument();
+    expect(within(await list()).getByRole("link", { name: /ca/ })).toHaveAttribute("title", siteACa);
 
     await user.clear(box);
     await user.type(box, "recipe/site-b");
-    expect(within(await entriesTable()).getByText(siteBToken)).toBeInTheDocument();
+    expect(within(await list()).getByRole("link", { name: /api-token/ })).toHaveAttribute("title", siteBToken);
 
     await user.clear(box);
     await user.type(box, "visible-certificate");
     expect(screen.getByText("No key matches this search")).toBeInTheDocument();
-    expect(address()).toBe("?folder=proxmox/site-a");
 
     await user.clear(box);
-    table = await entriesTable();
-    expect(within(table).getByText("api-token")).toHaveAttribute("title", siteAToken);
     expect(screen.getByRole("navigation", { name: "Folder" })).toBeInTheDocument();
-  });
-
-  it("starts a new key inside the current folder", async () => {
-    const user = userEvent.setup();
-    const { requests } = mockApi({ "GET /api/variables": () => store(), "PUT /api/variables": () => undefined });
-    renderFolder("/variables?folder=proxmox/site-a");
-    await entriesTable();
-    await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    const field = screen.getByLabelText<HTMLInputElement>("Key");
-    expect(field).toHaveValue("proxmox/site-a/");
-    expect(field).toHaveFocus();
-    expect(field.selectionStart).toBe("proxmox/site-a/".length);
-    expect(field).not.toHaveAttribute("aria-invalid");
-    expect(screen.getByText(/Keys under system\/ belong/)).toHaveClass("field__hint");
-    await user.type(screen.getByLabelText("Value"), "private-value");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-
-    await user.type(field, "backup/token");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(requests.find((request) => request.method === "PUT")?.body).toMatchObject({ key: "proxmox/site-a/backup/token" });
-  });
-
-  it("starts from an empty key at the root, in All keys, and during a search", async () => {
-    const user = userEvent.setup();
-    mockApi({ "GET /api/variables": () => store() });
-    renderFolder("/variables");
-    await entriesTable();
-    await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    expect(screen.getByLabelText("Key")).toHaveValue("");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    await user.click(screen.getByRole("link", { name: "proxmox" }));
-    await user.type(screen.getByRole("searchbox", { name: "Search all keys" }), "site");
-    await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    expect(screen.getByLabelText("Key")).toHaveValue("");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    await user.click(screen.getByRole("button", { name: "All keys" }));
-    await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    expect(screen.getByLabelText("Key")).toHaveValue("");
-  });
-
-  it("refuses a segment the server would reject", async () => {
-    const user = userEvent.setup();
-    mockApi({ "GET /api/variables": () => store() });
-    renderFolder();
-    await entriesTable();
-    await user.click(screen.getByRole("button", { name: "Set a variable" }));
-    await user.type(screen.getByLabelText("Key"), "proxmox/.hidden");
-    await user.type(screen.getByLabelText("Value"), "value");
-    expect(screen.getByLabelText("Key")).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it.each(["system", "system/git"])("never opens the reserved scope from ?folder=%s", async (folder) => {
@@ -587,29 +655,29 @@ describe("VariablesPage folders", () => {
         system: [{ key: "system/git/credential", visibility: "secret", updatedAt: createdAt }],
       }),
     });
-    renderFolder(`/variables?folder=${folder}`);
-    expect(await screen.findByRole("link", { name: "proxmox" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "system" })).not.toBeInTheDocument();
+    renderPage(`/variables?folder=${folder}`);
+    expect(within(await list()).getByRole("link", { name: /proxmox/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^system/ })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("credential");
-    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Referenced keys that are not set" })).not.toBeInTheDocument();
   });
 
   it("lists a single-segment key named system like any other", async () => {
     mockApi({ "GET /api/variables": () => store({ entries: [entry({ key: "system" }), entry({ key: "System/x" })] }) });
-    renderFolder();
-    const table = await entriesTable();
-    expect(within(table).getByRole("button", { name: "Update system" })).toBeInTheDocument();
-    expect(within(table).getByRole("link", { name: "System" })).toBeInTheDocument();
+    renderPage();
+    const rows = await list();
+    expect(within(rows).getByRole("link", { name: /^system .*v3/ })).toBeInTheDocument();
+    expect(within(rows).getByRole("link", { name: /^System/ })).toBeInTheDocument();
   });
 
   it("falls back to the deepest folder that still exists", async () => {
     mockApi({ "GET /api/variables": () => store() });
-    renderFolder("/variables?folder=proxmox/site-a/gone/deeper");
-    expect(await within(await entriesTable()).findByText("api-token")).toHaveAttribute("title", siteAToken);
+    renderPage("/variables?folder=proxmox/site-a/gone/deeper");
+    expect(within(await list()).getByRole("link", { name: /api-token/ })).toHaveAttribute("title", siteAToken);
     expect(within(screen.getByRole("navigation", { name: "Folder" })).getByText("site-a")).toHaveAttribute("aria-current", "page");
   });
 
-  it("deletes a key that nothing uses, whatever its history", async () => {
+  it("deletes a key that nothing uses and closes it", async () => {
     const user = userEvent.setup();
     let entries = store().entries;
     const { requests } = mockApi({
@@ -618,146 +686,102 @@ describe("VariablesPage folders", () => {
         entries = entries.filter((e) => e.key !== siteACa);
       },
     });
-    renderFolder("/variables?folder=proxmox/site-a");
-    await user.click(await screen.findByRole("button", { name: `Delete ${siteACa}` }));
+    renderPage(`/variables?folder=proxmox/site-a&key=${siteACa}`);
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    await user.click(within(selected).getByRole("button", { name: `Delete ${siteACa}` }));
     const dialog = screen.getByRole("dialog", { name: `Delete ${siteACa}?` });
     expect(dialog).toHaveTextContent("What each run was given stays on record");
     expect(dialog).not.toHaveTextContent("It is still used by these");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(requests.find((r) => r.method === "DELETE")?.search).toBe(`?key=${encodeURIComponent(siteACa)}`);
-    expect(screen.queryByTitle(siteACa)).not.toBeInTheDocument();
+    expect(address()).toBe("?folder=proxmox/site-a");
+    await waitFor(() => expect(screen.queryByTitle(siteACa)).not.toBeInTheDocument());
   });
 
   it("names what still uses a key, and shows the server's exact reason when deleting it is refused", async () => {
     const user = userEvent.setup();
     const reason = `'${siteBToken}' is still used by recipe/site-b, run #12. Delete it once nothing uses it.`;
-    mockApi({
-      "GET /api/variables": () => store(),
-      "DELETE /api/variables": () => problem(400, reason),
-    });
-    renderFolder("/variables?folder=proxmox/site-b");
-    await user.click(await screen.findByRole("button", { name: `Delete ${siteBToken}` }));
+    mockApi({ "GET /api/variables": () => store(), "DELETE /api/variables": () => problem(400, reason) });
+    renderPage(opened(siteBToken));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    await user.click(within(selected).getByRole("button", { name: `Delete ${siteBToken}` }));
     const dialog = screen.getByRole("dialog", { name: `Delete ${siteBToken}?` });
     expect(dialog).toHaveTextContent("It is still used by these");
     expect(within(dialog).getByText("recipe/site-b")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(reason);
-    expect(screen.getByRole("dialog", { name: `Delete ${siteBToken}?` })).toBeInTheDocument();
-  });
-
-  it("lands on the parent when the last key of a folder is deleted", async () => {
-    const user = userEvent.setup();
-    let entries = store().entries;
-    mockApi({
-      "GET /api/variables": () => store({ entries }),
-      "DELETE /api/variables": () => {
-        entries = entries.filter((e) => e.key !== siteBToken);
-      },
-    });
-    renderFolder("/variables?folder=proxmox/site-b");
-    await user.click(await screen.findByRole("button", { name: `Delete ${siteBToken}` }));
-    await user.click(within(screen.getByRole("dialog", { name: `Delete ${siteBToken}?` })).getByRole("button", { name: "Delete" }));
-    expect(await screen.findByRole("link", { name: "site-a" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "site-b" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Folder" })).getByText("proxmox")).toHaveAttribute("aria-current", "page");
   });
 });
 
 describe("VariablesPage revealing secrets", () => {
   beforeEach(() => window.localStorage.setItem(viewStorageKey, "all"));
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    window.localStorage.clear();
-  });
 
   const other = "proxmox/site-b/api-token";
-  const store = (versionOfKey = 3) => ({
+  const env = "# app\nPORT=3000\nTOKEN=abc";
+  const store = () => ({
     entries: [
-      entry({ version: versionOfKey }),
-      entry({ key: other, version: 1, latestVersion: 1 }),
+      entry(),
+      entry({ key: other, version: 1, latestVersion: 1, lines: 3 }),
       entry({ key: "region", visibility: "plain", value: "eu-west", version: 1, latestVersion: 1 }),
     ],
     missing: [],
     system: [],
   });
-  const secrets: Record<string, string> = { [key]: "token-a-value", [other]: "token-b-value" };
+  const secrets = { [key]: "token-a-value", [other]: env };
   const reveals = (requests: { method: string; path: string; body?: unknown }[]) =>
-    requests.filter((request) => request.method === "POST" && request.path.endsWith("/api/variables/reveal")).map((request) => request.body);
+    requests.filter((r) => r.method === "POST" && r.path.endsWith("/api/variables/reveal")).map((r) => r.body);
 
-  it("reveals and hides one secret, asking only for its key", async () => {
+  it("reveals and hides one secret in the pane, asking only for its key", async () => {
     const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => store(),
-      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
-    });
-    renderPage();
-    const table = await screen.findByRole("region", { name: "Variable store entries" });
-
-    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
-    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
-    expect(within(table).queryByText("token-b-value")).not.toBeInTheDocument();
+    const { requests } = mockApi({ "GET /api/variables": () => store(), "POST /api/variables/reveal": revealOf(secrets) });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Reveal" }));
+    expect(await within(selected).findByText("token-a-value")).toBeInTheDocument();
+    expect(within(await list()).getByText("token-a-value")).toBeInTheDocument();
     expect(reveals(requests)).toEqual([{ keys: [key] }]);
+    await user.click(within(selected).getByRole("button", { name: `Hide ${key}` }));
+    expect(screen.queryByText("token-a-value")).not.toBeInTheDocument();
+  });
 
-    await user.click(within(table).getByRole("button", { name: `Hide ${key}` }));
-    expect(within(table).queryByText("token-a-value")).not.toBeInTheDocument();
-    expect(within(table).getAllByText("Concealed")).toHaveLength(2);
+  it("shows a revealed file with line numbers and lets it be hidden", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store(), "POST /api/variables/reveal": revealOf(secrets) });
+    renderPage(opened(other));
+    const selected = await pane();
+    expect(within(selected).getByText("3 lines")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Reveal" }));
+    const viewer = await within(selected).findByRole("group", { name: `Value of ${other}` });
+    expect(viewer).toHaveTextContent("PORT=3000");
+    expect(within(selected).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Hide" }));
+    expect(within(selected).getByText("Concealed. 3 lines.")).toBeInTheDocument();
   });
 
   it("reveals every listed secret with one request, then hides them all", async () => {
     const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => store(),
-      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
-    });
+    const { requests } = mockApi({ "GET /api/variables": () => store(), "POST /api/variables/reveal": revealOf(secrets) });
     renderPage();
-    const table = await screen.findByRole("region", { name: "Variable store entries" });
-
+    const rows = await list();
     await user.click(screen.getByRole("button", { name: "Reveal all 2 secrets listed" }));
-    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
-    expect(within(table).getByText("token-b-value")).toBeInTheDocument();
+    expect(await within(rows).findByText("token-a-value")).toBeInTheDocument();
+    expect(within(rows).getByText("3 lines")).toBeInTheDocument();
     expect(reveals(requests)).toEqual([{ keys: [key, other] }]);
-
     await user.click(screen.getByRole("button", { name: "Hide all" }));
-    expect(within(table).getAllByText("Concealed")).toHaveLength(2);
+    expect(within(rows).getAllByText("Concealed")).toHaveLength(1);
   });
 
   it("reveals only the secrets a search lists", async () => {
     const user = userEvent.setup();
-    const { requests } = mockApi({
-      "GET /api/variables": () => store(),
-      "POST /api/variables/reveal": ({ body }) => ({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) }),
-    });
+    const { requests } = mockApi({ "GET /api/variables": () => store(), "POST /api/variables/reveal": revealOf(secrets) });
     renderPage();
     await user.type(await screen.findByRole("searchbox", { name: "Search all keys" }), "site-b");
-
     await user.click(screen.getByRole("button", { name: "Reveal the 1 secret listed" }));
-    expect(await screen.findByText("token-b-value")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Hide all" })).toBeInTheDocument();
     expect(reveals(requests)).toEqual([{ keys: [other] }]);
-  });
-
-  it("settles each of two overlapping reveals on its own", async () => {
-    const user = userEvent.setup();
-    const pending: (() => void)[] = [];
-    mockApi({
-      "GET /api/variables": () => store(),
-      "POST /api/variables/reveal": ({ body }) =>
-        new Promise((resolve) =>
-          pending.push(() => resolve({ values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: secrets[k] })) })),
-        ),
-    });
-    renderPage();
-    const table = await screen.findByRole("region", { name: "Variable store entries" });
-
-    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
-    await user.click(within(table).getByRole("button", { name: `Reveal ${other}` }));
-    await waitFor(() => expect(pending).toHaveLength(2));
-    pending[0]();
-    pending[1]();
-
-    expect(await within(table).findByText("token-a-value")).toBeInTheDocument();
-    expect(await within(table).findByText("token-b-value")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hide all" })).toBeEnabled();
   });
 
   it("says when a secret has no usable version, and shows the failure of a reveal", async () => {
@@ -765,18 +789,17 @@ describe("VariablesPage revealing secrets", () => {
     let fail = false;
     mockApi({
       "GET /api/variables": () => store(),
-      "POST /api/variables/reveal": ({ body }) =>
-        fail ? problem(500, "boom") : { values: (body as { keys: string[] }).keys.map((k) => ({ key: k, value: null })) },
+      "POST /api/variables/reveal": (request) => (fail ? problem(500, "boom") : revealOf({})(request)),
     });
-    renderPage();
-    const table = await screen.findByRole("region", { name: "Variable store entries" });
-
-    await user.click(within(table).getByRole("button", { name: `Reveal ${key}` }));
-    expect(await within(table).findByText("No usable version")).toBeInTheDocument();
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Reveal" }));
+    expect(await within(selected).findByText("No usable version.")).toBeInTheDocument();
 
     fail = true;
-    await user.click(within(table).getByRole("button", { name: `Reveal ${other}` }));
+    await user.click(within(await list()).getByRole("link", { name: /site-b/ }));
+    await user.click(within(await pane()).getByRole("button", { name: "Reveal" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The values could not be revealed.");
-    expect(within(within(table).getByRole("row", { name: new RegExp(other) })).getByText("Concealed")).toBeInTheDocument();
+    expect(within(await pane()).getByText("Concealed. 3 lines.")).toBeInTheDocument();
   });
 });

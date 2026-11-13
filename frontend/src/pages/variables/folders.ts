@@ -72,6 +72,37 @@ export function folderHref(path: string): string {
   return `/variables?folder=${encodeURIComponent(path).replaceAll("%2F", "/")}`;
 }
 
+/** A link that opens an entry, keeping the folder being browsed; null keeps the stored view. */
+export function entryHref(key: string, folder: string | null): string {
+  const query = new URLSearchParams();
+  if (folder !== null) query.set("folder", folder);
+  query.set("key", key);
+  return `/variables?${query.toString().replaceAll("%2F", "/")}`;
+}
+
+/** The folder a key sits in: "a/b/c" → "a/b", "solo" → "". */
+export function parentFolder(key: string): string {
+  return parentFolders(key).at(-1) ?? "";
+}
+
+export interface TreeFolder {
+  name: string;
+  path: string;
+  /** Entries at any depth below it. */
+  count: number;
+  folders: TreeFolder[];
+}
+
+/** Every folder of the store, nested, with how many entries each holds at any depth. */
+export function folderTree(all: Variable[]): TreeFolder[] {
+  const walk = (nodes: TreeNode[]): TreeFolder[] =>
+    nodes
+      .filter((node) => node.children)
+      .map((node) => ({ name: node.name, path: node.path, count: leaves(node.children!), folders: walk(node.children!) }));
+  const leaves = (nodes: TreeNode[]): number => nodes.reduce((n, node) => n + (node.children ? leaves(node.children) : 1), 0);
+  return walk(buildTree(all.map((entry) => entry.key)));
+}
+
 /** A link to the folder that lists a key. */
 export function folderLink(key: string): string {
   return folderHref(parentFolders(key).at(-1) ?? "");

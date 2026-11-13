@@ -21,12 +21,18 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     public Task<List<StoreEntry>> ListAsync(CancellationToken cancellationToken) =>
         db.StoreEntries.AsNoTracking().OrderBy(e => e.Key).ToListAsync(cancellationToken);
 
-    /// <summary>Sets a value from the API. Keys in the system scope are refused.</summary>
+    /// <summary>
+    /// Sets a value from the API, as the active version at once, a secret's too. Keys in the system scope are refused.
+    /// </summary>
     /// <param name="generation">For a value a deploy generates, the <see cref="GeneratedValue"/> the new version belongs to.</param>
-    public Task SetAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken, Guid? generation = null)
+    /// <param name="actor">The person who saved it, recorded with the new version together with <paramref name="note"/>.</param>
+    /// <param name="expectedCurrentVersion">When given, the active version the caller saw; 0 when it saw no entry.</param>
+    public Task SetAsync(string key, string value, string visibility, string? description, CancellationToken cancellationToken, Guid? generation = null,
+        string? actor = null, string? note = null, int? expectedCurrentVersion = null)
     {
         CheckUserKey(key);
-        return SetValueAsync(key, value, visibility, description, false, cancellationToken, generation);
+        CheckOptionalNote(note);
+        return SetValueAsync(key, value, visibility, description, false, cancellationToken, generation, actor, note, expectedCurrentVersion);
     }
 
     /// <summary>Sets a value in any scope, for the server's own credentials.</summary>
@@ -34,9 +40,9 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         SetValueAsync(key, value, visibility, description, true, cancellationToken);
 
     private async Task SetValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken,
-        Guid? generation = null)
+        Guid? generation = null, string? actor = null, string? note = null, int? expectedCurrentVersion = null)
     {
-        await PutValueAsync(key, value, visibility, description, internalWrite, cancellationToken, generation);
+        await PutValueAsync(key, value, visibility, description, internalWrite, cancellationToken, generation, actor, note, expectedCurrentVersion);
         await SaveAsync(cancellationToken);
     }
 
@@ -48,7 +54,7 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         PutValueAsync(key, value, visibility, description, true, cancellationToken);
 
     private async Task<int> PutValueAsync(string key, string value, string visibility, string? description, bool internalWrite, CancellationToken cancellationToken,
-        Guid? generation = null)
+        Guid? generation = null, string? actor = null, string? note = null, int? expectedCurrentVersion = null)
     {
         if (!KeyPattern().IsMatch(key))
         {
@@ -64,6 +70,12 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         // An entry added earlier in this unit of work and not saved yet is the same entry.
         var entry = db.StoreEntries.Local.FirstOrDefault(e => e.Key == key)
             ?? await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
+        // The concurrency token on CurrentVersion makes this hold until the save, not only at this read.
+        if (expectedCurrentVersion is { } expected && expected != (entry?.CurrentVersion ?? 0))
+        {
+            throw new StoreConflictException(expected == 0 ? $"'{key}' already exists." : "The active version changed. Refresh and review before saving.");
+        }
+
         if (entry is null)
         {
             // A key deleted before continues its numbering: an old version number never names a new value.
@@ -74,9 +86,9 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         {
             throw new StoreException("A secret cannot be made plain.");
         }
-        else if (entry.Visibility == Visibilities.Secret && !internalWrite)
+        else if (entry.Visibility == Visibilities.Secret && !internalWrite && string.IsNullOrEmpty(value))
         {
-            throw new StoreException("Stage a candidate version to replace an existing secret, then explicitly promote it after verification.");
+            throw new StoreException("A new value of a secret must not be empty.");
         }
 
         entry.Visibility = visibility;
@@ -93,8 +105,8 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             WrappedKey = wrapped,
             CreatedAt = now,
             ActivatedAt = now,
-            ActivatedBy = "initial-or-internal",
-            ActivationNote = "Initial value or immediate plain/system value update; not an automated credential check.",
+            ActivatedBy = actor ?? "initial-or-internal",
+            ActivationNote = actor is null ? "Initial value or immediate plain/system value update; not an automated credential check." : Trimmed(note),
             GenerationId = generation,
         });
         return entry.CurrentVersion;
@@ -139,10 +151,10 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     }
 
     /// <summary>Operator-attested promotion, not proof of upstream authentication.</summary>
-    public async Task PromoteAsync(string key, int version, int expectedCurrentVersion, string verificationNote, string actor, CancellationToken cancellationToken)
+    public async Task PromoteAsync(string key, int version, int expectedCurrentVersion, string? verificationNote, string actor, CancellationToken cancellationToken)
     {
         CheckUserKey(key);
-        CheckNote(verificationNote, "A note describing the external verification is required.");
+        CheckOptionalNote(verificationNote);
         var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken)
             ?? throw new StoreException($"There is no entry '{key}'.");
         if (entry.Visibility != Visibilities.Secret)
@@ -172,13 +184,13 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     }
 
     /// <summary>The one way a version becomes the active one, whoever asks.</summary>
-    internal static void Activate(StoreEntry entry, StoreVersion version, DateTimeOffset now, string actor, string note)
+    internal static void Activate(StoreEntry entry, StoreVersion version, DateTimeOffset now, string actor, string? note)
     {
         entry.CurrentVersion = version.Version;
         entry.UpdatedAt = now;
         version.ActivatedAt = now;
         version.ActivatedBy = actor;
-        version.ActivationNote = note.Trim();
+        version.ActivationNote = Trimmed(note);
     }
 
     /// <summary>The one way a version stops being released, whoever asks.</summary>
@@ -214,11 +226,16 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
     }
 
     /// <summary>Changes only the description of an entry.</summary>
-    public async Task DescribeAsync(string key, string? description, CancellationToken cancellationToken)
+    /// <param name="expectedCurrentVersion">When given, the active version the caller saw, as for <see cref="SetAsync"/>.</param>
+    public async Task DescribeAsync(string key, string? description, CancellationToken cancellationToken, int? expectedCurrentVersion = null)
     {
         CheckUserKey(key);
         var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken)
             ?? throw new StoreException($"There is no entry '{key}'.");
+        if (expectedCurrentVersion is { } expected && expected != entry.CurrentVersion)
+        {
+            throw new StoreConflictException(expected == 0 ? $"'{key}' already exists." : "The active version changed. Refresh and review before saving.");
+        }
         entry.Description = description;
         entry.UpdatedAt = clock.GetUtcNow();
         await SaveAsync(cancellationToken);
@@ -277,6 +294,20 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         CheckUserKey(key);
         return ActiveValueAsync(key, plainOnly: false, cancellationToken);
     }
+
+    /// <summary>
+    /// The number of lines in the active value of a key outside the system scope, so a list can tell a file from a one-line value
+    /// without showing either. Null when <see cref="RevealAsync"/> would return null.
+    /// </summary>
+    public async Task<int?> ActiveLinesAsync(string key, CancellationToken cancellationToken)
+    {
+        CheckUserKey(key);
+        return Lines(await ActiveValueAsync(key, plainOnly: false, cancellationToken));
+    }
+
+    /// <summary>Lines split on a newline; one trailing newline ends the last line and does not start another.</summary>
+    public static int? Lines(string? value) =>
+        value is null ? null : value.AsSpan().Count('\n') + (value.EndsWith('\n') ? 0 : 1);
 
     private async Task<string?> ActiveValueAsync(string key, bool plainOnly, CancellationToken cancellationToken)
     {
@@ -474,6 +505,17 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
             throw new StoreException(message + " Maximum length: 2000 characters. Do not include credential values.");
         }
     }
+
+    /// <summary>A note that may be left out: blank is none. Credential values do not belong in it.</summary>
+    private static void CheckOptionalNote(string? note)
+    {
+        if (note is { Length: > 2000 })
+        {
+            throw new StoreException("A note has at most 2000 characters. Do not include credential values.");
+        }
+    }
+
+    private static string? Trimmed(string? note) => string.IsNullOrWhiteSpace(note) ? null : note.Trim();
 
     private static string Context(string key, int version) => $"store\0{key}\0{version}";
 
