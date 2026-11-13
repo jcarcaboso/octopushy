@@ -3969,6 +3969,77 @@ a.service-tile:hover {
   width: auto;
 }
 
+.vars-version__value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0 calc(2.25rem + var(--space-3));
+  min-width: 0;
+}
+
+.vars-version__compare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.vars .vars-version__compare select {
+  width: auto;
+}
+
+.vars-diff {
+  display: block;
+}
+
+.vars-diff:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.vars-diff__text {
+  margin: 0;
+  padding: var(--space-2) 0;
+  overflow-x: auto;
+  white-space: pre;
+  font: inherit;
+  color: var(--code-text);
+}
+
+.vars-diff__line {
+  display: block;
+  min-width: max-content;
+  padding: 0 var(--space-4) 0 var(--space-2);
+}
+
+.vars-diff__line--added {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}
+
+.vars-diff__line--removed {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.vars-diff__mark {
+  display: inline-block;
+  width: 1.25rem;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.vars-diff__line--added .vars-diff__mark,
+.vars-diff__line--removed .vars-diff__mark {
+  color: inherit;
+}
+
+@media (max-width: 640px) {
+  .vars-version__value {
+    margin-left: 0;
+  }
+}
+
 /* Details */
 .vars-details {
   display: flex;

@@ -8,7 +8,7 @@ export interface Folder {
   entries: number;
   /** Entries whose active version is revoked. */
   revoked: number;
-  /** Entries with a version newer than the active one. */
+  /** Entries with a version newer than the active one that is not revoked. */
   newer: number;
 }
 
@@ -50,7 +50,7 @@ export function listFolder(all: Variable[], requested: string): FolderListing {
           path: node.path,
           entries: entries.length,
           revoked: entries.filter((entry) => entry.revoked).length,
-          newer: entries.filter((entry) => entry.latestVersion > entry.version).length,
+          newer: entries.filter((entry) => entry.newerVersion).length,
         };
       }),
     entries: nodes.filter((node) => !node.children).map((node) => byKey.get(node.path)!),

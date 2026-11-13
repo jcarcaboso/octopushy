@@ -11,17 +11,20 @@ const createdAt = "2026-10-20T12:00:00Z";
 const viewStorageKey = "octopushy.variables.view";
 
 function entry(overrides: Partial<Variable> = {}): Variable {
+  const version = overrides.version ?? 3;
+  const latestVersion = overrides.latestVersion ?? 4;
   return {
     key,
     visibility: "secret",
     description: "API credential",
-    version: 3,
-    latestVersion: 4,
+    version,
+    latestVersion,
     revoked: false,
     updatedAt: createdAt,
     value: null,
     usedBy: ["recipe/site-a"],
     lines: 1,
+    newerVersion: latestVersion > version ? latestVersion : null,
     ...overrides,
   };
 }
@@ -84,7 +87,16 @@ describe("VariablesPage entry pane", () => {
     expect(within(selected).getByRole("heading", { name: "api-token" })).toBeInTheDocument();
     expect(within(selected).getByText("proxmox/site-a/")).toBeInTheDocument();
     expect(within(selected).getByText("v3 active")).toBeInTheDocument();
-    expect(within(selected).getByText("Latest v4")).toBeInTheDocument();
+    expect(within(selected).getByText("Newer v4")).toBeInTheDocument();
+  });
+
+  it("does not call a revoked version after the active one newer, in the list or the entry", async () => {
+    mockApi({ "GET /api/variables": () => store(entry({ latestVersion: 4, newerVersion: null })) });
+    renderPage(opened(key));
+    const selected = await pane();
+    expect(within(selected).getByText("v3 active")).toBeInTheDocument();
+    expect(screen.queryByText(/Newer v/)).not.toBeInTheDocument();
+    expect(within(selected).queryByText(/is newer and not active/)).not.toBeInTheDocument();
   });
 
   it("modifies a secret from its revealed value and saves it active with the note and the expected version", async () => {
@@ -452,6 +464,65 @@ describe("VariablesPage versions", () => {
     await user.click(within(alert).getByRole("button", { name: "Refresh" }));
     expect(within(selected).queryByRole("alert")).not.toBeInTheDocument();
     expect(within(selected).queryByLabelText("Note, optional")).not.toBeInTheDocument();
+  });
+
+  it("shows a version's value compared with the active one, or alone", async () => {
+    const user = userEvent.setup();
+    const values: Record<number, string> = { 4: "A=1\nB=4\n", 3: "A=1\nB=3\n", 2: "A=1\nB=2\nC=2\n" };
+    const { requests } = mockApi({
+      "GET /api/variables": () => variables(),
+      "GET /api/variables/versions": () => [version(4, "revoked"), version(3, "active"), version(2, "previous")],
+      "POST /api/variables/versions/reveal": ({ body }) => {
+        const asked = (body as { version: number }).version;
+        return { key, version: asked, value: values[asked] };
+      },
+    });
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    await user.click(await within(selected).findByRole("button", { name: "Show the value of v2" }));
+
+    const diff = await within(selected).findByRole("group", { name: "Changes from v3 to v2" });
+    expect(diff).toHaveTextContent("Removed: B=3");
+    expect(diff).toHaveTextContent("Added: B=2");
+    expect(diff).toHaveTextContent("Added: C=2");
+    expect(within(selected).getByText(/From v3 to v2: B changed, C added\./)).toBeInTheDocument();
+    expect(requests.filter((r) => r.path.endsWith("/versions/reveal")).map((r) => r.body)).toEqual([
+      { key, version: 2 },
+      { key, version: 3 },
+    ]);
+
+    await user.selectOptions(within(selected).getByLabelText("Compare with"), "v4");
+    expect(await within(selected).findByRole("group", { name: "Changes from v4 to v2" })).toHaveTextContent("Removed: B=4");
+    await user.selectOptions(within(selected).getByLabelText("Compare with"), "Nothing, show the value");
+    expect(within(selected).getByRole("group", { name: "Value of v2" })).toHaveTextContent("C=2");
+
+    await user.click(within(selected).getByRole("button", { name: "Hide the value of v2" }));
+    expect(within(selected).queryByRole("group", { name: "Value of v2" })).not.toBeInTheDocument();
+    expect(selected).not.toHaveTextContent("C=2");
+  });
+
+  it("deletes a version that is not active, after asking", async () => {
+    const user = userEvent.setup();
+    let deleted = false;
+    const { requests } = mockApi({
+      "GET /api/variables": () => variables(entry({ latestVersion: 4, newerVersion: deleted ? null : 4 })),
+      "GET /api/variables/versions": () => [...(deleted ? [] : [version(4, "revoked")]), version(3, "active")],
+      "DELETE /api/variables/versions": () => {
+        deleted = true;
+      },
+    });
+    renderPage(opened(key));
+    const selected = await openVersions(user);
+    expect(await within(selected).findByRole("button", { name: "Delete v4" })).toBeInTheDocument();
+    expect(within(selected).queryByRole("button", { name: "Delete v3" })).not.toBeInTheDocument();
+
+    await user.click(within(selected).getByRole("button", { name: "Delete v4" }));
+    const dialog = await screen.findByRole("dialog", { name: `Delete v4 of ${key}?` });
+    await user.click(within(dialog).getByRole("button", { name: "Delete v4" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "DELETE")).toBe(true));
+    const sent = new URLSearchParams(requests.find((r) => r.method === "DELETE")?.search);
+    expect([sent.get("key"), sent.get("version")]).toEqual([key, "4"]);
+    await waitFor(() => expect(within(selected).queryByRole("button", { name: "Delete v4" })).not.toBeInTheDocument());
   });
 
   it("requires a reason to revoke and shows the revoked state", async () => {

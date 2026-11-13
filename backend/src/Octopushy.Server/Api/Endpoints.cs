@@ -566,6 +566,13 @@ public static partial class Endpoints
         {
             var uses = await VariableUses.ByKeyAsync(db, revisions, ct);
             var entries = await store.ListAsync(ct);
+            // A revoked version after the active one is no newer value to make active: only one that may still be used counts.
+            var newer = await (from version in db.StoreVersions.AsNoTracking()
+                               join entry in db.StoreEntries.AsNoTracking() on version.Key equals entry.Key
+                               where version.Version > entry.CurrentVersion && version.RevokedAt == null
+                               group version by version.Key into versions
+                               select new { Key = versions.Key, Version = versions.Max(v => v.Version) })
+                .ToDictionaryAsync(v => v.Key, v => v.Version, ct);
             var visible = new List<VariableDto>();
             foreach (var entry in entries.Where(e => !e.Key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal)))
             {
@@ -582,7 +589,8 @@ public static partial class Endpoints
                     entry.LatestVersion,
                     revoked,
                     // A secret is opened here only to count its lines; its value stays on the server.
-                    entry.Visibility == Visibilities.Plain ? VariableStore.Lines(value) : await store.ActiveLinesAsync(entry.Key, ct)));
+                    entry.Visibility == Visibilities.Plain ? VariableStore.Lines(value) : await store.ActiveLinesAsync(entry.Key, ct),
+                    newer.TryGetValue(entry.Key, out var newerVersion) ? newerVersion : null));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -647,6 +655,31 @@ public static partial class Endpoints
             return TypedResults.Ok(new VariableRevealDto(values));
         })
         .WithName("revealVariables");
+
+        group.MapPost("/versions/reveal", async (VariableVersionRevealRequest request, HttpContext http, VariableStore store, ILoggerFactory loggers, CancellationToken ct) =>
+        {
+            var value = await store.RevealVersionAsync(request.Key, request.Version, ct)
+                ?? throw new StoreException("The selected version does not exist.");
+            loggers.CreateLogger("Octopushy.Server.Variables").LogInformation(
+                "{User} revealed the value of {Key} v{Version}.", http.User.Identity?.Name ?? "administrator", request.Key, request.Version);
+            return TypedResults.Ok(new RevealedVariableVersionDto(request.Key, request.Version, value));
+        })
+        .WithName("revealVariableVersion");
+
+        group.MapDelete("/versions", async (string key, int version, HttpContext http, RunEngine engine, RevisionCache revisions, ILoggerFactory loggers, CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, services) =>
+            {
+                VariableStore.CheckUserKey(key);
+                var pinning = await VariableUses.PinningAsync(db, revisions, key, version, ct);
+                await services.GetRequiredService<VariableStore>().DeleteVersionAsync(key, version, pinning, ct);
+                return true;
+            }, ct);
+            loggers.CreateLogger("Octopushy.Server.Variables").LogInformation(
+                "{User} deleted {Key} v{Version}.", http.User.Identity?.Name ?? "administrator", key, version);
+            return TypedResults.NoContent();
+        })
+        .WithName("deleteVariableVersion");
 
         group.MapPost("/candidates", async (VariableCandidateRequest request, RunEngine engine, CancellationToken ct) =>
         {

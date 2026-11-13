@@ -134,3 +134,55 @@ export function splitLine(raw: string, format: Format): LinePart {
   const match = format === "yaml" ? /^(\s*(?:- )?[^:#\s][^:#]*)(:\s*)(.*)$/.exec(raw) : /^((?:export\s+)?[A-Za-z_][A-Za-z0-9_]*)(=)(.*)$/.exec(raw);
   return match ? { name: match[1], sep: match[2], rest: match[3], comment: false } : plain;
 }
+
+export interface DiffLine {
+  kind: "same" | "added" | "removed";
+  text: string;
+}
+
+/** Lines as the viewer shows them: one trailing newline ends the last line and does not start another. */
+function valueLines(text: string): string[] {
+  if (text === "") return [];
+  return (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
+}
+
+/**
+ * Every line of `before` and `after` in one list, each kept, removed or added, by their longest common run of lines: a line
+ * diff as a person reads one. The lines both start and end with are left out of the table, so a long value with a small
+ * change costs little.
+ */
+export function diffLines(before: string, after: string): DiffLine[] {
+  const a = valueLines(before);
+  const b = valueLines(after);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1;
+  const x = a.slice(start, a.length - end);
+  const y = b.slice(start, b.length - end);
+  // common[i][j]: the longest common run of x[i..] and y[j..].
+  const common = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i -= 1) {
+    for (let j = y.length - 1; j >= 0; j -= 1) {
+      common[i][j] = x[i] === y[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+    }
+  }
+  const middle: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      middle.push({ kind: "same", text: x[i] });
+      i += 1;
+      j += 1;
+    } else if (j >= y.length || (i < x.length && common[i + 1][j] >= common[i][j + 1])) {
+      middle.push({ kind: "removed", text: x[i] });
+      i += 1;
+    } else {
+      middle.push({ kind: "added", text: y[j] });
+      j += 1;
+    }
+  }
+  const same = (text: string): DiffLine => ({ kind: "same", text });
+  return [...a.slice(0, start).map(same), ...middle, ...a.slice(a.length - end).map(same)];
+}
