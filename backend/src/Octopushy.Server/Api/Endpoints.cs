@@ -579,7 +579,8 @@ public static partial class Endpoints
                     entry.Visibility == Visibilities.Plain ? await store.GetPlainAsync(entry.Key, ct) : null,
                     uses.GetValueOrDefault(entry.Key) ?? [],
                     entry.LatestVersion,
-                    revoked));
+                    revoked,
+                    null));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -657,7 +658,7 @@ public static partial class Endpoints
             await engine.ExecuteAsync(async (_, services) =>
             {
                 await services.GetRequiredService<VariableStore>().PromoteAsync(
-                    request.Key, request.Version, request.ExpectedCurrentVersion, request.VerificationNote,
+                    request.Key, request.Version, request.ExpectedCurrentVersion, request.VerificationNote ?? string.Empty,
                     http.User.Identity?.Name ?? "administrator", ct);
                 return true;
             }, ct);

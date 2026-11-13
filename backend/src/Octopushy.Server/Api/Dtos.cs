@@ -595,6 +595,10 @@ public sealed record TokenDto(
     DateTimeOffset? UsedAt,
     Guid? AgentId);
 
+/// <summary>
+/// An entry of the variable store. <c>Lines</c> is the number of lines in the active value, so a list can tell a file from a
+/// one-line value without revealing it; null when there is no active value that may be used.
+/// </summary>
 public sealed record VariableDto(
     string Key,
     string Visibility,
@@ -604,7 +608,8 @@ public sealed record VariableDto(
     string? Value,
     IReadOnlyList<string> UsedBy,
     int LatestVersion,
-    bool Revoked);
+    bool Revoked,
+    int? Lines);
 
 public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy);
 
@@ -612,7 +617,12 @@ public sealed record SystemVariableDto(string Key, string Visibility, DateTimeOf
 
 public sealed record VariablesDto(IReadOnlyList<VariableDto> Entries, IReadOnlyList<MissingVariableDto> Missing, IReadOnlyList<SystemVariableDto> System);
 
-public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description);
+/// <summary>
+/// Sets a value, which becomes the active version at once, for a new key and for an existing one, secret or plain. Without a
+/// <c>Value</c> only the description changes. <c>Note</c> is kept with the new version. With <c>ExpectedCurrentVersion</c> the
+/// write is refused with a conflict when another version became active since the caller read the entry.
+/// </summary>
+public sealed record VariableUpdate(string Key, string? Value, string? Visibility, string? Description, string? Note = null, int? ExpectedCurrentVersion = null);
 
 public sealed record VariableRevealRequest(IReadOnlyList<string> Keys);
 
@@ -625,7 +635,7 @@ public sealed record VariableCandidateRequest(string Key, string Value, string? 
 
 public sealed record VariableCandidateDto(int Version);
 
-public sealed record VariablePromotionRequest(string Key, int Version, int ExpectedCurrentVersion, string VerificationNote);
+public sealed record VariablePromotionRequest(string Key, int Version, int ExpectedCurrentVersion, string? VerificationNote = null);
 
 public sealed record VariableRevocationRequest(string Key, int Version, string Reason);
 
