@@ -49,7 +49,7 @@ is better written as a link with that host: the link then stands for the name.
 Agents do, as they do all network work; the server never connects anywhere itself. An agent that announces `uptime-v1`
 answers uptime probes from its own process: an SSH banner read, and `http`, one HTTP/1.1 `GET` whose status line alone is
 read and reported. Nothing else is sent: no credential, cookie or body. One that also announces `uptime-tcp-v1`, from
-the release after 0.9.2, answers `tcp`, a connection opened and closed with nothing sent. **A `tcp://` link goes only to such agents:**
+0.9.3, answers `tcp`, a connection opened and closed with nothing sent. **A `tcp://` link goes only to such agents:**
 while none is connected it stays pending, and nothing is recorded.
 
 - **The agents that reach it.** Each check keeps a pool: the agents that connected to its target and spoke its protocol

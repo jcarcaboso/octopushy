@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.2:
+Milestone 1 has shipped, up to release 0.9.3:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,31 @@ Milestone 1 has shipped, up to release 0.9.2:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.3:
+
+- A `tcp://host:port` service link, from #82: for a service that does not speak HTTP, such as a database. An agent
+  that announces the new `uptime-tcp-v1` capability opens a connection from its own process and closes it at once,
+  sending nothing; up means it opened. Older agents are never asked, so the check stays pending until an updated one
+  connects. The Inventory shows and checks such a link and never offers to open it.
+  See [uptime](docs/uptime.md) and [ADR 0008](docs/adr/0008-tcp-links.md).
+- A Services page, from #83, at `/services`: every service link grouped by the domain of its host, as a list with
+  uptime or as icon tiles. Octopushy ships no icons and serves each service's own: a picture uploaded for it and kept
+  in the database, else a file of the icons directory chosen for it or named after it, else its first letter. The
+  directory is `icons` under the data directory, or `Octopushy__Icons__Directory`; `deploy/compose.yaml` has a
+  commented read-only mount for it. See [service icons](docs/service-icons.md).
+- The Inventory page, from #84, shows a path bar and one list beside the details when it is narrow, and the list
+  above them under 36rem. The frame measures its own width, so the sidebar no longer throws the switch off.
+- A rebuilt Variables page, from #85: folders, the entries of a folder and the open entry as three panes that become
+  a drawer and then one pane as the room shrinks, with the open entry in the address. Modify and Update save the next
+  version as active at once, with an optional note, or as a candidate; a value of several lines gets an editor with
+  line numbers. `PUT /api/variables` takes a `note` and an expected current version and answers 409, writing nothing,
+  when it does not match; an entry of `GET /api/variables` gains the line count of its active value. The page asks
+  before a link, a reload or a closed tab drops a draft.
+
+Upgrade the backend first: it applies the `ServiceIcons` migration, which adds the `service_icons` table. The agent
+contract gains only the `uptime-tcp-v1` capability and `tcp` probe protocol, so agents keep working; update them to
+check `tcp://` links.
 
 New in 0.9.2:
 
