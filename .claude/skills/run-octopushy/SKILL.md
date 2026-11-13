@@ -98,7 +98,9 @@ Vite serves frontend edits as they are saved. Server changes need `down` and `up
 
 - **Key field:** `getByLabel("Key", { exact: true })`.
 - **Prefilled key:** `fill()` replaces the folder prefix. To type after it, use `pressSequentially`.
-- **Visibility:** the dialog defaults to Secret, so choose Plain for a plain key.
+- **Layout:** the list is the region "Variable store entries" (rows are links), the open entry the region "Selected entry", and `?key=` opens one. "Set a variable" turns the pane into the region "New entry". Below a 1040px box the tree is a drawer behind "Show the folders"; below 760px one pane shows at a time.
+- **Visibility:** the new-entry form defaults to Secret, so press Plain for a plain key.
+- **Value field:** `getByLabel("Value", { exact: true })`; Modify fills it with the active value, Update leaves it empty.
 - **Current view:** the Folders and All keys buttons mark it with `aria-current="page"`.
 - **Stored view:** All keys stays chosen across navigation, and hides the folder links, until Folders is clicked. A `?folder=` link overrides it for that visit.
 

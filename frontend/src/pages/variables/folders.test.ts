@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Variable } from "../../api/types";
-import { folderHref, folderLink, foldersOn, lastSegment, listFolder, matchesSearch } from "./folders";
+import { entryHref, folderHref, folderLink, folderTree, foldersOn, lastSegment, listFolder, matchesSearch, parentFolder } from "./folders";
 
 function entry(key: string, overrides: Partial<Variable> = {}): Variable {
   return {
@@ -13,6 +13,7 @@ function entry(key: string, overrides: Partial<Variable> = {}): Variable {
     updatedAt: "2026-10-20T12:00:00Z",
     value: null,
     usedBy: [],
+    lines: 1,
     ...overrides,
   };
 }
@@ -72,6 +73,30 @@ describe("listFolder", () => {
   });
 });
 
+describe("folderTree", () => {
+  it("nests every folder with the entries below it at any depth", () => {
+    const tree = folderTree([entry("proxmox/a/token"), entry("proxmox/a/ca"), entry("proxmox/b/deep/token"), entry("solo"), entry("shared/x")]);
+    expect(tree).toEqual([
+      {
+        name: "proxmox",
+        path: "proxmox",
+        count: 3,
+        folders: [
+          { name: "a", path: "proxmox/a", count: 2, folders: [] },
+          { name: "b", path: "proxmox/b", count: 1, folders: [{ name: "deep", path: "proxmox/b/deep", count: 1, folders: [] }] },
+        ],
+      },
+      { name: "shared", path: "shared", count: 1, folders: [] },
+    ]);
+  });
+
+  it("counts a key that is also a folder in its parent", () => {
+    expect(folderTree([entry("a/b"), entry("a/b/c")])).toEqual([
+      { name: "a", path: "a", count: 2, folders: [{ name: "b", path: "a/b", count: 1, folders: [] }] },
+    ]);
+  });
+});
+
 describe("folder paths", () => {
   it("lists the folders on the way to a path", () => {
     expect(foldersOn("")).toEqual([]);
@@ -89,6 +114,16 @@ describe("folder paths", () => {
     expect(folderHref("")).toBe("/variables?folder=");
     expect(folderLink("proxmox/site-a/api-token")).toBe("/variables?folder=proxmox/site-a");
     expect(folderLink("solo")).toBe("/variables?folder=");
+  });
+
+  it("links to an entry, with or without the folder being browsed", () => {
+    expect(entryHref("proxmox/site-a/api-token", "proxmox/site-a")).toBe("/variables?folder=proxmox/site-a&key=proxmox/site-a/api-token");
+    expect(entryHref("a&b", null)).toBe("/variables?key=a%26b");
+  });
+
+  it("names the folder a key sits in", () => {
+    expect(parentFolder("a/b/c")).toBe("a/b");
+    expect(parentFolder("solo")).toBe("");
   });
 
   it("escapes what would break a query string", () => {

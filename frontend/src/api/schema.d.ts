@@ -2372,6 +2372,8 @@ export interface components {
             /** Format: int32 */
             latestVersion: number;
             revoked: boolean;
+            /** Format: int32 */
+            lines: null | number;
         };
         VariablePromotionRequest: {
             key: string;
@@ -2379,7 +2381,7 @@ export interface components {
             version: number;
             /** Format: int32 */
             expectedCurrentVersion: number;
-            verificationNote: string;
+            verificationNote?: null | string;
         };
         VariableRevealDto: {
             values: components["schemas"]["RevealedVariableDto"][];
@@ -2398,6 +2400,9 @@ export interface components {
             value: null | string;
             visibility: null | string;
             description: null | string;
+            note?: null | string;
+            /** Format: int32 */
+            expectedCurrentVersion?: null | number;
         };
         VariableVersionDto: {
             /** Format: int32 */

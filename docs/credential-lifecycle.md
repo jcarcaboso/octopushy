@@ -8,15 +8,19 @@ lack: see [rotating the key](guest-configuration.md#rotating-the-key).
 ## Operator workflow
 
 1. Create an initial secret under **Variables**. The first value is active
-   immediately for bootstrap compatibility; Octopushy has not tested its access.
-2. **Update** an existing secret to save a **candidate**. This allocates a new
-   encrypted version without changing the active pointer. Description-only
-   edits and plain variable edits retain their existing behavior.
-3. Verify the replacement's intended permissions externally. Never put the
-   credential itself in a confirmation note, Git, a Nix expression, or logs.
-4. Open **Versions**, review usage, and **Promote** the candidate with an operator
-   confirmation note. This records the signed-in identity and time. It does
-   **not** run an authentication probe or verify an SSH login.
+   immediately; Octopushy has not tested its access.
+2. To replace a value, choose **Modify** to edit the active value, or **Update**
+   to enter a whole new one, then **Save and make active**. The new version is
+   active at once. The version before it becomes previous and stays available.
+   Description-only edits and plain variable edits work as before.
+3. To check a replacement before anything uses it, choose **Save as a
+   candidate** instead. This adds a new encrypted version and leaves the active
+   one as it is. Verify the replacement's permissions externally, then open
+   **Versions**, review usage, and choose **Make active**.
+4. Each version made active records the signed-in user, the time, and the
+   text of **Note, optional** if you gave one. Never put the credential itself in a note, Git, a Nix
+   expression, or logs. Making a version active does **not** run an
+   authentication probe or verify an SSH login.
 5. Allow old-version work to finish, then explicitly **Revoke** that version.
    Revocation blocks subsequent assignments using it. The final outbound-channel
    hand-off is serialized with revocation; assignments already handed to that
@@ -26,8 +30,8 @@ lack: see [rotating the key](guest-configuration.md#rotating-the-key).
 The UI shows active/latest version numbers, candidate/active/previous/revoked
 states, latest promotion metadata, revocation metadata, and run/definition
 references. History never returns values, ciphertext, or wrapped keys.
-Previously promoted versions can be explicitly promoted again if not revoked,
-with the same confirmation and concurrency checks. Revocation is irreversible.
+A previous version that is not revoked can be made active again, with the same
+concurrency checks. Revocation is irreversible.
 Emergency revocation of the active version is allowed; there is no fallback.
 
 ## Exact execution bindings
@@ -59,18 +63,18 @@ The existing resolution audit records the attempt, worker,
 key and version; it is evidence of resolution for assignment, not proof of
 delivery or successful authentication.
 
-Promotion affects runs that have not pinned yet. It does not rewrite already
+A new active version affects runs that have not pinned yet. It does not rewrite already
 queued, awaiting-approval, running, or retryable runs. Targeted retries retain
 their original bindings and successful infrastructure work. A pinned revoked
 version remains blocked whenever a step needs that version, even if another
-version is promoted: inspect/cancel
+version is made active: inspect/cancel
 the old work and create a new run where safe, rather than silently changing
 credentials under an approved plan.
 
 Updating a backing credential does not change Git's provisioning-input hash
 or automatically reprovision machines. A new run selects newly active versions.
-Promoting a new version of a key a guest's `secrets` or `secretFiles`
-name does configure that guest once, with its `setup` action and under its
+A new active version of a key a guest's `secrets` or `secretFiles`
+name, saved directly or made active from a candidate, does configure that guest once, with its `setup` action and under its
 own approval policy: see [shared store values](guest-configuration.md#shared-store-values).
 Changing an explicit version in Git changes the declared binding and can request
 a new plan; it does not by itself require VM replacement.
@@ -81,16 +85,19 @@ All endpoints require the existing authenticated administrator session:
 
 | Endpoint | Behavior |
 | --- | --- |
-| `PUT /api/variables` | Create initial value, edit a plain value, or change description. Replacing an existing secret value is refused. |
+| `PUT /api/variables` | `{key, value?, visibility?, description?, note?, expectedCurrentVersion?}`. Creates a key, or adds a version of an existing one, plain or secret, and makes it active at once. Records the signed-in user and the note. Without `value`, only the description changes. An empty value for an existing secret is refused, and so is making a secret plain. |
 | `POST /api/variables/candidates` | `{key, value, description?}` → `{version}`; existing secret only. |
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
 | `POST /api/variables/reveal` | `{keys}` → `{values: [{key, value}]}`: each key's active value, plain or secret. `null` when the active version is revoked or was never promoted, or the key is missing. Keys under `system/` are refused. The server logs who revealed which keys. |
-| `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote}`. |
+| `POST /api/variables/promote` | `{key, version, expectedCurrentVersion, verificationNote?}`. The note is optional. |
 | `POST /api/variables/revoke` | `{key, version, reason}`. |
 | `DELETE /api/variables?key=…` | Deletes the key once nothing needs it; see below. |
 
 Promotion compares the expected active version; stale or concurrent changes
-return `409`, requiring a refresh and review. Candidate allocation also uses
+return `409`, requiring a refresh and review. A save with `expectedCurrentVersion`
+does the same, and `0` means the key must not exist yet, so a form for a new
+entry cannot overwrite one. A save without it is not checked. Notes are at most
+2000 characters; a blank note is stored as none. Candidate allocation also uses
 optimistic concurrency so simultaneous writes cannot overwrite a version.
 All `system/` keys remain unavailable to these user lifecycle endpoints.
 Plain values remain API-readable, so do not put credentials in them.

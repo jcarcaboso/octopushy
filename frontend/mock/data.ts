@@ -568,11 +568,86 @@ export const operatorTokens = [
   { id: "op-1", name: "laptop CLI", createdAt: ago(9000), expiresAt: ago(-34000), revokedAt: null as string | null },
 ];
 
-// The variable store: secret values are never sent, as on the real server.
+// The variable store: secret values are never sent, as on the real server. Every key keeps its versions with their
+// values, so saving, staging, making a version active and revoking click through.
 
-const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], version = 1, value: string | null = null, description: string | null = null): Variable => ({
-  key, visibility, description, version, updatedAt: ago(1000 * version), value: visibility === "secret" ? null : value, usedBy, latestVersion: version, revoked: false,
-});
+type StoredVersion = VariableVersion & { value: string };
+
+const outline = "proxmox/moraband/apps-mrb-01/outline";
+const composeEnv = [
+  "# outline on apps-mrb-01",
+  "NODE_ENV=production",
+  "URL=https://outline.testing.example.org",
+  "PORT=3000",
+  "SECRET_KEY=8f2c61d0a7b94e53c1d6f0a2b7e4938d",
+  "UTILS_SECRET=41b7e09c5d2a6f83e7c0b1a94d5f2e68",
+  "DATABASE_URL=postgres://outline:kV3n8QpLx2Tz@db:5432/outline",
+  "REDIS_URL=redis://redis:6379",
+  "OIDC_CLIENT_ID=outline",
+  "OIDC_CLIENT_SECRET=Zr7mW2xKq9LdP4vT",
+  "SMTP_HOST=smtp.example.org",
+  "SMTP_PASSWORD=h4Jc9sNb2Yq",
+].join("\n");
+const oidcConfig = [
+  "oidc:",
+  "  issuer: https://auth.example.org",
+  "  client_id: outline",
+  "  client_secret: Zr7mW2xKq9LdP4vT",
+  "  scopes: [openid, profile, email]",
+  "storage:",
+  "  bucket: outline-uploads",
+  "  access_key: outline-uploads-rw",
+  "  secret_key: m9Xc2vB7nQ4kL8pR",
+].join("\n");
+
+/** A key's versions, newest first. */
+export const variableHistory = new Map<string, StoredVersion[]>();
+/** The version each key uses, which stays the same when it is revoked. */
+export const variableActive = new Map<string, number>();
+
+function stored(version: number, value: string, status: string, minutes: number, note: string | null = null, usedBy: string[] = []): StoredVersion {
+  const activated = status !== "candidate";
+  return {
+    version, status, createdAt: ago(minutes + 5), activatedAt: activated ? ago(minutes) : null, activatedBy: activated ? "ops" : null,
+    activationNote: activated ? note : null, revokedAt: status === "revoked" ? ago(minutes - 60) : null, revokedBy: status === "revoked" ? "ops" : null,
+    revocationNote: status === "revoked" ? "Pasted in a chat by mistake." : null, usedBy, value,
+  };
+}
+
+/** Recomputes an entry's summary from its versions, as the server would answer it. */
+export function summarizeVariable(entry: Variable) {
+  const history = variableHistory.get(entry.key) ?? [];
+  const active = history.find((v) => v.version === variableActive.get(entry.key));
+  entry.version = active?.version ?? 0;
+  entry.latestVersion = history[0]?.version ?? 0;
+  entry.revoked = active?.status === "revoked";
+  const usable = active && active.status === "active" ? active.value : null;
+  entry.lines = usable === null ? null : usable.split("\n").length - (usable.endsWith("\n") ? 1 : 0);
+  entry.value = entry.visibility === "plain" ? usable : null;
+  entry.updatedAt = active?.activatedAt ?? active?.createdAt ?? entry.updatedAt;
+  for (const v of history) v.usedBy = v === active ? entry.usedBy : [];
+}
+
+const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], version = 1, value: string | null = null, description: string | null = null): Variable => {
+  const own = value ?? `mock-secret-of-${key}`;
+  variableActive.set(key, version);
+  variableHistory.set(key, Array.from({ length: version }, (_, i) => {
+    const n = version - i;
+    return stored(n, n === version ? own : `${own}-v${n}`, n === version ? "active" : "previous", 1000 * (i + 1), n > 1 && n === version ? "Rotated after the token audit." : null);
+  }));
+  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null };
+  summarizeVariable(created);
+  return created;
+};
+
+/** A key with the versions given, newest first. */
+const withHistory = (key: string, visibility: "secret" | "plain", usedBy: string[], description: string, versions: StoredVersion[]): Variable => {
+  variableHistory.set(key, versions);
+  variableActive.set(key, versions.find((v) => v.status === "active")?.version ?? 0);
+  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null };
+  summarizeVariable(created);
+  return created;
+};
 
 export const variables: Variables = {
   entries: [
@@ -588,8 +663,29 @@ export const variables: Variables = {
     entry("dns/technitium/api-token", "secret", ["home/pve01/web/app"]),
     entry("motd", "plain", [], 2, "Managed by Octopushy. Changes here are overwritten."),
     entry("dns/zone", "plain", ["home/pve01/web/app"], 1, "home.example.org"),
+    withHistory(`${outline}/compose_env`, "secret", ["apps-mrb-01/outline"], "Compose environment of Outline.", [
+      stored(7, composeEnv, "active", 2880, "New SMTP password."),
+      stored(6, composeEnv.replace("h4Jc9sNb2Yq", "Lq8vT3mZx1Rw"), "previous", 30240),
+      stored(5, composeEnv.replace("h4Jc9sNb2Yq", "Lq8vT3mZx1Rw").replace("SMTP_HOST=smtp.example.org\n", ""), "previous", 86400),
+      stored(4, composeEnv.replace("h4Jc9sNb2Yq", "Ab1cD2eF3gH4"), "revoked", 90000),
+    ]),
+    withHistory(`${outline}/oidc_config`, "secret", ["apps-mrb-01/outline"], "Sign-in and storage settings, mounted as a file.", [
+      stored(4, oidcConfig.replace("m9Xc2vB7nQ4kL8pR", "p2Ws7nYq4kZb9Lx"), "candidate", 600),
+      stored(3, oidcConfig, "active", 30240),
+      stored(2, oidcConfig.replace("[openid, profile, email]", "[openid, email]"), "previous", 86400),
+    ]),
+    entry(`${outline}/db_password`, "secret", ["apps-mrb-01/outline"], 2, "kV3n8QpLx2Tz", "Password of the outline database user."),
+    entry(`${outline}/smtp_password`, "secret", ["apps-mrb-01/outline"], 1, "h4Jc9sNb2Yq", "Password for outgoing mail."),
+    entry(`${outline}/public_url`, "plain", ["apps-mrb-01/outline"], 1, "https://outline.testing.example.org", "Address people open Outline at."),
+    entry("proxmox/moraband/apps-mrb-01/plane/db_password", "secret", ["apps-mrb-01/plane"], 1, "Qw8nR2xLm5Vt"),
+    entry("proxmox/moraband/mrb-crt-01/traefik/dashboard_users", "secret", ["mrb-crt-01/traefik"], 1,
+      "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/\nops:$apr1$Xq2vR7lm$1aWkF0nqWnS4yPq7B8b1c/", "Basic auth users of the Traefik dashboard."),
+    entry("shared/acme_email", "plain", ["mrb-crt-01/traefik"], 1, "ops@example.org"),
   ],
-  missing: [{ key: "proxmox/pve01/bb/machine_tools_token", usedBy: ["home/pve01/bb"] }],
+  missing: [
+    { key: "proxmox/pve01/bb/machine_tools_token", usedBy: ["home/pve01/bb"] },
+    { key: "proxmox/moraband/apps-mrb-01/plane/s3_secret", usedBy: ["apps-mrb-01/plane"] },
+  ],
   system: [
     { key: "system/agent-ca/certificate", visibility: "plain", updatedAt: ago(90000) },
     { key: "system/agent-ca/private-key", visibility: "secret", updatedAt: ago(90000) },
@@ -597,17 +693,7 @@ export const variables: Variables = {
 };
 
 export function variableVersions(key: string): VariableVersion[] {
-  const current = variables.entries.find((v) => v.key === key);
-  if (!current) return [];
-  return Array.from({ length: Number(current.latestVersion) }, (_, i) => {
-    const version = Number(current.latestVersion) - i;
-    const active = version === Number(current.version);
-    return {
-      version, status: active ? "active" : "superseded", createdAt: ago(1000 * version + 5), activatedAt: ago(1000 * version), activatedBy: "ops",
-      activationNote: active && version > 1 ? "Rotated after the token audit." : null, revokedAt: null, revokedBy: null, revocationNote: null,
-      usedBy: active ? current.usedBy : [],
-    };
-  });
+  return (variableHistory.get(key) ?? []).map(({ value: _value, ...version }) => version);
 }
 
 // Workflows and the deploy wizard

@@ -10286,7 +10286,8 @@
           "value",
           "usedBy",
           "latestVersion",
-          "revoked"
+          "revoked",
+          "lines"
         ],
         "type": "object",
         "properties": {
@@ -10328,6 +10329,13 @@
           },
           "revoked": {
             "type": "boolean"
+          },
+          "lines": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -10335,8 +10343,7 @@
         "required": [
           "key",
           "version",
-          "expectedCurrentVersion",
-          "verificationNote"
+          "expectedCurrentVersion"
         ],
         "type": "object",
         "properties": {
@@ -10352,7 +10359,10 @@
             "format": "int32"
           },
           "verificationNote": {
-            "type": "string"
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -10433,6 +10443,19 @@
               "null",
               "string"
             ]
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "expectedCurrentVersion": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },

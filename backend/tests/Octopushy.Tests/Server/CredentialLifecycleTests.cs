@@ -29,9 +29,6 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         using var client = await SignInAsync(server);
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/variables",
-            new { key = Token, value = "must-not-overwrite", visibility = "secret" })).StatusCode);
-
         var staged = await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "candidate-private-value" });
         staged.EnsureSuccessStatusCode();
         Assert.Equal(2, (await staged.Content.ReadFromJsonAsync<JsonObject>())!["version"]!.GetValue<int>());
@@ -45,13 +42,91 @@ public class CredentialLifecycleTests(PostgresFixture postgres)
         Assert.DoesNotContain("secret-token", history);
         Assert.DoesNotContain("ciphertext", history, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("candidate", history);
-        Assert.Equal(HttpStatusCode.BadRequest, (await PromoteAsync(client, 2, 1, "")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await PromoteAsync(client, 2, 1, new string('x', 2001))).StatusCode);
         (await PromoteAsync(client, 2, 1)).EnsureSuccessStatusCode();
         Assert.Equal(HttpStatusCode.Conflict, (await PromoteAsync(client, 1, 1)).StatusCode);
         var versions = (await client.GetFromJsonAsync<JsonArray>("/api/variables/versions?key=" + Token))!;
         Assert.Equal("active", versions.Single(v => v!["version"]!.GetValue<int>() == 2)!["status"]!.GetValue<string>());
         Assert.Equal("ops", versions[0]!["activatedBy"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task Saving_an_existing_secret_makes_the_new_value_active_at_once()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        (await client.PutAsJsonAsync("/api/variables",
+            new { key = Token, value = "saved-directly", note = "  Rotated upstream by hand.  ", expectedCurrentVersion = 1 })).EnsureSuccessStatusCode();
+
+        var versions = (await client.GetFromJsonAsync<JsonArray>("/api/variables/versions?key=" + Token))!;
+        var saved = versions.Single(v => v!["version"]!.GetValue<int>() == 2)!;
+        Assert.Equal("active", saved["status"]!.GetValue<string>());
+        Assert.Equal("ops", saved["activatedBy"]!.GetValue<string>());
+        Assert.Equal("Rotated upstream by hand.", saved["activationNote"]!.GetValue<string>());
+        Assert.Equal("previous", versions.Single(v => v!["version"]!.GetValue<int>() == 1)!["status"]!.GetValue<string>());
+        var revealed = await client.PostAsJsonAsync("/api/variables/reveal", new { keys = new[] { Token } });
+        Assert.Equal("saved-directly", (await revealed.Content.ReadFromJsonAsync<JsonObject>())!["values"]![0]!["value"]!.GetValue<string>());
+
+        // Another version became active since the caller read v1, so nothing is written.
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PutAsJsonAsync("/api/variables",
+            new { key = Token, value = "stale", expectedCurrentVersion = 1 })).StatusCode);
+        // A form for a new entry cannot overwrite one that exists.
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PutAsJsonAsync("/api/variables",
+            new { key = Token, value = "stale", visibility = "secret", expectedCurrentVersion = 0 })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/variables", new { key = Token, value = "" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/variables",
+            new { key = Token, value = "too long a note", note = new string('x', 2001) })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/variables",
+            new { key = Token, value = "made plain", visibility = "plain" })).StatusCode);
+        Assert.Equal(2, await server.QueryAsync(db => db.StoreVersions.CountAsync(v => v.Key == Token)));
+
+        (await client.PutAsJsonAsync("/api/variables", new { key = Token, value = "without a note", note = " " })).EnsureSuccessStatusCode();
+        versions = (await client.GetFromJsonAsync<JsonArray>("/api/variables/versions?key=" + Token))!;
+        Assert.Equal(3, versions[0]!["version"]!.GetValue<int>());
+        Assert.Equal("active", versions[0]!["status"]!.GetValue<string>());
+        Assert.Null(versions[0]!["activationNote"]);
+        (await client.PutAsJsonAsync("/api/variables", new { key = "fixture/new", value = "first", visibility = "secret", expectedCurrentVersion = 0 })).EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task A_candidate_is_promoted_without_a_note()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        (await client.PostAsJsonAsync("/api/variables/candidates", new { key = Token, value = "candidate" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/promote", new { key = Token, version = 2, expectedCurrentVersion = 1 })).EnsureSuccessStatusCode();
+        var promoted = (await client.GetFromJsonAsync<JsonArray>("/api/variables/versions?key=" + Token))![0]!;
+        Assert.Equal("active", promoted["status"]!.GetValue<string>());
+        Assert.Equal("ops", promoted["activatedBy"]!.GetValue<string>());
+        Assert.Null(promoted["activationNote"]);
+    }
+
+    [Fact]
+    public async Task The_list_counts_the_lines_of_an_active_value_without_returning_a_secret()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        (await client.PutAsJsonAsync("/api/variables", new { key = "app/env", value = "A=1\nB=2\nC=3\n", visibility = "secret" })).EnsureSuccessStatusCode();
+        (await client.PutAsJsonAsync("/api/variables", new { key = "app/zone", value = "hlab.example.com", visibility = "plain" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/variables/revoke", new { key = Writer, version = 1, reason = "Retiring the writer" })).EnsureSuccessStatusCode();
+
+        var listing = await client.GetStringAsync("/api/variables");
+        Assert.DoesNotContain("A=1", listing);
+        var entries = JsonNode.Parse(listing)!["entries"]!.AsArray();
+        int? Lines(string key) => entries.Single(e => e!["key"]!.GetValue<string>() == key)!["lines"]?.GetValue<int>();
+        Assert.Equal(3, Lines("app/env"));
+        Assert.Equal(1, Lines(Token));
+        Assert.Equal(1, Lines("app/zone"));
+        Assert.Null(Lines(Writer));
+    }
+
+    [Theory]
+    [InlineData("", 1)]
+    [InlineData("a", 1)]
+    [InlineData("a\nb\n", 2)]
+    [InlineData("a\nb", 2)]
+    [InlineData("a\n\n", 2)]
+    public void Lines_ignore_one_trailing_newline(string value, int lines) => Assert.Equal(lines, VariableStore.Lines(value));
 
     [Fact]
     public async Task Promotion_does_not_change_a_run_between_plan_apply_and_verification()
