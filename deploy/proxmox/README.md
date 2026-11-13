@@ -272,6 +272,21 @@ To make a release: set the new version in `backend/Directory.Build.props`,
 commit `v<version>`, and push the tag. The workflow publishes `backend-<version>`,
 `frontend-<version>`, and `agent-<version>`.
 
+## Service icons
+
+`octopushy-update` replaces `compose.yaml`, so map a folder of icons for the Services page in
+`/opt/octopushy/compose.override.yaml`, which Compose reads too and updates leave alone. The folder must be in the
+container first, for example as a read-only mount point: `pct set <ctid> -mp1 /mnt/nas/icons,mp=/srv/icons,ro=1`. Then:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - /srv/icons:/var/lib/octopushy/icons:ro
+```
+
+and `pct exec <ctid> -- octopushy-compose up -d backend`. See [service icons](../../docs/service-icons.md).
+
 ## Day to day
 
 ```sh

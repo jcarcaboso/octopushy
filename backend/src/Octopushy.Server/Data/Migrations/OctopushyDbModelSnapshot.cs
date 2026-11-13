@@ -1628,6 +1628,36 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("secret_resolutions", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ServiceIcon", b =>
+                {
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<string>("ContentType")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("content_type");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("name");
+
+                    b.Property<byte[]>("Picture")
+                        .HasColumnType("bytea")
+                        .HasColumnName("picture");
+
+                    b.Property<DateTimeOffset>("SetAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("set_at");
+
+                    b.HasKey("ResourceId")
+                        .HasName("pk_service_icons");
+
+                    b.ToTable("service_icons", (string)null);
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.Step", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2141,6 +2171,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_operator_tokens_users_user_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.ServiceIcon", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Resource", null)
+                        .WithOne()
+                        .HasForeignKey("Octopushy.Server.Data.ServiceIcon", "ResourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_service_icons_resources_resource_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.Step", b =>

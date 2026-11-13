@@ -1107,7 +1107,8 @@ a.badge:hover {
   border-color: var(--border-strong);
 }
 
-.segmented__item[aria-current="page"] {
+.segmented__item[aria-current="page"],
+.segmented__item[aria-pressed="true"] {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);

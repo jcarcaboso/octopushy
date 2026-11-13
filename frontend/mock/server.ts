@@ -18,6 +18,9 @@ interface Request {
   params: Record<string, string>;
   query: URLSearchParams;
   body: Record<string, unknown>;
+  /** The body as sent, and its Content-Type, for an upload. */
+  raw: Buffer;
+  type: string;
 }
 
 /** A reply with a status other than 200, or no body. */
@@ -27,6 +30,16 @@ class Reply {
   constructor(status: number, body?: unknown) {
     this.status = status;
     this.body = body;
+  }
+}
+
+/** A reply that is a file, not JSON. */
+class FileReply {
+  readonly type: string;
+  readonly bytes: Uint8Array | string;
+  constructor(type: string, bytes: Uint8Array | string) {
+    this.type = type;
+    this.bytes = bytes;
   }
 }
 
@@ -86,6 +99,33 @@ on("GET", "/api/guests/{id}", ({ params }) => data.guestDetail(params.id) ?? not
 on("GET", "/api/services/{id}", ({ params }) => data.serviceDetail(params.id) ?? notFound("service"));
 on("GET", "/api/installations/{id}", ({ params }) => data.installationDetail(params.id) ?? notFound("installation"));
 on("GET", "/api/workflows", () => data.workflows);
+
+// Service icons: uploads and choices are kept in memory; the predefined files are drawn from their names.
+
+const serviceExists = (id: string) => Boolean(data.serviceDetail(id));
+on("GET", "/api/icons", () => ({ names: data.iconNames }));
+on("GET", "/api/icons/{name}", ({ params }) =>
+  data.iconNames.includes(params.name) ? new FileReply("image/svg+xml", data.iconSvg(params.name)) : notFound("icon"));
+on("GET", "/api/services/{id}/icon", ({ params }) => {
+  const own = data.ownIcons.get(params.id);
+  return own && "picture" in own ? new FileReply(own.picture.type, own.picture.bytes) : notFound("icon");
+});
+on("PUT", "/api/services/{id}/icon/picture", ({ params, raw, type }) => {
+  if (!serviceExists(params.id)) return notFound("service");
+  if (!["image/png", "image/jpeg", "image/webp", "image/svg+xml"].includes(type)) return problem(415, "Send a PNG, JPEG, WebP or SVG image.");
+  if (raw.length > 1024 * 1024) return problem(413, "The picture is larger than 1 MiB.");
+  data.ownIcons.set(params.id, { picture: { type, bytes: raw, version: Date.now() } });
+});
+on("PUT", "/api/services/{id}/icon/predefined", ({ params, body }) => {
+  if (!serviceExists(params.id)) return notFound("service");
+  const name = String(body.name ?? "");
+  if (!data.iconNames.includes(name)) return problem(400, `There is no icon ${name} in the icons directory.`);
+  data.ownIcons.set(params.id, { chosen: name });
+});
+on("DELETE", "/api/services/{id}/icon", ({ params }) => {
+  if (!serviceExists(params.id)) return notFound("service");
+  data.ownIcons.delete(params.id);
+});
 
 // Starting runs: they stay queued, since nothing executes them.
 
@@ -364,10 +404,14 @@ on("POST", "/api/deploy", ({ body }) => commit(deployPreview(body), null, body.k
 
 // The server
 
-async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readRaw(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(chunk as Buffer);
-  const text = Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+function parseBody(raw: Buffer): Record<string, unknown> {
+  const text = raw.toString("utf8");
   if (!text) return {};
   try {
     const parsed: unknown = JSON.parse(text);
@@ -378,6 +422,10 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
 }
 
 function send(response: ServerResponse, status: number, body: unknown) {
+  if (body instanceof FileReply) {
+    response.writeHead(status, { "content-type": body.type }).end(body.bytes);
+    return;
+  }
   if (body === undefined) {
     response.writeHead(status).end();
     return;
@@ -406,9 +454,10 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       return;
     }
     const params = Object.fromEntries(route.r.keys.map((key, i) => [key, decodeURIComponent(route.m![i + 1])]));
-    const body = method === "GET" ? {} : await readBody(request);
-    const result = route.r.handler({ params, query: url.searchParams, body });
-    const reply = result instanceof Reply ? result : result === undefined ? new Reply(204) : new Reply(200, result);
+    const raw = method === "GET" ? Buffer.alloc(0) : await readRaw(request);
+    const type = (request.headers["content-type"] ?? "").split(";")[0].trim();
+    const result = route.r.handler({ params, query: url.searchParams, body: type.startsWith("image/") ? {} : parseBody(raw), raw, type });
+    const reply = result instanceof Reply ? result : result instanceof FileReply ? new Reply(200, result) : result === undefined ? new Reply(204) : new Reply(200, result);
     status = reply.status;
     send(response, reply.status, reply.body);
   } catch (error) {

@@ -2905,3 +2905,241 @@
     grid-column: 1 / -1;
   }
 }
+
+/* Services: every link, one section per domain, as rows or tiles. The rows scroll sideways in their own box. */
+.services {
+  overflow-x: auto;
+}
+
+.services__inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.services--list .services__inner {
+  min-width: 56rem;
+}
+
+.services-section__toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+}
+
+.services-section__toggle[aria-expanded="true"] .runs-section__chevron {
+  transform: rotate(90deg);
+}
+
+.services-section__down {
+  margin-left: auto;
+}
+
+.services-down {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--danger-fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.services-down::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--meter-danger);
+}
+
+.services-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.services-head,
+.services-row {
+  display: grid;
+  grid-template-columns: 20px minmax(7.5rem, 1fr) minmax(18rem, 2fr) minmax(6rem, 0.8fr) minmax(10rem, 1.1fr) 8rem 1.5rem;
+  column-gap: var(--space-3);
+  align-items: center;
+  padding: 0 var(--space-5);
+}
+
+.services-head {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.services-row {
+  min-height: 2.875rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.services-row:hover {
+  background: var(--surface-2);
+}
+
+.services-row__name,
+.services-row__link,
+.services-row__guest {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.services-row__name {
+  color: var(--link);
+  font-weight: 600;
+}
+
+.services-row__link,
+.services-row__guest {
+  color: var(--text);
+}
+
+.services-row .uptime-strip {
+  max-width: 15rem;
+}
+
+.services-row__answer {
+  text-align: right;
+}
+
+.services-row__open {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.services-row__open:hover {
+  color: var(--text);
+}
+
+.service-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.service-icon--large {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+}
+
+.service-icon--letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--neutral-fg);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.service-icon--large.service-icon--letter {
+  font-size: 1.25rem;
+}
+
+.service-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* The predefined icons in the icon dialog. */
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.icon-grid__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.icon-grid__item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.icon-grid__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  list-style: none;
+}
+
+.service-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  padding: var(--space-5) var(--space-3) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: center;
+}
+
+a.service-tile:hover {
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+
+.service-tile .service-icon {
+  margin-bottom: var(--space-2);
+}
+
+.service-tile__name,
+.service-tile__label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-tile__name {
+  font-weight: 600;
+}
+
+.service-tile__label {
+  font-size: var(--text-xs);
+}

@@ -26,6 +26,7 @@ export const keys = {
   uptime: ["uptime"] as const,
   guest: (id: string) => ["guest", id] as const,
   service: (id: string) => ["service", id] as const,
+  icons: ["icons"] as const,
   installation: (id: string) => ["installation", id] as const,
   runs: (status: string | null) => ["runs", status ?? "all"] as const,
   run: (id: string) => ["run", id] as const,
@@ -101,6 +102,15 @@ export function useService(id: string) {
     queryKey: keys.service(id),
     queryFn: () => unwrap(api.GET("/api/services/{id}", { params: { path: { id } } })),
     refetchInterval: (query) => (query.state.data?.service.activeRun ? 4_000 : 15_000),
+  });
+}
+
+/** The predefined icon files the operator mapped into the backend; they change only when that folder does. */
+export function useIcons() {
+  return useQuery({
+    queryKey: keys.icons,
+    queryFn: () => unwrap(api.GET("/api/icons")),
+    staleTime: 30_000,
   });
 }
 
@@ -256,6 +266,31 @@ export function useDeployService(id: string) {
   return useMutation({
     mutationFn: () => unwrap(api.POST("/api/services/{id}/deploy", { params: { path: { id } } })),
     onSuccess: () => refresh(),
+  });
+}
+
+/** A new icon for a service: an uploaded picture, a predefined file by name, or back to the automatic match. */
+export type IconChange = { picture: File } | { predefined: string } | "default";
+
+export function useChangeServiceIcon(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (change: IconChange) => {
+      const path = { params: { path: { id } } };
+      if (change === "default") return unwrap(api.DELETE("/api/services/{id}/icon", path));
+      if ("predefined" in change) return unwrap(api.PUT("/api/services/{id}/icon/predefined", { ...path, body: { name: change.predefined } }));
+      // The picture goes as it is, under its own type, not as JSON.
+      return unwrap(
+        api.PUT("/api/services/{id}/icon/picture", {
+          ...path,
+          body: change.picture as unknown as string,
+          bodySerializer: (body) => body,
+          headers: { "Content-Type": change.picture.type },
+        }),
+      );
+    },
+    onSuccess: () =>
+      Promise.all([client.invalidateQueries({ queryKey: keys.inventory }), client.invalidateQueries({ queryKey: keys.service(id) })]),
   });
 }
 

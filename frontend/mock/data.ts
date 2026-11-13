@@ -202,14 +202,48 @@ export function guestDetail(id: string): GuestDetail | null {
 
 export const appLinks = ["https://app.home.example.org/"];
 
-export const otherServices: { id: string; guest: string; name: string; workflow: string; links: string[]; names?: { name: string; stage: string; url: string }[] }[] = [
+export const otherServices: {
+  id: string; guest: string; name: string; workflow: string; links: string[]; names?: { name: string; stage: string; url: string }[];
+}[] = [
   { id: "svc-traefik", guest: "web", name: "traefik", workflow: "traefik@2", links: ["https://traefik.home.example.org/dashboard/"] },
   { id: "svc-jellyfin", guest: "media", name: "jellyfin", workflow: "compose-app@1", links: ["https://jellyfin.home.example.org/", "https://media.home.example.org/"],
     names: [{ name: "jellyfin.home.example.org", stage: "dns", url: "https://jellyfin.home.example.org/" }] },
   { id: "svc-technitium", guest: "dns", name: "technitium", workflow: "compose-app@1", links: ["http://10.15.60.21:5380/"] },
   { id: "svc-pbs", guest: "pbs", name: "proxmox-backup", workflow: "pbs@1", links: ["https://pbs.home.example.org:8007/"] },
   { id: "svc-samba", guest: "nas", name: "samba", workflow: "samba@1", links: ["tcp://10.15.60.40:445"] },
+  // Under a second domain: fleet's dashboard and api names fold into ops.example.org.
+  { id: "svc-fleet", guest: "dev", name: "fleet", workflow: "compose-app@1",
+    links: ["https://fleet.ops.example.org/", "https://fleet.dashboard.ops.example.org/", "https://fleet.api.ops.example.org/v1/health"] },
+  { id: "svc-open-webui", guest: "pve01-ai", name: "open-webui", workflow: "compose-app@1", links: ["https://chat.ops.example.org/"] },
 ];
+
+// Icons: the predefined files, as if an operator mapped a folder of them. traefik, jellyfin, samba, fleet and open-webui
+// match by name; app, technitium and proxmox-backup have no match and show their letter.
+
+export const iconNames = [
+  "adguard.svg", "fleet.svg", "gitea.svg", "grafana.svg", "home-assistant.svg", "jellyfin.svg", "nextcloud.svg", "open-webui.svg",
+  "proxmox.svg", "samba.svg", "traefik.svg", "vaultwarden.svg",
+];
+
+/** Each service's own icon, set from the page: an uploaded picture or a chosen file. */
+export const ownIcons = new Map<string, { picture: { type: string; bytes: Uint8Array; version: number } } | { chosen: string }>();
+
+/** A predefined file: a rounded square in a colour from the name, with its first two letters. Not a real logo. */
+export function iconSvg(name: string): string {
+  const hue = [...name].reduce((sum, c) => sum * 31 + c.charCodeAt(0), 7) % 360;
+  const letters = name.slice(0, 1).toUpperCase() + name.slice(1, 2);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="10" fill="hsl(${hue} 55% 45%)"/>` +
+    `<text x="24" y="31" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="600" fill="#fff">${letters}</text></svg>`;
+}
+
+/** The server's order: an uploaded picture, a chosen file still there, the file named after the service, else none. */
+function iconOf(id: string, name: string): ServiceSummary["icon"] {
+  const own = ownIcons.get(id);
+  if (own && "picture" in own) return { url: `/api/services/${id}/icon?v=${own.picture.version}`, source: "picture" };
+  if (own && iconNames.includes(own.chosen)) return { url: `/api/icons/${own.chosen}`, source: "chosen" };
+  const match = iconNames.find((n) => n.replace(/\.[^.]+$/, "") === name);
+  return match ? { url: `/api/icons/${match}`, source: "name" } : null;
+}
 
 const guestAddressOf = (id: string) => {
   const g = [...guests, ...otherGuests].find((x) => x.id === id)!;
@@ -219,12 +253,12 @@ const guestAddressOf = (id: string) => {
 function serviceSummary(): ServiceSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(resources.app.id);
   return { id: resources.app.id, address: resources.app.address, name: "app", status: state, statusDetail, valid: true, activeRun, lastRun,
-    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks, names: [] };
+    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks, names: [], icon: iconOf(resources.app.id, "app") };
 }
 
 function otherSummary(s: (typeof otherServices)[number]): ServiceSummary {
   return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: "in-sync", statusDetail: null, valid: true,
-    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [] };
+    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [], icon: iconOf(s.id, s.name) };
 }
 
 function servicesOf(guestId: string): ServiceSummary[] {

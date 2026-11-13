@@ -56,6 +56,11 @@ Forms commit to the lab repository only with `Octopushy__RepositoryEditor__Publi
 environment, and a repository credential that can push: for GitHub, a deploy key with write access. Without either, the forms
 open read-only. See [changes from the UI](../docs/changes-from-the-ui.md).
 
+## Service icons
+
+The Services page can show logos from a folder of yours: uncomment the `icons` line under the backend's `volumes` in
+`compose.yaml` and point it at the folder. It is mounted read-only. See [service icons](../docs/service-icons.md).
+
 ## Upgrading from 0.5.0
 
 The releases after 0.5.0 add migrations after its `Initial`, so a 0.5.0 database is upgraded in place: `migrate` applies them.

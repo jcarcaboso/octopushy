@@ -18,8 +18,8 @@ in the mode they are in now (see [installation trust](installation-trust.md)):
 An API endpoint several hosts share, such as a cluster's, is checked once and speaks for the installation, not for one
 host.
 
-A service's links are where people open it. They are listed in its `service.yaml`, are shown in the Inventory, and change
-nothing a run does:
+A service's links are where people open it. They are listed in its `service.yaml`, are shown in the Inventory and on the
+Services page, grouped by the domain their host is under, and change nothing a run does:
 
 ```yaml
 schemaVersion: 1

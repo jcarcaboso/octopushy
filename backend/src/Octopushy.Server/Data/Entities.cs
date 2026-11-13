@@ -1391,3 +1391,23 @@ public sealed class UptimeBucket
 
     public long LatencyMsTotal { get; set; }
 }
+
+/// <summary>
+/// The icon chosen for one service on the Services page: a file of the icons directory by name, or a picture uploaded for it.
+/// Only shown, so it lives here and not in the lab repository; see docs/service-icons.md.
+/// </summary>
+public sealed class ServiceIcon
+{
+    public Guid ResourceId { get; set; }
+
+    /// <summary>The chosen file of the icons directory; null when <see cref="Picture"/> is set.</summary>
+    public string? Name { get; set; }
+
+    /// <summary>The uploaded picture, as it was sent; null when <see cref="Name"/> is set.</summary>
+    public byte[]? Picture { get; set; }
+
+    /// <summary>The picture's media type, set with it.</summary>
+    public string? ContentType { get; set; }
+
+    public DateTimeOffset SetAt { get; set; }
+}
