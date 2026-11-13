@@ -1,8 +1,8 @@
 name: Images
 
 # Publishes the backend, frontend, agent and validate images to one Docker Hub repository, as
-# `<component>-main` and `<component>-sha-<commit>` for every push to main, and
-# only `<component>-<version>` for every v<version> tag. The Proxmox
+# `<component>-<version>` for every v<version> tag. A push to main publishes nothing; a run started by hand
+# (workflow_dispatch) from a branch publishes `<component>-<branch>` and `<component>-sha-<commit>`. The Proxmox
 # installer (deploy/proxmox) runs the first three; `validate` is the offline validator,
 # `octopushy-validate`, for the CI of lab and workflows repositories. Needs the DOCKERHUB_USERNAME and
 # DOCKERHUB_TOKEN repository secrets; the token only has to write to this repository.
@@ -11,7 +11,6 @@ name: Images
 # The tag names its content, so a tag that exists is never built again or overwritten.
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
