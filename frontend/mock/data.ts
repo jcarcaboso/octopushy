@@ -196,6 +196,8 @@ export function guestDetail(id: string): GuestDetail | null {
     managedAccess: g.access ? access(g) : null,
     services: servicesOf(g.id),
     hostKey: null,
+    // bb's waiting plan grows it: what it was last applied with is smaller.
+    appliedDefinitionText: g.id === "bb" ? guestYaml({ ...g, memory: 4096, disks: [32], tags: ["homelab"] }) : null,
   };
 }
 
@@ -297,6 +299,7 @@ export function serviceDetail(id: string): ServiceDetail | null {
     missingSince: null,
     retiredAt: null,
     runs: runsOf(resources.app.id),
+    appliedDefinitionText: "schemaVersion: 1\nworkflow: web@1\nlinks:\n  - https://app.home.example.org/\ninputs:\n  app_hostname: app.home.example.org\n  app_port: 8080\nsecrets:\n  web_password: { store: home/pve01/web/app/web_password }\n",
   };
 }
 

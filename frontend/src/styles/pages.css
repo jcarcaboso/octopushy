@@ -4402,6 +4402,20 @@ a.service-tile:hover {
   font-size: var(--text-xs);
 }
 
+/* A value that is not what was last applied: the file's value, and under it what the last apply had. */
+.sheet-field--pending {
+  margin-left: calc(var(--space-3) * -1);
+  padding-left: calc(var(--space-3) - 2px);
+  border-left: 2px solid var(--attention-fg);
+}
+
+.sheet-field__applied {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--attention-fg);
+  overflow-wrap: anywhere;
+}
+
 .definition__line--marked > span {
   background: var(--accent-soft);
 }

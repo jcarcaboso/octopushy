@@ -1627,6 +1627,7 @@ export interface components {
             schedules: components["schemas"]["GuestScheduleDto"][];
             secrets: components["schemas"]["FollowedSecretDto"][];
             refused: null | string;
+            appliedDefinitionText?: null | string;
         };
         GuestDetailDto: {
             guest: components["schemas"]["GuestSummaryDto"];
@@ -1657,6 +1658,7 @@ export interface components {
             managedAccess: null | components["schemas"]["ManagedAccessDto"];
             services: components["schemas"]["ServiceSummaryDto"][];
             hostKey?: null | components["schemas"]["ManagedHostKeyDto"];
+            appliedDefinitionText?: null | string;
         };
         GuestScheduleDto: {
             action: string;
@@ -2157,6 +2159,7 @@ export interface components {
             /** Format: date-time */
             retiredAt: null | string;
             runs: components["schemas"]["RunSummaryDto"][];
+            appliedDefinitionText?: null | string;
         };
         ServiceIconChoice: {
             name: string;

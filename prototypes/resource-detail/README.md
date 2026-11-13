@@ -22,5 +22,4 @@ comment: 02 Tabs, 03 Declared and observed, 06 Blueprint and 07 Source map.
 in the bottom-right corner.
 
 None of this is wired to the backend. The pages that grew out of them, from 01 Spec sheet, are
-`GuestPage.tsx`, `ServicePage.tsx` and `InstallationPage.tsx` in `frontend/src/pages`. 01 also shows
-what the pages do not do yet: a value a waiting run would change, marked where it stands in the sheet.
+`GuestPage.tsx`, `ServicePage.tsx` and `InstallationPage.tsx` in `frontend/src/pages`.

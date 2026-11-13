@@ -763,6 +763,42 @@ public class ConfigureRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task The_guest_page_gets_the_definition_as_last_applied_until_the_change_is_applied()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var id = (await server.ResourceAsync(Guest)).Id;
+
+        // Applied from the commit the page reads, so there is nothing to compare with.
+        var detail = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{id}"))!;
+        Assert.Null(detail["appliedDefinitionText"]);
+        Assert.Null(detail["configuration"]!["appliedDefinitionText"]);
+
+        const string guest = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        var text = File.ReadAllText(Path.Combine(server.Repository.Root, guest));
+        server.Repository.Write(guest, text.Replace("memory: 2048", "memory: 4096"));
+        server.Commit("More memory");
+        await server.SyncAsync();
+
+        detail = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{id}"))!;
+        Assert.Contains("memory: 4096", detail["definitionText"]!.GetValue<string>());
+        Assert.Contains("memory: 2048", detail["appliedDefinitionText"]!.GetValue<string>());
+        Assert.Contains("memory: 2048", detail["configuration"]!["appliedDefinitionText"]!.GetValue<string>());
+
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(replace: 1), artifacts: FakeAgent.PlanArtifact());
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded);
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded);
+        await server.TickAsync();
+        detail = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{id}"))!;
+        Assert.Null(detail["appliedDefinitionText"]);
+    }
+
+    [Fact]
     public async Task A_rollback_configures_the_commit_the_branch_returned_to()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

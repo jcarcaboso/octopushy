@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 import type { Issue } from "../api/types";
-import { DefinitionSheet } from "./DefinitionSheet";
+import { DefinitionSheet, type AppliedDefinition } from "./DefinitionSheet";
 
 const file = "labs/home/proxmox/pve01/guests/bb/guest.yaml";
 const text = [
@@ -18,7 +18,7 @@ const text = [
   "",
 ].join("\n");
 
-function renderSheet(props: { text: string | null; issues?: Issue[] }) {
+function renderSheet(props: { text: string | null; issues?: Issue[]; applied?: AppliedDefinition[] }) {
   return render(
     <MemoryRouter>
       <DefinitionSheet file={file} kind="guest" {...props} />
@@ -45,6 +45,24 @@ describe("DefinitionSheet", () => {
     expect(screen.getByText("for the build cache")).toBeInTheDocument();
     expect(screen.getByText("on local-lvm")).toBeInTheDocument();
     expect(screen.getByText("data volume")).toBeInTheDocument();
+  });
+
+  it("says what was last applied for a value that differs, only in the sections that run applies", () => {
+    const then = "type: container\nhardware:\n  memory: 4096\naccess:\n  sshKey: { store: proxmox/pve01/bb/ssh-key, version: 1 }\n";
+    renderSheet({ text, applied: [{ text: then, sections: ["hardware"] }] });
+    expect(screen.getByText("Memory").parentElement).toHaveTextContent("Last applied: 4 GiB");
+    // Cores was not in the file then.
+    expect(screen.getByText("Cores").parentElement).toHaveTextContent("Not in the last apply");
+    expect(screen.getByText("2 values not applied yet")).toBeInTheDocument();
+    // The type and the key changed too, but this kind of run applies neither.
+    expect(screen.getByText("Type").parentElement).not.toHaveTextContent("Last applied");
+    expect(screen.getByText("SSH key").parentElement).not.toHaveTextContent("Last applied");
+  });
+
+  it("marks nothing when the last apply had the same values", () => {
+    renderSheet({ text, applied: [{ text: text.replace("# Sized for builds.", "# Another comment."), sections: ["general", "hardware", "access"] }] });
+    expect(screen.queryByText(/not applied yet/)).toBeNull();
+    expect(screen.queryByText(/Last applied/)).toBeNull();
   });
 
   it("opens the YAML at a section's lines, marked", async () => {

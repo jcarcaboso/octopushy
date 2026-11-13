@@ -123,4 +123,19 @@ describe("GuestPage", () => {
     expect(screen.getByText("Few cores.")).toBeInTheDocument();
     expect(screen.queryByText("Outputs")).toBeNull();
   });
+
+  it("marks the values that are not what was last applied, and none once the guest is in sync", async () => {
+    const before = text.replace("memory: 8192", "memory: 4096").replace("bridge: vmbr1", "bridge: vmbr0");
+    mockApi({ "GET /api/guests/guest-1": () => detail({ appliedDefinitionText: before }), "GET /api/uptime": () => ({ checks: [] }) });
+    const first = renderAt(<GuestPage />, route);
+    expect((await screen.findByText("Bridge")).parentElement).toHaveTextContent("Last applied: vmbr0");
+    expect(screen.getByText("2 values not applied yet")).toBeInTheDocument();
+    first.unmount();
+
+    // In sync after a plan that changed nothing: the older text says nothing about the machine.
+    mockApi({ "GET /api/guests/guest-1": () => detail({ appliedDefinitionText: before, inSync: true }), "GET /api/uptime": () => ({ checks: [] }) });
+    renderAt(<GuestPage />, route);
+    await screen.findByText("Bridge");
+    expect(screen.queryByText(/not applied yet/)).toBeNull();
+  });
 });

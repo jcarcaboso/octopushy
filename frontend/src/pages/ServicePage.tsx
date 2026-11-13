@@ -133,7 +133,14 @@ export function ServicePage() {
         <ServiceGlance data={data} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="service" issues={data.issues} />
+            <DefinitionSheet
+              file={data.definitionFile}
+              text={data.definitionText}
+              kind="service"
+              issues={data.issues}
+              // A pipeline applies the inputs and the secrets; links, description and policy run nothing.
+              applied={data.appliedDefinitionText ? [{ text: data.appliedDefinitionText, sections: ["inputs", "secrets"] }] : []}
+            />
             {data.issues.length > 0 ? (
               <Card title="Issues" meta={data.issues.length} id="issues">
                 <IssueList issues={data.issues} />

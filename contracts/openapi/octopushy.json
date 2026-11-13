@@ -7080,6 +7080,12 @@
               "null",
               "string"
             ]
+          },
+          "appliedDefinitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -7269,6 +7275,12 @@
               {
                 "$ref": "#/components/schemas/ManagedHostKeyDto"
               }
+            ]
+          },
+          "appliedDefinitionText": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }
@@ -9446,6 +9458,12 @@
             "items": {
               "$ref": "#/components/schemas/RunSummaryDto"
             }
+          },
+          "appliedDefinitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
