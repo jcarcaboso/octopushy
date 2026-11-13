@@ -133,6 +133,27 @@ export function VariablesPage() {
     else step();
   }, []);
 
+  // Reloading or closing the tab asks first, and so does a link outside this page, such as the sidebar. Links inside go through GuardLink.
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (dirty.current) event.preventDefault();
+    };
+    const guard = (event: MouseEvent) => {
+      if (!dirty.current || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(link instanceof HTMLAnchorElement) || link.closest(".vars-page")) return;
+      if (link.origin !== window.location.origin || link.target === "_blank" || link.hasAttribute("download")) return;
+      event.preventDefault();
+      leave(() => void navigate(`${link.pathname}${link.search}${link.hash}`));
+    };
+    window.addEventListener("beforeunload", warn);
+    document.addEventListener("click", guard, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", guard, true);
+    };
+  }, [leave, navigate]);
+
   /** The list is hidden only on a narrow container with an entry open: one pane at a time. */
   function listHidden() {
     return listRef.current !== null && getComputedStyle(listRef.current).display === "none";

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import type { Variable, VariableVersion } from "../api/types";
 import { mockApi, problem, renderAt } from "../test/utils";
 import { VariablesPage } from "./VariablesPage";
@@ -153,6 +153,94 @@ describe("VariablesPage entry pane", () => {
     await waitFor(() => expect(loads).toBeGreaterThan(before));
     expect(within(selected).queryByRole("alert")).not.toBeInTheDocument();
     expect(within(selected).getByLabelText("Value")).toHaveValue("replacement");
+  });
+
+  it("keeps the version an edit started from when the entry is refetched, until the draft is continued on purpose", async () => {
+    const user = userEvent.setup();
+    let active = 3;
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(entry({ version: active, latestVersion: 4 })),
+      "PUT /api/variables": ({ body }) => {
+        // Someone else makes v4 active while the draft is open; saving the description then refetches the entry.
+        if ((body as { value: string | null }).value === null) active = 4;
+      },
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), "replacement");
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    await user.click(within(selected).getByRole("button", { name: "Edit the description" }));
+    await user.click(within(selected).getByRole("button", { name: "Save" }));
+    expect(await within(selected).findByText("v4 active")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Value" }));
+
+    const alert = within(selected).getByRole("alert");
+    expect(alert).toHaveTextContent("v4 became active while you were editing.");
+    expect(alert).toHaveTextContent("Your draft started from v3");
+    expect(within(selected).getByRole("button", { name: "Save and make active" })).toBeDisabled();
+    expect(within(selected).getByLabelText("Value")).toHaveValue("replacement");
+
+    await user.click(within(alert).getByRole("button", { name: "Continue from v4" }));
+    expect(within(selected).queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+    await waitFor(() => expect(requests.filter((r) => r.method === "PUT").at(-1)?.body).toMatchObject({ value: "replacement", expectedCurrentVersion: 4 }));
+  });
+
+  it("does not let a second click save over the version a refused save ran into", async () => {
+    const user = userEvent.setup();
+    let active = 3;
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(entry({ version: active, latestVersion: 4 })),
+      "PUT /api/variables": () => {
+        active = 4;
+        return problem(409, "The active version changed. Refresh and review before saving.");
+      },
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    await user.type(within(selected).getByLabelText("Value"), "replacement");
+    await user.click(within(selected).getByRole("button", { name: "Save and make active" }));
+
+    expect(await within(selected).findByRole("button", { name: "Continue from v4" })).toBeInTheDocument();
+    expect(within(selected).getByRole("alert")).toHaveTextContent("The active version changed. Refresh and review before saving.");
+    expect(within(selected).getByRole("button", { name: "Save and make active" })).toBeDisabled();
+    expect(requests.filter((r) => r.method === "PUT").map((r) => (r.body as { expectedCurrentVersion: number }).expectedCurrentVersion)).toEqual([3]);
+  });
+
+  it("asks before a link outside the page or a reload drops the changes", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderAt(
+      <>
+        <Link to="/variables?folder=elsewhere">Elsewhere</Link>
+        <VariablesPage />
+        <Address />
+      </>,
+      { path: "/variables", route: opened(key) },
+    );
+    const selected = await pane();
+    const reload = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    await user.click(within(selected).getByRole("button", { name: "Update" }));
+    expect(reload()).toBe(false);
+    await user.type(within(selected).getByLabelText("Value"), "unsaved");
+    expect(reload()).toBe(true);
+
+    await user.click(screen.getByRole("link", { name: "Elsewhere" }));
+    let dialog = screen.getByRole("dialog", { name: "Drop the changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
+    expect(address()).toBe(`?key=${key}`);
+
+    await user.click(screen.getByRole("link", { name: "Elsewhere" }));
+    dialog = screen.getByRole("dialog", { name: "Drop the changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Drop them" }));
+    expect(address()).toBe("?folder=elsewhere");
+    expect(reload()).toBe(false);
   });
 
   it("asks before leaving an editor with changes, and stays when told to", async () => {

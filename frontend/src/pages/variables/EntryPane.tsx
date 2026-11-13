@@ -13,7 +13,8 @@ import { FormatLine, ValueEditor, ValueViewer } from "./ValueText";
 import { VersionsTab } from "./VersionsTab";
 
 export type Tab = "value" | "versions" | "details";
-type Edit = { mode: "modify" | "update"; base?: string; text: string };
+/** An edit keeps the version it started from: a refetch must not move what the save is checked against. */
+type Edit = { mode: "modify" | "update"; base?: string; text: string; version: number };
 
 interface Props {
   entry: Variable;
@@ -102,6 +103,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
   const remove = useDeleteVariable();
 
   const changed = edit ? (edit.base === undefined ? edit.text !== "" : edit.text !== edit.base) : false;
+  const stale = edit !== null && edit.version !== entry.version;
   const dirty = changed || (description !== null && description !== (entry.description ?? ""));
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   useEffect(() => () => onDirty(false), [onDirty]);
@@ -116,7 +118,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
   async function modify() {
     setNotice(null);
     if (!secret) {
-      setEdit({ mode: "modify", base: entry.value ?? "", text: entry.value ?? "" });
+      setEdit({ mode: "modify", base: entry.value ?? "", text: entry.value ?? "", version: entry.version });
       return;
     }
     let value = revealed;
@@ -125,7 +127,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
       value = await onReveal();
       setOpening(false);
     }
-    if (typeof value === "string") setEdit({ mode: "modify", base: value, text: value });
+    if (typeof value === "string") setEdit({ mode: "modify", base: value, text: value, version: entry.version });
   }
 
   function saved() {
@@ -134,7 +136,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
   }
 
   function saveActive() {
-    if (!edit || !changed || edit.text === "" || save.isPending) return;
+    if (!edit || !changed || edit.text === "" || save.isPending || stale) return;
     save.mutate(
       {
         key: entry.key,
@@ -142,7 +144,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
         visibility: entry.visibility,
         description: entry.description,
         note: note.trim() || null,
-        expectedCurrentVersion: entry.version,
+        expectedCurrentVersion: edit.version,
       },
       { onSuccess: saved },
     );
@@ -188,7 +190,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
           className="button button--small"
           onClick={() => {
             setNotice(null);
-            setEdit({ mode: "update", text: "" });
+            setEdit({ mode: "update", text: "", version: entry.version });
           }}
         >
           <Replace size={14} aria-hidden="true" /> Update
@@ -252,12 +254,14 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
     const error = save.error || stage.error;
     const pending = save.isPending || stage.isPending;
     const blocked = !changed || current.text === "" || pending;
+    const conflict = error instanceof ApiError && error.status === 409 ? error.message : null;
     return (
       <div className="vars-edit">
         <p className="muted small">
           {current.mode === "modify" ? (
             <>
-              <strong className="vars-strong">Modify.</strong> Starts from v{entry.version}, the active value. Change the lines you need.
+              <strong className="vars-strong">Modify.</strong> Starts from v{current.version}
+              {stale ? "" : ", the active value"}. Change the lines you need.
             </>
           ) : (
             <>
@@ -293,7 +297,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
             <button type="button" className="button" onClick={stopEditing} disabled={pending}>
               Cancel
             </button>
-            <button type="button" className="button button--primary" onClick={saveActive} disabled={blocked}>
+            <button type="button" className="button button--primary" onClick={saveActive} disabled={blocked || stale}>
               {save.isPending ? "Saving…" : "Save and make active"}
             </button>
           </span>
@@ -302,16 +306,39 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
           Saved as v{entry.latestVersion + 1} and active right away.
           {entry.usedBy.length > 0 ? " Guests and services that follow this key get a setup run." : null}
         </p>
-        {error instanceof ApiError && error.status === 409 ? (
+        {stale ? (
+          <Callout
+            kind="warning"
+            title={conflict ?? `v${entry.version} became active while you were editing.`}
+            alert
+            actions={
+              <button
+                type="button"
+                className="button button--small"
+                onClick={() => {
+                  save.reset();
+                  stage.reset();
+                  setEdit({ ...current, version: entry.version });
+                }}
+              >
+                Continue from v{entry.version}
+              </button>
+            }
+          >
+            Your draft started from v{current.version} and holds nothing of what v{entry.version} changed. Continue only if it should replace
+            v{entry.version}.
+          </Callout>
+        ) : conflict !== null ? (
           <ConflictNote
-            message={error.message}
+            message={conflict}
             onRefresh={() => {
               save.reset();
               stage.reset();
               onRefresh();
             }}
           />
-        ) : error ? (
+        ) : null}
+        {error && conflict === null ? (
           <Callout kind="danger" title={stage.error ? "The candidate could not be saved." : "The value could not be saved."} alert>
             Try again or reload the page. Submitted values are not shown in error messages.
           </Callout>
