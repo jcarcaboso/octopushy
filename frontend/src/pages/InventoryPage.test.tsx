@@ -188,6 +188,41 @@ it("keeps only the machines in the statuses the address names, and shows all aga
   expect(within(column("Nodes")).getAllByRole("button")).toHaveLength(2);
 });
 
+it("names the list a narrow page shows, and its path leads back up", async () => {
+  const user = userEvent.setup();
+  show();
+  const frame = () => column("Details").parentElement!;
+  const path = () => screen.getByRole("navigation", { name: "Path" });
+  await screen.findByRole("region", { name: "Nodes" });
+  // Nothing chosen yet: the nodes, though the details already show the first one with a problem.
+  expect(frame()).toHaveAttribute("data-level", "nodes");
+  expect(path()).toHaveTextContent(/^Nodes$/);
+
+  await user.click(within(column("Nodes")).getByRole("button", { name: /pve01/ }));
+  expect(frame()).toHaveAttribute("data-level", "machines");
+  // No machine is chosen, so the first is the one the Tab key reaches.
+  expect(within(column("Machines")).getByRole("button", { name: /media/ })).toHaveAttribute("tabindex", "0");
+
+  // A machine without services stays in the list of machines; one with services opens them.
+  await user.click(within(column("Machines")).getByRole("button", { name: /dns/ }));
+  expect(frame()).toHaveAttribute("data-level", "machines");
+  await user.click(within(column("Machines")).getByRole("button", { name: /media/ }));
+  expect(frame()).toHaveAttribute("data-level", "services");
+  await user.click(within(column("Services")).getByRole("button", { name: /jellyfin/ }));
+  expect(path()).toHaveTextContent("Nodespve01mediajellyfin");
+
+  await user.click(within(path()).getByRole("button", { name: "pve01" }));
+  expect(frame()).toHaveAttribute("data-level", "machines");
+  expect(within(column("Details")).getByRole("heading", { name: "pve01" })).toBeInTheDocument();
+  // Back at the nodes, the one it came from stays chosen.
+  await user.click(within(path()).getByRole("button", { name: "Nodes" }));
+  expect(frame()).toHaveAttribute("data-level", "nodes");
+  expect(path()).toHaveTextContent(/^Nodes$/);
+  expect(within(column("Details")).getByRole("heading", { name: "pve01" })).toBeInTheDocument();
+  await user.click(within(column("Nodes")).getByRole("button", { name: /pve01/ }));
+  expect(frame()).toHaveAttribute("data-level", "machines");
+});
+
 it("says when no agent checks uptime", async () => {
   show("/inventory", false);
   expect(await screen.findByText("Nothing checks uptime right now")).toBeInTheDocument();

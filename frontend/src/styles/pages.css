@@ -1953,10 +1953,17 @@
 /*
  * Inventory: columns as in a file browser. Nodes, their machines, a machine's services (only when it has any), and the
  * details of whatever is selected. Liveness colors follow the run track: up is the muted green, down the meter red.
+ * The frame measures the room the page has, whatever the sidebar takes: too little for every column and a path stands
+ * in for the ones on the way to the selection.
  */
+.inv-frame {
+  container: inv / inline-size;
+}
+
 .inv {
   display: grid;
-  grid-template-columns: minmax(12rem, 15rem) minmax(13rem, 16rem) minmax(0, 1fr);
+  /* The lists give way before the details do, which keep 24rem; with less than that, the path takes over below. */
+  grid-template-columns: minmax(12rem, 15rem) minmax(13rem, 16rem) minmax(24rem, 1fr);
   height: max(30rem, calc(100vh - 9.5rem));
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1965,7 +1972,7 @@
 }
 
 .inv--services {
-  grid-template-columns: minmax(12rem, 15rem) minmax(13rem, 16rem) minmax(13rem, 16rem) minmax(0, 1fr);
+  grid-template-columns: minmax(12rem, 15rem) minmax(13rem, 16rem) minmax(13rem, 16rem) minmax(24rem, 1fr);
 }
 
 .inv-problems {
@@ -2141,6 +2148,7 @@
 }
 
 .inv-detail {
+  container: inv-detail / inline-size;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -2168,6 +2176,22 @@
 
 .inv-path button:hover {
   text-decoration: underline;
+}
+
+.inv-path__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.inv-path [aria-current] {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.inv-path--bar {
+  display: none;
 }
 
 .inv-detail__header {
@@ -2374,23 +2398,54 @@
   margin-top: var(--space-1);
 }
 
-@media (max-width: 1100px) {
-  .inv,
-  .inv--services {
-    grid-template-columns: minmax(10rem, 13rem) minmax(11rem, 14rem) minmax(0, 1fr);
+/* Narrow details: a check's history goes under its address, which keeps the line to itself. */
+@container inv-detail (max-width: 26rem) {
+  .check-row {
+    grid-template-columns: auto minmax(0, 1fr) 3.75rem;
+    row-gap: var(--space-1);
   }
 
-  .inv--services .inv-detail {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--border);
-  }
-
-  .inv--services {
-    grid-template-rows: minmax(14rem, 40%) minmax(0, 1fr);
+  .check-row .uptime-strip {
+    grid-area: 2 / 2 / auto / -1;
+    width: 100%;
   }
 }
 
-@media (max-width: 760px) {
+/* Too narrow for every column: one list beside the details, and the path above them to the lists it replaced. */
+@container inv (max-width: 62rem) {
+  .inv,
+  .inv--services {
+    grid-template-columns: minmax(14rem, 3fr) minmax(0, 10fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .inv-path--bar {
+    display: flex;
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .inv-path--bar button {
+    min-height: 1.5rem;
+  }
+
+  .inv-detail .inv-path,
+  .inv-column {
+    display: none;
+  }
+
+  .inv[data-level="nodes"] .inv-column[data-level="nodes"],
+  .inv[data-level="machines"] .inv-column[data-level="machines"],
+  .inv[data-level="services"] .inv-column[data-level="services"] {
+    display: flex;
+  }
+}
+
+/* Too narrow for the list beside the details: the list goes above them, and the page scrolls. */
+@container inv (max-width: 36rem) {
   .inv,
   .inv--services {
     grid-template-columns: minmax(0, 1fr);

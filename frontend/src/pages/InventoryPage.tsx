@@ -1,5 +1,5 @@
 import { ChevronRight, CircleCheck, CircleDashed, CircleMinus, CircleX, ExternalLink, GitBranch, Layers, Monitor, Package, Server, TriangleAlert } from "lucide-react";
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useInventory, useUptime } from "../api/queries";
 import type { UptimeCheck } from "../api/types";
@@ -462,9 +462,16 @@ function UnmanagedDetail({ node, entry }: { node: NodeEntry; entry: UnmanagedEnt
   );
 }
 
+/** The list a narrow page shows: the one the selection is in, or the one under it when it has one. */
+type Level = "nodes" | "machines" | "services";
+
+const displayed = (element: Element) => getComputedStyle(element).display !== "none";
+
 interface RowProps {
   column: number;
   selected: boolean;
+  /** The row the Tab key reaches when its column has no selection. */
+  first?: boolean;
   liveness?: Liveness;
   icon: typeof Server;
   name: string;
@@ -475,7 +482,7 @@ interface RowProps {
   onSelect: () => void;
 }
 
-function Row({ column, selected, liveness, icon: Icon, name, note, value, more, muted, onSelect }: RowProps) {
+function Row({ column, selected, first, liveness, icon: Icon, name, note, value, more, muted, onSelect }: RowProps) {
   return (
     <li>
       <button
@@ -483,7 +490,7 @@ function Row({ column, selected, liveness, icon: Icon, name, note, value, more, 
         className={`inv-row${selected ? " inv-row--selected" : ""}${muted ? " inv-row--muted" : ""}`}
         data-column={column}
         aria-current={selected ? "true" : undefined}
-        tabIndex={selected ? 0 : -1}
+        tabIndex={selected || first ? 0 : -1}
         onClick={onSelect}
       >
         {liveness ? <LivenessIcon liveness={liveness} /> : <span className="inv-row__spacer" />}
@@ -499,9 +506,9 @@ function Row({ column, selected, liveness, icon: Icon, name, note, value, more, 
   );
 }
 
-function Column({ label, count, children }: { label: string; count?: number; children: ReactNode }) {
+function Column({ level, label, count, children }: { level: Level; label: string; count?: number; children: ReactNode }) {
   return (
-    <section className="inv-column" aria-label={label}>
+    <section className="inv-column" data-level={level} aria-label={label}>
       <header className="inv-column__head">
         <span>{label}</span>
         {count !== undefined ? <span className="num">{count}</span> : null}
@@ -521,6 +528,21 @@ export function InventoryPage() {
   const statuses = (params.get("status") ?? "").split(",").filter(Boolean);
   const span = (windows.find((w) => w.value === params.get("window"))?.value ?? "day") as UptimeWindow;
   const columnsRef = useRef<HTMLDivElement>(null);
+  const lastLevel = useRef<string | undefined>(undefined);
+
+  // On a narrow page one list takes the place of another, and the focus that was in the old one moves to the new one.
+  useEffect(() => {
+    const root = columnsRef.current;
+    const level = root?.dataset.level;
+    const changed = lastLevel.current !== undefined && level !== lastLevel.current;
+    lastLevel.current = level;
+    if (!root || !changed) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && !root.contains(active)) return;
+    const lists = [...root.querySelectorAll<HTMLElement>(".inv-column")].filter(displayed);
+    if (lists.length !== 1 || lists[0].contains(active)) return;
+    lists[0].querySelector<HTMLButtonElement>('.inv-row[tabindex="0"]')?.focus();
+  });
 
   if (isPending) return <PageSkeleton />;
   if (!data) return <ErrorMessage error={error} title="The inventory could not be loaded" />;
@@ -547,6 +569,36 @@ export function InventoryPage() {
   const unmanaged = node?.unmanaged.find((u) => u.key === machineKey);
   const service = machine?.services.find((s) => s.key === params.get("service"));
   const showServices = Boolean(machine && machine.services.length > 0);
+  // The nodes until one is chosen, and again when the path leads back to them, which keeps the node chosen.
+  const level: Level = params.get("list") === "nodes" || node?.key !== params.get("node") ? "nodes" : showServices ? "services" : "machines";
+  const choose = (changes: Record<string, string | null>) => select({ ...changes, list: null });
+
+  // The way to the selection. The bar a narrow page shows starts at the list of nodes, which it has no column for.
+  const path = (bar: boolean) => {
+    const crumbs: { label: string; go?: () => void }[] = [];
+    if (bar) crumbs.push({ label: "Nodes", go: () => select({ list: "nodes", machine: null, service: null }) });
+    if (node && !(bar && level === "nodes")) {
+      crumbs.push({ label: node.host.name, go: () => choose({ node: node.key, machine: null, service: null }) });
+      if (machine || unmanaged) crumbs.push({ label: machine?.guest.name ?? unmanaged?.guest.name ?? `VMID ${unmanaged?.guest.vmid}`, go: () => choose({ service: null }) });
+      if (service) crumbs.push({ label: service.service.name });
+    }
+    return (
+      <nav className={bar ? "inv-path inv-path--bar" : "inv-path"} aria-label={bar ? "Path" : "Selection"}>
+        {crumbs.map((crumb, i) => (
+          <span key={i} className="inv-path__crumb">
+            {i > 0 ? <ChevronRight size={13} aria-hidden="true" /> : null}
+            {i < crumbs.length - 1 ? (
+              <button type="button" onClick={crumb.go}>
+                {crumb.label}
+              </button>
+            ) : (
+              <span aria-current="true">{crumb.label}</span>
+            )}
+          </span>
+        ))}
+      </nav>
+    );
+  };
 
   // Arrows move within a column and between columns, as in a file browser.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -556,6 +608,16 @@ export function InventoryPage() {
     const rows = (c: number) => [...columnsRef.current!.querySelectorAll<HTMLButtonElement>(`.inv-row[data-column="${c}"]`)];
     const here = rows(column);
     const index = here.indexOf(row);
+    if ([...columnsRef.current.querySelectorAll(".inv-column")].some((c) => !displayed(c))) {
+      // A narrow page shows one list: the arrows move in it, open a row, or go back up the path.
+      if (event.key === "ArrowDown") here[index + 1]?.focus();
+      else if (event.key === "ArrowUp") here[index - 1]?.focus();
+      else if (event.key === "ArrowRight") row.click();
+      else if (event.key === "ArrowLeft") [...columnsRef.current.querySelectorAll<HTMLButtonElement>(".inv-path--bar button")].at(-1)?.click();
+      else return;
+      event.preventDefault();
+      return;
+    }
     let target: HTMLButtonElement | undefined;
     if (event.key === "ArrowDown") target = here[index + 1];
     else if (event.key === "ArrowUp") target = here[index - 1];
@@ -671,115 +733,102 @@ export function InventoryPage() {
           {filtered ? null : "Nodes appear once an installation is observed."}
         </EmptyState>
       ) : (
-        <div
-          ref={columnsRef}
-          className={showServices ? "inv inv--services" : "inv"}
-          onKeyDown={onKeyDown}
-        >
-          <Column label="Nodes" count={shown.length}>
-            {shown.map((n) => (
-              <Row
-                key={n.key}
-                column={0}
-                selected={n === node}
-                liveness={n.liveness}
-                icon={Server}
-                name={n.host.name}
-                note={[n.installation.hosts.length > 1 ? n.installation.name : null, installationNote(n.installation)].filter(Boolean).join(" · ") || null}
-                value={formatPercent(percentOf(n.checks, span))}
-                more
-                onSelect={() => select({ node: n.key, machine: null, service: null })}
-              />
-            ))}
-          </Column>
-          <Column label="Machines" count={node?.machines.length}>
-            {node?.machines.map((m) => (
-              <Row
-                key={m.key}
-                column={1}
-                selected={m === machine}
-                liveness={m.liveness}
-                icon={m.guest.type === "container" ? Package : Monitor}
-                name={m.guest.name}
-                value={formatPercent(percentOf(m.checks, span))}
-                more={m.services.length > 0}
-                onSelect={() => select({ node: node.key, machine: m.key, service: null })}
-              />
-            ))}
-            {node && node.machines.length === 0 ? <li className="inv-column__empty">No machines {filtered ? "match" : "on this node"}.</li> : null}
-            {node && node.unmanaged.length > 0 ? (
-              <li>
-                <details className="inv-unmanaged" open={Boolean(unmanaged) || (search.trim() !== "" && node.unmanaged.length > 0) || undefined}>
-                  <summary>
-                    <ChevronRight className="inv-unmanaged__chevron" size={14} aria-hidden="true" />
-                    Unmanaged <span className="num">{node.unmanaged.length}</span>
-                  </summary>
-                  <ul className="inv-column__list">
-                    {node.unmanaged.map((u) => (
-                      <Row
-                        key={u.key}
-                        column={1}
-                        selected={u === unmanaged}
-                        icon={u.guest.kind === "lxc" ? Package : Monitor}
-                        name={u.guest.name ?? `VMID ${u.guest.vmid}`}
-                        note={u.guest.template ? "template" : u.guest.status}
-                        muted
-                        onSelect={() => select({ node: node.key, machine: u.key, service: null })}
-                      />
-                    ))}
-                  </ul>
-                </details>
-              </li>
-            ) : null}
-          </Column>
-          {showServices && machine ? (
-            <Column label="Services" count={machine.services.length}>
-              {machine.services.map((s) => (
+        <div className="inv-frame">
+          <div
+            ref={columnsRef}
+            className={showServices ? "inv inv--services" : "inv"}
+            data-level={level}
+            onKeyDown={onKeyDown}
+          >
+            {path(true)}
+            <Column level="nodes" label="Nodes" count={shown.length}>
+              {shown.map((n) => (
                 <Row
-                  key={s.key}
-                  column={2}
-                  selected={s === service}
-                  liveness={s.liveness}
-                  icon={Layers}
-                  name={s.service.name}
-                  value={s.checks.length > 0 ? formatPercent(percentOf(s.checks, span)) : undefined}
-                  onSelect={() => select({ node: node!.key, machine: machine.key, service: s.key })}
+                  key={n.key}
+                  column={0}
+                  selected={n === node}
+                  liveness={n.liveness}
+                  icon={Server}
+                  name={n.host.name}
+                  note={[n.installation.hosts.length > 1 ? n.installation.name : null, installationNote(n.installation)].filter(Boolean).join(" · ") || null}
+                  value={formatPercent(percentOf(n.checks, span))}
+                  more
+                  onSelect={() => choose({ node: n.key, machine: null, service: null })}
                 />
               ))}
             </Column>
-          ) : null}
-          <section className="inv-detail" aria-label="Details" aria-live="polite">
-            {node ? (
-              <nav className="inv-path" aria-label="Selection">
-                <button type="button" onClick={() => select({ node: node.key, machine: null, service: null })}>
-                  {node.host.name}
-                </button>
-                {machine || unmanaged ? (
-                  <>
-                    <ChevronRight size={13} aria-hidden="true" />
-                    <button type="button" onClick={() => select({ service: null })}>
-                      {machine?.guest.name ?? unmanaged?.guest.name ?? `VMID ${unmanaged?.guest.vmid}`}
-                    </button>
-                  </>
-                ) : null}
-                {service ? (
-                  <>
-                    <ChevronRight size={13} aria-hidden="true" />
-                    <span>{service.service.name}</span>
-                  </>
-                ) : null}
-              </nav>
+            <Column level="machines" label="Machines" count={node?.machines.length}>
+              {node?.machines.map((m, i) => (
+                <Row
+                  key={m.key}
+                  column={1}
+                  selected={m === machine}
+                  first={i === 0 && !machine && !unmanaged}
+                  liveness={m.liveness}
+                  icon={m.guest.type === "container" ? Package : Monitor}
+                  name={m.guest.name}
+                  value={formatPercent(percentOf(m.checks, span))}
+                  more={m.services.length > 0}
+                  onSelect={() => choose({ node: node.key, machine: m.key, service: null })}
+                />
+              ))}
+              {node && node.machines.length === 0 ? <li className="inv-column__empty">No machines {filtered ? "match" : "on this node"}.</li> : null}
+              {node && node.unmanaged.length > 0 ? (
+                <li>
+                  <details className="inv-unmanaged" open={Boolean(unmanaged) || (search.trim() !== "" && node.unmanaged.length > 0) || undefined}>
+                    <summary>
+                      <ChevronRight className="inv-unmanaged__chevron" size={14} aria-hidden="true" />
+                      Unmanaged <span className="num">{node.unmanaged.length}</span>
+                    </summary>
+                    <ul className="inv-column__list">
+                      {node.unmanaged.map((u, i) => (
+                        <Row
+                          key={u.key}
+                          column={1}
+                          selected={u === unmanaged}
+                          first={i === 0 && node.machines.length === 0 && !unmanaged}
+                          icon={u.guest.kind === "lxc" ? Package : Monitor}
+                          name={u.guest.name ?? `VMID ${u.guest.vmid}`}
+                          note={u.guest.template ? "template" : u.guest.status}
+                          muted
+                          onSelect={() => choose({ node: node.key, machine: u.key, service: null })}
+                        />
+                      ))}
+                    </ul>
+                  </details>
+                </li>
+              ) : null}
+            </Column>
+            {showServices && machine ? (
+              <Column level="services" label="Services" count={machine.services.length}>
+                {machine.services.map((s, i) => (
+                  <Row
+                    key={s.key}
+                    column={2}
+                    selected={s === service}
+                    first={i === 0 && !service}
+                    liveness={s.liveness}
+                    icon={Layers}
+                    name={s.service.name}
+                    value={s.checks.length > 0 ? formatPercent(percentOf(s.checks, span)) : undefined}
+                    onSelect={() => choose({ node: node!.key, machine: machine.key, service: s.key })}
+                  />
+                ))}
+              </Column>
             ) : null}
-            {service ? (
-              <ServiceDetail service={service} span={span} />
-            ) : machine && node ? (
-              <MachineDetail node={node} machine={machine} span={span} />
-            ) : unmanaged && node ? (
-              <UnmanagedDetail node={node} entry={unmanaged} />
-            ) : node ? (
-              <NodeDetail node={node} span={span} />
-            ) : null}
-          </section>
+            <section className="inv-detail" aria-label="Details" aria-live="polite">
+              {node ? path(false) : null}
+              {service ? (
+                <ServiceDetail service={service} span={span} />
+              ) : machine && node ? (
+                <MachineDetail node={node} machine={machine} span={span} />
+              ) : unmanaged && node ? (
+                <UnmanagedDetail node={node} entry={unmanaged} />
+              ) : node ? (
+                <NodeDetail node={node} span={span} />
+              ) : null}
+            </section>
+          </div>
         </div>
       )}
     </>
