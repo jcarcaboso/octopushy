@@ -99,6 +99,20 @@ describe("Services", () => {
     expect(media).toHaveTextContent(/^J/);
   });
 
+  it("lists a tcp:// link without offering to open it", async () => {
+    const user = userEvent.setup();
+    show(inventoryOf([guest("data", [service("store", ["tcp://store.home.example.org:5432"])])]));
+    const rows = await screen.findByRole("list", { name: "home.example.org" });
+    expect(within(rows).getByText("tcp://")).toBeVisible();
+    expect(within(rows).getByText("store", { selector: ".services-row__label" })).toBeVisible();
+    expect(within(rows).queryByRole("link", { name: /^Open / })).not.toBeInTheDocument();
+    expect(within(rows).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/services/svc-store", "/guests/guest-data"]);
+
+    await user.click(screen.getByRole("button", { name: "Tiles" }));
+    const tile = within(screen.getByRole("list", { name: "home.example.org" })).getByTitle("tcp://store.home.example.org:5432");
+    expect(tile.tagName).toBe("DIV");
+  });
+
   it("says when no service has a link", async () => {
     show(inventoryOf([guest("web", [service("app", [])])]));
     expect(await screen.findByText("No service has a link")).toBeVisible();

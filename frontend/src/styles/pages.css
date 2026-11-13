@@ -3119,7 +3119,7 @@
   text-align: center;
 }
 
-.service-tile:hover {
+a.service-tile:hover {
   border-color: var(--border-strong);
   text-decoration: none;
 }
