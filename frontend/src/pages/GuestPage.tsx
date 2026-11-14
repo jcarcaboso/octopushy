@@ -140,6 +140,13 @@ export function GuestPage() {
   const { guest } = data;
   const noun = machineNoun(guest.type, guest.observed?.kind);
   const sections = data.definitionText === null ? null : readDefinition(data.definitionText, "guest");
+  // A provision run applies the machine itself, a configure run what goes on it: each is compared with what its last run had.
+  const applied = [
+    ...(!data.inSync && data.appliedDefinitionText ? [{ text: data.appliedDefinitionText, sections: ["general", "hardware", "network"] }] : []),
+    ...(data.configuration && !data.configuration.inSync && data.configuration.appliedDefinitionText
+      ? [{ text: data.configuration.appliedDefinitionText, sections: ["inputs", "secrets", "access"] }]
+      : []),
+  ];
 
   return (
     <>
@@ -195,7 +202,7 @@ export function GuestPage() {
         <GuestGlance data={data} sections={sections} />
         <div className="columns columns--main-side">
           <div className="stack stack--large">
-            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="guest" issues={data.issues} />
+            <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="guest" issues={data.issues} applied={applied} />
             {data.issues.length > 0 ? (
               <Card title="Issues" meta={data.issues.length} id="issues">
                 <IssueList issues={data.issues} />

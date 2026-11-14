@@ -344,7 +344,9 @@ public sealed record GuestConfigurationDto(
     IReadOnlyList<GuestScheduleDto> Schedules,
     IReadOnlyList<FollowedSecretDto> Secrets,
     /// <summary>Why no setup run starts, automatically or by hand, when it would log in with a key nothing shows reached the machine.</summary>
-    string? Refused);
+    string? Refused,
+    /// <summary>The guest's definition file at <c>AppliedCommit</c>, when that is not the commit the page's definition text is read from.</summary>
+    string? AppliedDefinitionText = null);
 
 /// <summary>
 /// A store value the guest's setup takes at its active version. <see cref="Pending"/> means a
@@ -413,7 +415,9 @@ public sealed record GuestDetailDto(
     GuestConfigurationDto? Configuration,
     ManagedAccessDto? ManagedAccess,
     IReadOnlyList<ServiceSummaryDto> Services,
-    ManagedHostKeyDto? HostKey = null);
+    ManagedHostKeyDto? HostKey = null,
+    /// <summary>The definition file at <c>AppliedCommit</c>, when that is not the commit <c>DefinitionText</c> is read from.</summary>
+    string? AppliedDefinitionText = null);
 
 /// <summary>
 /// A guest's SSH host key, when it is Octopushy's. <see cref="Pinned"/> is the version an apply delivered last, which
@@ -482,7 +486,9 @@ public sealed record ServiceDetailDto(
     DateTimeOffset? AppliedAt,
     DateTimeOffset? MissingSince,
     DateTimeOffset? RetiredAt,
-    IReadOnlyList<RunSummaryDto> Runs);
+    IReadOnlyList<RunSummaryDto> Runs,
+    /// <summary>The definition file at <c>AppliedCommit</c>, when that is not the commit <c>DefinitionText</c> is read from.</summary>
+    string? AppliedDefinitionText = null);
 
 public sealed record InstallationDetailDto(
     InstallationSummaryDto Installation,

@@ -158,8 +158,8 @@ describe("readDefinition", () => {
     expect(secrets.lines).toEqual([2, 7]);
     expect(secrets.fields).toEqual([
       { key: "token", label: "Token", value: { kind: "secret", key: "x/token", version: 3 }, line: 3, note: null },
-      { key: "env_file", label: "Env file", value: { kind: "secret", key: "x/env", version: null }, line: 6, note: "the whole env. Delivered as a file" },
-      { key: "other", label: "Other", value: { kind: "secret", key: "x/other", version: null }, line: 7, note: "Delivered as a file" },
+      { key: "secretFiles.env_file", label: "Env file", value: { kind: "secret", key: "x/env", version: null }, line: 6, note: "the whole env. Delivered as a file" },
+      { key: "secretFiles.other", label: "Other", value: { kind: "secret", key: "x/other", version: null }, line: 7, note: "Delivered as a file" },
     ]);
   });
 
@@ -384,7 +384,7 @@ describe("readDefinition", () => {
     });
     expect(field(sections, "inputs", "env.ENABLE_SIGNUP").value).toEqual({ kind: "text", text: "false" });
     expect(section(sections, "secrets").fields.map((item) => [item.key, item.line, item.note])).toEqual([
-      ["env_file", 16, "Delivered as a file"],
+      ["secretFiles.env_file", 16, "Delivered as a file"],
       ["webui_secret_key", 18, null],
     ]);
     expect(field(sections, "policy", "approval").note).toBe("a deploy waits for approval");

@@ -424,18 +424,20 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
                     var usable = await FollowedSecrets.UsableAsync(db, followed, cancellationToken);
                     var started = FollowedSecrets.Parse(state?.SecretVersions);
                     var pending = state?.SecretVersions is null ? [] : FollowedSecrets.Changes(started, usable).Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
+                    var configured = state?.AppliedRevisionId is { } applied
+                        ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null;
                     configure = new GuestConfigurationDto(
                         guest.Workflow!.Label,
                         offered.Actions.Values.Select(a => new ConfigureActionDto(a.Id, a.Description, a.Destructive, a.OnChange)).ToList(),
                         state is { AppliedHash: not null } && state.AppliedHash == state.DesiredHash,
                         state?.AppliedAction,
-                        state?.AppliedRevisionId is { } applied
-                            ? await db.Revisions.AsNoTracking().Where(r => r.Id == applied).Select(r => r.Commit).FirstOrDefaultAsync(cancellationToken) : null,
+                        configured,
                         state?.AppliedAt,
                         state?.Snapshot is not null,
                         schedules,
                         followed.Select(k => new FollowedSecretDto(k, usable[k], started.GetValueOrDefault(k), pending.Contains(k))).ToList(),
-                        await GuestWork.OwnKeyRefusedAsync(db, id, guest, cancellationToken));
+                        await GuestWork.OwnKeyRefusedAsync(db, id, guest, cancellationToken),
+                        await AppliedDefinitionTextAsync(configured, latest.Commit, resource.DefinitionFile, cancellationToken));
                 }
             }
 
@@ -466,7 +468,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             configure,
             await ManagedAccessAsync(id, cancellationToken),
             services,
-            await ManagedHostKeyAsync(id, cancellationToken));
+            await ManagedHostKeyAsync(id, cancellationToken),
+            text is null ? null : await AppliedDefinitionTextAsync(commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty), latest!.Commit, resource.DefinitionFile, cancellationToken));
     }
 
     /// <summary>The guest's host key, when it is Octopushy's: the pin, and the version plans carry when that is another.</summary>
@@ -661,13 +664,14 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var commits = await CommitsAsync([state?.AppliedRevisionId], cancellationToken);
         var active = runs.Where(r => !RunStatuses.IsTerminal(r.Status)).MinBy(r => r.CreatedAt);
         var last = runs.FirstOrDefault(r => RunStatuses.IsTerminal(r.Status));
+        var text = latest is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken);
         return new ServiceDetailDto(
             ServiceSummary(resource, active, last, state, await ServiceWaitingAsync(guest, resource, latest, cancellationToken), definition,
                 (await StoredIconsAsync([id], cancellationToken)).GetValueOrDefault(id)),
             guest?.Id,
             resource.ParentAddress,
             resource.DefinitionFile,
-            latest is null || resource.MissingSince is not null ? null : await DefinitionTextAsync(latest.Commit, resource.DefinitionFile, cancellationToken),
+            text,
             Issues(resource.Issues),
             policy,
             labels?.Value ?? [],
@@ -677,7 +681,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             state?.AppliedAt,
             resource.MissingSince,
             resource.RetiredAt,
-            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Service)).ToList());
+            runs.Select(r => Summary(r, resource.Address, ResourceKinds.Service)).ToList(),
+            text is null ? null : await AppliedDefinitionTextAsync(commits.GetValueOrDefault(state?.AppliedRevisionId ?? Guid.Empty), latest!.Commit, resource.DefinitionFile, cancellationToken));
     }
 
     /// <summary>The version runs use: public, and all there is to show. The private half never reaches this layer.</summary>
@@ -1024,6 +1029,13 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var wanted = ids.OfType<Guid>().Distinct().ToList();
         return await db.Revisions.AsNoTracking().Where(r => wanted.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r.Commit, cancellationToken);
     }
+
+    /// <summary>
+    /// The definition file at the commit last applied, for a page that says which values are not applied yet. Null when
+    /// nothing was applied, or when that is the commit the page's text is read from.
+    /// </summary>
+    private async Task<string?> AppliedDefinitionTextAsync(string? applied, string shown, string? file, CancellationToken cancellationToken) =>
+        applied is null || applied == shown ? null : await DefinitionTextAsync(applied, file, cancellationToken);
 
     private async Task<string?> DefinitionTextAsync(string commit, string? file, CancellationToken cancellationToken)
     {

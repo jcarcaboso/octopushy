@@ -12,7 +12,7 @@ export type FieldValue =
   | { kind: "link"; url: string };
 
 export interface DefinitionField {
-  /** The key as written, with its parents when it is nested: "cores", "env.OLLAMA_BASE_URL". */
+  /** The key as written, with its parents when it is nested or a secret file: "cores", "env.OLLAMA_BASE_URL", "secretFiles.env_file". */
   key: string;
   label: string;
   value: FieldValue;
@@ -365,7 +365,11 @@ export function readDefinition(text: string, kind: DefinitionKind): DefinitionSe
     const fields = sectionFields(value, node, key, kind);
     if (key === "secrets" || key === "secretFiles") {
       if (key === "secretFiles") {
-        for (const field of fields) field.note = field.note ? `${field.note}${/[.!?]$/.test(field.note) ? "" : "."} Delivered as a file` : "Delivered as a file";
+        for (const field of fields) {
+          // The two share a section, and a name can be in both: the key says which one it is under.
+          field.key = `secretFiles.${field.key}`;
+          field.note = field.note ? `${field.note}${/[.!?]$/.test(field.note) ? "" : "."} Delivered as a file` : "Delivered as a file";
+        }
       }
       if (secrets) {
         secrets.fields.push(...fields);
