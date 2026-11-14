@@ -65,6 +65,12 @@ describe("DefinitionSheet", () => {
     expect(screen.queryByText(/Last applied/)).toBeNull();
   });
 
+  it("marks a secret that moved to a file, though its name and its reference stayed", () => {
+    renderSheet({ text: "secretFiles:\n  token: { store: x/token }\n", applied: [{ text: "secrets:\n  token: { store: x/token }\n", sections: ["secrets"] }] });
+    expect(screen.getByText("Token").parentElement).toHaveTextContent("Not in the last apply");
+    expect(screen.getByText("1 value not applied yet")).toBeInTheDocument();
+  });
+
   it("opens the YAML at a section's lines, marked", async () => {
     renderSheet({ text });
     await userEvent.click(screen.getByRole("button", { name: "lines 4–6" }));

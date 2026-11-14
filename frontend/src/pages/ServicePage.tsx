@@ -138,8 +138,8 @@ export function ServicePage() {
               text={data.definitionText}
               kind="service"
               issues={data.issues}
-              // A pipeline applies the inputs and the secrets; links, description and policy run nothing.
-              applied={data.appliedDefinitionText ? [{ text: data.appliedDefinitionText, sections: ["inputs", "secrets"] }] : []}
+              // A pipeline applies the inputs and the secrets; links, description and policy run nothing. In sync, the older file deploys the same.
+              applied={service.status !== "in-sync" && data.appliedDefinitionText ? [{ text: data.appliedDefinitionText, sections: ["inputs", "secrets"] }] : []}
             />
             {data.issues.length > 0 ? (
               <Card title="Issues" meta={data.issues.length} id="issues">

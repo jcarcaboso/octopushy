@@ -67,6 +67,21 @@ describe("ServicePage", () => {
     expect(await figure("Last deployed")).toHaveTextContent("e6b1282");
   });
 
+  it("marks the inputs that are not what was last deployed, and none once the service is in sync", async () => {
+    const appliedDefinitionText = "inputs:\n  app_port: 8080\n  env: { TZ: UTC }\n";
+    mockApi({ "GET /api/services/svc-1": () => detail({ definitionText: appliedDefinitionText.replace("8080", "8443"), appliedDefinitionText }, "pending") });
+    const first = renderAt(<ServicePage />, route);
+    expect((await screen.findByText("App port")).parentElement).toHaveTextContent("Last applied: 8080");
+    expect(screen.getByText("1 value not applied yet")).toBeInTheDocument();
+    first.unmount();
+
+    // In sync: the file only lays the same values out another way, and deploys the same.
+    mockApi({ "GET /api/services/svc-1": () => detail({ definitionText: "inputs:\n  app_port: 8080\n  env:\n    TZ: UTC\n", appliedDefinitionText }, "in-sync") });
+    renderAt(<ServicePage />, route);
+    await screen.findByText("App port");
+    expect(screen.queryByText(/not applied yet/)).toBeNull();
+  });
+
   it("brings its pipeline that waits for approval to the page", async () => {
     const run = runDetail({ operation: "pipeline", resourceId: "svc-1", resourceKind: "service" });
     mockApi({
