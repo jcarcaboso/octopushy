@@ -80,7 +80,9 @@ jar=$work/cookies
 if [[ $remote == 1 ]]; then jar=$REMOTE_COOKIE_FILE; fi
 cookies=(-b "$jar")
 if [[ $remote == 0 ]]; then cookies+=(-c "$jar"); fi
-call() { curl -sS -f "${cookies[@]}" -H 'Content-Type: application/json' "$@"; }
+api_origin=${api#*://}
+api_origin=${api%%://*}://${api_origin%%/*}
+call() { curl -sS -f "${cookies[@]}" -H "Origin: $api_origin" -H 'Content-Type: application/json' "$@"; }
 import_proxmox_credentials() {
   # Values travel only from explicit files to the store on stdin, never in argv/output.
   jq -cn --arg key "proxmox/$node/read-only-token" --rawfile token "$read_only_token_file" \

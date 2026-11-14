@@ -205,7 +205,12 @@ public sealed class ServerHarness : IAsyncDisposable
     }
 
     // Endpoints are bound to the API port by host, so the client addresses it.
-    public HttpClient CreateClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, BaseAddress = new Uri("http://localhost:8080") });
+    public HttpClient CreateClient()
+    {
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, BaseAddress = new Uri("http://localhost:8080") });
+        client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
+        return client;
+    }
 
     public void Commit(string message)
     {
