@@ -242,6 +242,29 @@ app.UseExceptionHandler();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// Authorization may select the cookie explicitly, even when a Bearer token was sent.
+app.Use(async (context, next) =>
+{
+    var request = context.Request;
+    var cookieAuthenticated = context.User.Identities.Any(identity =>
+        identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+    if (cookieAuthenticated && (HttpMethods.IsPost(request.Method) || HttpMethods.IsPut(request.Method)
+        || HttpMethods.IsPatch(request.Method) || HttpMethods.IsDelete(request.Method)))
+    {
+        var sameOrigin = request.Headers.TryGetValue("Sec-Fetch-Site", out var fetchSite)
+            ? fetchSite == "same-origin"
+            : Uri.TryCreate(request.Headers.Origin.ToString(), UriKind.Absolute, out var origin)
+                && Uri.TryCreate($"{request.Scheme}://{request.Host}", UriKind.Absolute, out var target)
+                && Uri.Compare(origin, target, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.OrdinalIgnoreCase) == 0;
+        if (!sameOrigin)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+    }
+
+    await next();
+});
 
 app.MapOpenApi("/api/openapi/{documentName}.json");
 app.MapGet("/api/health", () => TypedResults.Ok(new { status = "ok" })).ExcludeFromDescription();

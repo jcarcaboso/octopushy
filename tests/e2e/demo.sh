@@ -39,7 +39,7 @@ pids+=($!)
 for _ in $(seq 1 60); do curl -sf "$api/api/health" >/dev/null && break; sleep 1; done
 
 jar=$work/cookies
-call() { curl -sf -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$@"; }
+call() { curl -sf -b "$jar" -c "$jar" -H "Origin: $api" -H 'Content-Type: application/json' "$@"; }
 code=$(tr -d '\n' <"$work/server/setup-code")
 call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"demo\",\"password\":\"octopushy-demo\"}" >/dev/null
 call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/read-only-token","value":"octopushy-reader@pve!e2e-read-only=00000000-0000-4000-8000-0000000000e1","visibility":"secret","description":"Read-only identity for the mock Proxmox"}'

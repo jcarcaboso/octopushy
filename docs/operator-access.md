@@ -74,6 +74,13 @@ falls back to plain HTTP.
 
 ## Use the existing API
 
+Cookie-authenticated POST, PUT, PATCH and DELETE requests must send
+`Sec-Fetch-Site: same-origin`. When that header is absent, `Origin` must match
+the API request's scheme, host and port. Browsers send these headers through
+Caddy and the Vite proxy. Scripts using a session cookie must add the matching
+`Origin` header. Requests authenticated by an operator token do not need either
+header.
+
 ```sh
 octopushy operator request /api/inventory
 printf '%s\n' '{"draining":true}' |

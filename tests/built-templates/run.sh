@@ -93,7 +93,7 @@ pids+=($!)
 for _ in $(seq 1 60); do curl -sf "$api/api/health" >/dev/null && break; sleep 1; done
 curl -sf "$api/api/health" >/dev/null || fail "the backend did not start; see $work/backend.log"
 jar=$work/cookies
-call() { curl -sf -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$@"; }
+call() { curl -sf -b "$jar" -c "$jar" -H "Origin: $api" -H 'Content-Type: application/json' "$@"; }
 source "$root/tests/installation-trust/fixture.sh"
 code=$(tr -d '\n' <"$work/server/setup-code")
 call -X POST "$api/api/auth/setup" -d "{\"setupCode\":\"$code\",\"username\":\"e2e\",\"password\":\"an end-to-end password\"}" >/dev/null
