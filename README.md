@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.3:
+Milestone 1 has shipped, up to release 0.9.4:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,30 @@ Milestone 1 has shipped, up to release 0.9.3:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.4:
+
+- The guest, service and installation pages, from #89, read the definition and no longer open on its YAML. A strip of
+  figures sits under the title, then the definition as sections of labelled values with the author's comments as notes.
+  **View YAML** in the header opens the file, and each section opens it at its own lines; a definition that cannot be
+  read that way, or has an error, still shows as YAML. A run that waits for approval shows on the page of its guest or
+  service with the same change tiles and the same Approve and Reject as the run's page, and the installation page lists
+  its guests' runs that wait or failed.
+- A value that is not what was last applied is marked, from #91, with what it was ("Last applied: 4 GiB") or "Not in the
+  last apply", and the sheet counts them. A guest compares placement, hardware and network with its last provision and
+  inputs, secrets and access with its last configure run; a service compares inputs and secrets with its last deploy.
+  `GET /api/guests/{id}`, its `configuration` and `GET /api/services/{id}` gain `appliedDefinitionText`, the file at the
+  applied commit, null when that is the commit shown.
+- Variable versions, from #88: `GET /api/variables` returns `newerVersion`, the newest version after the active one
+  that is not revoked, and the page marks a key **Newer vN** only for that. A version that is not active can be
+  deleted once nothing holds it, with `DELETE /api/variables/versions`, and its number is never given again.
+  `POST /api/variables/versions/reveal` reads one version's value, logged, and the Versions tab compares it line by
+  line with another. See [credential lifecycle](docs/credential-lifecycle.md).
+- The Images workflow, from #87, publishes only for a `v<version>` tag, not for every push to main; a run started by
+  hand still publishes the branch and sha tags.
+- The backend builds with the newest .NET 10 SDK installed, from #90, where `global.json` pinned one patch.
+
+No migration, and the agent contract does not change: upgrade in any order.
 
 New in 0.9.3:
 
