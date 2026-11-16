@@ -518,8 +518,10 @@ installation's latest successful observation to be:
   > sees below /vms"*. Do not remove ACLs you rely on to work around it. Until an authoritative check of one VMID's
   > availability replaces this proof (a listed follow-up), such an installation cannot be deployed to from the wizard;
   > deploy there in Git, with a VMID you know is free;
-- **complete:** it lists hosts, each with an explicit online state and online; every host `installation.yaml` declares at the
-  commit being checked is listed; and it says whether it is a cluster, and a cluster says it is quorate.
+- **complete:** it lists hosts; every host `installation.yaml` declares at the commit being checked is listed; and it says
+  whether it is a cluster, and a cluster says it is quorate. A standalone host has an explicit online state and is online.
+  A node of a quorate cluster may be off: the cluster keeps every guest's configuration, an offline node's too, and lists
+  its VMIDs.
 
 Otherwise nothing is offered or committed. The reason names the installation and when it was last observed, such as *"home/
 pve01 has not been observed successfully since 2026-11-04 08:00 UTC, more than 15 minutes ago. Refresh its observation
