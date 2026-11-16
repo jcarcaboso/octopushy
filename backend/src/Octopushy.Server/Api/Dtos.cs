@@ -431,7 +431,13 @@ public sealed record GuestDetailDto(
     IReadOnlyList<ServiceSummaryDto> Services,
     ManagedHostKeyDto? HostKey = null,
     /// <summary>The definition file at <c>AppliedCommit</c>, when that is not the commit <c>DefinitionText</c> is read from.</summary>
-    string? AppliedDefinitionText = null);
+    string? AppliedDefinitionText = null,
+    /// <summary>When and by whom the guest was detached: forgotten, with its machine left as it was. <c>RetiredAt</c> is set too.</summary>
+    DateTimeOffset? DetachedAt = null,
+    string? DetachedBy = null);
+
+/// <summary>Detaches a guest whose folder was deleted, in place of its removal: <c>Address</c> is typed to confirm it.</summary>
+public sealed record DetachGuestRequest(string Address);
 
 /// <summary>
 /// A guest's SSH host key, when it is Octopushy's. <see cref="Pinned"/> is the version an apply delivered last, which

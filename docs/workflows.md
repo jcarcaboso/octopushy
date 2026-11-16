@@ -109,6 +109,15 @@ layout, and the lab repository has neither.
 
     Either way, the history is kept. *Decided October 28, 2026.*
 
+    **Detach** stops managing a guest and keeps its machine. **Detach** on the guest page deletes its folder in one commit,
+    as **Remove** does, and no retire run follows: Octopushy forgets the guest. Its binding, OpenTofu state and Octopushy's
+    keys for it are deleted, nothing is sent to Proxmox, and its runs stay on record. The machine keeps running with its
+    protection, and the installation lists it as one Octopushy does not manage. A guest whose folder was deleted in Git
+    offers **Detach instead** of its removal, typed to confirm, while no change of it may be under way. A detach that has to
+    wait for such a change, of the guest or one of its services, waits and is tried again at each sync; the latest change that
+    deleted the folder, a removal or a detach, decides, so it never turns into a removal. Octopushy's login key
+    stays in the machine's `authorized_keys`, and its private half is deleted.
+
     If the entire server has been removed from Git and is offline or permanently gone, use **Force delete server** in its
     inventory node details or installation page after syncing the repository. Type the installation address to confirm.
     This forgets the entire installation, including every node of a cluster, its guests and services, run history,

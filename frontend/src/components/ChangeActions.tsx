@@ -1,4 +1,4 @@
-import { ArrowUpCircle, Pencil, Trash2 } from "lucide-react";
+import { ArrowUpCircle, Pencil, Trash2, Unlink } from "lucide-react";
 import { Link } from "react-router";
 import { useChangeForm, useChanges } from "../api/queries";
 import { StatusBadge } from "./Badge";
@@ -37,6 +37,12 @@ export function ChangeActions(props: Props) {
         <Link to={`${base(props)}?mode=remove`} className="button button--danger-outline">
           <Trash2 size={15} aria-hidden="true" />
           Remove
+        </Link>
+      ) : null}
+      {props.kind === "guest" && form?.canRemove ? (
+        <Link to={`${base(props)}?mode=detach`} className="button" title="Stop managing the guest and keep its machine as it is.">
+          <Unlink size={15} aria-hidden="true" />
+          Detach
         </Link>
       ) : null}
     </>

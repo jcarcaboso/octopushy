@@ -30,6 +30,8 @@ public static class GuestStatuses
     public const string Invalid = "invalid";
     public const string Missing = "missing";
     public const string Retired = "retired";
+    /// <summary>A guest Octopushy forgot on purpose, leaving its machine as it was.</summary>
+    public const string Detached = "detached";
 }
 
 /// <summary>Builds the read models the API returns.</summary>
@@ -188,6 +190,11 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
 
     public static (string Status, string? Detail) GuestStatus(Resource resource, Run? active, Run? last)
     {
+        if (resource.DetachedAt is not null)
+        {
+            return (GuestStatuses.Detached, $"Detached by {resource.DetachedBy}: Octopushy no longer manages its machine, which was left as it was.");
+        }
+
         if (resource.RetiredAt is not null)
         {
             return (GuestStatuses.Retired, null);
@@ -196,8 +203,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         // A deleted guest with a proposed removal shows the removal's progress.
         if (resource.MissingSince is not null && active is null)
         {
-            return (GuestStatuses.Missing, "The folder was deleted. Octopushy proposes removing the guest; "
-                + "Plan now proposes it again. Restore the folder to keep the guest.");
+            return (GuestStatuses.Missing, resource.ProvisionWaiting ?? ("The folder was deleted. Octopushy proposes removing the guest; "
+                + "Plan now proposes it again. Restore the folder to keep the guest."));
         }
 
         if (!resource.Valid)
@@ -481,7 +488,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             await ManagedAccessAsync(id, cancellationToken),
             services,
             await ManagedHostKeyAsync(id, cancellationToken),
-            text is null ? null : await AppliedDefinitionTextAsync(commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty), latest!.Commit, resource.DefinitionFile, cancellationToken));
+            text is null ? null : await AppliedDefinitionTextAsync(commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty), latest!.Commit, resource.DefinitionFile, cancellationToken),
+            resource.DetachedAt,
+            resource.DetachedBy);
     }
 
     /// <summary>The guest's host key, when it is Octopushy's: the pin, and the version plans carry when that is another.</summary>

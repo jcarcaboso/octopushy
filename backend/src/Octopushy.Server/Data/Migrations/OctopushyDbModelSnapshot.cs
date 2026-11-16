@@ -1252,6 +1252,14 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("desired_revision_id");
 
+                    b.Property<DateTimeOffset?>("DetachedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("detached_at");
+
+                    b.Property<string>("DetachedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("detached_by");
+
                     b.Property<DateTimeOffset>("FirstSeenAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("first_seen_at");

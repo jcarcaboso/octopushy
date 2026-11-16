@@ -621,6 +621,70 @@
         }
       }
     },
+    "/api/guests/{id}/detach": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "detachGuest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetachGuestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/guests/{id}/configure": {
       "post": {
         "tags": [
@@ -6763,6 +6827,17 @@
           }
         }
       },
+      "DetachGuestRequest": {
+        "required": [
+          "address"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          }
+        }
+      },
       "DraftChangesRequest": {
         "required": [
           "expectedHead",
@@ -7463,6 +7538,19 @@
             ]
           },
           "appliedDefinitionText": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "detachedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "detachedBy": {
             "type": [
               "null",
               "string"

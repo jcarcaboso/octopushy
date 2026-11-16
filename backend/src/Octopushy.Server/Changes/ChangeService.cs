@@ -478,7 +478,7 @@ public sealed partial class ChangeService(
         return new ResourceChange
         {
             Id = id,
-            Kind = composed?.Kind ?? (request.Kind is ChangeKinds.Remove or ChangeKinds.Upgrade ? request.Kind : ChangeKinds.Edit),
+            Kind = composed?.Kind ?? (request.Kind is ChangeKinds.Remove or ChangeKinds.Upgrade or ChangeKinds.Detach ? request.Kind : ChangeKinds.Edit),
             ResourceKind = target.Kind,
             ResourceId = target.Resource.Id,
             Address = target.Address,

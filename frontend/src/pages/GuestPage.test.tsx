@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { GuestDetail, UptimeCheck } from "../api/types";
 import { guest } from "../test/inventory";
@@ -141,6 +142,34 @@ describe("GuestPage", () => {
     expect(await screen.findByText(moved.detail)).toBeInTheDocument();
     expect(screen.getByText("Moved to", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Accept placement" })).toHaveAttribute("href", "/guests/guest-1/change?host=pve02");
+  });
+
+  it("offers to detach a guest whose folder was deleted, and says when it was detached", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/guests/guest-1": () => detail({ missingSince: "2026-11-13T08:00:00Z" }, { status: "missing" }),
+      "POST /api/guests/guest-1/detach": () => new Response(null, { status: 204 }),
+    });
+    const first = renderAt(<GuestPage />, route);
+    await user.click(await screen.findByRole("button", { name: "Detach instead" }));
+    const dialog = screen.getByRole("dialog", { name: `Detach ${guest("bb", []).address}?` });
+    const confirm = within(dialog).getByRole("button", { name: "Detach, keep the machine" });
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByRole("textbox"), guest("bb", []).address);
+    await user.click(confirm);
+    await waitFor(() => expect(requests.some((r) => r.path === "/api/guests/guest-1/detach")).toBe(true));
+    expect(requests.find((r) => r.path === "/api/guests/guest-1/detach")!.body).toEqual({ address: guest("bb", []).address });
+    first.unmount();
+
+    mockApi({
+      "GET /api/guests/guest-1": () =>
+        detail({ missingSince: "2026-11-13T08:00:00Z", retiredAt: "2026-11-13T09:00:00Z", detachedAt: "2026-11-13T09:00:00Z", detachedBy: "ops" },
+          { status: "detached" }),
+    });
+    renderAt(<GuestPage />, route);
+    expect(await screen.findByText(/ops detached the guest/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Detach instead" })).toBeNull();
+    expect(screen.queryByText(/verified absent/)).toBeNull();
   });
 
   it("marks the values that are not what was last applied, and none once the guest is in sync", async () => {

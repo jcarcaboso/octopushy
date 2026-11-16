@@ -15,7 +15,7 @@ import { SchemaForm, type FieldIssue } from "../components/SchemaForm";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { isObject, readUi, type JsonObject, type Schema } from "../lib/jsonSchema";
 
-type Mode = "edit" | "upgrade" | "remove";
+type Mode = "edit" | "upgrade" | "remove" | "detach";
 
 const guestSections = ["hardware", "network", "inputs"] as const;
 
@@ -50,7 +50,8 @@ export function ChangeEditorPage() {
   const [params] = useSearchParams();
   const location = useLocation();
   const kind = location.pathname.startsWith("/services/") ? "service" : "guest";
-  const mode: Mode = params.get("mode") === "upgrade" ? "upgrade" : params.get("mode") === "remove" ? "remove" : "edit";
+  const asked = params.get("mode");
+  const mode: Mode = asked === "upgrade" || asked === "remove" || asked === "detach" ? asked : "edit";
   const { data: form, error, isPending, refetch, isFetching, isFetchedAfterMount } = useChangeForm(id, { fresh: true });
 
   // The guest's page may have read the form a while ago: the editor starts from the commit it reads now.
@@ -87,7 +88,7 @@ function Editor({ form, mode, host: wantedHost, reload, reloading }: {
   const back = `/${form.resourceKind === "service" ? "services" : "guests"}/${form.resourceId}`;
 
   const request = useCallback((): ChangeRequest => {
-    if (mode === "remove") return { resourceId: form.resourceId, baseCommit: form.baseCommit!, kind: "remove" };
+    if (mode === "remove" || mode === "detach") return { resourceId: form.resourceId, baseCommit: form.baseCommit!, kind: mode };
     const original = form as unknown as Record<string, unknown>;
     const sections: Record<string, unknown> = {};
     for (const section of sectionsOf(form)) {
@@ -171,13 +172,14 @@ function Editor({ form, mode, host: wantedHost, reload, reloading }: {
   };
 
   const title =
-    mode === "remove" ? `Remove ${form.name}` : mode === "upgrade" && target ? `Upgrade ${form.name} to ${target}` : `Edit ${form.name}`;
+    mode === "remove" ? `Remove ${form.name}` : mode === "detach" ? `Detach ${form.name}`
+      : mode === "upgrade" && target ? `Upgrade ${form.name} to ${target}` : `Edit ${form.name}`;
   return (
     <>
       <PageHeader
         eyebrow={
           <>
-            <Link to="/inventory">Inventory</Link> / <Link to={back}>{form.address}</Link> / {mode === "remove" ? "Remove" : mode === "upgrade" ? "Upgrade" : "Edit"}
+            <Link to="/inventory">Inventory</Link> / <Link to={back}>{form.address}</Link> / {mode === "remove" ? "Remove" : mode === "detach" ? "Detach" : mode === "upgrade" ? "Upgrade" : "Edit"}
           </>
         }
         title={title}
@@ -219,9 +221,9 @@ function Editor({ form, mode, host: wantedHost, reload, reloading }: {
           </Callout>
         ) : null}
         {reviewed ? (
-          <Review preview={reviewed} remove={mode === "remove"} pending={commit.isPending} onBack={mode === "remove" ? null : () => setReviewed(null)}
+          <Review preview={reviewed} mode={mode} pending={commit.isPending} onBack={mode === "remove" || mode === "detach" ? null : () => setReviewed(null)}
             onCommit={commitChange} />
-        ) : mode === "remove" ? (
+        ) : mode === "remove" || mode === "detach" ? (
           preview.isPending ? <PageSkeleton rows={2} /> : <ErrorMessage error={preview.error} />
         ) : (
           <Card title="Definition">
@@ -281,14 +283,18 @@ function Editor({ form, mode, host: wantedHost, reload, reloading }: {
   );
 }
 
-function Review({ preview, remove, pending, onBack, onCommit }: { preview: ChangePreview; remove: boolean; pending: boolean;
+function Review({ preview, mode, pending, onBack, onCommit }: { preview: ChangePreview; mode: Mode; pending: boolean;
   onBack: (() => void) | null; onCommit: () => void }) {
+  const remove = mode === "remove";
   return (
     <Card title="Review" meta={`${preview.files.length} file${preview.files.length === 1 ? "" : "s"}`}>
       <div className="stack stack--large">
         <p>
           {remove
             ? "Committing deletes the guest's folder. Octopushy then proposes its retire run, under the guest's approval and destructive policy."
+            : mode === "detach"
+              ? "Committing deletes the guest's folder, and Octopushy forgets the guest: no retire run, nothing sent to Proxmox. Its machine keeps "
+                + "running as it is, protection included, and the installation lists it as a VM Octopushy does not manage. The guest's runs stay on record."
             : "Committing writes this commit to the lab repository as you, syncs it at once, and the normal process runs: plan, approval as the policy says, apply."}
         </p>
         <CodeBlock code={preview.message} label="Commit message" copy={false} wrap />
@@ -308,7 +314,7 @@ function Review({ preview, remove, pending, onBack, onCommit }: { preview: Chang
           ) : null}
           <button type="button" className={remove ? "button button--danger" : "button button--primary"} onClick={onCommit} disabled={pending}>
             {remove ? <Trash2 size={15} aria-hidden="true" /> : <GitCommitHorizontal size={15} aria-hidden="true" />}
-            {pending ? "Committing…" : remove ? "Commit the removal" : "Commit change"}
+            {pending ? "Committing…" : remove ? "Commit the removal" : mode === "detach" ? "Commit the detach" : "Commit change"}
           </button>
         </div>
       </div>

@@ -253,6 +253,15 @@ export function usePlanGuest() {
   });
 }
 
+export function useDetachGuest() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, address }: { id: string; address: string }) =>
+      unwrap(api.POST("/api/guests/{id}/detach", { params: { path: { id } }, body: { address } })),
+    onSuccess: () => client.invalidateQueries({ predicate: (query) => query.queryKey[0] !== "auth" }),
+  });
+}
+
 export function useConfigureGuest(id: string) {
   const refresh = useRefreshRuns();
   return useMutation({

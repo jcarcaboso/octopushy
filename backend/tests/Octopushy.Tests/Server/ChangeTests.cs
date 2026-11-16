@@ -456,6 +456,125 @@ public class ChangeTests(PostgresFixture postgres)
         Assert.Equal([$"{Folder}/guest.yaml", $"{Folder}/motd"], change.Files);
     }
 
+    [Fact]
+    public async Task Detaching_a_guest_deletes_its_folder_and_forgets_it_without_touching_its_machine()
+    {
+        var holder = new FakeAgentHolder();
+        // Even where removals go ahead without a person, a detach proposes none.
+        await using var setup = await StartAsync(Lab("policy: { destructive: automatic }"), agent: holder);
+        var agent = holder.Agent!;
+        await ProvisionAsync(setup, agent);
+        var resource = await setup.Server.ResourceAsync(Guest);
+        Assert.True(await setup.Server.QueryAsync(db => db.TofuStates.AnyAsync(s => s.ResourceId == resource.Id)));
+        var form = await setup.FormAsync();
+
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Kind: ChangeKinds.Detach));
+        Assert.Equal(ChangeKinds.Detach, change.Kind);
+        Assert.Equal("krb-app-01: detach the guest, keeping its machine", change.Message);
+        Assert.DoesNotContain(Folder, TestWorkflows.Run(setup.Remote.Root, "ls-tree", "-r", "--name-only", "main"));
+
+        resource = await setup.Server.ResourceAsync(Guest);
+        Assert.Equal("ops", resource.DetachedBy);
+        Assert.NotNull(resource.DetachedAt);
+        Assert.Equal(resource.DetachedAt, resource.RetiredAt);
+        Assert.Null(resource.BoundVmid);
+        Assert.False(await setup.Server.QueryAsync(db => db.TofuStates.AnyAsync(s => s.ResourceId == resource.Id)));
+        Assert.False(await setup.Server.QueryAsync(db => db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Operation == Operations.Retire)));
+        Assert.Empty(agent.TakeAssignments());
+        Assert.Equal(ChangeStatuses.Applied, (await setup.GetAsync(change.Id)).Status);
+        Assert.Equal(GuestStatuses.Detached, Views.GuestStatus(resource, null, null).Status);
+    }
+
+    [Fact]
+    public async Task A_guest_whose_folder_was_deleted_can_be_detached_in_place_of_its_removal()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(Lab("policy: { approval: manual }"), agent: holder);
+        var agent = holder.Agent!;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var first = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        var approval = first.Steps.Single(s => s.Name == StepNames.Approval);
+        await setup.Server.Engine.ApproveAsync(first.Id, approval.Id, approval.PlanSha256!, "ops", null, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        var resource = await setup.Server.ResourceAsync(Guest);
+        Assert.NotNull(resource.BoundVmid);
+
+        // Detaching needs the folder gone: otherwise the next sync would only find the guest again.
+        var early = await Assert.ThrowsAsync<RunException>(() => setup.Server.Engine.DetachGuestAsync(resource.Id, Guest, "ops", CancellationToken.None));
+        Assert.Contains("Remove the guest's folder", early.Message);
+
+        setup.DeleteElsewhere(Folder, "Remove the app VM");
+        await setup.Server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("destroy"));
+        await setup.Server.TickAsync();
+        var retire = await setup.Server.LatestRunAsync(Guest, Operations.Retire);
+        Assert.Equal(RunStatuses.AwaitingApproval, retire.Status);
+
+        var wrong = await Assert.ThrowsAsync<RunException>(() => setup.Server.Engine.DetachGuestAsync(resource.Id, "home/korriban/other", "ops", CancellationToken.None));
+        Assert.Contains("does not match", wrong.Message);
+        await setup.Server.Engine.DetachGuestAsync(resource.Id, Guest, "ops", CancellationToken.None);
+
+        Assert.Equal(RunStatuses.Cancelled, (await setup.Server.LatestRunAsync(Guest, Operations.Retire)).Status);
+        resource = await setup.Server.ResourceAsync(Guest);
+        Assert.Equal(("ops", (int?)null), (resource.DetachedBy, resource.BoundVmid));
+        Assert.Empty(agent.TakeAssignments());
+    }
+
+    [Fact]
+    public async Task A_detach_that_must_wait_for_an_apply_is_done_later_and_never_becomes_a_removal()
+    {
+        var holder = new FakeAgentHolder();
+        // Where a removal would go ahead without a person: the worst case for a detach that falls through.
+        await using var setup = await StartAsync(Lab("policy: { destructive: automatic }"), agent: holder);
+        var agent = holder.Agent!;
+        await ProvisionAsync(setup, agent);
+
+        // An edit's apply is with the agent when the owner detaches the guest.
+        setup.PushElsewhere(GuestFile, Commented.Replace("memory: 2048 ", "memory: 4096 "));
+        await setup.Server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(update: 1), artifacts: FakeAgent.PlanArtifact("edit"));
+        var apply = await agent.NextAsync("apply");
+        var form = await setup.FormAsync();
+        var change = await CommitAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Kind: ChangeKinds.Detach));
+
+        var waiting = await setup.Server.ResourceAsync(Guest);
+        Assert.Null(waiting.DetachedAt);
+        Assert.Contains("Waiting to be detached", waiting.ProvisionWaiting);
+        Assert.Equal(ChangeStatuses.Planning, (await setup.GetAsync(change.Id)).Status);
+
+        await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["outputs"] = new JsonObject() });
+        await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject());
+        // Any later commit: the guest is detached now, and no removal was ever proposed.
+        setup.PushElsewhere("notes.md", "unrelated\n");
+        await setup.Server.SyncAsync();
+
+        var resource = await setup.Server.ResourceAsync(Guest);
+        Assert.Equal(("ops", (int?)null), (resource.DetachedBy, resource.BoundVmid));
+        Assert.False(await setup.Server.QueryAsync(db => db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Operation == Operations.Retire)));
+        Assert.Equal(0, await setup.Server.QueryAsync(db => db.Attempts.CountAsync(a => a.Action == "set-protection")));
+        Assert.Equal(ChangeStatuses.Applied, (await setup.GetAsync(change.Id)).Status);
+    }
+
+    [Fact]
+    public async Task A_guest_is_not_detached_while_an_apply_of_it_may_be_under_way()
+    {
+        var holder = new FakeAgentHolder();
+        await using var setup = await StartAsync(agent: holder);
+        var agent = holder.Agent!;
+        await ProvisionAsync(setup, agent);
+        setup.DeleteElsewhere(Folder, "Remove the app VM");
+        await setup.Server.SyncAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(delete: 1), artifacts: FakeAgent.PlanArtifact("destroy"));
+        var unprotect = await agent.NextAsync("set-protection");
+        var resource = await setup.Server.ResourceAsync(Guest);
+
+        var busy = await Assert.ThrowsAsync<RunException>(() => setup.Server.Engine.DetachGuestAsync(resource.Id, Guest, "ops", CancellationToken.None));
+        Assert.Contains("may be changing the guest's machine", busy.Message);
+        Assert.Null((await setup.Server.ResourceAsync(Guest)).DetachedAt);
+        Assert.NotNull(unprotect);
+    }
+
     private static async Task ProvisionAsync(Setup setup, FakeAgent agent)
     {
         await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());

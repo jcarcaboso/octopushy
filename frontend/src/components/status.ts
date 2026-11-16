@@ -41,6 +41,7 @@ const statuses: Record<string, StatusStyle> = {
   invalid: { label: "Invalid", tone: "danger", icon: "alert" },
   missing: { label: "Missing", tone: "warning", icon: "missing" },
   retired: { label: "Retired", tone: "muted", icon: "archive" },
+  detached: { label: "Detached", tone: "muted", icon: "archive" },
   cancelled: { label: "Cancelled", tone: "muted", icon: "minus" },
   skipped: { label: "Skipped", tone: "muted", icon: "minus" },
   // A change from the UI, from its commit to the end of its runs.
@@ -74,6 +75,7 @@ export const guestStatuses = [
   "invalid",
   "missing",
   "retired",
+  "detached",
 ] as const;
 
 export const runStatuses = [
