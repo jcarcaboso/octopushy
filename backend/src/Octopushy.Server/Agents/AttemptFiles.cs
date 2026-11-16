@@ -185,6 +185,11 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
             return Task.FromResult(0L);
         }, cancellationToken);
 
+    internal IEnumerable<Guid> StoredAttempts() => Directory.Exists(_directory)
+        ? Directory.EnumerateFiles(_directory, "*.jsonl").Select(Path.GetFileNameWithoutExtension)
+            .Where(name => Guid.TryParse(name, out _)).Select(name => Guid.Parse(name!))
+        : [];
+
     private LogGate Enter(Guid attemptId)
     {
         lock (_gates)
@@ -276,6 +281,11 @@ public sealed class ArtifactStore(IOptions<OctopushyOptions> options, Envelope e
         if (Directory.Exists(directory))
             Directory.Delete(directory, recursive: true);
     }
+
+    internal IEnumerable<Guid> StoredAttempts() => Directory.Exists(_directory)
+        ? Directory.EnumerateDirectories(_directory).Select(Path.GetFileName)
+            .Where(name => Guid.TryParse(name, out _)).Select(name => Guid.Parse(name!))
+        : [];
 
     public static string Sha256(ReadOnlySpan<byte> content) => Convert.ToHexStringLower(SHA256.HashData(content));
 

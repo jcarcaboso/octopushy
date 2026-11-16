@@ -40,6 +40,12 @@ public sealed class OctopushyOptions
     public ImageOptions Images { get; set; } = new();
 
     public IconOptions Icons { get; set; } = new();
+
+    /// <summary>Finished run history is eligible for deletion after this many days.</summary>
+    public int RunRetentionDays { get; set; } = 180;
+
+    /// <summary>At least this many newest finished runs per resource are kept regardless of age.</summary>
+    public int RunRetentionKeep { get; set; } = 50;
 }
 
 /// <summary>The icons the Services page may show by file name. Octopushy ships none. See docs/service-icons.md.</summary>
