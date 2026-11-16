@@ -193,6 +193,24 @@ export function GuestPage() {
             folder to keep the guest; that cancels a removal that has not started changing anything.
           </Callout>
         ) : null}
+        {guest.drift ? (
+          <Callout
+            kind={guest.drift.kind === "missing" ? "danger" : "warning"}
+            title={
+              guest.drift.kind === "missing" ? (
+                <>
+                  {humanize(noun)} {guest.drift.vmid} is gone
+                </>
+              ) : (
+                <>
+                  Moved to <span className="mono">{guest.drift.observedHost}</span>
+                </>
+              )
+            }
+          >
+            {guest.drift.detail}
+          </Callout>
+        ) : null}
         {data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
             The {noun} was removed and verified absent.

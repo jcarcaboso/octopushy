@@ -274,7 +274,15 @@ public sealed record GuestSummaryDto(
     /// <summary>Where a configure run connects: <c>access.address</c>, or the static or reserved address; null when unknown.</summary>
     string? AccessAddress,
     /// <summary>The services the repository shows on the guest.</summary>
-    IReadOnlyList<ServiceSummaryDto> Services);
+    IReadOnlyList<ServiceSummaryDto> Services,
+    /// <summary>Where the guest's own machine is not where Octopushy expects it, by the latest observation; null when it is, or cannot be told.</summary>
+    MachineDriftDto? Drift = null);
+
+/// <summary>
+/// The guest's own machine as the installation's latest complete observation shows it, when that is not what the guest
+/// expects. <c>Kind</c> is <c>missing</c>, when no machine is at its VMID, or <c>moved</c>, when it is on another host.
+/// </summary>
+public sealed record MachineDriftDto(string Kind, int Vmid, string? DeclaredHost, string? ObservedHost, DateTimeOffset ObservedAt, string Detail);
 
 /// <summary>
 /// The workflow a guest or service names, as written (<c>fedora-vm@2</c>), and the version the latest revision resolved

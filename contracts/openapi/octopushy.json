@@ -7631,6 +7631,16 @@
             "items": {
               "$ref": "#/components/schemas/ServiceSummaryDto"
             }
+          },
+          "drift": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MachineDriftDto"
+              }
+            ]
           }
         }
       },
@@ -8036,6 +8046,45 @@
             "type": "string"
           },
           "password": {
+            "type": "string"
+          }
+        }
+      },
+      "MachineDriftDto": {
+        "required": [
+          "kind",
+          "vmid",
+          "declaredHost",
+          "observedHost",
+          "observedAt",
+          "detail"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "declaredHost": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "observedHost": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
             "type": "string"
           }
         }

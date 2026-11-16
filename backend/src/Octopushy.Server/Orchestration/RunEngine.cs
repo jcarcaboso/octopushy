@@ -530,10 +530,17 @@ public sealed partial class RunEngine(
         }
 
         var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
+        // A guest bound to its machine had it created and verified once. A plan that creates it again found it gone: deleted
+        // outside Octopushy, or waiting to be restored from a backup. An empty machine at its VMID would stand in the way of
+        // that restore, so it waits for a person whatever the policy says.
+        var recreatesLost = run.Operation == Operations.Provision && !GuestVmPlan.RemovesGuestVm(outputs, context)
+            && GuestVmPlan.MakesGuestMachine(outputs, context)
+            && await db.Resources.AnyAsync(r => r.Id == run.ResourceId
+                && r.BoundVmid == context.Proxmox.Vmid && r.BoundInstallation == r.ParentAddress, cancellationToken);
         var vmNote = recoversVm ? $" The plan recreates {context.Proxmox.Machine} {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
             : removesVm ? $" The plan destroys a {context.Proxmox.Machine} and its disks."
             : "";
-        step.ApprovalRequired = manual || destructiveManual || vmHeld;
+        step.ApprovalRequired = manual || destructiveManual || vmHeld || recreatesLost;
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
@@ -553,18 +560,24 @@ public sealed partial class RunEngine(
 
         // A deploy that asked to approve its plan in the same click: only a first plan that does nothing but create.
         var preApproval = run.Operation == Operations.Provision
-            ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs) ?? (removesVm ? $"It destroys a {context.Proxmox.Machine}." : null), needed: true, cancellationToken)
+            ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs)
+                ?? (removesVm ? $"It destroys a {context.Proxmox.Machine}." : null)
+                ?? (recreatesLost ? $"It creates again a {context.Proxmox.Machine} this guest had, which is gone." : null), needed: true, cancellationToken)
             : (false, null);
         if (preApproval.Approved)
             return true;
         // An agent update approves its guest's provision plan only when that changes no resource.
-        if (run.Operation == Operations.Provision && resourceChanges == 0 && deletes == 0 && !removesVm
+        if (run.Operation == Operations.Provision && resourceChanges == 0 && deletes == 0 && !removesVm && !recreatesLost
             && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
             return true;
 
         step.Status = StepStatuses.AwaitingApproval;
         step.StartedAt ??= clock.GetUtcNow();
-        step.Detail = vmHeld && !manual
+        step.Detail = recreatesLost
+            ? $"The {context.Proxmox.Machine} {context.Proxmox.Vmid} that was created and verified for this guest is gone from {context.Proxmox.Node}: "
+              + $"the plan creates a new, empty one. If it was deleted by mistake, restore it from a backup at VMID {context.Proxmox.Vmid} and plan again. "
+              + "Approve only to start over with an empty machine; this waits for a person whatever the policy says." + DeclinedNote(preApproval.Declined)
+            : vmHeld && !manual
             ? $"The plan destroys a VM and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
             : (destructiveManual && !manual
                 ? $"The plan deletes {deletes} resource(s) and destructive is manual (set by {policy.DestructiveSetBy})."

@@ -192,6 +192,30 @@ shows a VM at that VMID: then the create failed on a VM that was there first. A
 reservation is cleared when the guest's VMID or node changes while it is unbound, and
 when the guest is retired.
 
+## A machine that is gone, or on another host
+
+A binding is to an installation and a VMID, not to a host, so a VM that moves within a
+cluster stays the guest's.
+
+**A plan that creates a bound guest's machine again waits for a person,** whatever the
+policy says, `destructive: automatic` included, and a deploy's same-click approval does
+not cover it. Such a plan means OpenTofu's refresh found the machine gone: deleted outside
+Octopushy, or waiting to be restored from a backup. An empty machine at that VMID would
+stand in the way of the restore. Restore it at the same VMID and plan again: the binding
+still holds, the restored configuration still carries the tag and description, and the plan
+finds it. Approve only to start over with an empty machine.
+
+**The guest shows what the installation's latest observation says of its machine,** as
+`drift` in the guest's summary, when the guest is bound and the observation was made after
+it was bound, proves it saw every VM, and, for a cluster, was quorate:
+
+- `missing`: no host lists a machine at its VMID.
+- `moved`: the machine is on another host than `host:` in `guest.yaml`. Plans of the guest
+  are refused until the definition names the host it is on, since they would name a node
+  that is not the guest's.
+
+This is shown, not acted on: nothing is planned, retired or written because of it.
+
 ## Threat model and accepted limits
 
 The guards assume one operator who writes all the Git code, and they stop that

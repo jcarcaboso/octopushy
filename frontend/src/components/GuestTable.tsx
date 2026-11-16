@@ -51,6 +51,11 @@ export function GuestTable({ guests, label, emptyText = "No guests declared." }:
               <td className="cell-status">
                 <StatusBadge status={guest.status} />
                 {guest.statusDetail ? <div className="muted small cell-status__detail">{guest.statusDetail}</div> : null}
+                {guest.drift ? (
+                  <div className="small cell-status__detail" title={guest.drift.detail}>
+                    {guest.drift.kind === "missing" ? "Gone from Proxmox" : `Moved to ${guest.drift.observedHost}`}
+                  </div>
+                ) : null}
               </td>
               <td>
                 <Power guest={guest} />

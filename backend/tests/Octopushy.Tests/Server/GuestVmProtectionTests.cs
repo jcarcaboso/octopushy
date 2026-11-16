@@ -395,6 +395,36 @@ public class GuestVmProtectionTests(PostgresFixture postgres)
         Assert.Contains("destroys a VM and its disks", approval.DecisionNote);
     }
 
+    [Theory]
+    [InlineData("policy: { destructive: automatic }")]
+    [InlineData("")]
+    public async Task Creating_again_a_vm_the_guest_was_bound_to_waits_for_a_person_whatever_the_policy(string policy)
+    {
+        await using var server = await StartAsync(policy);
+        var agent = await server.ConnectAgentAsync("home");
+        await EstablishAsync(server, agent);
+        Assert.Equal(Vmid, (await server.ResourceAsync(Guest)).BoundVmid);
+
+        // The VM was deleted outside Octopushy: OpenTofu's refresh dropped it, so the plan creates it again.
+        await PlanAgainAsync(server);
+        var create = VmPlan(["create"]);
+        create["counts"]!["create"] = 1;
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, create, artifacts: FakeAgent.PlanArtifact("recreate"));
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.AwaitingApproval, run.Status);
+        Assert.Contains("is gone from korriban", run.Detail);
+        Assert.Contains("restore it from a backup at VMID 310", run.Detail);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.True(approval.ApprovalRequired);
+        Assert.Empty(agent.TakeAssignments());
+
+        await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "ops", "start over", CancellationToken.None);
+        Assert.Equal("apply", (await agent.NextAsync("apply")).Action);
+        Assert.Equal(0, await SetProtectionAttemptsAsync(server));
+    }
+
     [Fact]
     public async Task A_provision_plan_that_deletes_the_vm_is_treated_like_replacing_it()
     {

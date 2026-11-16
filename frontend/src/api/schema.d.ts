@@ -1720,6 +1720,7 @@ export interface components {
             type: null | string;
             accessAddress: null | string;
             services: components["schemas"]["ServiceSummaryDto"][];
+            drift?: null | components["schemas"]["MachineDriftDto"];
         };
         IconNamesDto: {
             names: string[];
@@ -1809,6 +1810,16 @@ export interface components {
         LoginRequest: {
             username: string;
             password: string;
+        };
+        MachineDriftDto: {
+            kind: string;
+            /** Format: int32 */
+            vmid: number;
+            declaredHost: null | string;
+            observedHost: null | string;
+            /** Format: date-time */
+            observedAt: string;
+            detail: string;
         };
         ManagedAccessDto: {
             publicKey: string;
