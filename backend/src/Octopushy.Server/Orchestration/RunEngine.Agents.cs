@@ -14,16 +14,25 @@ public sealed partial class RunEngine
 {
     private readonly Dictionary<Guid, int> _resultFailures = [];
 
-    // ponytail: serialize log batches with run changes; use per-attempt gates if log traffic becomes a bottleneck.
-    public Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
-        IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct) =>
-        WithDbAsync(async db =>
+    /// <summary>
+    /// Keeps a log batch of the agent's own attempt. Not under the engine's gate, so a batch never holds back the agent's
+    /// heartbeats or other messages. The attempt is looked up again under its log's own gate, which deletion takes after its
+    /// rows are gone: a batch either lands before the log is removed or finds the attempt gone.
+    /// </summary>
+    public async Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
+        IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct)
+    {
+        if (!await OwnsAsync())
+            return;
+        using (await masks.EnsureAsync(attemptId, ct))
+            await logs.AppendAsync(attemptId, firstSequence, lines, ct, OwnsAsync);
+
+        async Task<bool> OwnsAsync()
         {
-            if (!await db.Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct))
-                return;
-            using (await masks.EnsureAsync(attemptId, ct))
-                await logs.AppendAsync(attemptId, firstSequence, lines, ct);
-        }, ct);
+            await using var scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct);
+        }
+    }
 
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
     public async Task DispatchAsync(CancellationToken cancellationToken)

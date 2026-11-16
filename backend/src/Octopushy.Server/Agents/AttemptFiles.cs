@@ -107,11 +107,17 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     public string? Withholds(Guid attemptId, JsonNode? document) =>
         Known(attemptId) is { } secrets ? OutputMasking.Check(document, secrets) : Withheld;
 
-    /// <summary>Appends the lines not stored yet; returns the number of lines stored in total.</summary>
-    public Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken) =>
+    /// <summary>
+    /// Appends the lines not stored yet; returns the number of lines stored in total. <paramref name="stillKept"/>, when given, is
+    /// asked under the attempt's gate first, and nothing is written when it says no.
+    /// </summary>
+    public Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken,
+        Func<Task<bool>>? stillKept = null) =>
         UnderGateAsync(attemptId, async gate =>
         {
             var path = PathFor(attemptId);
+            if (stillKept is not null && !await stillKept())
+                return gate.Next ?? CountLines(path);
             var next = gate.Next ?? CountLines(path);
             Directory.CreateDirectory(_directory);
             await using (var writer = new StreamWriter(path, append: true))
