@@ -15,7 +15,7 @@ public class ValidatorTests
         using var error = new StringWriter();
         Assert.Equal(Validator.Valid, Validator.Run([TestRepository.ExampleLab], output, error));
         Assert.Contains("home/korriban/krb-app-01: machine-tools@1 -> machine-tools@1.0", output.ToString());
-        Assert.Contains("Workflows: machine-tools@1.0, proxmox-vm@1.0", output.ToString());
+        Assert.Contains("Workflows: machine-tools@1.0, proxmox-vm@1.1", output.ToString());
         Assert.Contains("0 errors", output.ToString());
     }
 

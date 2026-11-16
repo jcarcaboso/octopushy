@@ -401,7 +401,8 @@ public sealed partial class AssignmentBuilder(
             throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
         }
         var runContext = RunContext.Parse(run.Context);
-        if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext) is { } foreign)
+        if (GuestVmPlan.ForeignChange(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext,
+                await SafetyBoundary.BoundAsync(db, run.ResourceId, runContext, cancellationToken)) is { } foreign)
             throw new AssignmentException(await OutputDiagnostics.MaskAsync(db, masks, logs, plan, foreign, cancellationToken));
         if (stepName == StepNames.Unprotect && run.Operation is Operations.Provision or Operations.Retire
             && !GuestVmPlan.LiftsProtection(plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs), runContext))

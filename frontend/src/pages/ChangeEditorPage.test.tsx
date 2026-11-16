@@ -99,6 +99,28 @@ describe("ChangeEditorPage", () => {
     expect(requests.find((r) => r.path === "/api/changes" && r.method === "POST")!.body).toEqual(sent);
   });
 
+  it("moves a guest to another host of its cluster, starting from where Proxmox saw it", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/changes/form/guest-1": () => form({ host: "pve01", hosts: ["pve01", "pve02"], observedHost: "pve02" }),
+      "POST /api/changes/preview": () => preview({ subject: "pve01-worker: host pve01 → pve02" }),
+    });
+    const first = renderAt(<ChangeEditorPage />, { ...route, route: "/guests/guest-1/change?host=pve02" });
+
+    const host = await screen.findByLabelText("Host");
+    expect(host).toHaveValue("pve02");
+    expect(screen.getByText(/Proxmox last saw it on pve02/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Review the change" }));
+    await screen.findByRole("region", { name: "The exact diff that will be committed" });
+    expect((requests.find((r) => r.path === "/api/changes/preview")!.body as Record<string, unknown>).host).toBe("pve02");
+    first.unmount();
+
+    // A host the installation does not list is not taken from a link.
+    mockApi({ "GET /api/changes/form/guest-1": () => form({ host: "pve01", hosts: ["pve01", "pve02"], observedHost: null }) });
+    renderAt(<ChangeEditorPage />, { ...route, route: "/guests/guest-1/change?host=elsewhere" });
+    expect(await screen.findByLabelText("Host")).toHaveValue("pve01");
+  });
+
   it("keeps the form and shows the server's issues next to their fields when the change does not validate", async () => {
     const user = userEvent.setup();
     mockApi({

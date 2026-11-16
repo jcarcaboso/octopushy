@@ -110,8 +110,8 @@ public static class ChangeComposer
 
         if (request.Kind is not (ChangeKinds.Edit or ChangeKinds.Upgrade))
             throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, "A change is an edit, an upgrade or a removal.");
-        if (resourceKind == ResourceKinds.Service && (request.Hardware is not null || request.Network is not null))
-            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "A service has inputs only: no hardware or network.");
+        if (resourceKind == ResourceKinds.Service && (request.Hardware is not null || request.Network is not null || request.Host is not null))
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "A service has inputs only: no host, hardware or network.");
 
         JsonObject original;
         try
@@ -144,6 +144,14 @@ public static class ChangeComposer
             throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "An upgrade names the workflow at its new major.");
         }
 
+        if (request.Host is { } host)
+        {
+            if (string.IsNullOrWhiteSpace(host))
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "Choose the host the guest runs on.",
+                    fieldIssues: [new FieldIssueDto("/host", "Choose a host.")]);
+            desired["host"] = host.Trim();
+        }
+
         Set(desired, original, "hardware", request.Hardware);
         Set(desired, original, "network", request.Network);
         Set(desired, original, "inputs", request.Inputs);
@@ -163,6 +171,7 @@ public static class ChangeComposer
 
         var differences = new List<string>();
         Describe(original["workflow"], desired["workflow"], "workflow", differences);
+        Describe(original["host"], desired["host"], "host", differences);
         foreach (var section in GuestSections)
             Describe(original[section], desired[section], "", differences, section);
         var summary = differences.Count == 0 ? "edit its definition"
@@ -170,7 +179,7 @@ public static class ChangeComposer
         var line = Truncate($"{name}: {summary}", 200);
         // What a later revision has to keep for this change to be the one applied: each section it wrote, a null for one removed.
         var written = new JsonObject();
-        foreach (var key in GuestSections.Prepend("workflow").Where(k => !YamlEditor.Same(original[k], desired[k])))
+        foreach (var key in GuestSections.Prepend("host").Prepend("workflow").Where(k => !YamlEditor.Same(original[k], desired[k])))
             written[key] = desired[key]?.DeepClone();
         return new ComposedChange(kind, resourceKind, address, name, file, [new DraftFileChange(file, edited)], [file], null, line,
             Message(line, differences.Count > 1 ? differences : [], id), edited, desired, written);

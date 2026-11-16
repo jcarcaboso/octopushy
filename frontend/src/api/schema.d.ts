@@ -1376,6 +1376,9 @@ export interface components {
             canRemove: boolean;
             upgrade: null | components["schemas"]["WorkflowVersionDto"];
             fieldIssues: components["schemas"]["FieldIssueDto"][];
+            host?: null | string;
+            hosts?: null | string[];
+            observedHost?: null | string;
         };
         ChangePreviewDto: {
             kind: string;
@@ -1416,6 +1419,7 @@ export interface components {
             hardware?: null | components["schemas"]["JsonObject"];
             network?: null | components["schemas"]["JsonObject"];
             inputs?: null | components["schemas"]["JsonObject"];
+            host?: null | string;
         };
         ChangedPath: {
             path: string;

@@ -108,6 +108,15 @@ public static class SafetyBoundary
     /// <summary>The tag a provision module puts on the VMs it makes, as the example module does.</summary>
     public const string OwnerTag = "octopushy";
 
+    /// <summary>
+    /// Whether the run's guest is bound to the VMID it acts on, in its own installation. A binding is to a VMID, not a
+    /// host, so this is what lets a plan move the guest's machine between the hosts of a cluster.
+    /// </summary>
+    public static Task<bool> BoundAsync(OctopushyDb db, Guid resourceId, RunContext context, CancellationToken cancellationToken) =>
+        context.Stage is null && context.Proxmox?.Vmid is { } vmid
+            ? db.Resources.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.BoundVmid == vmid && r.BoundInstallation == r.ParentAddress, cancellationToken)
+            : Task.FromResult(false);
+
     /// <summary>What the description of a VM made for the guest at <paramref name="address"/> contains.</summary>
     public static string OwnerDescription(string address) => $"Managed by Octopushy as {address}.";
 

@@ -25,6 +25,11 @@ resource "proxmox_virtual_environment_vm" "guest" {
   node_name   = var.guest.host
   vm_id       = var.guest.vmid
 
+  # A new host in guest.yaml migrates the VM there, online and with its local disks, instead of
+  # replacing it. Without this the provider would destroy and recreate it, and Octopushy refuses
+  # such a plan. The target host needs the same storage ids and bridges.
+  migrate = true
+
   bios          = "ovmf"
   machine       = "q35"
   scsi_hardware = "virtio-scsi-single"

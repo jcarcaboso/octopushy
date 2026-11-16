@@ -57,10 +57,14 @@ export function ChangeEditorPage() {
   if (isPending || (!isFetchedAfterMount && isFetching)) return <PageSkeleton rows={4} />;
   if (!form) return isNotFound(error) ? <NotFound what={kind} /> : <ErrorMessage error={error} title="The form could not be loaded" />;
   // Each load of the form is its own editor: reloading it starts again from the new commit.
-  return <Editor key={form.baseCommit ?? "none"} form={form} mode={mode} reload={() => void refetch()} reloading={isFetching} />;
+  return (
+    <Editor key={form.baseCommit ?? "none"} form={form} mode={mode} host={params.get("host")} reload={() => void refetch()} reloading={isFetching} />
+  );
 }
 
-function Editor({ form, mode, reload, reloading }: { form: ChangeForm; mode: Mode; reload: () => void; reloading: boolean }) {
+function Editor({ form, mode, host: wantedHost, reload, reloading }: {
+  form: ChangeForm; mode: Mode; host: string | null; reload: () => void; reloading: boolean;
+}) {
   const navigate = useNavigate();
   const preview = usePreviewChange();
   const commit = useCommitChange();
@@ -70,6 +74,8 @@ function Editor({ form, mode, reload, reloading }: { form: ChangeForm; mode: Mod
   const ui = useMemo(() => readUi(version?.ui), [version]);
   const [value, setValue] = useState<JsonObject>(() => initialValue(form));
   const [workflow, setWorkflow] = useState(target ?? form.workflow ?? "");
+  // A link may ask for a host, such as Accept placement: only one the installation lists.
+  const [host, setHost] = useState(wantedHost && form.hosts?.includes(wantedHost) ? wantedHost : (form.host ?? ""));
   const [issues, setIssues] = useState<FieldIssue[]>(mode === "edit" ? form.fieldIssues : []);
   const [reviewed, setReviewed] = useState<ChangePreview | null>(null);
   const [yamlErrors, setYamlErrors] = useState<string[]>([]);
@@ -94,9 +100,10 @@ function Editor({ form, mode, reload, reloading }: { form: ChangeForm; mode: Mod
       baseCommit: form.baseCommit!,
       kind: mode === "upgrade" ? "upgrade" : "edit",
       workflow: reference !== (form.workflow ?? "") ? reference : null,
+      ...(form.host && host !== form.host ? { host } : {}),
       ...sections,
     };
-  }, [form, mode, value, workflow]);
+  }, [form, mode, value, workflow, host]);
 
   const runPreview = useCallback(
     (automatic = false) => {
@@ -231,8 +238,27 @@ function Editor({ form, mode, reload, reloading }: { form: ChangeForm; mode: Mod
                   <span key={n} className="field__error" role="alert">{i.message}</span>
                 ))}
               </div>
+              {form.host && form.hosts && form.hosts.length > 1 ? (
+                <div className="field">
+                  <label htmlFor="change-host">Host</label>
+                  <select id="change-host" className="mono" value={host} disabled={disabled || mode === "upgrade"}
+                    onChange={(e) => setHost(e.target.value)} aria-invalid={issues.some((i) => i.pointer === "/host")}>
+                    {form.hosts.map((h) => (
+                      <option key={h} value={h}>{h}</option>
+                    ))}
+                  </select>
+                  <span className="field__hint">
+                    {form.observedHost
+                      ? `Proxmox last saw it on ${form.observedHost}: choosing that host records where it is, and moves nothing.`
+                      : "Another host migrates the machine there with its disks, once you approve its plan. Its storage and bridge must exist on that host."}
+                  </span>
+                  {issues.filter((i) => i.pointer === "/host").map((i, n) => (
+                    <span key={n} className="field__error" role="alert">{i.message}</span>
+                  ))}
+                </div>
+              ) : null}
               <SchemaForm schema={schema} ui={ui} value={value} onChange={setValue} disabled={disabled}
-                issues={issues.filter((i) => i.pointer !== "/workflow")} onYamlErrors={setYamlErrors} />
+                issues={issues.filter((i) => i.pointer !== "/workflow" && i.pointer !== "/host")} onYamlErrors={setYamlErrors} />
               {previewIssues && !previewIssues.valid && previewIssues.issues.length > 0 ? (
                 <div className="stack stack--small">
                   <h3 className="schema-form__group-title">What the validation found</h3>
