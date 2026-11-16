@@ -15,7 +15,7 @@ A **change** is a structured edit of one guest or service, made in a form and wr
 
 | Kind | What it writes |
 |---|---|
-| `edit` | A guest's `hardware`, `network`, `inputs` and `workflow`, or a service's `inputs` and `workflow` |
+| `edit` | A guest's `host`, `hardware`, `network`, `inputs` and `workflow`, or a service's `inputs` and `workflow` |
 | `upgrade` | An edit that moves `workflow:` to a newer major of the same workflow, such as `fedora-vm@1` to `fedora-vm@2`, with any inputs the new major needs |
 | `remove` | Deletes a guest's folder. Octopushy then proposes the guest's retire run, under its approval and destructive policy, as for a folder deleted in Git |
 | `create-guest` | A new guest's folder with its `guest.yaml`, from [the workflow wizard](#the-workflow-wizard) |

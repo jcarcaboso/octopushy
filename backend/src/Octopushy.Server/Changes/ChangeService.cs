@@ -8,6 +8,7 @@ using Octopushy.Definitions.Yaml;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
+using Octopushy.Server.Inventory;
 using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
 using Octopushy.Server.Store;
@@ -74,10 +75,29 @@ public sealed partial class ChangeService(
             resource.Kind == ResourceKinds.Guest ? json["hardware"]?.DeepClone() : null,
             resource.Kind == ResourceKinds.Guest ? json["network"]?.DeepClone() : null,
             json["inputs"]?.DeepClone(), blocked ?? (text is null ? $"{file} is not a text file Octopushy can edit." : null),
-            resource.Kind == ResourceKinds.Guest, upgrade, fieldIssues);
+            resource.Kind == ResourceKinds.Guest, upgrade, fieldIssues,
+            resource.Kind == ResourceKinds.Guest ? json["host"]?.ToString() : null,
+            resource.Kind == ResourceKinds.Guest && repository.Guest(resource.Address) is { } guest
+                ? repository.Installation(guest.InstallationAddress)?.Hosts.Keys.Order(StringComparer.Ordinal).ToList()
+                : null,
+            resource.Kind == ResourceKinds.Guest ? await MovedToAsync(db, resource, json["host"]?.ToString(), ct) : null);
 
         static ChangeFormDto Empty(Resource resource, string name, string reason) => new(resource.Id, resource.Kind, resource.Address, name,
             null, null, null, null, null, null, null, null, reason, false, null, []);
+    }
+
+    /// <summary>The host the installation's latest observation saw the guest's machine on, when that is not its definition's; see <see cref="MachineDrift"/>.</summary>
+    private static async Task<string?> MovedToAsync(OctopushyDb db, Resource guest, string? declaredHost, CancellationToken ct)
+    {
+        if (guest.BoundVmid is null)
+            return null;
+        var latest = await db.Observations.AsNoTracking()
+            .Where(o => db.Resources.Any(r => r.Id == o.ResourceId && r.Kind == ResourceKinds.Installation && r.Address == guest.ParentAddress && r.RetiredAt == null))
+            .OrderByDescending(o => o.ObservedAt).FirstOrDefaultAsync(ct);
+        if (latest is null || JsonNode.Parse(latest.Data) is not JsonObject data)
+            return null;
+        data["observedAt"] = latest.ObservedAt;
+        return MachineDrift.Of(guest, declaredHost, data) is { Kind: MachineDriftKinds.Moved } drift ? drift.ObservedHost : null;
     }
 
     /// <summary>What committing <paramref name="request"/> would do, with nothing committed.</summary>
@@ -472,8 +492,30 @@ public sealed partial class ChangeService(
         };
     }
 
-    private static ComposedChange Compose(ChangeRequest request, Guid id, Target target, IReadOnlyList<TreeFile> tree) =>
-        ChangeComposer.Compose(request, id, target.Kind, target.Address, target.File, target.Folder, target.Text, tree);
+    private static ComposedChange Compose(ChangeRequest request, Guid id, Target target, IReadOnlyList<TreeFile> tree)
+    {
+        if (request.Host is { } host && target.Repository.Guest(target.Address) is { } guest && host.Trim() != guest.Host)
+            CheckMove(target.Repository, guest, host.Trim());
+        return ChangeComposer.Compose(request, id, target.Kind, target.Address, target.File, target.Folder, target.Text, tree);
+    }
+
+    /// <summary>
+    /// Refuses a move to a host the installation does not list, and one that would take away the host key Octopushy gives the
+    /// guest: without a snippet on the new host, the provider would replace the VM to drop it.
+    /// </summary>
+    private static void CheckMove(LabRepository repository, GuestDefinition guest, string host)
+    {
+        var installation = repository.Installation(guest.InstallationAddress);
+        if (installation is null || !installation.Hosts.ContainsKey(host))
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"{host} is not a host of {guest.InstallationAddress}: declare it under hosts first.",
+                fieldIssues: [new FieldIssueDto("/host", $"Not a host of {guest.InstallationAddress}.")]);
+        if (ManagedHostKey.TrustOf(installation, guest) == HostKeyTrust.Managed
+            && ManagedHostKey.Settings(installation)?.Hosts.ContainsKey(host) != true)
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid,
+                $"This guest's host key is Octopushy's, delivered in a snippet, and {host} is not set up for snippets. Moving it there would replace "
+                + $"the VM. Run deploy/proxmox/snippets.sh on {host} and add it under snippets.hosts in {installation.File} first.",
+                fieldIssues: [new FieldIssueDto("/host", $"{host} is not under snippets.hosts.")]);
+    }
 
     /// <summary>The resource a change acts on and its definition at the change's base commit, or a refusal saying why it cannot be changed.</summary>
     private async Task<Target> TargetAsync(OctopushyDb db, ChangeRequest request, CancellationToken ct)

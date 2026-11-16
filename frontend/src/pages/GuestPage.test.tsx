@@ -140,6 +140,7 @@ describe("GuestPage", () => {
     renderAt(<GuestPage />, route);
     expect(await screen.findByText(moved.detail)).toBeInTheDocument();
     expect(screen.getByText("Moved to", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Accept placement" })).toHaveAttribute("href", "/guests/guest-1/change?host=pve02");
   });
 
   it("marks the values that are not what was last applied, and none once the guest is in sync", async () => {

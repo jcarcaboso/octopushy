@@ -73,9 +73,13 @@ public static class GuestVmPlan
     /// <item>one that names no VM, or one not known until apply, unless its type is in <see cref="MachineFreeTypes"/>;</item>
     /// <item>a plan that counts changes without listing them.</item>
     /// </list>
+    /// One exception: the guest's own machine moving to its node from another host of its installation, as an update of
+    /// that machine alone, when the guest is <paramref name="bound"/> to its VMID. A VMID is one machine in an installation,
+    /// whichever host it is on, and only the guest's binding says the machine is its own.
     /// What cannot be shown to be the guest's own is treated as someone else's. See docs/safety-boundary.md.
     /// </summary>
-    public static string? ForeignChange(JsonNode? outputs, RunContext context)
+    /// <param name="bound">The run's guest is bound to its VMID in its installation; see <see cref="SafetyBoundary.OwnsAsync"/>.</param>
+    public static string? ForeignChange(JsonNode? outputs, RunContext context, bool bound = false)
     {
         var changes = outputs?["changes"] as JsonArray;
         if (changes is null)
@@ -101,6 +105,12 @@ public static class GuestVmPlan
             var machines = targets.Where(t => t.Vmid is not null).ToList();
             var freeType = MachineFreeTypes.Contains(change["type"]?.ToString() ?? "");
             var unknown = change["targetUnknown"] is JsonValue u && u.TryGetValue<bool>(out var isUnknown) && isUnknown;
+            if (!stage && bound && !unknown && MovesOwnMachine(change, machines, context))
+                continue;
+            if (!stage && bound && !unknown && ReplacesOwnMachineElsewhere(change, machines, context) is { } from)
+                return $"The plan would move {context.Proxmox.Machine} {context.Proxmox.Vmid} from {from} to {context.Proxmox.Node} by replacing it, "
+                    + $"which wipes its disks. Set migrate = true on the {change["type"]} of the workflow's module so the provider migrates it, "
+                    + $"or set host back to {from}. Octopushy refuses this plan whatever the policy says.";
             var refused = stage
                 ? machines.Count > 0 || !freeType
                 : machines.Any(t => t.Vmid != context.Proxmox.Vmid || t.Node is null || t.Node != context.Proxmox.Node)
@@ -116,6 +126,37 @@ public static class GuestVmPlan
             ? $"Stage {context.Stage} would change a Proxmox resource that acts on a machine ({what}). A pipeline stage owns no machine, so Octopushy refuses this plan whatever the policy says."
             : $"The plan would change a Proxmox resource that is not this guest's {context.Proxmox.Machine} {context.Proxmox.Vmid} on {context.Proxmox.Node} ({what}). "
               + "Octopushy refuses to act on a machine it does not manage, whatever the policy says.";
+    }
+
+    /// <summary>
+    /// The node the plan migrates the guest's own machine from, to the guest's node, or null when it moves nothing. Such a plan
+    /// is not foreign when the guest is bound to its VMID (see <see cref="ForeignChange"/>), and it waits for a person: the
+    /// machine may have been moved in Proxmox on purpose, and the definition not told yet.
+    /// </summary>
+    public static string? MovesGuestMachineFrom(JsonNode? outputs, RunContext context) =>
+        (outputs?["changes"] as JsonArray ?? []).OfType<JsonNode>()
+            .Where(c => IsMachine(c) && Actions(c) is ["update"])
+            .Select(c => OwnVmidOnTwoNodes(Targets(c).Where(t => t.Vmid is not null).ToList(), context))
+            .FirstOrDefault(from => from is not null);
+
+    /// <summary>
+    /// The guest's own machine resource, updated in place, naming only its own VMID, on its own node and on one other: a
+    /// migration to its node. Nothing is deleted or created.
+    /// </summary>
+    private static bool MovesOwnMachine(JsonNode change, List<Target> machines, RunContext context) =>
+        IsMachine(change) && Actions(change) is ["update"] && OwnVmidOnTwoNodes(machines, context) is not null;
+
+    /// <summary>The node the guest's own machine is replaced from, when the plan replaces it to place it on its node; null otherwise.</summary>
+    private static string? ReplacesOwnMachineElsewhere(JsonNode change, List<Target> machines, RunContext context) =>
+        IsMachine(change) && Actions(change).Contains("delete") && Actions(change).Contains("create") ? OwnVmidOnTwoNodes(machines, context) : null;
+
+    /// <summary>The other node, when the targets are exactly the guest's VMID on its node and on one other.</summary>
+    private static string? OwnVmidOnTwoNodes(List<Target> machines, RunContext context)
+    {
+        if (machines.Count != 2 || machines.Any(t => t.Vmid != context.Proxmox.Vmid || t.Node is null)
+            || machines.Count(t => t.Node == context.Proxmox.Node) != 1)
+            return null;
+        return machines.Single(t => t.Node != context.Proxmox.Node).Node;
     }
 
     /// <summary>A resource of a Proxmox provider: the agent says so, or its type does, for a summary that predates that.</summary>

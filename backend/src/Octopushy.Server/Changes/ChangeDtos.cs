@@ -7,7 +7,8 @@ namespace Octopushy.Server.Changes;
 /// <summary>
 /// A change made in a form. <c>Kind</c> is <c>edit</c>, <c>upgrade</c> (the workflow reference to a newer major) or
 /// <c>remove</c> (a guest's folder). For an edit or upgrade, each section given replaces that section of the definition;
-/// one left out stays as it is. <c>BaseCommit</c> is the commit the form was loaded from.
+/// one left out stays as it is. <c>Host</c> moves a guest to another host of its installation. <c>BaseCommit</c> is the commit
+/// the form was loaded from.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChangeRequest(
@@ -17,15 +18,17 @@ public sealed record ChangeRequest(
     string? Workflow = null,
     JsonObject? Hardware = null,
     JsonObject? Network = null,
-    JsonObject? Inputs = null);
+    JsonObject? Inputs = null,
+    string? Host = null);
 
-/// <summary>A problem with one field, at a JSON pointer into <c>{ workflow, hardware, network, inputs }</c>; an empty pointer is the whole form.</summary>
+/// <summary>A problem with one field, at a JSON pointer into <c>{ workflow, host, hardware, network, inputs }</c>; an empty pointer is the whole form.</summary>
 public sealed record FieldIssueDto(string Pointer, string Message);
 
 /// <summary>
 /// What a form for a guest or service starts from: its definition at <c>BaseCommit</c>, the workflow its reference resolved
 /// to with its inputs schema and <c>ui</c> hints, and, when a newer major is released, that version to upgrade to.
-/// <c>BlockedReason</c> says why the form is read-only.
+/// <c>BlockedReason</c> says why the form is read-only. For a guest, <c>Host</c> is its host and <c>Hosts</c> every host of its
+/// installation it may move to; <c>ObservedHost</c> is where the installation's latest observation saw its machine.
 /// </summary>
 public sealed record ChangeFormDto(
     Guid ResourceId,
@@ -43,7 +46,10 @@ public sealed record ChangeFormDto(
     string? BlockedReason,
     bool CanRemove,
     WorkflowVersionDto? Upgrade,
-    IReadOnlyList<FieldIssueDto> FieldIssues);
+    IReadOnlyList<FieldIssueDto> FieldIssues,
+    string? Host = null,
+    IReadOnlyList<string>? Hosts = null,
+    string? ObservedHost = null);
 
 /// <summary>
 /// What committing a change would do, without committing it: the exact diff, the commit message, and its validation against

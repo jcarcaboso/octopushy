@@ -5964,6 +5964,27 @@
             "items": {
               "$ref": "#/components/schemas/FieldIssueDto"
             }
+          },
+          "host": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hosts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "observedHost": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -6160,6 +6181,12 @@
               {
                 "$ref": "#/components/schemas/JsonObject"
               }
+            ]
+          },
+          "host": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         },

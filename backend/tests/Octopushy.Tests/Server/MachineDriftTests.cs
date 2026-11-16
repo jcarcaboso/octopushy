@@ -50,7 +50,7 @@ public class MachineDriftTests
 
         Assert.NotNull(drift);
         Assert.Equal((MachineDriftKinds.Moved, "korriban", "dromund"), (drift.Kind, drift.DeclaredHost, drift.ObservedHost));
-        Assert.Contains("host: dromund", drift.Detail);
+        Assert.Contains("Accept placement records host: dromund", drift.Detail);
     }
 
     [Fact]

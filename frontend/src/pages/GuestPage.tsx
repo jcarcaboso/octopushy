@@ -196,6 +196,13 @@ export function GuestPage() {
         {guest.drift ? (
           <Callout
             kind={guest.drift.kind === "missing" ? "danger" : "warning"}
+            actions={
+              guest.drift.kind === "moved" && guest.drift.observedHost && !data.missingSince && !data.retiredAt ? (
+                <Link to={`/guests/${guest.id}/change?host=${encodeURIComponent(guest.drift.observedHost)}`} className="button">
+                  Accept placement
+                </Link>
+              ) : undefined
+            }
             title={
               guest.drift.kind === "missing" ? (
                 <>

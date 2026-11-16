@@ -51,7 +51,7 @@ public sealed record MachineDrift(string Kind, int Vmid, string? DeclaredHost, s
         if (declaredHost is not null && observedHost is { Length: > 0 } && observedHost != declaredHost)
             return new MachineDrift(MachineDriftKinds.Moved, vmid, declaredHost, observedHost, observedAt,
                 $"VMID {vmid} is on {observedHost} at the last observation ({when}), and the definition places it on {declaredHost}. "
-                + $"Plans are refused until the definition says host: {observedHost}, or the machine is moved back.");
+                + $"A plan of the guest would move it back to {declaredHost}, and waits for a person. Accept placement records host: {observedHost}.");
         return null;
     }
 }

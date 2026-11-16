@@ -75,8 +75,10 @@ layout, and the lab repository has neither.
    Each resource has one folder; the folder name is its id, unique among its siblings. Its address is the path of ids, such
    as `home/korriban/krb-app-01/web`. One repository can hold several labs.
 2. **Guests sit under the installation, not the host.** In a cluster, VMIDs are shared and a VM can migrate between hosts,
-   so the host is a field in `guest.yaml`. Moving a VM within a cluster changes that field, not its folder. For a
-   standalone installation, the installation is the host.
+   so the host is a field in `guest.yaml`. Moving a VM within a cluster changes that field, not its folder: the guest's
+   provision plan migrates it, when its module sets `migrate = true` as the example does, once a person approves it, and a
+   plan that would replace it to move it is refused. A VM moved in Proxmox is shown as moved on its guest, and **Accept placement** writes the host
+   it is on. For a standalone installation, the installation is the host.
 3. **A guest's folder holds all of its configuration:** `guest.yaml` with placement, hardware, network, its workflow and
    that workflow's inputs, access, and policy, plus files of its own and its services. Reading that one file tells
    everything about the VM.

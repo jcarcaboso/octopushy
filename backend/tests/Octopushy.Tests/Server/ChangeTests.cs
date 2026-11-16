@@ -220,6 +220,66 @@ public class ChangeTests(PostgresFixture postgres)
         return (await response.Content.ReadFromJsonAsync<ChangeRefusedDto>())!;
     }
 
+    /// <summary>The lab with korriban a cluster of korriban and dromund, and only korriban set up for snippets when asked.</summary>
+    private static TestRepository ClusterLab(bool snippets = false)
+    {
+        var repository = Lab();
+        repository.Write("labs/home/proxmox/korriban/installation.yaml", $$"""
+            schemaVersion: 1
+            type: cluster
+            connection:
+              endpoint: https://10.1.0.10:8006/
+              tls: { verify: false }
+              readOnlyToken: { store: proxmox/korriban/read-only-token }
+              privilegedToken: { store: proxmox/korriban/privileged-token }
+            hosts:
+              korriban:
+                datastores: { images: local, disks: local-lvm }
+                bridges: [vmbr0]
+              dromund:
+                datastores: { images: local, disks: local-lvm }
+                bridges: [vmbr0]
+            {{(snippets ? "snippets:\n  hosts:\n    korriban: { hostKey: { store: proxmox/korriban/ssh-host-key } }\n" : "")}}
+            """);
+        return repository;
+    }
+
+    [Fact]
+    public async Task A_guest_moves_to_another_host_of_its_cluster_as_one_edit_of_its_host()
+    {
+        await using var setup = await StartAsync(ClusterLab());
+        var form = await setup.FormAsync();
+        Assert.Equal("korriban", form.Host);
+        Assert.Equal(["dromund", "korriban"], form.Hosts);
+        Assert.Null(form.ObservedHost);
+
+        var request = new ChangeRequest(form.ResourceId, form.BaseCommit!, Host: "dromund");
+        var preview = (await (await setup.Client.PostAsJsonAsync("/api/changes/preview", request)).Content.ReadFromJsonAsync<ChangePreviewDto>())!;
+        Assert.True(preview.Valid, string.Join("; ", preview.Issues.Select(i => i.Message)));
+        Assert.Equal("krb-app-01: host korriban → dromund", preview.Subject);
+
+        var change = await CommitAsync(setup, request);
+        Assert.Contains("host: dromund            # the only host", setup.RemoteFile(GuestFile));
+        Assert.Equal(ChangeStatuses.Planning, change.Status);
+
+        var unknown = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, change.Commit!, Host: "moraband"));
+        Assert.Equal("/host", Assert.Single(unknown.FieldIssues).Pointer);
+    }
+
+    [Fact]
+    public async Task A_guest_with_octopushys_host_key_does_not_move_to_a_host_without_snippets()
+    {
+        var lab = ClusterLab(snippets: true);
+        lab.Write("workflows/test-vm/workflow.yaml", File.ReadAllText(Path.Combine(lab.Root, "workflows/test-vm/workflow.yaml"))
+            .Replace("verify: proxmox", "verify: proxmox\n    hostKey: managed"));
+        await using var setup = await StartAsync(lab);
+        var form = await setup.FormAsync();
+
+        var refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Host: "dromund"));
+        Assert.Contains("not set up for snippets", refused.Message);
+        Assert.Equal("/host", Assert.Single(refused.FieldIssues).Pointer);
+    }
+
     [Fact]
     public async Task An_edit_is_one_commit_by_the_operator_that_keeps_comments_and_is_synced_at_once()
     {

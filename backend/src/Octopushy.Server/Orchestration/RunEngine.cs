@@ -474,7 +474,7 @@ public sealed partial class RunEngine(
         var plan = run.Steps.Single(s => s.Name == StepNames.Plan);
         var outputs = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs);
         // The plan's effects refuse this already; asked again so no path offers it for approval.
-        if (GuestVmPlan.ForeignChange(outputs, context) is { } refusal)
+        if (GuestVmPlan.ForeignChange(outputs, context, await SafetyBoundary.BoundAsync(db, run.ResourceId, context, cancellationToken)) is { } refusal)
         {
             var foreign = await ReportedAsync(db, plan, refusal, cancellationToken);
             step.Status = StepStatuses.Failed;
@@ -540,7 +540,10 @@ public sealed partial class RunEngine(
         var vmNote = recoversVm ? $" The plan recreates {context.Proxmox.Machine} {context.Proxmox.Vmid}, whose first apply did not finish; it was never verified."
             : removesVm ? $" The plan destroys a {context.Proxmox.Machine} and its disks."
             : "";
-        step.ApprovalRequired = manual || destructiveManual || vmHeld || recreatesLost;
+        // A migration waits for a person, whatever the policy: the plan cannot tell a host changed in guest.yaml from a machine
+        // someone moved in Proxmox, which this plan would move back. Accept placement records where it is, and moves nothing.
+        var movesFrom = run.Operation == Operations.Provision ? GuestVmPlan.MovesGuestMachineFrom(outputs, context) : null;
+        step.ApprovalRequired = manual || destructiveManual || vmHeld || recreatesLost || movesFrom is not null;
         if (!step.ApprovalRequired)
         {
             step.Decision = "approved";
@@ -562,12 +565,13 @@ public sealed partial class RunEngine(
         var preApproval = run.Operation == Operations.Provision
             ? await PreApproveAsync(db, run, step, context, MoreThanCreate(outputs)
                 ?? (removesVm ? $"It destroys a {context.Proxmox.Machine}." : null)
-                ?? (recreatesLost ? $"It creates again a {context.Proxmox.Machine} this guest had, which is gone." : null), needed: true, cancellationToken)
+                ?? (recreatesLost ? $"It creates again a {context.Proxmox.Machine} this guest had, which is gone." : null)
+                ?? (movesFrom is not null ? $"It moves a {context.Proxmox.Machine}." : null), needed: true, cancellationToken)
             : (false, null);
         if (preApproval.Approved)
             return true;
         // An agent update approves its guest's provision plan only when that changes no resource.
-        if (run.Operation == Operations.Provision && resourceChanges == 0 && deletes == 0 && !removesVm && !recreatesLost
+        if (run.Operation == Operations.Provision && resourceChanges == 0 && deletes == 0 && !removesVm && !recreatesLost && movesFrom is null
             && await ApprovedByAgentUpdateAsync(db, run, step, cancellationToken))
             return true;
 
@@ -577,6 +581,10 @@ public sealed partial class RunEngine(
             ? $"The {context.Proxmox.Machine} {context.Proxmox.Vmid} that was created and verified for this guest is gone from {context.Proxmox.Node}: "
               + $"the plan creates a new, empty one. If it was deleted by mistake, restore it from a backup at VMID {context.Proxmox.Vmid} and plan again. "
               + "Approve only to start over with an empty machine; this waits for a person whatever the policy says." + DeclinedNote(preApproval.Declined)
+            : movesFrom is not null
+            ? $"The plan migrates {context.Proxmox.Machine} {context.Proxmox.Vmid} from {movesFrom} to {context.Proxmox.Node}. A migration waits for a person "
+              + $"whatever the policy says. If it was moved to {movesFrom} in Proxmox on purpose, reject this and use Accept placement on the guest, "
+              + "which records where it is and moves nothing." + DeclinedNote(preApproval.Declined)
             : vmHeld && !manual
             ? $"The plan destroys a VM and its disks. That waits for approval unless destructive is set to automatic explicitly (it is {policy.Destructive}, set by {policy.DestructiveSetBy})."
             : (destructiveManual && !manual
@@ -625,7 +633,8 @@ public sealed partial class RunEngine(
         }
 
         // Refused before anything else is recorded, and before any approval is offered: see docs/safety-boundary.md.
-        if (step.Name == StepNames.Plan && GuestVmPlan.ForeignChange(outputs, RunContext.Parse(run.Context)) is { } foreign)
+        if (step.Name == StepNames.Plan && RunContext.Parse(run.Context) is var planContext
+            && GuestVmPlan.ForeignChange(outputs, planContext, await SafetyBoundary.BoundAsync(db, run.ResourceId, planContext, cancellationToken)) is { } foreign)
         {
             step.Status = StepStatuses.Failed;
             step.Detail = await ReportedAsync(db, step, foreign, cancellationToken);

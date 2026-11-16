@@ -210,11 +210,23 @@ finds it. Approve only to start over with an empty machine.
 it was bound, proves it saw every VM, and, for a cluster, was quorate:
 
 - `missing`: no host lists a machine at its VMID.
-- `moved`: the machine is on another host than `host:` in `guest.yaml`. Plans of the guest
-  are refused until the definition names the host it is on, since they would name a node
-  that is not the guest's.
+- `moved`: the machine is on another host than `host:` in `guest.yaml`. A plan of the guest
+  would migrate it back, and waits for a person, as every migration does (below).
+  **Accept placement** on the guest opens an edit of its host, set to the one it is on; its
+  plan then changes nothing.
 
 This is shown, not acted on: nothing is planned, retired or written because of it.
+
+**A plan may move a bound guest's machine to its host.** A change of `host:` makes the
+provider migrate the machine when its module sets `migrate = true`. The plan's update names
+the guest's VMID on two nodes, the one it is on and its own, and is allowed only when it is
+an update of the machine alone, names nothing else, and the guest is bound to that VMID in
+its installation. **A migration always waits for a person,** whatever the policy says: the plan
+cannot tell a `host:` changed on purpose from a machine moved in Proxmox, which it would move
+back. A plan that would **replace** the machine to move it is refused, whatever
+the policy says, with how to migrate it instead. An edit in the form refuses a host the
+installation does not list, and one without snippets for a guest whose host key is
+Octopushy's, which would otherwise be replaced.
 
 ## Threat model and accepted limits
 
