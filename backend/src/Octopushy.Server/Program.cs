@@ -60,6 +60,7 @@ builder.Services.AddSingleton<Octopushy.Server.Icons.IconDirectory>();
 builder.Services.AddSingleton<OrchestratorSignal>();
 builder.Services.AddSingleton<RunFactory>();
 builder.Services.AddSingleton<RunEngine>();
+builder.Services.AddSingleton<RunHistoryRetention>();
 builder.Services.AddScoped<AssignmentBuilder>();
 builder.Services.AddScoped<InventoryUpdater>();
 builder.Services.AddSingleton<InventoryFaults>();
@@ -71,6 +72,7 @@ if (!generatingDocument && settings.RunBackgroundServices)
 {
     builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySync>());
     builder.Services.AddHostedService<Orchestrator>();
+    builder.Services.AddHostedService(services => services.GetRequiredService<RunHistoryRetention>());
     builder.Services.AddHostedService<ReachabilityRefresher>();
     builder.Services.AddHostedService<Octopushy.Server.Uptime.UptimeRunner>();
 }

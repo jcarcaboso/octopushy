@@ -50,6 +50,22 @@ podman compose up -d                      # or: docker compose up -d
   server refuses to start rather than create a new CA, which would leave every enrolled
   agent untrusted. Restore the entries from a database backup.
 
+## Run history retention
+
+The backend prunes finished run history at startup and daily. Configure
+`Octopushy__RunRetentionDays`, default `180`, and `Octopushy__RunRetentionKeep`,
+default `50`, in the backend environment. A run must have started and finished
+before the age cutoff and be outside the newest finished runs of its resource.
+Unfinished and uncertain runs, runs referenced by a change or schedule, runs
+with pending approvals, each resource's latest provision run and the latest one
+that changed something, and the run for its current desired work are never
+deleted.
+
+Deletion includes steps, attempts, secret-release audit rows, logs and encrypted
+artifacts. Secret-release evidence therefore lives only as long as its run.
+Database rows commit before files are removed. Each pass also sweeps attempt
+files with no database row, so a restart finishes interrupted file cleanup.
+
 ## Changes from the UI
 
 Forms commit to the lab repository only with `Octopushy__RepositoryEditor__PublishEnabled: "true"` in the backend's
