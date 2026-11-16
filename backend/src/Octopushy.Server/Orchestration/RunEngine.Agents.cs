@@ -336,18 +336,20 @@ public sealed partial class RunEngine
             signal.Wake();
         }, cancellationToken);
 
-    public Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken) =>
-        WithDbAsync(async db =>
-        {
-            var ids = runningAttemptIds.Select(Guid.Parse).ToList();
-            var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
-            await db.Attempts
-                .Where(a => a.AgentId == agentId && ids.Contains(a.Id)
-                            && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
-                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, lease), cancellationToken);
-            await db.Agents.Where(a => a.Id == agentId)
-                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LastSeenAt, clock.GetUtcNow()), cancellationToken);
-        }, cancellationToken);
+    public async Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken)
+    {
+        // Only conditional, atomic renewals bypass the engine's single-writer lock.
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var ids = runningAttemptIds.Select(Guid.Parse).ToList();
+        var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
+        await db.Attempts
+            .Where(a => a.AgentId == agentId && ids.Contains(a.Id)
+                        && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, lease), cancellationToken);
+        await db.Agents.Where(a => a.Id == agentId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LastSeenAt, clock.GetUtcNow()), cancellationToken);
+    }
 
     public Task OnStartedAsync(Guid agentId, Guid attemptId, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
