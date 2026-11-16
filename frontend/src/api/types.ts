@@ -86,8 +86,9 @@ export type WorkflowCatalog = Schemas["WorkflowCatalogDto"];
 export interface ChangeRequest {
   resourceId: string;
   baseCommit: string;
-  kind: "edit" | "upgrade" | "remove";
+  kind: "edit" | "upgrade" | "remove" | "detach";
   workflow?: string | null;
+  host?: string | null;
   hardware?: Record<string, unknown> | null;
   network?: Record<string, unknown> | null;
   inputs?: Record<string, unknown> | null;

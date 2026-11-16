@@ -100,8 +100,10 @@ public static class ChangeEndpoints
 
     private static string? Malformed(ChangeRequest request) =>
         request.ResourceId == Guid.Empty ? "Name the guest or service to change."
-        : request.Kind is not (ChangeKinds.Edit or ChangeKinds.Upgrade or ChangeKinds.Remove) ? "A change is an edit, an upgrade or a removal."
-        : request.Kind == ChangeKinds.Remove && (request.Workflow is not null || request.Hardware is not null || request.Network is not null || request.Inputs is not null)
-            ? "A removal takes no values."
+        : request.Kind is not (ChangeKinds.Edit or ChangeKinds.Upgrade or ChangeKinds.Remove or ChangeKinds.Detach)
+            ? "A change is an edit, an upgrade, a removal or a detach."
+        : request.Kind is ChangeKinds.Remove or ChangeKinds.Detach
+          && (request.Workflow is not null || request.Hardware is not null || request.Network is not null || request.Inputs is not null || request.Host is not null)
+            ? "A removal or a detach takes no values."
         : null;
 }

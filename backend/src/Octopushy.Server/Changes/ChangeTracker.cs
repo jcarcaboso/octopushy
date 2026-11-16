@@ -165,7 +165,7 @@ public static class ChangeTracker
         }
 
         var entry = repository.Resource(change.Address);
-        if (change.Kind == ChangeKinds.Remove)
+        if (change.Kind is ChangeKinds.Remove or ChangeKinds.Detach)
             return entry is null ? null : $"it defines {change.Address} again.";
         if (entry?.Json is not { } json)
             return entry is null ? $"it no longer defines {change.Address}." : $"its definition of {change.Address} cannot be read.";
@@ -236,6 +236,11 @@ public static class ChangeTracker
         var owed = await OwedAsync(db, change, revision, ct);
         if (runs.Count == 0)
         {
+            // A detach is done when the guest is, and until then it waits: it never fails into a removal.
+            if (change.Kind == ChangeKinds.Detach)
+                return resource?.DetachedAt is not null
+                    ? (ChangeStatuses.Applied, $"{change.Address} is detached: Octopushy forgot it and left its machine as it is.")
+                    : (ChangeStatuses.Planning, resource?.ProvisionWaiting ?? $"Waiting for {change.Address} to be detached.");
             // An empty list is not "nothing to do" by itself: what the server recorded for the resource says why there is none.
             if (await ProblemAsync(db, change, revision, ct) is { } problem)
                 return (ChangeStatuses.Failed, change.Kind == ChangeKinds.Remove ? problem : $"{problem} ({change.ResourceKind} at {Short(revision.Commit)})");

@@ -142,6 +142,24 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                     cancellationToken, keepRemoval: true);
                 // Deleting a folder asks for removal; the destructive policy decides whether it waits for approval.
                 if (resource.Kind != ResourceKinds.Guest) continue;
+                // Unless it was deleted by a detach: then the guest is forgotten and its machine left as it is. One that cannot be
+                // done yet waits, and is tried again at each sync: it never becomes a removal.
+                resource.ProvisionWaiting = null;
+                if (await DetachedByChangeAsync(db, resource, cancellationToken) is { } detaching)
+                {
+                    try
+                    {
+                        await engine.DetachInternalAsync(db, resource, detaching, cancellationToken);
+                        activeRuns.RemoveAll(r => r.ResourceId == resource.Id);
+                    }
+                    catch (RunException error)
+                    {
+                        resource.ProvisionWaiting = $"Waiting to be detached: {error.Message} The next sync tries again, or use Detach instead on this page.";
+                    }
+
+                    continue;
+                }
+
                 try
                 {
                     if (await GuestRemoval.ProposeAsync(db, revisions, factory, resource, revision, force: false, cancellationToken) is { } removal)
@@ -413,6 +431,19 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         var other = guests.FirstOrDefault(r => r.Id != resource.Id && r.BoundVmid == guest.Vmid && r.BoundInstallation == guest.InstallationAddress);
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
     }
+
+    /// <summary>
+    /// Who asked to detach a guest whose folder is gone, or null when nobody did: the latest change that deletes its folder, a
+    /// removal or a detach, decides, whatever became of it since, unless it was refused, which pushed nothing. The change is on
+    /// record before its commit is pushed, so its sync always finds it, and a detach that could not be done at one sync, or a
+    /// dismissed one whose commit landed after all, is still a detach at the next: never a removal.
+    /// </summary>
+    private static async Task<string?> DetachedByChangeAsync(OctopushyDb db, Resource guest, CancellationToken cancellationToken) =>
+        await db.Changes.AsNoTracking()
+            .Where(c => (c.Kind == ChangeKinds.Detach || c.Kind == ChangeKinds.Remove) && c.ResourceId == guest.Id && c.Status != ChangeStatuses.Refused)
+            .OrderByDescending(c => c.CreatedAt)
+            .Select(c => c.Kind == ChangeKinds.Detach ? c.Author : null)
+            .FirstOrDefaultAsync(cancellationToken);
 
     private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
         CancellationToken cancellationToken, bool keepRemoval = false)

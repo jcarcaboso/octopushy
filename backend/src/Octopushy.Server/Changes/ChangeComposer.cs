@@ -95,21 +95,24 @@ public static class ChangeComposer
         string text, IReadOnlyList<TreeFile> tree)
     {
         var name = address.Split('/')[^1];
-        if (request.Kind == ChangeKinds.Remove)
+        if (request.Kind is ChangeKinds.Remove or ChangeKinds.Detach)
         {
+            var detach = request.Kind == ChangeKinds.Detach;
             if (resourceKind != ResourceKinds.Guest)
-                throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, "Only a guest can be removed here. Removing a service is a later step.");
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, detach
+                    ? "Only a guest can be detached."
+                    : "Only a guest can be removed here. Removing a service is a later step.");
             var files = tree.Where(f => f.Path.StartsWith(folder + "/", StringComparison.Ordinal)).Select(f => f.Path).ToList();
             if (files.Count > 64)
                 throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported,
                     $"{folder} holds {files.Count} files, more than one change here deletes; remove it in the repository editor or in Git.");
-            var subject = $"{name}: remove the guest";
-            return new ComposedChange(ChangeKinds.Remove, resourceKind, address, name, file, files.Select(p => new DraftFileChange(p, null)).ToList(),
+            var subject = detach ? $"{name}: detach the guest, keeping its machine" : $"{name}: remove the guest";
+            return new ComposedChange(request.Kind, resourceKind, address, name, file, files.Select(p => new DraftFileChange(p, null)).ToList(),
                 files, folder, subject, Message(subject, [], id), null, null);
         }
 
         if (request.Kind is not (ChangeKinds.Edit or ChangeKinds.Upgrade))
-            throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, "A change is an edit, an upgrade or a removal.");
+            throw new ChangeRefusal(ChangeRefusal.Reasons.Unsupported, "A change is an edit, an upgrade, a removal or a detach.");
         if (resourceKind == ResourceKinds.Service && (request.Hardware is not null || request.Network is not null || request.Host is not null))
             throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "A service has inputs only: no host, hardware or network.");
 

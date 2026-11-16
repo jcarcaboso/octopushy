@@ -181,6 +181,23 @@ describe("ChangeEditorPage", () => {
     expect((last.inputs as Record<string, unknown>).worker_pool).toBe("gpu");
   });
 
+  it("detaches a guest: the folder goes, no retire run follows, and the machine stays", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/changes/form/guest-1": () => form(),
+      "POST /api/changes/preview": () => preview({ kind: "detach", subject: "pve01-worker: detach the guest, keeping its machine" }),
+      "POST /api/changes": () => ({ id: "change-1" }),
+      "GET /api/changes/change-1": () => new Response(null, { status: 404 }),
+    });
+    renderAt(<ChangeEditorPage />, { ...route, route: "/guests/guest-1/change?mode=detach" });
+
+    expect(await screen.findByRole("heading", { name: "Detach pve01-worker" })).toBeInTheDocument();
+    expect(await screen.findByText(/no retire run, nothing sent to Proxmox/)).toBeInTheDocument();
+    expect(requests.find((r) => r.path === "/api/changes/preview")!.body).toEqual({ resourceId: "guest-1", baseCommit: base, kind: "detach" });
+    await user.click(screen.getByRole("button", { name: "Commit the detach" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "POST" && r.path === "/api/changes")).toBe(true));
+  });
+
   it("says when the form is out of date and reloads it", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({

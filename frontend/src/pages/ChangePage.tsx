@@ -18,6 +18,7 @@ const kindLabels: Record<string, string> = {
   edit: "Edit",
   upgrade: "Upgrade",
   remove: "Removal",
+  detach: "Detach",
   "create-guest": "New guest",
   "create-service": "New service",
 };

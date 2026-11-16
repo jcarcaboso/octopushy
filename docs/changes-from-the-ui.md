@@ -11,13 +11,14 @@ changes to what exists, and [the workflow wizard](#the-workflow-wizard), which d
 
 ## What a change is
 
-A **change** is a structured edit of one guest or service, made in a form and written as one commit. There are five kinds:
+A **change** is a structured edit of one guest or service, made in a form and written as one commit. There are six kinds:
 
 | Kind | What it writes |
 |---|---|
 | `edit` | A guest's `host`, `hardware`, `network`, `inputs` and `workflow`, or a service's `inputs` and `workflow` |
 | `upgrade` | An edit that moves `workflow:` to a newer major of the same workflow, such as `fedora-vm@1` to `fedora-vm@2`, with any inputs the new major needs |
 | `remove` | Deletes a guest's folder. Octopushy then proposes the guest's retire run, under its approval and destructive policy, as for a folder deleted in Git |
+| `detach` | Deletes a guest's folder, and Octopushy forgets the guest and leaves its machine as it is: no retire run. See [removal](workflows.md#rules) |
 | `create-guest` | A new guest's folder with its `guest.yaml`, from [the workflow wizard](#the-workflow-wizard) |
 | `create-service` | A new service's folder under a guest, with its `service.yaml`, from the wizard |
 

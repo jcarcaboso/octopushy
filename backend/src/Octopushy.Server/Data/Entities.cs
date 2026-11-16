@@ -96,6 +96,8 @@ public static class ChangeKinds
     public const string Upgrade = "upgrade";
     /// <summary>Deletes the guest's folder; its retire run follows under its policy.</summary>
     public const string Remove = "remove";
+    /// <summary>Deletes the guest's folder, and Octopushy forgets the guest and leaves its machine as it is: no retire run.</summary>
+    public const string Detach = "detach";
     /// <summary>Writes a new guest's folder, from the workflow wizard.</summary>
     public const string CreateGuest = "create-guest";
     /// <summary>Writes a new service's folder under a guest, from the workflow wizard.</summary>
@@ -524,6 +526,15 @@ public sealed class Resource
     public int? BoundVmid { get; set; }
 
     public DateTimeOffset? BoundAt { get; set; }
+
+    /// <summary>
+    /// When a person detached the guest: Octopushy forgot it and left its machine as it was, with <see cref="RetiredAt"/>
+    /// set at the same time. A guest retired without it was removed by a retire run, and its machine verified absent.
+    /// </summary>
+    public DateTimeOffset? DetachedAt { get; set; }
+
+    /// <summary>Who detached the guest, or <c>repository</c> when a detach change's commit did.</summary>
+    public string? DetachedBy { get; set; }
 
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }

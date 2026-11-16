@@ -22,6 +22,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { RunTable } from "../components/RunTable";
 import { ServicesCard } from "../components/ServicesCard";
 import { ChangeActions, RecentChanges } from "../components/ChangeActions";
+import { DetachGuest } from "../components/DetachGuest";
 import { WorkflowLabel } from "../components/WorkflowLabel";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
@@ -171,6 +172,7 @@ export function GuestPage() {
           <>
             {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
             {data.missingSince || data.retiredAt ? null : <ChangeActions resourceId={guest.id} kind="guest" />}
+            {data.missingSince && !data.retiredAt ? <DetachGuest id={guest.id} address={guest.address} noun={noun} /> : null}
             <button
               type="button"
               className="button button--primary"
@@ -218,7 +220,12 @@ export function GuestPage() {
             {guest.drift.detail}
           </Callout>
         ) : null}
-        {data.retiredAt ? (
+          {data.detachedAt ? (
+          <Callout kind="info" title={<>Detached <RelativeTime value={data.detachedAt} /></>}>
+            {data.detachedBy ? `${data.detachedBy} detached the guest. ` : null}Octopushy no longer manages its {noun}, which was left as
+            it was; the installation lists it as one Octopushy does not manage.
+          </Callout>
+        ) : data.retiredAt ? (
           <Callout kind="info" title={<>Retired <RelativeTime value={data.retiredAt} /></>}>
             The {noun} was removed and verified absent.
           </Callout>
