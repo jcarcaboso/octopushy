@@ -9,12 +9,13 @@ interface Props {
   confirmLabel: string;
   danger?: boolean;
   pending?: boolean;
+  disabled?: boolean;
   error?: unknown;
   onConfirm: () => void;
   onClose: () => void;
 }
 
-export function ConfirmDialog({ open, title, children, confirmLabel, danger, pending, error, onConfirm, onClose }: Props) {
+export function ConfirmDialog({ open, title, children, confirmLabel, danger, pending, disabled, error, onConfirm, onClose }: Props) {
   return (
     <Dialog
       open={open}
@@ -30,7 +31,7 @@ export function ConfirmDialog({ open, title, children, confirmLabel, danger, pen
             type="button"
             className={danger ? "button button--danger" : "button button--primary"}
             onClick={onConfirm}
-            disabled={pending}
+            disabled={pending || disabled}
           >
             {pending ? "Working…" : confirmLabel}
           </button>

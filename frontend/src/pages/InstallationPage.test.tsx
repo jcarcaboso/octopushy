@@ -185,3 +185,70 @@ describe("installation page", () => {
     expect(screen.queryByRole("heading", { name: "Hosts" })).toBeNull();
   });
 });
+
+describe("force delete server", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("requires the installation address before deleting and explains the scope", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      [`GET /api/installations/${id}`]: () => detail(),
+      [`DELETE /api/installations/${id}`]: () => undefined,
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Force delete server" }));
+    const dialog = screen.getByRole("dialog", { name: "Force delete korriban?" });
+    expect(dialog).toHaveTextContent("entire installation and all its nodes");
+    expect(dialog).toHaveTextContent("OpenTofu state");
+    expect(dialog).toHaveTextContent("does not connect to Proxmox");
+    expect(dialog).toHaveTextContent("User variables and shared credentials stay");
+    const confirm = within(dialog).getByRole("button", { name: "Delete stored data" });
+    expect(confirm).toBeDisabled();
+    const input = within(dialog).getByRole("textbox", { name: "Type home/korriban to confirm" });
+    await user.type(input, "korriban");
+    expect(confirm).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "home/korriban");
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+    const request = requests.find((request) => request.method === "DELETE");
+    expect(request?.path).toBe(`/api/installations/${id}`);
+    expect(new URLSearchParams(request?.search).get("address")).toBe("home/korriban");
+  });
+
+  it("can be cancelled without deleting data", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({ [`GET /api/installations/${id}`]: () => detail() });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Force delete server" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Keep as is" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(requests.some((request) => request.method === "DELETE")).toBe(false);
+  });
+
+  it("shows a refused deletion and keeps the dialog open", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      [`GET /api/installations/${id}`]: () => detail(),
+      [`DELETE /api/installations/${id}`]: () => problem(409, "Remove the installation's folder and sync first."),
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Force delete server" }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox"), "home/korriban");
+    await user.click(within(dialog).getByRole("button", { name: "Delete stored data" }));
+    expect(await within(dialog).findByText("Remove the installation's folder and sync first.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Delete stored data" })).toBeEnabled();
+  });
+
+  it("offers deletion directly in the inventory node details", async () => {
+    mockApi({
+      "GET /api/inventory": () => ({
+        revision: null,
+        labs: [{ id: "lab-1", address: "home", name: "Home", valid: true, issues: [], installations: [summary()] }],
+      } satisfies Inventory),
+    });
+    renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory" });
+    expect(await screen.findByRole("button", { name: "Force delete server" })).toBeInTheDocument();
+  });
+});

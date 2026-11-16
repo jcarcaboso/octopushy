@@ -191,6 +191,12 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("getInstallation");
 
+        api.MapDelete("/installations/{id:guid}", async Task<Results<NoContent, NotFound>> (
+            Guid id, string address, RunEngine engine, CancellationToken ct) =>
+            await engine.DeleteInstallationAsync(id, address, ct) ? TypedResults.NoContent() : TypedResults.NotFound())
+            .WithTags("Inventory")
+            .WithName("deleteInstallation");
+
         // The key snippet uploads use, made when a person asks for it, since they install its public half on each host.
         // Asking again returns the same key: replacing it is not done here.
         api.MapPost("/installations/{id:guid}/snippets-key", async (Guid id, RunEngine engine, TimeProvider clock, CancellationToken ct) =>

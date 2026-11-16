@@ -89,8 +89,6 @@ public sealed class AgentChannelService(
     Uptime.UptimeMonitor uptime,
     RunEngine engine,
     AgentUpdates updates,
-    AttemptLogStore logs,
-    AttemptMasks masks,
     ImageStore images,
     Microsoft.Extensions.Options.IOptions<Options.OctopushyOptions> options,
     TimeProvider clock,
@@ -167,7 +165,6 @@ public sealed class AgentChannelService(
                 }
             }, CancellationToken.None);
 
-            var ownAttempts = new HashSet<Guid>();
             while (await requestStream.MoveNext(call.Token))
             {
                 var message = requestStream.Current;
@@ -180,15 +177,8 @@ public sealed class AgentChannelService(
                         await engine.OnStartedAsync(agent.Id, started, call.Token);
                         break;
                     case AgentMessage.KindOneofCase.Log when Guid.TryParse(message.Log.AttemptId, out var attemptId):
-                        if (ownAttempts.Contains(attemptId) || await IsAssignedAsync(agent.Id, attemptId, call.Token))
-                        {
-                            ownAttempts.Add(attemptId);
-                            var lines = message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList();
-                            // A restarted controller reads the attempt's secrets back before it keeps a line.
-                            using (await masks.EnsureAsync(attemptId, call.Token))
-                                await logs.AppendAsync(attemptId, (long)message.Log.FirstSequence, lines, call.Token);
-                        }
-
+                        await engine.OnLogAsync(agent.Id, attemptId, (long)message.Log.FirstSequence,
+                            message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
                         break;
                     case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
                         await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
@@ -376,13 +366,6 @@ public sealed class AgentChannelService(
         }
 
         return (agent, serial);
-    }
-
-    private async Task<bool> IsAssignedAsync(Guid agentId, Guid attemptId, CancellationToken cancellationToken)
-    {
-        await using var scope = scopes.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts
-            .AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
     }
 
     private async Task UpdateAgentAsync(Guid agentId, Action<AgentRecord> update, CancellationToken cancellationToken)

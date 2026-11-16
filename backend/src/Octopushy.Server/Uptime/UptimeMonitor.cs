@@ -52,6 +52,7 @@ public sealed class UptimeMonitor(
     public const int MaxQueued = 32;
 
     private readonly Lock _gate = new();
+    private readonly SemaphoreSlim _storageGate = new(1, 1);
     private readonly Dictionary<string, Slot> _slots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Pending> _outstanding = new(StringComparer.Ordinal);
     private IReadOnlyList<UptimeTarget> _targets = [];
@@ -231,6 +232,19 @@ public sealed class UptimeMonitor(
 
     private async Task RefreshTargetsAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
+        await _storageGate.WaitAsync(cancellationToken);
+        try
+        {
+            await RefreshTargetsInternalAsync(now, cancellationToken);
+        }
+        finally
+        {
+            _storageGate.Release();
+        }
+    }
+
+    private async Task RefreshTargetsInternalAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
         IReadOnlyList<UptimeTarget> targets;
         try
         {
@@ -318,8 +332,12 @@ public sealed class UptimeMonitor(
 
     private async Task StoreAsync(Verdict verdict, CancellationToken cancellationToken)
     {
+        await _storageGate.WaitAsync(cancellationToken);
         try
         {
+            lock (_gate)
+                if (!_slots.ContainsKey(verdict.Key))
+                    return;
             await using var scope = scopes.CreateAsyncScope();
             await RecordAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), verdict.Key, verdict.Up, verdict.Detail, verdict.ElapsedMs,
                 verdict.Agent, verdict.At, cancellationToken);
@@ -327,6 +345,35 @@ public sealed class UptimeMonitor(
         catch (Exception e) when (e is not OperationCanceledException)
         {
             logger.LogWarning(e, "Recording an uptime answer for {Key} failed.", verdict.Key);
+        }
+        finally
+        {
+            _storageGate.Release();
+        }
+    }
+
+    /// <summary>Serializes deletion with saved and in-flight answers so a late probe cannot recreate forgotten data.</summary>
+    public async Task<bool> ForgetInstallationAsync(string address, Func<Task<bool>> delete, CancellationToken ct)
+    {
+        await _storageGate.WaitAsync(ct);
+        try
+        {
+            var deleted = await delete();
+            lock (_gate)
+            {
+                var keys = _targets.Where(t => t.Installation == address).Select(t => t.Key).ToHashSet(StringComparer.Ordinal);
+                _targets = _targets.Where(t => t.Installation != address).ToList();
+                foreach (var key in keys)
+                    _slots.Remove(key);
+                foreach (var pending in _outstanding.Where(p => keys.Contains(p.Value.Key)).Select(p => p.Key).ToList())
+                    _outstanding.Remove(pending);
+                _targetsAt = DateTimeOffset.MinValue;
+            }
+            return deleted;
+        }
+        finally
+        {
+            _storageGate.Release();
         }
     }
 
