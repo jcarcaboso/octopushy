@@ -89,8 +89,14 @@ branch, and so does the first sync at startup.
   taken. There is no timeout: a force-push, a clock that jumps or another instance would make one wrong.
 - **A committed change is checked too, until its follow-through ends.** If the branch no longer reaches its commit, as after
   a force-push, it is `unknown` again, and is found again only if one of its commits comes back.
-- **The batch is picked before the branch is fetched,** under the engine's gate, so every commit it holds was pushed before the
-  fetch began. A change pushed while a sync waits is never judged against a head that predates it.
+- **The batch is picked before the branch is fetched,** and a push and a sync's pick, fetch and reconciliation never overlap:
+  both hold the Git gate, a lock of their own. So every commit the batch holds was pushed before the fetch began, and a change
+  is never judged half-pushed. A push holds the engine's gate only to record the change before it and the outcome after it,
+  so runs advance and agents' results are recorded while Git waits on the network.
+- **A push that a request starts has a limit** (`Octopushy__RepositoryEditor__PushTimeoutSeconds`, 90 by default), fetches,
+  merges and retries included. At the limit it is stopped. If a candidate commit was recorded, the change is `uncertain`
+  without another fetch, and the next sync's reconciliation finds out whether it landed.
+- **Every change to an editor draft** (edit, update, discard) takes the Git gate too, so none overlaps the draft's publication.
 - **Each sync checks a bounded batch** (`Octopushy__Changes__ReconcileBatch`, 100 by default), the changes checked longest
   ago first, so every change is reached in turn. The Git ancestry checks run outside the engine's gate: the batch is picked
   under it and the results applied under it, and a change that moved in between is left for the next sync.

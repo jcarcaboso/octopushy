@@ -85,6 +85,52 @@ public class RepositoryEditorTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_edit_to_a_draft_waits_for_its_publication_and_is_then_refused()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres,
+            settings: new() { ["Octopushy:RepositoryEditor:PublishEnabled"] = "true" });
+        using var remote = new TestRepository();
+        var git = server.Services.GetRequiredService<GitCli>();
+        await git.RunAsync(["clone", "--bare", "--quiet", server.Repository.Root, remote.Root]);
+        await server.WithDbAsync(async db =>
+        {
+            (await db.RepositorySettings.SingleAsync()).Url = remote.Root;
+            await db.SaveChangesAsync();
+        });
+        await server.SyncAsync();
+        using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        var draft = await ReadAsync<DraftDetailDto>(await client.PostAsJsonAsync(Drafts, new DraftCreateRequest("Notes")));
+        var path = $"{Drafts}/{draft.Draft.Id}";
+        draft = await ReadAsync<DraftDetailDto>(await client.PostAsJsonAsync($"{path}/changes",
+            new DraftChangesRequest(draft.Draft.HeadCommit, [new("notes.txt", "published\n")])));
+        // The remote takes the push only once the test lets it.
+        var received = Path.Combine(remote.Root, "push-received");
+        var release = Path.Combine(remote.Root, "push-release");
+        var hook = Path.Combine(remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, $"#!/bin/sh\ncat >/dev/null\ntouch '{received}'\nwhile [ ! -e '{release}' ]; do sleep 0.1; done\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var publish = client.PostAsJsonAsync($"{path}/publish", new DraftPublishRequest(draft.Draft.HeadCommit, "Add notes", true));
+            for (var i = 0; i < 300 && !File.Exists(received); i++)
+                await Task.Delay(100);
+            Assert.True(File.Exists(received), "The push never reached the remote.");
+            var edit = client.PostAsJsonAsync($"{path}/changes", new DraftChangesRequest(draft.Draft.HeadCommit, [new("notes.txt", "lost\n")]));
+            await Task.Delay(500);
+            Assert.False(edit.IsCompleted);
+            File.WriteAllText(release, "");
+            (await publish).EnsureSuccessStatusCode();
+            Assert.Equal(HttpStatusCode.Conflict, (await edit).StatusCode);
+        }
+        finally
+        {
+            File.WriteAllText(release, "");
+        }
+
+        Assert.Equal("published\n", await git.RunAsync(["show", "main:notes.txt"], remote.Root));
+    }
+
+    [Fact]
     public async Task Updating_a_behind_draft_keeps_conflict_markers_until_the_file_is_saved()
     {
         await using var server = await ServerHarness.StartAsync(postgres);

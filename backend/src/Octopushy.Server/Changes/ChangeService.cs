@@ -23,6 +23,8 @@ namespace Octopushy.Server.Changes;
 /// </summary>
 public sealed partial class ChangeService(
     RunEngine engine,
+    GitNetworkGate gitGate,
+    IServiceScopeFactory scopes,
     RepositoryMirror mirror,
     RevisionCache revisions,
     WorkflowsMirrors workflowMirrors,
@@ -114,53 +116,71 @@ public sealed partial class ChangeService(
     public async Task<(ChangeDto? Change, ChangeRefusedDto? Refused)> CommitAsync(ChangeRequest request, string actor, CancellationToken ct)
     {
         var id = Guid.CreateVersion7();
-        var (committed, refused) = await engine.ExecuteAsync(async (db, services) =>
+        ResourceChange? committed;
+        ChangeRefusedDto? refused;
+        // The Git gate, not the engine's, is held across the push: runs advance meanwhile, and no sync judges this change half-pushed.
+        using (await gitGate.EnterAsync(ct))
         {
             Target? target = null;
             ComposedChange? composed = null;
-            ResourceChange? change = null;
             try
             {
-                target = await TargetAsync(db, request, ct);
-                composed = Compose(request, id, target, await mirror.TreeAsync(request.BaseCommit, ct));
-                // On record before anything is pushed: whatever happens to this request after a push, the branch never moves
-                // without a change that says why, and the commit each attempt pushes is recorded before it is pushed.
-                change = Record(id, target, composed, request, actor);
-                change.StoreKeys = GeneratedValues.StoreKeysOf(composed);
-                change.Status = ChangeStatuses.Committing;
-                change.Detail = "Pushing its commit.";
-                db.Changes.Add(change);
-                await db.SaveChangesAsync(ct);
-                var commit = await PushAsync(db, services, target.Settings, target.Address, composed, change, request.BaseCommit, actor, null, ct);
+                var change = await engine.ExecuteAsync(async (db, _) =>
+                {
+                    target = await TargetAsync(db, request, ct);
+                    composed = Compose(request, id, target, await mirror.TreeAsync(request.BaseCommit, ct));
+                    // On record before anything is pushed: whatever happens to this request after a push, the branch never moves
+                    // without a change that says why, and the commit each attempt pushes is recorded before it is pushed.
+                    var recorded = Record(id, target, composed, request, actor);
+                    recorded.StoreKeys = GeneratedValues.StoreKeysOf(composed);
+                    recorded.Status = ChangeStatuses.Committing;
+                    recorded.Detail = "Pushing its commit.";
+                    db.Changes.Add(recorded);
+                    await db.SaveChangesAsync(ct);
+                    return recorded;
+                }, ct);
+                var commit = await PushOutsideEngineAsync(target!.Settings, target.Address, composed!, change, request.BaseCommit, actor, null, ct);
                 // The push happened: what follows is recorded even if the request is gone by now.
-                change.Commit = commit;
-                change.Status = ChangeStatuses.Committed;
-                change.Detail = "Waiting for the sync.";
-                change.UpdatedAt = clock.GetUtcNow();
-                await db.SaveChangesAsync(CancellationToken.None);
-                return ((ResourceChange?)change, (ChangeRefusedDto?)null);
+                committed = await engine.ExecuteAsync(async (db, _) =>
+                {
+                    var stored = await db.Changes.SingleAsync(c => c.Id == id, CancellationToken.None);
+                    stored.Commit = commit;
+                    stored.Status = ChangeStatuses.Committed;
+                    stored.Detail = "Waiting for the sync.";
+                    stored.UpdatedAt = clock.GetUtcNow();
+                    await db.SaveChangesAsync(CancellationToken.None);
+                    return stored;
+                }, CancellationToken.None);
+                refused = null;
             }
             catch (ChangeRefusal refusal)
             {
-                if (target is null)
-                    return ((ResourceChange?)null, (ChangeRefusedDto?)new ChangeRefusedDto(null, refusal.Reason, refusal.Message, refusal.Issues, refusal.FieldIssues));
-                if (change is null)
-                {
-                    change = Record(id, target, composed, request, actor);
-                    db.Changes.Add(change);
-                }
+                committed = null;
+                refused = target is null
+                    ? new ChangeRefusedDto(null, refusal.Reason, refusal.Message, refusal.Issues, refusal.FieldIssues)
+                    : await engine.ExecuteAsync(async (db, _) =>
+                    {
+                        // Looked up, not assumed: a refusal may come after the change was recorded.
+                        var stored = await db.Changes.FirstOrDefaultAsync(c => c.Id == id, CancellationToken.None);
+                        if (stored is null)
+                        {
+                            stored = Record(id, target, composed, request, actor);
+                            db.Changes.Add(stored);
+                        }
 
-                // Refused before any push: nothing was committed, for good. After a push was attempted, the branch may still
-                // hold one of its commits, so the change is left for reconciliation and for a person to dismiss.
-                var attempted = change.CandidateCommits.Count > 0;
-                change.Status = !attempted ? ChangeStatuses.Refused : refusal.Unverified ? ChangeStatuses.Uncertain : ChangeStatuses.Unknown;
-                change.Detail = !attempted ? refusal.Message
-                    : $"{refusal.Message} A push was attempted: each sync looks for its commit on the branch, until it is found or the change is dismissed.";
-                change.UpdatedAt = clock.GetUtcNow();
-                await db.SaveChangesAsync(CancellationToken.None);
-                return ((ResourceChange?)null, (ChangeRefusedDto?)refusal.Dto(id, change.Status));
+                        // Refused before any push: nothing was committed, for good. After a push was attempted, the branch may
+                        // still hold one of its commits, so the change is left for reconciliation and for a person to dismiss.
+                        var attempted = stored.CandidateCommits.Count > 0;
+                        stored.Status = !attempted ? ChangeStatuses.Refused : refusal.Unverified ? ChangeStatuses.Uncertain : ChangeStatuses.Unknown;
+                        stored.Detail = !attempted ? refusal.Message
+                            : $"{refusal.Message} A push was attempted: each sync looks for its commit on the branch, until it is found or the change is dismissed.";
+                        stored.UpdatedAt = clock.GetUtcNow();
+                        await db.SaveChangesAsync(CancellationToken.None);
+                        return refusal.Dto(id, stored.Status);
+                    }, CancellationToken.None);
             }
-        }, ct);
+        }
+
         if (committed is null)
             return (null, refused);
 
@@ -189,22 +209,43 @@ public sealed partial class ChangeService(
             return await DtoAsync(db, change, ct);
         }, ct);
 
-    /// <summary>The newest changes of a resource, or of every resource, each brought up to date.</summary>
-    public async Task<IReadOnlyList<ChangeDto>> ListAsync(Guid? resourceId, int limit, CancellationToken ct) =>
-        await engine.ExecuteAsync(async (db, _) =>
+    /// <summary>
+    /// The newest changes of a resource, or of every resource, each brought up to date. Read without the engine's gate, so the
+    /// list answers while a long tick runs; only a change whose state moved is brought up to date again and saved under it.
+    /// </summary>
+    public async Task<IReadOnlyList<ChangeDto>> ListAsync(Guid? resourceId, int limit, CancellationToken ct)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var changes = await db.Changes.AsNoTracking().Where(c => resourceId == null || c.ResourceId == resourceId)
+            .OrderByDescending(c => c.CreatedAt).Take(Math.Clamp(limit, 1, 100)).ToListAsync(ct);
+        var result = new List<ChangeDto>();
+        var moved = new List<Guid>();
+        foreach (var change in changes)
         {
-            var changes = await db.Changes.Where(c => resourceId == null || c.ResourceId == resourceId)
-                .OrderByDescending(c => c.CreatedAt).Take(Math.Clamp(limit, 1, 100)).ToListAsync(ct);
-            var result = new List<ChangeDto>();
-            foreach (var change in changes)
-            {
-                await ChangeTracker.RefreshAsync(db, mirror, revisions, change, clock.GetUtcNow(), ct);
-                result.Add(await DtoAsync(db, change, ct));
-            }
+            var before = Tracked(change);
+            await ChangeTracker.RefreshAsync(db, mirror, revisions, change, clock.GetUtcNow(), ct);
+            if (Tracked(change) != before)
+                moved.Add(change.Id);
+            result.Add(await DtoAsync(db, change, ct));
+        }
 
-            await db.SaveChangesAsync(ct);
-            return (IReadOnlyList<ChangeDto>)result;
-        }, ct);
+        if (moved.Count > 0)
+        {
+            await engine.ExecuteAsync(async (locked, _) =>
+            {
+                foreach (var change in await locked.Changes.Where(c => moved.Contains(c.Id)).ToListAsync(ct))
+                    await ChangeTracker.RefreshAsync(locked, mirror, revisions, change, clock.GetUtcNow(), ct);
+                await locked.SaveChangesAsync(ct);
+                return 0;
+            }, ct);
+        }
+
+        return result;
+
+        static string Tracked(ResourceChange c) =>
+            $"{c.Status}|{c.Detail}|{c.RevisionId}|{c.SyncedAt:O}|{c.SupersededBy}|{string.Join(',', c.RunIds)}|{c.UpdatedAt:O}";
+    }
 
     /// <summary>
     /// Pushes the change, compare-and-swap on the files it touches, and returns the commit that landed. Every attempt's commit is
@@ -212,9 +253,16 @@ public sealed partial class ChangeService(
     /// checked before anything is retried or refused, so a push whose acknowledgement was lost is never taken for a stale form.
     /// </summary>
     /// <param name="check">Asked of each candidate before it is validated, such as whether a new guest's VMID is still free.</param>
-    private async Task<string> PushAsync(OctopushyDb db, IServiceProvider services, RepositorySettings settings, string address, ComposedChange composed,
-        ResourceChange change, string baseCommit, string actor, Func<PublishCandidate, Task>? check, CancellationToken ct)
+    /// <remarks>
+    /// Runs under the Git gate and outside the engine's: it reads with a database context of its own, and records each candidate
+    /// under the engine's gate. <paramref name="change"/> is the change as recorded, not tracked by any context.
+    /// </remarks>
+    private async Task<string> PushOutsideEngineAsync(RepositorySettings settings, string address, ComposedChange composed,
+        ResourceChange change, string baseCommit, string actor, Func<OctopushyDb, PublishCandidate, Task>? check, CancellationToken ct)
     {
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var services = scope.ServiceProvider;
         var id = change.Id;
         await mirror.CreateDraftAsync(id, baseCommit, ct);
         try
@@ -240,7 +288,7 @@ public sealed partial class ChangeService(
                         if (await ObservedOnlyAsync(db, address, candidate.Commit!, releases, ct) is { } observed)
                             throw new ChangeRefusal(ChangeRefusal.Reasons.ObservedOnly, observed);
                         if (check is not null)
-                            await check(candidate);
+                            await check(db, candidate);
                         var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
                         if (!validation.Valid)
                         {
@@ -252,9 +300,15 @@ public sealed partial class ChangeService(
 
                         // Recorded before this attempt's push: whatever happens next, the branch reaching it is how it is found.
                         change.CandidateCommits = [.. change.CandidateCommits, candidate.Commit!];
-                        change.UpdatedAt = clock.GetUtcNow();
-                        await db.SaveChangesAsync(CancellationToken.None);
-                    }, ct);
+                        await engine.ExecuteAsync(async (locked, _) =>
+                        {
+                            var stored = await locked.Changes.SingleAsync(c => c.Id == id, CancellationToken.None);
+                            stored.CandidateCommits = [.. change.CandidateCommits];
+                            stored.UpdatedAt = clock.GetUtcNow();
+                            await locked.SaveChangesAsync(CancellationToken.None);
+                            return 0;
+                        }, CancellationToken.None);
+                    }, TimeSpan.FromSeconds(options.Value.RepositoryEditor.PushTimeoutSeconds), ct);
                 return candidate.Commit!;
             }
             catch (ChangeLanded landed)
@@ -267,6 +321,9 @@ public sealed partial class ChangeService(
                     + "such as a deploy key with write access.";
                 if (change.CandidateCommits.Count == 0)
                     throw new ChangeRefusal(ChangeRefusal.Reasons.PushFailed, message);
+                // Out of time: another fetch to check the branch could take as long, so the next sync's reconciliation says.
+                if (e is PushTimedOutException)
+                    throw new ChangeRefusal(ChangeRefusal.Reasons.PushFailed, e.Message, unverified: true);
                 // A push reported as failed may still have landed: the branch says, if it can be read.
                 var (checkedBranch, landed) = await CheckBranchAsync(settings, services, change);
                 if (landed is not null)
@@ -307,18 +364,32 @@ public sealed partial class ChangeService(
     /// and that is all. A push was attempted, so it is never "not committed" by this; one of its commits that arrives later still
     /// moves it on. Refused while one of its commits is on the branch.
     /// </summary>
-    public async Task<ChangeDto> DismissAsync(Guid id, string actor, CancellationToken ct) =>
-        await engine.ExecuteAsync(async (db, services) =>
+    public async Task<ChangeDto> DismissAsync(Guid id, string actor, CancellationToken ct)
+    {
+        // The branch is read under the Git gate, outside the engine's: no push of this change runs meanwhile.
+        using var held = await gitGate.EnterAsync(ct);
+        var (seen, settings) = await engine.ExecuteAsync(async (db, _) =>
         {
-            var change = await db.Changes.FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw new RunException("There is no such change.");
-            if (change.Status is not (ChangeStatuses.Uncertain or ChangeStatuses.Unknown))
-                throw new RunException($"Only an uncertain or unknown change can be dismissed; this one is {change.Status}.");
-            var settings = await db.RepositorySettings.AsNoTracking().SingleAsync(s => s.Id == 1, ct);
-            var (checkedBranch, landed) = await CheckBranchAsync(settings, services, change);
+            var change = await db.Changes.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw new RunException("There is no such change.");
+            Dismissable(change);
+            return (change, await db.RepositorySettings.AsNoTracking().SingleAsync(s => s.Id == 1, ct));
+        }, ct);
+        await using (var scope = scopes.CreateAsyncScope())
+        {
+            var (checkedBranch, landed) = await CheckBranchAsync(settings, scope.ServiceProvider, seen);
             if (!checkedBranch)
                 throw new RunException($"{settings.Branch} cannot be read now, so whether this change landed cannot be checked. Try again later.");
             if (landed is not null)
                 throw new RunException($"Its commit {landed[..10]} is on {settings.Branch}: it was committed. Sync the repository to follow it.");
+        }
+
+        return await engine.ExecuteAsync(async (db, _) =>
+        {
+            var change = await db.Changes.FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw new RunException("There is no such change.");
+            Dismissable(change);
+            // A sync settled it while the branch was read: what was read is not about it any more.
+            if (change.Status != seen.Status || change.CandidateCommits.Count != seen.CandidateCommits.Count)
+                throw new RunException("The change moved while its branch was read. Look at it again.");
             var now = clock.GetUtcNow();
             change.Status = ChangeStatuses.Dismissed;
             change.DismissedBy = actor;
@@ -331,6 +402,13 @@ public sealed partial class ChangeService(
             // under the usual guards, against the head it has just fetched.
             return await DtoAsync(db, change, ct);
         }, ct);
+
+        static void Dismissable(ResourceChange change)
+        {
+            if (change.Status is not (ChangeStatuses.Uncertain or ChangeStatuses.Unknown))
+                throw new RunException($"Only an uncertain or unknown change can be dismissed; this one is {change.Status}.");
+        }
+    }
 
     /// <summary>
     /// Every store key a definition file at the branch as last fetched references, or null when it cannot be read. The mirror

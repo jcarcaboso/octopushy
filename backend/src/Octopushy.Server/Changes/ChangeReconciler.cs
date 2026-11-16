@@ -17,10 +17,10 @@ namespace Octopushy.Server.Changes;
 /// <item>Changes committed and still being followed: one whose commit the branch no longer reaches, as after a force-push, is
 /// <c>unknown</c> again, so it is not followed through a commit that is gone.</item>
 /// </list>
-/// Each sync checks a bounded batch, the longest unchecked first, so every change is reached in turn. The batch is picked under
-/// the engine's gate <b>before</b> the branch is fetched, so every commit it holds was pushed before the fetch began, and a push
-/// recorded while the sync waits is never judged against a head that predates it. The Git ancestry checks run outside the gate,
-/// and the results are applied under it, unless a change moved meanwhile.
+/// Each sync checks a bounded batch, the longest unchecked first, so every change is reached in turn. The caller holds the
+/// <see cref="GitNetworkGate"/> from the pick, <b>before</b> the branch is fetched, until the results are applied, and so does
+/// every push: every commit the batch holds was pushed before the fetch began, and no change is judged half-pushed. The Git
+/// ancestry checks run outside the engine's gate, and the results are applied under it, unless a change moved meanwhile.
 /// </summary>
 public static class ChangeReconciler
 {
