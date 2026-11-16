@@ -531,9 +531,9 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
     public const string NoMachine = "fakeNoMachine";
 
     /// <summary>
-    /// What the example provision module reports, filled in where a test leaves it out. A provision plan that
-    /// creates something and names no Proxmox resource makes the guest's own VM with its first create, as the
-    /// module does, and a retire plan's first delete is of that VM, unless the outputs say <see cref="NoMachine"/>. A verified VM carries the module's tag and
+    /// What the example provision module reports, filled in where a test leaves it out. A provision plan of a guest not
+    /// bound to its VM yet that creates something and names no Proxmox resource makes the guest's own VM with its first
+    /// create, as the module does once, and a retire plan's first delete is of that VM, unless the outputs say <see cref="NoMachine"/>. A verified VM carries the module's tag and
     /// description unless the test says what it carries. Explicit outputs are left as they are.
     /// </summary>
     /// <summary>A create, as <see cref="Plan"/> lists one: its actions name create and not delete.</summary>
@@ -556,12 +556,16 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         if (!preview && !verify)
             return outputs;
         var run = await harness.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == attemptId)
-            .Select(a => new { a.Step!.Stage, a.Step.Run!.Operation, a.Step.Run.Context }).FirstOrDefaultAsync());
+            .Select(a => new
+            {
+                a.Step!.Stage, a.Step.Run!.Operation, a.Step.Run.Context,
+                Bound = db.Resources.Any(r => r.Id == a.Step.Run.ResourceId && r.BoundVmid != null),
+            }).FirstOrDefaultAsync());
         if (run is null || run.Stage is not null)
             return outputs;
         var context = RunContext.Parse(run.Context);
         var retire = run.Operation == Operations.Retire;
-        if (preview && (run.Operation == Operations.Provision && outputs!["changes"]!.AsArray().Any(IsCreate)
+        if (preview && (run.Operation == Operations.Provision && !run.Bound && outputs!["changes"]!.AsArray().Any(IsCreate)
                         || retire && outputs!["changes"]!.AsArray().Any(IsDelete)))
         {
             outputs = outputs!.DeepClone().AsObject();

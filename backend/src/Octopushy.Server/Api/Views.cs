@@ -946,7 +946,10 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             Workflow(resource),
             definition?["type"] is JsonValue type && type.TryGetValue<string>(out var typeText) ? typeText : null,
             definition is JsonObject guestJson ? ConfigureInputs.AddressOf(guestJson) : null,
-            services);
+            services,
+            MachineDrift.Of(resource, definition?["host"]?.GetValue<string>(), observation) is { } drift
+                ? new MachineDriftDto(drift.Kind, drift.Vmid, drift.DeclaredHost, drift.ObservedHost, drift.ObservedAt, drift.Detail)
+                : null);
     }
 
     private static int? Vmid(Resource resource) =>

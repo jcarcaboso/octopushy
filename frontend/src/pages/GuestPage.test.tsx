@@ -124,6 +124,24 @@ describe("GuestPage", () => {
     expect(screen.queryByText("Outputs")).toBeNull();
   });
 
+  it("warns when its own VM is gone from Proxmox, or on another host than its definition says", async () => {
+    const missing = {
+      kind: "missing", vmid: 112, declaredHost: "pve01", observedHost: null, observedAt: "2026-11-13T08:00:00Z",
+      detail: "VMID 112, which this guest was created at, was not on any host at the last observation.",
+    };
+    mockApi({ "GET /api/guests/guest-1": () => detail({}, { drift: missing }) });
+    const first = renderAt(<GuestPage />, route);
+    expect(await screen.findByText("VM 112 is gone")).toBeInTheDocument();
+    expect(screen.getByText(missing.detail)).toBeInTheDocument();
+    first.unmount();
+
+    const moved = { ...missing, kind: "moved", observedHost: "pve02", detail: "VMID 112 is on pve02 at the last observation." };
+    mockApi({ "GET /api/guests/guest-1": () => detail({}, { observed: { ...observed, host: "pve02" }, drift: moved }) });
+    renderAt(<GuestPage />, route);
+    expect(await screen.findByText(moved.detail)).toBeInTheDocument();
+    expect(screen.getByText("Moved to", { exact: false })).toBeInTheDocument();
+  });
+
   it("marks the values that are not what was last applied, and none once the guest is in sync", async () => {
     const before = text.replace("memory: 8192", "memory: 4096").replace("bridge: vmbr1", "bridge: vmbr0");
     mockApi({ "GET /api/guests/guest-1": () => detail({ appliedDefinitionText: before }), "GET /api/uptime": () => ({ checks: [] }) });
