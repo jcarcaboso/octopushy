@@ -1,3 +1,5 @@
+> Historical design document. See `../CONTEXT.md`, `adr/`, `workflows.md` and `safety-boundary.md` for current terms, decisions and behavior.
+
 # Octopushy: agreed direction and open design decisions
 
 Recorded October 14, 2026.
