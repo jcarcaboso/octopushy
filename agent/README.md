@@ -112,7 +112,7 @@ What the agent does on the channel:
 - Renews its certificate when less than a third of its validity remains
   (`RenewCertificate` over the current connection), replaces key and certificate as
   a pair, and reconnects with the new identity.
-- `CancelAttempt` stops read-only attempts (`OUTCOME_CANCELLED`) but never an
+- Normal `CancelAttempt` stops read-only attempts (`OUTCOME_CANCELLED`) but never an
   `opentofu/apply`, `proxmox/set-protection`, or `ansible/run`;
   the refusal is logged in the attempt.
 - gRPC messages may be up to 64 MiB each way (repository files, saved plans).
@@ -218,7 +218,10 @@ OpenTofu has a 60-minute attempt timeout by default, configurable with
 state, then SIGTERM after 10 seconds, then a hard kill after another 10 seconds.
 A timed-out preview fails; a timed-out apply is uncertain and reports saved state.
 Other tools receive SIGTERM, then a hard kill after 10 seconds. Normal server
-cancellation still never interrupts a running change.
+cancellation still never interrupts a running change. An explicit operator Force
+stop is the exception: agents advertising `forced-mutation-stop-v1` stop the
+running tool and return uncertain, with complete saved state for OpenTofu. Ansible
+uses SIGTERM and then a hard kill. Older agents keep the tool running.
 
 Ansible runs the same way, without the provider cache, through `octopushy-ansible`
 from [`ansible/`](ansible/): its secrets arrive on stdin and stay in memory, so with

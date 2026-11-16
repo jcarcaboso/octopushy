@@ -237,8 +237,12 @@ export function RunPage() {
         onConfirm={() => forceStop.mutate(run.id, { onSuccess: () => setConfirm(null) })}
       >
         <p>
-          For a change whose agent will not report, such as one stuck restarting itself. The agent is asked to cancel, without
-          waiting for it, and the run becomes uncertain: check the guest, then close the run.
+          Ask the agent to stop the running tool, without waiting for it. The run becomes uncertain: check the guest and saved
+          state before closing the run or planning again. This does not roll back changes or stop work already sent to Proxmox.
+        </p>
+        <p>
+          Older agents keep the tool running. An offline agent cannot receive the stop request. In either case, stop the tool
+          on the agent yourself if needed.
         </p>
       </ConfirmDialog>
       <ConfirmDialog

@@ -31,6 +31,7 @@ it("force stops a change in progress that cannot be cancelled", async () => {
   renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
   expect(screen.queryByRole("button", { name: /Cancel run/ })).not.toBeInTheDocument();
   await userEvent.click(await screen.findByRole("button", { name: "Force stop" }));
+  expect(await screen.findByText(/Older agents keep the tool running/)).toBeInTheDocument();
   await userEvent.click(await screen.findByRole("button", { name: "Force stop the run" }));
   await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual(["/api/runs/run-1/force-stop"]);

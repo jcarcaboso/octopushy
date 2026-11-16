@@ -1089,3 +1089,60 @@ async fn a_container_runtime_that_stops_answering_cannot_hold_the_run_open() {
     );
     assert!(out.cancelled);
 }
+
+#[tokio::test]
+async fn force_stop_terminates_a_running_playbook_and_releases_its_slot() {
+    use octopushy::attempts::{AttemptManager, SessionCursor};
+    use octopushy::outbox::Outbox;
+    use octopushy_proto::v1::{Assignment, Outcome, agent_message::Kind};
+    let fx = Fixture::new();
+    fx.set("sleep", "600");
+    let manager = AttemptManager::new(
+        fx.dir.path().join("managed"),
+        Outbox::open(fx.dir.path().join("outbox")).unwrap(),
+        Arc::new(fx.cfg),
+    );
+    manager.accept(Assignment {
+        attempt_id: "forced-ansible".into(),
+        executor: "ansible".into(),
+        action: "run".into(),
+        input_json: input().to_string(),
+        files_tar_gz: repo(),
+        artifacts: vec![preview_artifact(Value::Null)],
+        secrets: HashMap::from([
+            ("ansible.ssh-key".into(), SSH_KEY.into()),
+            ("ansible.var.tailscale_key".into(), PASSWORD.into()),
+            ("ansible.file.git_key_src".into(), "git-key".into()),
+        ]),
+        ..Default::default()
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fx.rec.join("runs").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.cancel_requested("forced-ansible", true);
+    manager.accept(Assignment {
+        attempt_id: "next".into(),
+        executor: "unknown".into(),
+        ..Default::default()
+    });
+    let mut cursor = SessionCursor::default();
+    let mut results = HashMap::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while results.len() < 2 {
+            for message in manager.collect(&mut cursor) {
+                if let Some(Kind::Result(result)) = message.kind {
+                    results.insert(result.attempt_id.clone(), result);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("playbook must release the slot");
+    assert_eq!(results["forced-ansible"].outcome(), Outcome::Uncertain);
+    assert!(manager.is_idle());
+}

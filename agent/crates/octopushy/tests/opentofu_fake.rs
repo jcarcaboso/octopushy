@@ -88,6 +88,7 @@ JSON
     if [ -n "${FAKE_GRACEFUL:-}" ]; then
       trap 'echo "{\"version\":4,\"serial\":10,\"lineage\":\"l\"}" > "$state"; echo interrupted > "$REC/stopped"; exit 0' INT
     fi
+    touch "$REC/apply-started"
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
     if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
     if [ -n "${FAKE_NOT_SAVED:-}" ]; then
@@ -1256,4 +1257,85 @@ async fn opentofu_timeout_fails_plans_and_preserves_interrupted_apply_state_and_
         assert!(results["next"].error.contains("unknown executor"));
     }
     tokio::join!(check("preview"), check("apply"));
+}
+
+#[tokio::test]
+async fn normal_cancel_leaves_apply_running_but_force_stops_and_saves_state() {
+    use octopushy::attempts::{AttemptManager, SessionCursor};
+    use octopushy::outbox::Outbox;
+    use octopushy_proto::v1::{Assignment, Outcome, agent_message::Kind};
+    let fx = Fixture::new();
+    let content = archive::pack(&[("plan.bin", &b"PLAN"[..])]).unwrap();
+    let plan = Artifact {
+        name: "plan.tar.gz".into(),
+        sha256: octopushy::tls::sha256_hex(&content),
+        content,
+    };
+    let work = fx.dir.path().join("managed");
+    let manager = AttemptManager::new(
+        work,
+        Outbox::open(fx.dir.path().join("outbox")).unwrap(),
+        Arc::new(fx.cfg),
+    );
+    manager.accept(Assignment {
+        attempt_id: "forced-apply".into(),
+        executor: "opentofu".into(),
+        action: "apply".into(),
+        input_json: input(
+            false,
+            json!({"FAKE_APPLY_SLEEP": "600", "FAKE_GRACEFUL": "1"}),
+        )
+        .to_string(),
+        files_tar_gz: repo_tar(None),
+        artifacts: vec![plan],
+        secrets: HashMap::from([
+            ("proxmox.token".into(), PVE_TOKEN.into()),
+            ("extra.secret".into(), EXTRA_SECRET.into()),
+        ]),
+        ..Default::default()
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fx.rec.join("apply-started").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.cancel("forced-apply");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !fx.rec.join("stopped").exists(),
+        "normal cancel must not signal the mutation"
+    );
+    assert!(!manager.is_idle());
+    manager.cancel_requested("forced-apply", true);
+    manager.accept(Assignment {
+        attempt_id: "next".into(),
+        executor: "unknown".into(),
+        ..Default::default()
+    });
+    let mut cursor = SessionCursor::default();
+    let mut results = HashMap::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while results.len() < 2 {
+            for message in manager.collect(&mut cursor) {
+                if let Some(Kind::Result(result)) = message.kind {
+                    results.insert(result.attempt_id.clone(), result);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("force stop must release the slot");
+    let result = &results["forced-apply"];
+    assert_eq!(result.outcome(), Outcome::Uncertain);
+    let state = result
+        .artifacts
+        .iter()
+        .find(|a| a.name == state::ARTIFACT)
+        .expect("saved state");
+    assert!(String::from_utf8_lossy(&state.content).contains("\"serial\":10"));
+    assert!(fx.rec.join("stopped").exists());
+    assert!(manager.is_idle());
 }

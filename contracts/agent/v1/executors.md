@@ -17,6 +17,22 @@ again on each new connection while an attempt runs. `Hello.capabilities` lists f
 that are not executors; a controller sends built-in OpenTofu state work only to agents
 that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 
+### Cancellation and operator Force stop
+
+Normal `CancelAttempt`, with `force` absent or false, cancels queued work and
+read-only attempts. It never interrupts a running mutation. Lease loss and agent
+draining do not override that rule.
+
+An agent advertising `forced-mutation-stop-v1` accepts `CancelAttempt.force=true`
+for an explicit operator Force stop. The controller must not send force from
+normal cancellation or to an agent without that capability. A forced queued
+attempt is cancelled before starting. A forced running mutation is uncertain,
+even if its tool exits zero after stopping. OpenTofu uses the SIGINT, SIGTERM,
+hard-kill sequence described below and reports complete saved state. Ansible
+terminates the playbook process, then escalates to a hard kill. Remote work may
+continue; force does not roll back changes or permit an automatic retry. Older
+agents refuse to interrupt mutations, so their tools keep running.
+
 ## Enrollment token and CA
 
 An enrollment token is `opy1.<secret>.<fingerprint>`: `secret` is base64url without
@@ -502,7 +518,7 @@ The controller records the artifact's SHA-256 as `planSha256`, which the approva
 
 ### `run`
 
-**Mutating and not cancellable.** The assignment carries `preview.json`, whose SHA-256 is
+**Mutating and not normally cancellable.** The assignment carries `preview.json`, whose SHA-256 is
 checked, and the secrets `ansible.ssh-key`, `ansible.var.<name>` and `ansible.file.<name>`. They
 reach `octopushy-ansible` on stdin as `{"sshKey", "secretVars", "secretFiles"}`, never in argv,
 the environment or the workspace. A secret file's extra var holds its path.

@@ -512,3 +512,32 @@ fn oversized_state_is_dropped_and_reads_fail() {
     assert!(r.artifacts.is_empty());
     assert!(r.encoded_len() < MAX_RESULT_BYTES);
 }
+
+#[tokio::test]
+async fn forced_mutations_remain_uncertain_even_if_the_executor_returns_success() {
+    let h = harness();
+    h.manager
+        .accept(assignment("forced", "test", "mutate", r#"{"ms":100}"#));
+    let mut c = Collector::default();
+    for _ in 0..100 {
+        c.poll(&h.manager);
+        if c.msgs
+            .iter()
+            .any(|m| matches!(&m.kind, Some(Kind::Started(s)) if s.attempt_id == "forced"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    h.manager.cancel_requested("forced", true);
+    h.manager.accept(assignment("after", "test", "echo", "{}"));
+    assert_eq!(
+        c.result(&h.manager, "forced").await.outcome(),
+        Outcome::Uncertain
+    );
+    assert_eq!(
+        c.result(&h.manager, "after").await.outcome(),
+        Outcome::Succeeded
+    );
+    assert!(h.manager.is_idle());
+}

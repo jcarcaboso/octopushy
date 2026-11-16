@@ -53,8 +53,10 @@ the OpenAPI document and client when an API changes. Do not hand-edit the client
 
 ## Rules that refactors must keep
 
-- A change is never retried and never interrupted. A lost lease means uncertain,
-  and one late result may still settle it.
+- A change is never retried and normal cancellation never interrupts it. Only an
+  explicit operator Force stop may interrupt one, on an agent advertising
+  `forced-mutation-stop-v1`. A lost lease means uncertain, and one late result may
+  still settle it.
 - One writer for runs. Writes to runs, steps and attempts go through the engine
   lock in `RunEngine`. Do not replace it with row versions. Atomic, conditional
   heartbeat lease renewals are the narrow exception.

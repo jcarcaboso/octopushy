@@ -20,6 +20,31 @@ container is owned, unprotected and protected again under the same rules. A gues
 `qemu` or `lxc`, and a machine of the other kind at that VMID fails them, with nothing
 changed.
 
+## Stopping an in-progress change
+
+Normal cancellation never interrupts a running change. Losing a lease, draining
+an agent or reconnecting does not authorize an interruption or a retry.
+
+There are two narrow exceptions to letting a mutating tool finish. Its configured
+OpenTofu timeout bounds a hung attempt. Separately, only an explicit operator
+**Force stop** may request interruption of a running change. The controller sends
+`CancelAttempt.force` only from Force stop and only when the connected agent
+advertises `forced-mutation-stop-v1`. An older agent receives ordinary cancel,
+refuses to interrupt its mutation and keeps the tool running. An offline agent
+cannot receive either request. The confirmation warns about both cases.
+
+OpenTofu receives SIGINT first, allowing it to finish in-flight work and save
+state. After the grace period the agent escalates to SIGTERM, then a hard kill.
+Ansible receives SIGTERM, then a hard kill if needed. A forced mutation remains
+uncertain even if the tool exits zero, and an OpenTofu apply reports its complete
+saved state. A partial or missing state is not proof that nothing happened.
+Stopping a local tool cannot stop a task already accepted by Proxmox.
+
+Neither exception waives the approved-plan hash check, machine ownership guards
+or state locking. There is no rollback or automatic retry. The operator inspects
+the target and saved state before closing an uncertain run or planning again. A
+late result can still settle an uncertain attempt under the existing rules.
+
 ## Installations Octopushy only observes: `manage: false`
 
 ```yaml

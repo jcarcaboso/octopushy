@@ -373,6 +373,12 @@ A named, observable unit of a run with its own outcome and recovery rules.
 One execution of a step; a retry creates a new attempt without erasing the
 previous outcome.
 
+**Force stop**:
+An operator's explicit request to interrupt an in-progress change and treat its
+outcome as uncertain until reconciled. Unlike normal cancellation, it may stop a
+running change. It neither rolls back work nor authorizes a retry.
+_Avoid_: Cancel, which never interrupts an in-progress change
+
 **Observation**:
 What an installation's Proxmox API reported at one time, gathered by an agent in
 the background. It changes nothing, so it is not a run; only its failures surface.
