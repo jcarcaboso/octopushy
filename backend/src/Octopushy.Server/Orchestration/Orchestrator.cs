@@ -25,25 +25,9 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.Agent
         var nextObserveCheck = clock.GetUtcNow();
         while (!stoppingToken.IsCancellationRequested)
         {
-            try
-            {
-                await engine.TickAsync(stoppingToken);
-                await planner.ScheduleConfigurationsAsync(stoppingToken);
-                await planner.SchedulePipelinesAsync(stoppingToken);
-                await updates.AdvanceAsync(stoppingToken);
-                if (clock.GetUtcNow() >= nextObserveCheck)
-                {
-                    nextObserveCheck = clock.GetUtcNow() + ObserveCheck;
-                    await planner.ScheduleObservesAsync(stoppingToken);
-                    await planner.FireSchedulesAsync(clock.GetUtcNow(), stoppingToken);
-                    await planner.ExpireScheduledAsync(clock.GetUtcNow(), stoppingToken);
-                }
-            }
-            // Only the server stopping ends the loop: a cancellation from anywhere else, such as a timeout, is one more failed pass.
-            catch (Exception e) when (e is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
-            {
-                logger.LogError(e, "The orchestrator loop failed; it will try again.");
-            }
+            var observeDue = clock.GetUtcNow() >= nextObserveCheck;
+            if (observeDue) nextObserveCheck = clock.GetUtcNow() + ObserveCheck;
+            await RunOnceAsync(observeDue, stoppingToken);
 
             try
             {
@@ -53,6 +37,33 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.Agent
             {
                 return;
             }
+        }
+    }
+
+    internal async Task RunOnceAsync(bool observeDue, CancellationToken cancellationToken)
+    {
+        await PhaseAsync("runs", () => engine.TickAsync(cancellationToken), cancellationToken);
+        await PhaseAsync("configure scheduling", () => planner.ScheduleConfigurationsAsync(cancellationToken), cancellationToken);
+        await PhaseAsync("pipeline scheduling", () => planner.SchedulePipelinesAsync(cancellationToken), cancellationToken);
+        await PhaseAsync("agent updates", () => updates.AdvanceAsync(cancellationToken), cancellationToken);
+        if (observeDue)
+        {
+            await PhaseAsync("observations", () => planner.ScheduleObservesAsync(cancellationToken), cancellationToken);
+            await PhaseAsync("cron", () => planner.FireSchedulesAsync(clock.GetUtcNow(), cancellationToken), cancellationToken);
+            await PhaseAsync("scheduled expiry", () => planner.ExpireScheduledAsync(clock.GetUtcNow(), cancellationToken), cancellationToken);
+        }
+    }
+
+    private async Task PhaseAsync(string phase, Func<Task> action, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await action();
+        }
+        // A timeout is a failed phase; only shutdown cancels the loop.
+        catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(e, "The orchestrator phase {Phase} failed; later phases will still run.", phase);
         }
     }
 }

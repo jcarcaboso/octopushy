@@ -168,34 +168,53 @@ public sealed class AgentChannelService(
             while (await requestStream.MoveNext(call.Token))
             {
                 var message = requestStream.Current;
-                switch (message.KindCase)
+                try
                 {
-                    case AgentMessage.KindOneofCase.Heartbeat:
-                        await engine.OnHeartbeatAsync(agent.Id, message.Heartbeat.RunningAttemptIds, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
-                        await engine.OnStartedAsync(agent.Id, started, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Log when Guid.TryParse(message.Log.AttemptId, out var attemptId):
-                        await engine.OnLogAsync(agent.Id, attemptId, (long)message.Log.FirstSequence,
-                            message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
-                        await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Reachability:
-                        // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
-                        // An uptime probe's answer is never reachability evidence.
-                        if (!await uptime.AcceptAsync(session, message.Reachability, call.Token))
-                            await reachability.AcceptAsync(session, message.Reachability, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Result:
-                        if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))
-                        {
-                            await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = message.Result.AttemptId } }, call.Token);
-                        }
+                    switch (message.KindCase)
+                    {
+                        case AgentMessage.KindOneofCase.Heartbeat:
+                            await engine.OnHeartbeatAsync(agent.Id, message.Heartbeat.RunningAttemptIds, call.Token);
+                            break;
+                        case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
+                            await engine.OnStartedAsync(agent.Id, started, call.Token);
+                            break;
+                        case AgentMessage.KindOneofCase.Log when Guid.TryParse(message.Log.AttemptId, out var attemptId):
+                            await engine.OnLogAsync(agent.Id, attemptId, (long)message.Log.FirstSequence,
+                                message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
+                            break;
+                        case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
+                            await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
+                            break;
+                        case AgentMessage.KindOneofCase.Reachability:
+                            // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
+                            // An uptime probe's answer is never reachability evidence.
+                            if (!await uptime.AcceptAsync(session, message.Reachability, call.Token))
+                                await reachability.AcceptAsync(session, message.Reachability, call.Token);
+                            break;
+                        case AgentMessage.KindOneofCase.Result:
+                            if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))
+                            {
+                                await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = message.Result.AttemptId } }, call.Token);
+                            }
 
-                        break;
+                            break;
+                    }
+                }
+                catch (Exception e) when (e is not OperationCanceledException || !call.IsCancellationRequested)
+                {
+                    logger.LogError(e, "Handling {Message} from agent {Agent} failed; the stream stays open.", message.KindCase, agent.Id);
+                    if (message.Result is { } failed && Guid.TryParse(failed.AttemptId, out var attemptId))
+                    {
+                        try
+                        {
+                            if (await engine.OnResultRecordingFailedAsync(agent.Id, failed, call.Token))
+                                await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = failed.AttemptId } }, call.Token);
+                        }
+                        catch (Exception recording) when (recording is not OperationCanceledException || !call.IsCancellationRequested)
+                        {
+                            logger.LogError(recording, "Settling the recording failure of attempt {Attempt} failed; its result is not acknowledged.", attemptId);
+                        }
+                    }
                 }
             }
         }

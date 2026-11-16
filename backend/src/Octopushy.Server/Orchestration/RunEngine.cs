@@ -61,20 +61,50 @@ public sealed partial class RunEngine(
     /// <summary>One pass of the loop: expire leases, advance runs, assign queued attempts.</summary>
     public async Task TickAsync(CancellationToken cancellationToken)
     {
-        await WithDbAsync(async db =>
+        var active = await WithDbAsync(async (db, _) =>
         {
             await ExpireLeasesAsync(db, cancellationToken);
-            var active = await db.Runs
+            return await db.Runs
                 .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
                             && r.Status != RunStatuses.Cancelled && r.Status != RunStatuses.Uncertain)
                 .OrderBy(r => r.CreatedAt)
                 .Select(r => r.Id)
                 .ToListAsync(cancellationToken);
-            foreach (var id in active)
-            {
-                await AdvanceAsync(db, id, cancellationToken);
-            }
         }, cancellationToken);
+        foreach (var id in active)
+        {
+            try
+            {
+                await WithDbAsync(db => AdvanceAsync(db, id, cancellationToken), cancellationToken);
+            }
+            catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // A failed advance's tracked changes must never be saved with the diagnostic.
+                    await WithDbAsync(async db =>
+                    {
+                        var error = e.Message;
+                        foreach (var attemptId in await db.Attempts.Where(a => a.RunId == id).Select(a => a.Id).ToListAsync(cancellationToken))
+                        {
+                            using var held = await masks.EnsureAsync(attemptId, cancellationToken);
+                            error = logs.MaskDiagnostic(attemptId, error);
+                        }
+                        logger.LogError("Advancing run {Run} failed: {Error}", id, error);
+                        var run = await db.Runs.FindAsync([id], cancellationToken);
+                        if (run is not null)
+                        {
+                            run.Detail = $"Advancing this run failed: {error}";
+                            await db.SaveChangesAsync(cancellationToken);
+                        }
+                    }, cancellationToken);
+                }
+                catch (Exception recording) when (recording is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogError(recording, "Recording the advance failure of run {Run} failed.", id);
+                }
+            }
+        }
         await DispatchAsync(cancellationToken);
         health.TickCompleted();
     }
