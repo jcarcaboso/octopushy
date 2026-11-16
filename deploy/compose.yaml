@@ -32,6 +32,12 @@ services:
   backend:
     image: ${OCTOPUSHY_BACKEND_IMAGE:-localhost/octopushy-backend:dev}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 60s
     environment:
       ConnectionStrings__Octopushy: Host=postgres;Database=octopushy;Username=octopushy;Password=${POSTGRES_PASSWORD}
       Octopushy__TrustForwardedHeaders: "true"

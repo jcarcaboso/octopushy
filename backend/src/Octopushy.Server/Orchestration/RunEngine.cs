@@ -51,6 +51,7 @@ public sealed partial class RunEngine(
     Images.ImageStore images,
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
+    EngineHealth health,
     ILogger<RunEngine> logger)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -73,6 +74,7 @@ public sealed partial class RunEngine(
             }
         }, cancellationToken);
         await DispatchAsync(cancellationToken);
+        health.TickCompleted();
     }
 
     /// <summary>Runs work that changes runs, such as applying a revision, one change at a time with the engine.</summary>

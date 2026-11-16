@@ -33,9 +33,11 @@ if (!generatingDocument)
     Directory.CreateDirectory(settings.DataDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 }
 
-builder.Services.AddDbContext<OctopushyDb>(options => options
+builder.Services.AddScoped<RunTransitionLog>();
+builder.Services.AddDbContext<OctopushyDb>((services, options) => options
     .UseNpgsql(builder.Configuration.GetConnectionString("Octopushy") ?? throw new InvalidOperationException("Set ConnectionStrings:Octopushy."))
-    .UseSnakeCaseNamingConvention());
+    .UseSnakeCaseNamingConvention()
+    .AddInterceptors(services.GetRequiredService<RunTransitionLog>()));
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<KeyEncryptionKey>();
@@ -60,6 +62,7 @@ builder.Services.AddSingleton<Octopushy.Server.Icons.IconDirectory>();
 builder.Services.AddSingleton<OrchestratorSignal>();
 builder.Services.AddSingleton<RunFactory>();
 builder.Services.AddSingleton<RunEngine>();
+builder.Services.AddSingleton<EngineHealth>();
 builder.Services.AddSingleton<RunHistoryRetention>();
 builder.Services.AddScoped<AssignmentBuilder>();
 builder.Services.AddScoped<InventoryUpdater>();
@@ -273,7 +276,21 @@ app.Use(async (context, next) =>
 });
 
 app.MapOpenApi("/api/openapi/{documentName}.json");
-app.MapGet("/api/health", () => TypedResults.Ok(new { status = "ok" })).ExcludeFromDescription();
+app.MapGet("/api/health", async (OctopushyDb db, EngineHealth health, CancellationToken cancellationToken) =>
+{
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+    var healthy = false;
+    try
+    {
+        healthy = health.IsFresh && await db.Database.CanConnectAsync(timeout.Token);
+    }
+    catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+    {
+        // This unauthenticated endpoint reports no database or exception details.
+    }
+    return Results.Json(new { status = healthy ? "ok" : "unhealthy" }, statusCode: healthy ? 200 : 503);
+}).ExcludeFromDescription();
 app.MapAccount();
 app.MapOperatorTokens();
 app.MapApi();

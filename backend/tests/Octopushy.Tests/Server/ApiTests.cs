@@ -60,6 +60,7 @@ public class ApiTests(PostgresFixture postgres)
         using var client = server.CreateClient();
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/agent/ca.pem")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync("/octopushy.agent.v1.Enrollment/Enroll", null)).StatusCode);
+        await server.Engine.TickAsync(CancellationToken.None);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health")).StatusCode);
     }
 

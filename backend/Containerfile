@@ -14,7 +14,7 @@ RUN dotnet publish backend/src/Octopushy.Server \
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends git openssh-client ca-certificates \
+ && apt-get install --yes --no-install-recommends git openssh-client ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o app -g app -m 0700 /var/lib/octopushy
 COPY --from=build /app /opt/octopushy
