@@ -55,24 +55,56 @@ public sealed partial class RunEngine(
     ILogger<RunEngine> logger)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    // Protected by _gate; discarded on rollback or failure of the enclosing operation.
+    private readonly List<(Guid AgentId, Guid AttemptId)> _pendingCancellations = [];
 
     /// <summary>One pass of the loop: expire leases, advance runs, assign queued attempts.</summary>
     public async Task TickAsync(CancellationToken cancellationToken)
     {
-        await WithDbAsync(async db =>
+        var active = await WithDbAsync(async (db, _) =>
         {
             await ExpireLeasesAsync(db, cancellationToken);
-            var active = await db.Runs
+            return await db.Runs
                 .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
                             && r.Status != RunStatuses.Cancelled && r.Status != RunStatuses.Uncertain)
                 .OrderBy(r => r.CreatedAt)
                 .Select(r => r.Id)
                 .ToListAsync(cancellationToken);
-            foreach (var id in active)
-            {
-                await AdvanceAsync(db, id, cancellationToken);
-            }
         }, cancellationToken);
+        foreach (var id in active)
+        {
+            try
+            {
+                await WithDbAsync(db => AdvanceAsync(db, id, cancellationToken), cancellationToken);
+            }
+            catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // A failed advance's tracked changes must never be saved with the diagnostic.
+                    await WithDbAsync(async db =>
+                    {
+                        var error = e.Message;
+                        foreach (var attemptId in await db.Attempts.Where(a => a.RunId == id).Select(a => a.Id).ToListAsync(cancellationToken))
+                        {
+                            using var held = await masks.EnsureAsync(attemptId, cancellationToken);
+                            error = logs.MaskDiagnostic(attemptId, error);
+                        }
+                        logger.LogError("Advancing run {Run} failed: {Error}", id, error);
+                        var run = await db.Runs.FindAsync([id], cancellationToken);
+                        if (run is not null)
+                        {
+                            run.Detail = $"Advancing this run failed: {error}";
+                            await db.SaveChangesAsync(cancellationToken);
+                        }
+                    }, cancellationToken);
+                }
+                catch (Exception recording) when (recording is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogError(recording, "Recording the advance failure of run {Run} failed.", id);
+                }
+            }
+        }
         await DispatchAsync(cancellationToken);
         health.TickCompleted();
     }
@@ -233,10 +265,8 @@ public sealed partial class RunEngine(
 
         foreach (var attempt in attempts.Where(a => !AttemptStatuses.IsTerminal(a.Status)))
         {
-            if (AttemptStatuses.IsActive(attempt.Status) && attempt.AgentId is { } agentId && connections.Get(agentId) is { } session)
-            {
-                await session.SendAsync(new ServerMessage { Cancel = new CancelAttempt { AttemptId = attempt.Id.ToString() } }, cancellationToken);
-            }
+            if (AttemptStatuses.IsActive(attempt.Status) && attempt.AgentId is { } agentId)
+                _pendingCancellations.Add((agentId, attempt.Id));
 
             attempt.Status = AttemptStatuses.Cancelled;
             attempt.FinishedAt = clock.GetUtcNow();
@@ -839,9 +869,11 @@ public sealed partial class RunEngine(
         {
             await using var scope = scopes.CreateAsyncScope();
             await action(scope.ServiceProvider.GetRequiredService<OctopushyDb>());
+            await SendCommittedCancellationsAsync(cancellationToken);
         }
         finally
         {
+            _pendingCancellations.Clear();
             _gate.Release();
         }
     }
@@ -852,11 +884,21 @@ public sealed partial class RunEngine(
         try
         {
             await using var scope = scopes.CreateAsyncScope();
-            return await action(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), scope.ServiceProvider);
+            var result = await action(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), scope.ServiceProvider);
+            await SendCommittedCancellationsAsync(cancellationToken);
+            return result;
         }
         finally
         {
+            _pendingCancellations.Clear();
             _gate.Release();
         }
+    }
+
+    private async Task SendCommittedCancellationsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var (agentId, attemptId) in _pendingCancellations)
+            if (connections.Get(agentId) is { } session)
+                await session.SendAsync(new ServerMessage { Cancel = new CancelAttempt { AttemptId = attemptId.ToString() } }, cancellationToken);
     }
 }

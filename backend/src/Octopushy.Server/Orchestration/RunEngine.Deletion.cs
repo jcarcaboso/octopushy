@@ -82,6 +82,10 @@ public sealed partial class RunEngine
                     artifacts.Delete(attemptId);
                 }
                 await transaction.CommitAsync(ct);
+                // Log batches are kept outside the engine's gate: one that got in before the commit is removed now, under its
+                // log's gate, and one after it finds its attempt gone.
+                foreach (var attemptId in attemptIds)
+                    await logs.DeleteAsync(attemptId, CancellationToken.None);
                 foreach (var attempt in pending)
                     connections.Get(attempt.AgentId!.Value)?.TrySend(new ServerMessage
                     {

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Channels;
 using Google.Protobuf;
 using Grpc.Core;
 using Microsoft.EntityFrameworkCore;
@@ -120,12 +121,14 @@ public sealed class AgentChannelService(
         {
             RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
         };
-        connections.Add(session);
-        reachability.OnConnected(session);
-        logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
         var writer = Task.CompletedTask;
+        var handler = Task.CompletedTask;
         try
         {
+            await engine.OnHelloAsync(agent.Id, hello, call.Token);
+            connections.Add(session);
+            reachability.OnConnected(session);
+            logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage
             {
                 Welcome = new Welcome
@@ -135,7 +138,6 @@ public sealed class AgentChannelService(
                     HeartbeatSeconds = (uint)options.Value.AgentChannel.HeartbeatSeconds,
                 },
             }, call.Token);
-            await engine.OnHelloAsync(agent.Id, hello, call.Token);
             // Back on the version an update set: the update is done, and its pause lifted.
             try
             {
@@ -165,39 +167,102 @@ public sealed class AgentChannelService(
                 }
             }, CancellationToken.None);
 
+            // Heartbeats, log batches and reachability answers never wait for the engine's gate, and are handled as they
+            // arrive. An attempt's started, state and result messages are handled in order, behind them, so one that waits
+            // for the gate never holds back a heartbeat until its lease expires. A state that waits is replaced in its place by
+            // a newer one of the same attempt, so the queue holds at most three messages per attempt and never makes the
+            // reader wait.
+            var ordered = Channel.CreateUnbounded<AgentMessage>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            var newestStates = new Dictionary<string, AgentMessage>();
+            handler = Task.Run(async () =>
+            {
+                await foreach (var queued in ordered.Reader.ReadAllAsync(call.Token))
+                {
+                    var message = queued;
+                    if (message.StateSnapshot is { } waiting)
+                        lock (newestStates)
+                            message = newestStates.Remove(waiting.AttemptId, out var newest) ? newest : message;
+                    try
+                    {
+                        switch (message.KindCase)
+                        {
+                            case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
+                                await engine.OnStartedAsync(agent.Id, started, call.Token);
+                                break;
+                            case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
+                                await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
+                                break;
+                            case AgentMessage.KindOneofCase.Result:
+                                if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))
+                                {
+                                    await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = message.Result.AttemptId } }, call.Token);
+                                }
+
+                                break;
+                        }
+                    }
+                    catch (Exception e) when (e is not OperationCanceledException || !call.IsCancellationRequested)
+                    {
+                        logger.LogError(e, "Handling {Message} from agent {Agent} failed; the stream stays open.", message.KindCase, agent.Id);
+                        if (message.Result is { } failed && Guid.TryParse(failed.AttemptId, out var attemptId))
+                        {
+                            try
+                            {
+                                if (await engine.OnResultRecordingFailedAsync(agent.Id, failed, call.Token))
+                                    await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = failed.AttemptId } }, call.Token);
+                            }
+                            catch (Exception recording) when (recording is not OperationCanceledException || !call.IsCancellationRequested)
+                            {
+                                logger.LogError(recording, "Settling the recording failure of attempt {Attempt} failed; its result is not acknowledged.", attemptId);
+                            }
+                        }
+                    }
+                }
+            }, CancellationToken.None);
+
             while (await requestStream.MoveNext(call.Token))
             {
                 var message = requestStream.Current;
-                switch (message.KindCase)
+                if (message.StateSnapshot is { } state)
                 {
-                    case AgentMessage.KindOneofCase.Heartbeat:
-                        await engine.OnHeartbeatAsync(agent.Id, message.Heartbeat.RunningAttemptIds, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
-                        await engine.OnStartedAsync(agent.Id, started, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Log when Guid.TryParse(message.Log.AttemptId, out var attemptId):
-                        await engine.OnLogAsync(agent.Id, attemptId, (long)message.Log.FirstSequence,
-                            message.Log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.StateSnapshot when message.StateSnapshot.State is not null && Guid.TryParse(message.StateSnapshot.AttemptId, out var snapshot):
-                        await engine.OnStateSnapshotAsync(agent.Id, snapshot, message.StateSnapshot.State, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Reachability:
-                        // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
-                        // An uptime probe's answer is never reachability evidence.
-                        if (!await uptime.AcceptAsync(session, message.Reachability, call.Token))
-                            await reachability.AcceptAsync(session, message.Reachability, call.Token);
-                        break;
-                    case AgentMessage.KindOneofCase.Result:
-                        if (await engine.OnResultAsync(agent.Id, message.Result, call.Token))
-                        {
-                            await session.SendAsync(new ServerMessage { ResultAck = new ResultAck { AttemptId = message.Result.AttemptId } }, call.Token);
-                        }
+                    lock (newestStates)
+                    {
+                        if (newestStates.TryAdd(state.AttemptId, message))
+                            ordered.Writer.TryWrite(message);
+                        else
+                            newestStates[state.AttemptId] = message;
+                    }
 
-                        break;
+                    continue;
+                }
+
+                if (message.KindCase is not (AgentMessage.KindOneofCase.Heartbeat or AgentMessage.KindOneofCase.Log
+                    or AgentMessage.KindOneofCase.Reachability))
+                {
+                    ordered.Writer.TryWrite(message);
+                    continue;
+                }
+
+                try
+                {
+                    if (message.Heartbeat is { } heartbeat)
+                        await engine.OnHeartbeatAsync(agent.Id, heartbeat.RunningAttemptIds, call.Token);
+                    else if (message.Log is { } log && Guid.TryParse(log.AttemptId, out var attemptId))
+                        await engine.OnLogAsync(agent.Id, attemptId, (long)log.FirstSequence,
+                            log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
+                    // Ephemeral: an answer this session is not waiting for is dropped, and nothing is acknowledged.
+                    // An uptime probe's answer is never reachability evidence.
+                    else if (message.Reachability is { } answer && !await uptime.AcceptAsync(session, answer, call.Token))
+                        await reachability.AcceptAsync(session, answer, call.Token);
+                }
+                catch (Exception e) when (e is not OperationCanceledException || !call.IsCancellationRequested)
+                {
+                    logger.LogError(e, "Handling {Message} from agent {Agent} failed; the stream stays open.", message.KindCase, agent.Id);
                 }
             }
+
+            ordered.Writer.Complete();
+            await handler;
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested || call.IsCancellationRequested)
         {
@@ -211,6 +276,13 @@ public sealed class AgentChannelService(
             connections.Remove(session);
             await call.CancelAsync();
             await writer;
+            try
+            {
+                await handler;
+            }
+            catch (OperationCanceledException)
+            {
+            }
             await UpdateAgentAsync(agent.Id, a => a.LastSeenAt = clock.GetUtcNow(), CancellationToken.None);
             logger.LogInformation("Agent {Name} ({Agent}) disconnected.", agent.Name, agent.Id);
         }

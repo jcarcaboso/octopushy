@@ -12,24 +12,35 @@ namespace Octopushy.Server.Orchestration;
 
 public sealed partial class RunEngine
 {
-    // ponytail: serialize log batches with run changes; use per-attempt gates if log traffic becomes a bottleneck.
-    public Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
-        IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct) =>
-        WithDbAsync(async db =>
+    private readonly Dictionary<Guid, int> _resultFailures = [];
+
+    /// <summary>
+    /// Keeps a log batch of the agent's own attempt. Not under the engine's gate, so a batch never holds back the agent's
+    /// heartbeats or other messages. The attempt is looked up again under its log's own gate, which deletion takes after its
+    /// rows are gone: a batch either lands before the log is removed or finds the attempt gone.
+    /// </summary>
+    public async Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
+        IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct)
+    {
+        if (!await OwnsAsync())
+            return;
+        using (await masks.EnsureAsync(attemptId, ct))
+            await logs.AppendAsync(attemptId, firstSequence, lines, ct, OwnsAsync);
+
+        async Task<bool> OwnsAsync()
         {
-            if (!await db.Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct))
-                return;
-            using (await masks.EnsureAsync(attemptId, ct))
-                await logs.AppendAsync(attemptId, firstSequence, lines, ct);
-        }, ct);
+            await using var scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct);
+        }
+    }
 
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
     public async Task DispatchAsync(CancellationToken cancellationToken)
     {
-        await WithDbAsync(async (db, services) =>
+        await WithDbAsync(async (snapshot, _) =>
         {
-            var eligible = RepositoryTrust.EligibleRevisions(db);
-            var pending = db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+            var eligible = RepositoryTrust.EligibleRevisions(snapshot);
+            var pending = snapshot.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .Where(a => a.Status == AttemptStatuses.Queued);
             // An observation has no step or run; it records its own revision and context.
             var queued = await pending
@@ -47,231 +58,342 @@ public sealed partial class RunEngine
                 .OrderBy(a => a.CreatedAt)
                 .Take(200)
                 .ToListAsync(cancellationToken));
-            // A change that waited for an agent may have outlived its schedule since it was queued.
-            // Stopping it here keeps its secrets from being released for nothing.
-            foreach (var attempt in queued.Where(a => a is { Mutating: true, Step.Run.Reason: RunReasons.Schedule }).ToList())
-            {
-                if (await StopIfLateAsync(db, await LoadRunAsync(db, attempt.Step!.RunId, cancellationToken), clock.GetUtcNow(), cancellationToken))
-                    queued.Remove(attempt);
-            }
-
-            var result = new List<(AgentSession Session, ServerMessage Message, Guid AttemptId)>();
+            var sent = 0;
             if (queued.Count == 0)
             {
                 return 0;
             }
 
-            var active = await db.Attempts.AsNoTracking()
+            var active = await snapshot.Attempts.AsNoTracking()
                 .Where(a => a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running)
                 .Select(a => new { a.AgentId, a.HostKey })
                 .ToListAsync(cancellationToken);
             var perAgent = active.Where(a => a.AgentId is not null).GroupBy(a => a.AgentId!.Value).ToDictionary(g => g.Key, g => g.Count());
             var perHost = active.Where(a => a.HostKey is not null).GroupBy(a => a.HostKey!).ToDictionary(g => g.Key, g => g.Count());
             var connectedIds = connections.All.Select(s => s.AgentId).ToList();
-            var agents = await db.Agents.AsNoTracking()
+            var agents = await snapshot.Agents.AsNoTracking()
                 .Where(a => !a.Disabled && !a.Draining && connectedIds.Contains(a.Id))
                 .ToListAsync(cancellationToken);
-            var builder = services.GetRequiredService<AssignmentBuilder>();
-            // Guests something was handed to in this pass: the database does not show them yet.
+            // Guests already handed work during this pass.
             var changing = new HashSet<Guid>();
-            var observedOnly = await SafetyBoundary.ObservedOnlyInstallationsAsync(db, cancellationToken);
+            var observedOnly = await SafetyBoundary.ObservedOnlyInstallationsAsync(snapshot, cancellationToken);
 
-            foreach (var attempt in queued)
+            foreach (var queuedAttempt in queued)
             {
-                // A build of a template's image: no run, no installation, no secrets. See RunEngine.Images.
-                if (Images.TemplateImages.IsBuild(attempt))
-                {
-                    if (await DispatchImageBuildAsync(db, attempt, agents, perAgent, builder, cancellationToken) is { } build)
-                    {
-                        logs.RegisterSecrets(attempt.Id, []);
-                        result.Add((build.Session, build.Message, attempt.Id));
-                    }
-                    continue;
-                }
-
-                var step = attempt.Step;
-                var run = step?.Run;
-                var context = RunContext.Parse(run?.Context ?? attempt.Context!);
-                // Before anything that would make it wait: work in an installation Octopushy only observes fails.
-                if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken, observedOnly) is { } refused)
-                {
-                    attempt.Status = AttemptStatuses.Failed;
-                    attempt.Error = refused;
-                    attempt.FinishedAt = clock.GetUtcNow();
-                    attempt.WaitingReason = null;
-                    step!.Status = StepStatuses.Failed;
-                    step.Detail = refused;
-                    signal.Wake();
-                    continue;
-                }
-
-                if (await (run is null
-                        ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
-                        : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
-                {
-                    attempt.WaitingReason = trustReason;
-                    if (run is not null)
-                    {
-                        run.Status = RunStatuses.Blocked;
-                        run.Detail = trustReason;
-                    }
-                    continue;
-                }
-                // Asked again here, not only when the attempt was queued: others may have started since, and a
-                // service's guest may have stopped being ready for it.
-                var family = run is not null && attempt.Mutating ? await GuestWork.FamilyAsync(db, run.ResourceId, cancellationToken) : [];
-                if (family.Count > 1 && family.Any(changing.Contains))
-                {
-                    attempt.WaitingReason = "Waiting for another run that is changing the same guest.";
-                    continue;
-                }
-
-                if (run is not null && attempt.Mutating && await ChangeHeldAsync(db, run, context, dispatching: true, cancellationToken) is { } held)
-                {
-                    if (context.Stages is not null)
-                        TakeBack(attempt, step!, run, held);
-                    else
-                        attempt.WaitingReason = held;
-                    continue;
-                }
-
-                var resourceId = run?.ResourceId ?? attempt.ResourceId;
-                var needsBuiltInState = attempt.Executor == "opentofu";
-                var candidates = agents
-                    .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
-                                && attempt.RequiredLabels.All(a.Labels.Contains)
-                                && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability)))
-                    .ToList();
-                string? waiting = null;
-                // Only agents with fresh evidence of every connection the step makes; the rest are asked, never waited for.
-                // Labels, executors and capabilities above, and capacity, preference and every check of the assignment
-                // below, still apply to those that remain.
-                var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
-                if (candidates.Count == 0)
-                {
-                    var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
-                    waiting = matchingLabels
-                        ? needsBuiltInState
-                            ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
-                            : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
-                        : attempt.RequiredLabels.Length == 0
-                            ? "Waiting for a connected agent."
-                            : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
-                }
-                else if ((candidates = reachable.Agents).Count == 0)
-                {
-                    waiting = reachable.Waiting;
-                }
-                else if (attempt.HostKey is { } hostKey && attempt.HostLimit is { } limit && perHost.GetValueOrDefault(hostKey) >= limit)
-                {
-                    waiting = $"Waiting for capacity on host {hostKey} (at most {limit} at once).";
-                }
-
-                var free = candidates.Where(a => perAgent.GetValueOrDefault(a.Id) < a.MaxConcurrency).ToList();
-                if (waiting is null && free.Count == 0)
-                {
-                    waiting = "Waiting for agent capacity.";
-                }
-
-                if (waiting is not null)
-                {
-                    attempt.WaitingReason = waiting;
-                    continue;
-                }
-
-                var agent = free.FirstOrDefault(a => a.Id == attempt.PreferredAgentId)
-                            ?? free.MinBy(a => perAgent.GetValueOrDefault(a.Id))!;
-                // Only through the connection whose evidence was checked: one that replaced it since has none. A replaced
-                // connection is closed, so the hand-off below requeues the attempt.
-                var session = reachable.Sessions is { } checkedOn ? checkedOn[agent.Id] : connections.Get(agent.Id);
-                if (session is null)
-                {
-                    attempt.WaitingReason = "The agent disconnected before assignment.";
-                    continue;
-                }
-                Assignment assignment;
+                var handedOff = false;
                 try
                 {
-                    assignment = await builder.BuildAsync(attempt, step, run, context, agent.Id, cancellationToken);
-                }
-                catch (Exception e) when (e is CredentialUnavailableException or ExecutionUntrustedException && run is not null)
-                {
-                    attempt.WaitingReason = e.Message;
-                    run.Status = RunStatuses.Blocked;
-                    run.Detail = e.Message;
-                    continue;
-                }
-                catch (Exception e) when (e is ExecutionUntrustedException or StateBusyException)
-                {
-                    attempt.WaitingReason = e.Message;
-                    continue;
-                }
-                // An observation is not replanned: unavailable credentials are its error until the next one.
-                catch (Exception e) when (e is AssignmentException or CredentialUnavailableException or IOException or Git.GitException)
-                {
-                    logger.LogWarning("Attempt {Attempt} cannot be assigned: {Error}", attempt.Id, e.Message);
-                    attempt.Status = AttemptStatuses.Failed;
-                    attempt.Error = e.Message;
-                    attempt.FinishedAt = clock.GetUtcNow();
-                    if (step is null)
+                    await using var scope = scopes.CreateAsyncScope();
+                    var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+                    var builder = scope.ServiceProvider.GetRequiredService<AssignmentBuilder>();
+                    var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(step => step!.Run)
+                        .SingleAsync(a => a.Id == queuedAttempt.Id, cancellationToken);
+                    if (attempt.Status != AttemptStatuses.Queued) continue;
+                    (AgentSession Session, ServerMessage Message, Guid AttemptId)? prepared = null;
+                    async Task PrepareAsync()
                     {
-                        await FinishObservationAsync(db, attempt, null, cancellationToken);
+                        if (attempt is { Mutating: true, Step.Run.Reason: RunReasons.Schedule }
+                            && await StopIfLateAsync(db, await LoadRunAsync(db, attempt.Step.RunId, cancellationToken), clock.GetUtcNow(), cancellationToken))
+                            return;
+                        // A build of a template's image: no run, no installation, no secrets. See RunEngine.Images.
+                        if (Images.TemplateImages.IsBuild(attempt))
+                        {
+                            if (await DispatchImageBuildAsync(db, attempt, agents, perAgent, builder, cancellationToken) is { } build)
+                            {
+                                logs.RegisterSecrets(attempt.Id, []);
+                                prepared = (build.Session, build.Message, attempt.Id);
+                            }
+                            return;
+                        }
+
+                        var step = attempt.Step;
+                        var run = step?.Run;
+                        var context = RunContext.Parse(run?.Context ?? attempt.Context!);
+                        // Before anything that would make it wait: work in an installation Octopushy only observes fails.
+                        if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken, observedOnly) is { } refused)
+                        {
+                            attempt.Status = AttemptStatuses.Failed;
+                            attempt.Error = refused;
+                            attempt.FinishedAt = clock.GetUtcNow();
+                            attempt.WaitingReason = null;
+                            step!.Status = StepStatuses.Failed;
+                            step.Detail = refused;
+                            signal.Wake();
+                            return;
+                        }
+
+                        if (await (run is null
+                                ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+                                : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
+                        {
+                            attempt.WaitingReason = trustReason;
+                            if (run is not null)
+                            {
+                                run.Status = RunStatuses.Blocked;
+                                run.Detail = trustReason;
+                            }
+                            return;
+                        }
+                        // Asked again here, not only when the attempt was queued: others may have started since, and a
+                        // service's guest may have stopped being ready for it.
+                        var family = run is not null && attempt.Mutating ? await GuestWork.FamilyAsync(db, run.ResourceId, cancellationToken) : [];
+                        if (family.Count > 1 && family.Any(changing.Contains))
+                        {
+                            attempt.WaitingReason = "Waiting for another run that is changing the same guest.";
+                            return;
+                        }
+
+                        if (run is not null && attempt.Mutating && await ChangeHeldAsync(db, run, context, dispatching: true, cancellationToken) is { } held)
+                        {
+                            if (context.Stages is not null)
+                                TakeBack(attempt, step!, run, held);
+                            else
+                                attempt.WaitingReason = held;
+                            return;
+                        }
+
+                        var resourceId = run?.ResourceId ?? attempt.ResourceId;
+                        var needsBuiltInState = attempt.Executor == "opentofu";
+                        var candidates = agents
+                            .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
+                                        && attempt.RequiredLabels.All(a.Labels.Contains)
+                                        && (!needsBuiltInState || s.Capabilities.Contains(TofuStateStore.AgentCapability)))
+                            .ToList();
+                        string? waiting = null;
+                        // Only agents with fresh evidence of every connection the step makes; the rest are asked, never waited for.
+                        // Labels, executors and capabilities above, and capacity, preference and every check of the assignment
+                        // below, still apply to those that remain.
+                        var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
+                        if (candidates.Count == 0)
+                        {
+                            var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
+                            waiting = matchingLabels
+                                ? needsBuiltInState
+                                    ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
+                                    : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
+                                : attempt.RequiredLabels.Length == 0
+                                    ? "Waiting for a connected agent."
+                                    : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
+                        }
+                        else if ((candidates = reachable.Agents).Count == 0)
+                        {
+                            waiting = reachable.Waiting;
+                        }
+                        else if (attempt.HostKey is { } hostKey && attempt.HostLimit is { } limit && perHost.GetValueOrDefault(hostKey) >= limit)
+                        {
+                            waiting = $"Waiting for capacity on host {hostKey} (at most {limit} at once).";
+                        }
+
+                        var free = candidates.Where(a => perAgent.GetValueOrDefault(a.Id) < a.MaxConcurrency).ToList();
+                        if (waiting is null && free.Count == 0)
+                        {
+                            waiting = "Waiting for agent capacity.";
+                        }
+
+                        if (waiting is not null)
+                        {
+                            attempt.WaitingReason = waiting;
+                            return;
+                        }
+
+                        var agent = free.FirstOrDefault(a => a.Id == attempt.PreferredAgentId)
+                                    ?? free.MinBy(a => perAgent.GetValueOrDefault(a.Id))!;
+                        // Only through the connection whose evidence was checked: one that replaced it since has none. A replaced
+                        // connection is closed, so the hand-off below requeues the attempt.
+                        var session = reachable.Sessions is { } checkedOn ? checkedOn[agent.Id] : connections.Get(agent.Id);
+                        if (session is null)
+                        {
+                            attempt.WaitingReason = "The agent disconnected before assignment.";
+                            return;
+                        }
+                        Assignment assignment;
+                        try
+                        {
+                            assignment = await builder.BuildAsync(attempt, step, run, context, agent.Id, cancellationToken);
+                        }
+                        catch (Exception e) when (e is CredentialUnavailableException or ExecutionUntrustedException && run is not null)
+                        {
+                            attempt.WaitingReason = e.Message;
+                            run.Status = RunStatuses.Blocked;
+                            run.Detail = e.Message;
+                            return;
+                        }
+                        catch (Exception e) when (e is ExecutionUntrustedException or StateBusyException)
+                        {
+                            attempt.WaitingReason = e.Message;
+                            return;
+                        }
+                        // An observation is not replanned: unavailable credentials are its error until the next one.
+                        catch (Exception e) when (e is AssignmentException or CredentialUnavailableException or IOException or Git.GitException)
+                        {
+                            logger.LogWarning("Attempt {Attempt} cannot be assigned: {Error}", attempt.Id, e.Message);
+                            attempt.Status = AttemptStatuses.Failed;
+                            attempt.Error = e.Message;
+                            attempt.FinishedAt = clock.GetUtcNow();
+                            if (step is null)
+                            {
+                                await FinishObservationAsync(db, attempt, null, cancellationToken);
+                            }
+                            else
+                            {
+                                step.Status = StepStatuses.Failed;
+                                step.Detail = e.Message;
+                            }
+
+                            signal.Wake();
+                            return;
+                        }
+
+                        // Building an assignment takes time, so the limit is decided at the time this one records.
+                        var now = clock.GetUtcNow();
+                        if (attempt.Mutating && run is not null && await StopIfLateAsync(db, run, now, cancellationToken))
+                            return;
+
+                        attempt.Status = AttemptStatuses.Assigned;
+                        attempt.AgentId = agent.Id;
+                        attempt.AssignedAt = now;
+                        attempt.LeaseExpiresAt = now.AddSeconds(options.Value.AgentChannel.LeaseSeconds);
+                        attempt.WaitingReason = null;
+                        if (step is not null)
+                        {
+                            step.Status = StepStatuses.Running;
+                            step.StartedAt ??= now;
+                        }
+
+                        changing.UnionWith(family);
+                        perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
+                        if (attempt.HostKey is { } key)
+                        {
+                            perHost[key] = perHost.GetValueOrDefault(key) + 1;
+                        }
+
+                        logs.RegisterSecrets(attempt.Id, assignment.Secrets.Values);
+                        prepared = (session, new ServerMessage { Assignment = assignment }, attempt.Id);
                     }
-                    else
+                    await PrepareAsync();
+                    await db.SaveChangesAsync(cancellationToken);
+                    // Hand off each saved assignment before preparing the next, under the same gate as revocation.
+                    if (prepared is { } ready)
                     {
-                        step.Status = StepStatuses.Failed;
-                        step.Detail = e.Message;
+                        if (ready.Session.TrySend(ready.Message))
+                        {
+                            handedOff = true;
+                            sent++;
+                        }
+                        else
+                        {
+                            Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
+                            if (attempt.Step is { } step) step.Status = StepStatuses.Queued;
+                            await db.SaveChangesAsync(cancellationToken);
+                        }
                     }
-
-                    signal.Wake();
-                    continue;
                 }
-
-                // Building an assignment takes time, so the limit is decided at the time this one records.
-                var now = clock.GetUtcNow();
-                if (attempt.Mutating && run is not null && await StopIfLateAsync(db, run, now, cancellationToken))
-                    continue;
-
-                attempt.Status = AttemptStatuses.Assigned;
-                attempt.AgentId = agent.Id;
-                attempt.AssignedAt = now;
-                attempt.LeaseExpiresAt = now.AddSeconds(options.Value.AgentChannel.LeaseSeconds);
-                attempt.WaitingReason = null;
-                if (step is not null)
+                catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                 {
-                    step.Status = StepStatuses.Running;
-                    step.StartedAt ??= now;
+                    if (handedOff)
+                    {
+                        logger.LogError(e, "Dispatch cleanup failed after attempt {Attempt} was sent; its result or lease still decides it.", queuedAttempt.Id);
+                        continue;
+                    }
+                    try
+                    {
+                        await FailUnsentAttemptAsync(queuedAttempt.Id, e, cancellationToken);
+                    }
+                    catch (Exception recording) when (recording is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                    {
+                        logger.LogError(recording, "Recording dispatch failure for attempt {Attempt} failed.", queuedAttempt.Id);
+                    }
                 }
-
-                changing.UnionWith(family);
-                perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
-                if (attempt.HostKey is { } key)
-                {
-                    perHost[key] = perHost.GetValueOrDefault(key) + 1;
-                }
-
-                logs.RegisterSecrets(attempt.Id, assignment.Secrets.Values);
-                result.Add((session, new ServerMessage { Assignment = assignment }, attempt.Id));
             }
-
-            await db.SaveChangesAsync(cancellationToken);
-            // Keep revocation and the final outbound hand-off under the same controller
-            // gate. A full channel requeues immediately; it must not stall unrelated work.
-            foreach (var (session, message, attemptId) in result)
-            {
-                if (!session.TrySend(message))
-                {
-                    var attempt = queued.Single(a => a.Id == attemptId);
-                    Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
-                    if (attempt.Step is { } requeued)
-                    {
-                        requeued.Status = StepStatuses.Queued;
-                    }
-                }
-            }
-            await db.SaveChangesAsync(cancellationToken);
-            return result.Count;
+            return sent;
         }, cancellationToken);
+    }
+
+    private async Task FailUnsentAttemptAsync(Guid attemptId, Exception error, CancellationToken cancellationToken)
+    {
+        // Do not save the failed assignment builder's tracked entities.
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var attempt = await db.Attempts.Include(a => a.Step).SingleAsync(a => a.Id == attemptId, cancellationToken);
+        using var held = await masks.EnsureAsync(attemptId, cancellationToken);
+        attempt.Status = AttemptStatuses.Failed;
+        attempt.Error = logs.MaskDiagnostic(attemptId, error.Message);
+        attempt.WaitingReason = null;
+        attempt.LeaseExpiresAt = null;
+        attempt.FinishedAt = clock.GetUtcNow();
+        if (attempt.Step is { } step)
+        {
+            step.Status = StepStatuses.Failed;
+            step.Detail = attempt.Error;
+        }
+        else if (Images.TemplateImages.IsBuild(attempt))
+            await FailImageRecordingAsync(db, attempt, cancellationToken);
+        else
+            await FinishObservationAsync(db, attempt, null, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        logger.LogError("Attempt {Attempt} could not be dispatched: {Error}", attemptId, attempt.Error);
+        signal.Wake();
+    }
+
+    /// <summary>After repeated recording failures, stop replaying a poison result without ever retrying a change.</summary>
+    public Task<bool> OnResultRecordingFailedAsync(Guid agentId, AttemptResult result, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(result.AttemptId, out var attemptId)) return Task.FromResult(true);
+        var received = ArtifactStore.Sha256(result.ToByteArray());
+        return WithDbAsync(async (db, _) =>
+        {
+            var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+                .FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
+            if (attempt is null) return true;
+            if (attempt.ResultSha256 == received
+                || AttemptStatuses.IsTerminal(attempt.Status) && attempt.Status != AttemptStatuses.Uncertain)
+            {
+                _resultFailures.Remove(attemptId);
+                return true;
+            }
+            _resultFailures[attemptId] = _resultFailures.GetValueOrDefault(attemptId) + 1;
+            if (_resultFailures[attemptId] < 3) return false;
+
+            const string detail = "The result could not be recorded after three attempts. Inspect the work before planning again.";
+            attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Failed;
+            attempt.Error = detail;
+            // Remember the discarded result too: a lost acknowledgement must not consume a later, different result.
+            attempt.ResultSha256 = received;
+            attempt.Outputs = null;
+            attempt.LeaseExpiresAt = null;
+            attempt.FinishedAt = clock.GetUtcNow();
+            if (attempt.Step is { } step)
+            {
+                var current = await db.Attempts.Where(a => a.StepId == step.Id).OrderByDescending(a => a.Number).FirstAsync(cancellationToken);
+                if (current.Id == attempt.Id && !RunStatuses.IsTerminal(step.Run!.Status)
+                    && step.Status is StepStatuses.Running or StepStatuses.Queued or StepStatuses.Uncertain)
+                {
+                    step.Status = attempt.Mutating ? StepStatuses.Uncertain : StepStatuses.Failed;
+                    step.Detail = detail;
+                    step.FinishedAt = clock.GetUtcNow();
+                    step.Run.Detail = detail;
+                    if (attempt.Mutating) step.Run.Status = RunStatuses.Uncertain;
+                }
+            }
+            else if (Images.TemplateImages.IsBuild(attempt))
+                await FailImageRecordingAsync(db, attempt, cancellationToken);
+            else
+                await FinishObservationAsync(db, attempt, null, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            _resultFailures.Remove(attemptId);
+            signal.Wake();
+            return true;
+        }, cancellationToken);
+    }
+
+    private async Task FailImageRecordingAsync(OctopushyDb db, Attempt attempt, CancellationToken cancellationToken)
+    {
+        images.Release(attempt.Id);
+        if (await db.ImageBuilds.FirstOrDefaultAsync(b => b.AttemptId == attempt.Id, cancellationToken) is { } build)
+        {
+            build.Status = ImageBuildStatuses.Failed;
+            build.Error = attempt.Error;
+        }
     }
 
     /// <summary>
@@ -336,18 +458,20 @@ public sealed partial class RunEngine
             signal.Wake();
         }, cancellationToken);
 
-    public Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken) =>
-        WithDbAsync(async db =>
-        {
-            var ids = runningAttemptIds.Select(Guid.Parse).ToList();
-            var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
-            await db.Attempts
-                .Where(a => a.AgentId == agentId && ids.Contains(a.Id)
-                            && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
-                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, lease), cancellationToken);
-            await db.Agents.Where(a => a.Id == agentId)
-                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LastSeenAt, clock.GetUtcNow()), cancellationToken);
-        }, cancellationToken);
+    public async Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken)
+    {
+        // Only conditional, atomic renewals bypass the engine's single-writer lock.
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var ids = runningAttemptIds.Select(Guid.Parse).ToList();
+        var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
+        await db.Attempts
+            .Where(a => a.AgentId == agentId && ids.Contains(a.Id)
+                        && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, lease), cancellationToken);
+        await db.Agents.Where(a => a.Id == agentId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LastSeenAt, clock.GetUtcNow()), cancellationToken);
+    }
 
     public Task OnStartedAsync(Guid agentId, Guid attemptId, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
@@ -408,6 +532,7 @@ public sealed partial class RunEngine
             // The result this attempt was settled with, sent again: nothing to do.
             if (attempt.ResultSha256 == received)
             {
+                _resultFailures.Remove(attemptId);
                 return true;
             }
 
@@ -417,6 +542,7 @@ public sealed partial class RunEngine
             var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && !attempt.OutputsWithheld;
             if (AttemptStatuses.IsTerminal(attempt.Status) && !late)
             {
+                _resultFailures.Remove(attemptId);
                 return true;
             }
 
@@ -511,6 +637,7 @@ public sealed partial class RunEngine
                 await FinishImageBuildAsync(db, services, attempt, outputs, cancellationToken);
                 await db.SaveChangesAsync(cancellationToken);
                 signal.Wake();
+                _resultFailures.Remove(attemptId);
                 return true;
             }
 
@@ -521,6 +648,7 @@ public sealed partial class RunEngine
                 await logs.CloseAsync(attempt.Id, cancellationToken);
                 await db.SaveChangesAsync(cancellationToken);
                 signal.Wake();
+                _resultFailures.Remove(attemptId);
                 return true;
             }
 
@@ -569,6 +697,7 @@ public sealed partial class RunEngine
             await db.SaveChangesAsync(cancellationToken);
             await AdvanceAsync(db, run.Id, cancellationToken);
             signal.Wake();
+            _resultFailures.Remove(attemptId);
             return true;
         }, cancellationToken);
     }

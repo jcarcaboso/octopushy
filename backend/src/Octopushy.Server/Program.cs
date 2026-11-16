@@ -71,6 +71,11 @@ builder.Services.AddSingleton<Planner>();
 builder.Services.AddSingleton<WorkflowCatalog>();
 builder.Services.AddSingleton<ChangeService>();
 builder.Services.AddSingleton<AgentUpdates>();
+if (!generatingDocument)
+{
+    builder.Services.AddSingleton<ServerOwnership>();
+    builder.Services.AddHostedService(services => services.GetRequiredService<ServerOwnership>());
+}
 if (!generatingDocument && settings.RunBackgroundServices)
 {
     builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySync>());
@@ -201,6 +206,8 @@ if (args is ["migrate", ..])
 
 if (!generatingDocument)
 {
+    // Before schema initialization, background work, or accepting an agent connection.
+    await app.Services.GetRequiredService<ServerOwnership>().AcquireAsync(CancellationToken.None);
     await using (var scope = app.Services.CreateAsyncScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();

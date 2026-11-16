@@ -365,8 +365,8 @@ public sealed class ServerHarness : IAsyncDisposable
             await db.SaveChangesAsync();
         });
         var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime) { Responder = responder, RemoteAddress = remote };
-        Services.GetRequiredService<AgentConnections>().Add(session);
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
+        Services.GetRequiredService<AgentConnections>().Add(session);
         return new FakeAgent(this, agent.Id, session);
     }
 

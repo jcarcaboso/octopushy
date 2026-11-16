@@ -11,20 +11,22 @@ public sealed partial class Planner
 {
     /// <summary>Deploys a service at the latest revision, whatever its last run did, once its guest is ready.</summary>
     public Task<Guid> DeployServiceAsync(Guid resourceId, CancellationToken cancellationToken) =>
-        engine.ExecuteAsync(async (db, _) =>
-        {
-            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Service, cancellationToken);
-            var service = repository.Service(resource.Address) ?? throw new RunException("The service is not in the latest revision.");
-            var guest = await db.Resources.FirstOrDefaultAsync(r => r.Address == service.GuestAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken)
-                ?? throw new RunException("The service's guest is not known yet.");
-            if (await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, service) is { } waiting)
-                throw new RunException(waiting);
-            var run = factory.Pipeline(repository, service, resource, guest, revision, "manual");
-            if (await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } state)
-                state.ProposedHash = run.InputsHash;
-            await engine.AddRunsAsync(db, [run], cancellationToken);
-            return run.Id;
-        }, cancellationToken);
+        engine.ExecuteAsync((db, _) => DeployServiceAsync(db, resourceId, cancellationToken), cancellationToken);
+
+    private async Task<Guid> DeployServiceAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
+    {
+        var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Service, cancellationToken);
+        var service = repository.Service(resource.Address) ?? throw new RunException("The service is not in the latest revision.");
+        var guest = await db.Resources.FirstOrDefaultAsync(r => r.Address == service.GuestAddress && r.Kind == ResourceKinds.Guest && r.RetiredAt == null, cancellationToken)
+            ?? throw new RunException("The service's guest is not known yet.");
+        if (await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, service) is { } waiting)
+            throw new RunException(waiting);
+        var run = factory.Pipeline(repository, service, resource, guest, revision, "manual");
+        if (await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } state)
+            state.ProposedHash = run.InputsHash;
+        await engine.AddRunsAsync(db, [run], cancellationToken);
+        return run.Id;
+    }
 
     /// <summary>
     /// Proposes a run of each service whose inputs changed and whose guest is ready. Each input hash gets one
