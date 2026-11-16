@@ -65,8 +65,9 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
     {
         using var workflows = TestWorkflows.Create();
         var first = workflows.Head;
-        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows));
+        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows), settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
         using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
 
         var revision = Assert.Single(await RevisionsAsync(server));
@@ -133,9 +134,10 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
         workflows.WriteVersion("1.0", "Untagged work in progress.");
         workflows.Files.Write("workflows/test-vm/notes.md", "draft");
         workflows.Commit("work in progress");
-        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows));
+        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows), settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
         var agent = await server.ConnectAgentAsync("home");
         using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
 
         var plan = await agent.NextAsync("preview");
@@ -160,8 +162,9 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
     {
         using var workflows = TestWorkflows.Create();
         var original = workflows.Head;
-        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows));
+        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows), settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
         using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
         var digest = Assert.Single(await RevisionsAsync(server)).WorkflowsDigest;
 
@@ -186,12 +189,13 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
     public async Task A_tag_whose_workflow_declares_another_version_is_an_invalid_release_and_never_used()
     {
         using var workflows = TestWorkflows.Create();
-        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows));
+        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows), settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
         workflows.Files.Write(TestWorkflows.Module, "resource \"terraform_data\" \"forgot\" {}");
         var wrong = workflows.Commit("forgot the version bump");
         workflows.Tag("test-vm/v1.1");
         workflows.Tag("not-a-release");
         using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
 
         var releases = await ReleasesAsync(server);
@@ -208,8 +212,9 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
     public async Task A_deleted_tag_stays_a_release_and_one_whose_commit_is_gone_makes_its_references_invalid()
     {
         using var workflows = TestWorkflows.Create();
-        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows));
+        await using var server = await ServerHarness.StartAsync(postgres, Config(workflows), settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
         using var client = await InstallationTrustTests.AuthenticateAsync(server);
+        await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
         workflows.DeleteTag("test-vm/v1.0");
         await server.SyncAsync();
@@ -246,8 +251,8 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
         using var workflows = TestWorkflows.Create();
         var config = TestRepository.Minimal();
         config.Write("octopushy.yaml", $"schemaVersion: 1\nworkflows:\n  repository: {workflows.Root}\n");
-        await using var server = await ServerHarness.StartAsync(postgres, config);
-        await server.SyncAsync();
+        await using var server = await ServerHarness.StartAsync(postgres, config, settings: new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" });
+        await server.ConfirmWorkflowSourceAsync();
         var revision = Assert.Single(await RevisionsAsync(server));
         Assert.False(revision.RepositoryValid);
         Assert.Contains($"Workflows come from {workflows.Root}; remove workflows/ and modules/ here.", revision.Issues);
@@ -255,8 +260,7 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres)
     }
 
     /// <summary>
-    /// The workflows repository's address and key come from a commit nobody has validated yet, so the server decides what
-    /// that commit can make it send, and where.
+    /// Even a confirmed source cannot receive system keys or cleartext credentials, or the lab token at another host.
     /// </summary>
     [Fact]
     public async Task A_commit_cannot_send_the_servers_own_keys_anywhere_or_the_lab_token_to_another_host()

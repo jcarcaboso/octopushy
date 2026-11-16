@@ -1,9 +1,12 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Changes;
 using Octopushy.Server.Data;
@@ -85,6 +88,12 @@ public static partial class Endpoints
                     settings.LastFetchAt = null;
                     settings.LastFetchError = null;
                     settings.WorkflowsRepository = null;
+                    settings.ConfirmedWorkflowsRepository = null;
+                    settings.ConfirmedWorkflowsCredentialKey = null;
+                    settings.ConfirmedWorkflowsCredentialVersion = null;
+                    settings.WorkflowsConfirmedAt = null;
+                    settings.WorkflowsConfirmedBy = null;
+                    WorkflowSourceTrust.ClearPending(settings);
                     settings.WorkflowsLastFetchAt = null;
                     settings.WorkflowsLastFetchError = null;
                 }
@@ -106,6 +115,39 @@ public static partial class Endpoints
             }, ct);
         })
         .WithName("updateRepository");
+
+        // Only an interactive operator session may grant trust; automation tokens may not grant it.
+        group.MapPost("/workflows/trust", async Task<Results<Ok<RepositoryDto>, ProblemHttpResult>> (
+            ConfirmWorkflowSourceRequest request, HttpContext http, RunEngine engine, RepositorySync sync,
+            IOptions<OctopushyOptions> options, TimeProvider clock, CancellationToken ct) =>
+        {
+            return await engine.ExecuteAsync<Results<Ok<RepositoryDto>, ProblemHttpResult>>(async (db, services) =>
+            {
+                var settings = await db.RepositorySettings.SingleOrDefaultAsync(s => s.Id == 1, ct);
+                var proposed = new WorkflowsSetting(request.Repository,
+                    request.CredentialKey is { } key ? new StoreReference(key, request.CredentialVersion) : null);
+                if (request.CredentialVersion != proposed.Credential?.Version
+                    || settings is null || settings.Url is null || settings.SourceId != request.SourceId
+                    || settings.PendingWorkflowsRepository is null || settings.PendingWorkflowsCommit is null
+                    || settings.PendingWorkflowsCommit != request.Commit || WorkflowSourceTrust.Pending(settings) != proposed)
+                    return TypedResults.Problem(statusCode: 409, title: "The proposed workflows source changed. Sync and review it again.");
+                if (WorkflowSourceTrust.Rejection(proposed, options.Value.AllowLocalWorkflowSources) is { } rejection)
+                    return TypedResults.Problem(statusCode: 400, title: rejection);
+                settings.ConfirmedWorkflowsRepository = proposed.Repository;
+                settings.ConfirmedWorkflowsCredentialKey = proposed.Credential?.Key;
+                settings.ConfirmedWorkflowsCredentialVersion = proposed.Credential?.Version;
+                settings.WorkflowsConfirmedAt = clock.GetUtcNow();
+                settings.WorkflowsConfirmedBy = http.User.Identity?.Name ?? "operator";
+                WorkflowSourceTrust.ClearPending(settings);
+                settings.WorkflowsLastFetchAt = null;
+                settings.WorkflowsLastFetchError = null;
+                await db.SaveChangesAsync(ct);
+                sync.Trigger();
+                return TypedResults.Ok(await RepositoryAsync(db, services.GetRequiredService<Views>(), ct));
+            }, ct);
+        })
+        .RequireAuthorization(new AuthorizationPolicyBuilder(CookieAuthenticationDefaults.AuthenticationScheme).RequireAuthenticatedUser().Build())
+        .WithName("trustWorkflowSource");
 
         group.MapPost("/sync", (RepositorySync sync) =>
         {
@@ -840,6 +882,7 @@ public static partial class Endpoints
             settings.LastFetchError,
             settings.HeadCommit,
             await views.LatestRevisionAsync(ct),
-            workflows ? await views.WorkflowsAsync(settings, ct) : null);
+            workflows ? await views.WorkflowsAsync(settings, ct) : null,
+            views.WorkflowTrust(settings));
     }
 }

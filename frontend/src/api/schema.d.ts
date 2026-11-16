@@ -516,6 +516,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/repository/workflows/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["trustWorkflowSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/repository/sync": {
         parameters: {
             query?: never;
@@ -1436,6 +1452,15 @@ export interface components {
             name: string;
             reference: string;
         };
+        ConfirmWorkflowSourceRequest: {
+            /** Format: uuid */
+            sourceId: string;
+            commit: string;
+            repository: string;
+            credentialKey: null | string;
+            /** Format: int32 */
+            credentialVersion: null | number;
+        };
         CreatedOperatorToken: {
             /** Format: uuid */
             id: string;
@@ -2028,6 +2053,7 @@ export interface components {
             headCommit: null | string;
             revision: null | components["schemas"]["RevisionDto"];
             workflows?: null | components["schemas"]["WorkflowsSourceDto"];
+            workflowsTrust?: null | components["schemas"]["WorkflowSourceTrustDto"];
         };
         RepositoryUpdate: {
             url: null | string;
@@ -2479,6 +2505,23 @@ export interface components {
         WorkflowReleasesDto: {
             id: string;
             releases: components["schemas"]["WorkflowReleaseDto"][];
+        };
+        WorkflowSourcePairDto: {
+            repository: string;
+            credentialKey: null | string;
+            /** Format: int32 */
+            credentialVersion: null | number;
+        };
+        WorkflowSourceTrustDto: {
+            /** Format: uuid */
+            sourceId: string;
+            confirmed: null | components["schemas"]["WorkflowSourcePairDto"];
+            pending: null | components["schemas"]["WorkflowSourcePairDto"];
+            pendingCommit: null | string;
+            /** Format: date-time */
+            confirmedAt: null | string;
+            confirmedBy: null | string;
+            blockedReason: null | string;
         };
         WorkflowSummaryDto: {
             id: string;
@@ -4270,6 +4313,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["RepositoryUpdate"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    trustWorkflowSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmWorkflowSourceRequest"];
             };
         };
         responses: {

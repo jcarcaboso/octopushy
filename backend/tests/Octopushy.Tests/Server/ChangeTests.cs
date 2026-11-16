@@ -175,9 +175,11 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     private async Task<Setup> StartAsync(TestRepository? lab = null, bool publish = true, FakeAgentHolder? agent = null,
-        Dictionary<string, string>? settings = null, TimeProvider? clock = null)
+        Dictionary<string, string>? settings = null, TimeProvider? clock = null, bool confirmWorkflowSource = false)
     {
         var all = new Dictionary<string, string>(settings ?? []);
+        if (confirmWorkflowSource)
+            all["Octopushy:AllowLocalWorkflowSources"] = "true";
         if (publish)
             all["Octopushy:RepositoryEditor:PublishEnabled"] = "true";
         var server = await ServerHarness.StartAsync(postgres, lab ?? Lab(), settings: all, clock: clock);
@@ -191,6 +193,8 @@ public class ChangeTests(PostgresFixture postgres)
         if (agent is not null)
             agent.Agent = await server.ConnectAgentAsync("home");
         var client = await InstallationTrustTests.AuthenticateAsync(server);
+        if (confirmWorkflowSource)
+            await server.ConfirmWorkflowSourceAsync(client);
         await server.SyncAndTrustAsync(client);
         return new Setup { Server = server, Client = client, Remote = remote };
     }
@@ -1265,7 +1269,7 @@ public class ChangeTests(PostgresFixture postgres)
         workflows.Commit("test-vm 2.0");
         workflows.Tag("test-vm/v2.0");
         var lab = workflows.Config(Lab());
-        await using var setup = await StartAsync(lab);
+        await using var setup = await StartAsync(lab, confirmWorkflowSource: true);
 
         var catalog = (await setup.Client.GetFromJsonAsync<WorkflowCatalogDto>("/api/workflows"))!;
         Assert.Equal("repository", catalog.Source);

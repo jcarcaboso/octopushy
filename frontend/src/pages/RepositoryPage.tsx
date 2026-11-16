@@ -1,7 +1,7 @@
 import { Check, ChevronDown, GitCommitHorizontal, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useRepository, useRevision, useRevisions, useSyncRepository, useUpdateRepository } from "../api/queries";
+import { useRepository, useRevision, useRevisions, useSyncRepository, useTrustWorkflowSource, useUpdateRepository } from "../api/queries";
 import type { Repository, Revision } from "../api/types";
 import { Badge } from "../components/Badge";
 import { Callout } from "../components/Callout";
@@ -55,6 +55,8 @@ function issueSummary(revision: Revision): string {
 function FetchStatus({ repository }: { repository: Repository }) {
   const [tone, label] = !repository.url
     ? ["muted", "Not connected"]
+    : repository.workflowsTrust?.pending
+      ? ["warning", "Waiting for trust"]
     : repository.lastFetchError
       ? ["danger", "Last fetch failed"]
       : repository.lastFetchAt
@@ -72,6 +74,41 @@ function FetchStatus({ repository }: { repository: Repository }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+function WorkflowTrust({ repository, onConfirmed }: { repository: Repository; onConfirmed: () => void }) {
+  const trust = useTrustWorkflowSource();
+  const state = repository.workflowsTrust;
+  const pending = state?.pending;
+  // A newly discovered pair must never inherit an acknowledgement of the previous one.
+  const proposal = JSON.stringify([state?.sourceId, state?.pendingCommit, pending]);
+  const [acknowledged, setAcknowledged] = useState("");
+  if (!pending || !state?.pendingCommit) return null;
+  return (
+    <Callout kind="warning" title="Waiting for trust">
+      <div className="stack">
+        <p>{state.confirmed ? "The commit proposes a different workflows source. Existing work keeps its confirmed source." : "Finish connecting the repository: confirm its workflows source before the first fetch."}</p>
+        <dl>
+          <dt>Proposed URL</dt><dd className="mono break">{pending.repository}</dd>
+          <dt>Credential key</dt><dd className="mono break">{pending.credentialKey ?? "None (the lab credential is reused only under the existing transport and host rules)"}{pending.credentialVersion != null ? `, version ${pending.credentialVersion}` : ""}</dd>
+          {state.confirmed ? <><dt>Confirmed URL</dt><dd className="mono break">{state.confirmed.repository}</dd><dt>Confirmed credential key</dt><dd className="mono break">{state.confirmed.credentialKey ?? "None"}{state.confirmed.credentialVersion != null ? `, version ${state.confirmed.credentialVersion}` : ""}</dd></> : null}
+        </dl>
+        {state.blockedReason ? <p>{state.blockedReason}</p> : (
+          <>
+            <label className="checkbox">
+              <input type="checkbox" checked={acknowledged === proposal} onChange={(e) => setAcknowledged(e.target.checked ? proposal : "")} />
+              I confirm this URL and credential key may be used to fetch workflows.
+            </label>
+            <button type="button" className="button" disabled={acknowledged !== proposal || trust.isPending}
+              onClick={() => trust.mutate({ sourceId: state.sourceId, commit: state.pendingCommit!, repository: pending.repository, credentialKey: pending.credentialKey, credentialVersion: pending.credentialVersion }, { onSuccess: onConfirmed })}>
+              Confirm workflows source
+            </button>
+          </>
+        )}
+        <ErrorMessage error={trust.error} />
+      </div>
+    </Callout>
   );
 }
 
@@ -481,6 +518,7 @@ export function RepositoryPage() {
       />
       <div className="stack stack--large">
         <ErrorMessage error={sync.error} />
+        <WorkflowTrust repository={data} onConfirmed={() => setWatching(true)} />
         {data.lastFetchError ? (
           <Callout kind="danger" title="The last fetch failed">
             <span className="mono small break">{data.lastFetchError}</span>

@@ -10,6 +10,7 @@ import type {
   DraftFileChange,
   DraftPublishRequest,
   RepositoryUpdate,
+  ConfirmWorkflowSource,
   RunDetail,
   TokenRequest,
   TrustInstallationRequest,
@@ -598,6 +599,18 @@ export function useUpdateRepository() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (body: RepositoryUpdate) => unwrap(api.PUT("/api/repository", { body })),
+    onSuccess: (repository) => client.setQueryData(keys.repository, repository),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: keys.overview });
+      void client.invalidateQueries({ queryKey: keys.revisions });
+    },
+  });
+}
+
+export function useTrustWorkflowSource() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ConfirmWorkflowSource) => unwrap(api.POST("/api/repository/workflows/trust", { body })),
     onSuccess: (repository) => client.setQueryData(keys.repository, repository),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: keys.overview });

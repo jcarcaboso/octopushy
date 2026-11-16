@@ -31,7 +31,13 @@ public sealed record RepositoryDto(
     string? LastFetchError,
     string? HeadCommit,
     RevisionDto? Revision,
-    WorkflowsSourceDto? Workflows = null);
+    WorkflowsSourceDto? Workflows = null,
+    WorkflowSourceTrustDto? WorkflowsTrust = null);
+
+public sealed record WorkflowSourcePairDto(string Repository, string? CredentialKey, int? CredentialVersion);
+public sealed record WorkflowSourceTrustDto(Guid SourceId, WorkflowSourcePairDto? Confirmed, WorkflowSourcePairDto? Pending,
+    string? PendingCommit, DateTimeOffset? ConfirmedAt, string? ConfirmedBy, string? BlockedReason);
+public sealed record ConfirmWorkflowSourceRequest(Guid SourceId, string Commit, string Repository, string? CredentialKey, int? CredentialVersion);
 
 /// <summary>
 /// Where the head revision's workflows come from: <c>local</c>, the lab repository's own <c>workflows/</c>, or <c>repository</c>,

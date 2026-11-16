@@ -1089,6 +1089,18 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("branch");
 
+                    b.Property<string>("ConfirmedWorkflowsCredentialKey")
+                        .HasColumnType("text")
+                        .HasColumnName("confirmed_workflows_credential_key");
+
+                    b.Property<int?>("ConfirmedWorkflowsCredentialVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("confirmed_workflows_credential_version");
+
+                    b.Property<string>("ConfirmedWorkflowsRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("confirmed_workflows_repository");
+
                     b.Property<string>("CredentialKind")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1114,6 +1126,22 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("last_fetch_error");
 
+                    b.Property<string>("PendingWorkflowsCommit")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_workflows_commit");
+
+                    b.Property<string>("PendingWorkflowsCredentialKey")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_workflows_credential_key");
+
+                    b.Property<int?>("PendingWorkflowsCredentialVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("pending_workflows_credential_version");
+
+                    b.Property<string>("PendingWorkflowsRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_workflows_repository");
+
                     b.Property<int>("PollSeconds")
                         .HasColumnType("integer")
                         .HasColumnName("poll_seconds");
@@ -1129,6 +1157,14 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("Url")
                         .HasColumnType("text")
                         .HasColumnName("url");
+
+                    b.Property<DateTimeOffset?>("WorkflowsConfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("workflows_confirmed_at");
+
+                    b.Property<string>("WorkflowsConfirmedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("workflows_confirmed_by");
 
                     b.Property<DateTimeOffset?>("WorkflowsLastFetchAt")
                         .HasColumnType("timestamp with time zone")

@@ -73,6 +73,21 @@ files with no database row, so a restart finishes interrupted file cleanup.
 
 ## Changes from the UI
 
+When connecting a lab repository that names an external workflows repository,
+finish setup on **Repository** by confirming the displayed workflows URL and
+credential key. A changed pair shows **Waiting for trust** and is not fetched
+until an operator confirms it. Existing work keeps the previously confirmed
+source. The confirmation requires a signed-in browser session, not an automation
+token. After upgrading, confirm the first pair again; migration does not trust
+previous fetch history.
+
+Repository-declared absolute paths and `file://` workflow sources are disabled
+by default. `Octopushy__AllowLocalWorkflowSources=true` permits them when the
+server deliberately needs local Git repositories. They still need confirmation.
+Leave this disabled on servers that poll repositories you do not fully control.
+The operator-configured lab repository and offline validator are not subject to
+this repository-declared-source setting.
+
 Forms commit to the lab repository only with `Octopushy__RepositoryEditor__PublishEnabled: "true"` in the backend's
 environment, and a repository credential that can push: for GitHub, a deploy key with write access. Without either, the forms
 open read-only. See [changes from the UI](../docs/changes-from-the-ui.md).

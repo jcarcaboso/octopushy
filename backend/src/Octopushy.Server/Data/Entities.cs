@@ -35,6 +35,19 @@ public sealed class RepositorySettings
     /// <summary>The workflows repository the head's <c>octopushy.yaml</c> names, when it names one.</summary>
     public string? WorkflowsRepository { get; set; }
 
+    /// <summary>The exact external source an operator confirmed; never learned from a commit alone.</summary>
+    public string? ConfirmedWorkflowsRepository { get; set; }
+    public string? ConfirmedWorkflowsCredentialKey { get; set; }
+    public int? ConfirmedWorkflowsCredentialVersion { get; set; }
+    public DateTimeOffset? WorkflowsConfirmedAt { get; set; }
+    public string? WorkflowsConfirmedBy { get; set; }
+
+    /// <summary>A declaration waiting for explicit confirmation, scoped to SourceId and its discovered commit.</summary>
+    public string? PendingWorkflowsRepository { get; set; }
+    public string? PendingWorkflowsCredentialKey { get; set; }
+    public int? PendingWorkflowsCredentialVersion { get; set; }
+    public string? PendingWorkflowsCommit { get; set; }
+
     public DateTimeOffset? WorkflowsLastFetchAt { get; set; }
 
     public string? WorkflowsLastFetchError { get; set; }

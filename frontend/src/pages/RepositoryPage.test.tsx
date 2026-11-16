@@ -193,4 +193,67 @@ describe("repository page", () => {
     expect(history.getByText("d1g35t0")).toBeVisible();
     expect(history.getByText("0lderd1")).toBeVisible();
   });
+  it("requires explicit first-setup acknowledgement and confirms the exact proposed URL and credential reference", async () => {
+    const user = userEvent.setup();
+    const pair = { repository: "https://git.example.org/workflows.git", credentialKey: "git/workflows", credentialVersion: 2 };
+    const trust = { sourceId: "lab-source", confirmed: null, pending: pair, pendingCommit: commit, confirmedAt: null, confirmedBy: null, blockedReason: null };
+    const { requests } = mockApi({
+      "GET /api/repository": () => ({ ...repository(), headCommit: null, revision: null, workflowsTrust: trust }),
+      "GET /api/repository/revisions": () => [],
+      "POST /api/repository/workflows/trust": () => ({ ...repository(), workflowsTrust: { ...trust, pending: null, pendingCommit: null, confirmed: pair } }),
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+    const button = await screen.findByRole("button", { name: "Confirm workflows source" });
+    expect(screen.getAllByText("Waiting for trust")).toHaveLength(2);
+    expect(screen.getByText(/Finish connecting the repository/)).toBeVisible();
+    expect(screen.getByText(pair.repository)).toBeVisible();
+    expect(screen.getByText("git/workflows, version 2")).toBeVisible();
+    expect(button).toBeDisabled();
+    expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
+    await user.click(screen.getByRole("checkbox", { name: /I confirm this URL and credential key/ }));
+    await user.click(button);
+    await waitFor(() => expect(requests.find((r) => r.path.endsWith("/workflows/trust"))?.body).toEqual({ sourceId: "lab-source", commit, ...pair }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm workflows source" })).not.toBeInTheDocument());
+  });
+
+  it("shows both pairs, preserves current history, and reports a stale confirmation without trusting it", async () => {
+    const user = userEvent.setup();
+    const trust = {
+      sourceId: "lab-source", pendingCommit: previousCommit, confirmedAt: loadedAt, confirmedBy: "ops", blockedReason: null,
+      confirmed: { repository: "https://old.example/workflows.git", credentialKey: "git/old", credentialVersion: null },
+      pending: { repository: "https://new.example/workflows.git", credentialKey: "git/new", credentialVersion: null },
+    };
+    mockApi({
+      "GET /api/repository": () => ({ ...repository(), workflowsTrust: trust }),
+      "GET /api/repository/revisions": () => [revision()],
+      "POST /api/repository/workflows/trust": () => new Response(JSON.stringify({ title: "The proposed workflows source changed. Sync and review it again." }), { status: 409, headers: { "content-type": "application/problem+json" } }),
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+    expect(await screen.findByText(trust.pending.repository)).toBeVisible();
+    expect(screen.getByText(trust.confirmed.repository)).toBeVisible();
+    expect(screen.getByText("git/old")).toBeVisible();
+    expect(screen.getByText("git/new")).toBeVisible();
+    expect(screen.getByText(/Existing work keeps its confirmed source/)).toBeVisible();
+    expect(await screen.findByRole("list", { name: "Revision history" })).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: /I confirm this URL and credential key/ }));
+    await user.click(screen.getByRole("button", { name: "Confirm workflows source" }));
+    expect(await screen.findByText("The proposed workflows source changed. Sync and review it again.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Confirm workflows source" })).toBeVisible();
+  });
+
+  it("does not offer confirmation for a server-local source rejected by the server", async () => {
+    mockApi({
+      "GET /api/repository": () => ({ ...repository(), workflowsTrust: {
+        sourceId: "lab-source", pendingCommit: commit, confirmed: null, confirmedAt: null, confirmedBy: null,
+        pending: { repository: "file:///srv/private/workflows", credentialKey: null, credentialVersion: null },
+        blockedReason: "Server-local workflow sources (absolute paths and file:// URLs) are disabled.",
+      } }),
+      "GET /api/repository/revisions": () => [],
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+    expect(await screen.findByText(/Server-local workflow sources/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Confirm workflows source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
 });

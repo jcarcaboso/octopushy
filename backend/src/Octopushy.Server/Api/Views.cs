@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
@@ -8,6 +9,7 @@ using Octopushy.Server.Store;
 using Octopushy.Server.Git;
 using Octopushy.Server.Icons;
 using Octopushy.Server.Inventory;
+using Octopushy.Server.Options;
 using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Server.Api;
@@ -32,7 +34,7 @@ public static class GuestStatuses
 
 /// <summary>Builds the read models the API returns.</summary>
 public sealed partial class Views(OctopushyDb db, RevisionCache revisions, RepositoryMirror mirror, WorkflowsMirrors workflowMirrors, AgentConnections connections,
-    TimeProvider clock, IconDirectory icons)
+    TimeProvider clock, IconDirectory icons, IOptions<OctopushyOptions> options)
 {
     private const int DefinitionTextLimit = 256 * 1024;
 
@@ -269,6 +271,16 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
     public static RevisionDto Revision(DefinitionRevision r, bool isCurrentSource) =>
         new(r.Id, r.Commit, r.Subject, r.Author, r.CommittedAt, r.LoadedAt, r.RepositoryValid, r.ErrorCount, r.WarningCount, isCurrentSource,
             r.WorkflowsRepository, r.WorkflowsDigest.Length == 0 ? null : r.WorkflowsDigest);
+
+    /// <summary>The confirmed and the waiting workflows source, and why the waiting one cannot be confirmed.</summary>
+    public WorkflowSourceTrustDto WorkflowTrust(RepositorySettings settings)
+    {
+        static WorkflowSourcePairDto? Pair(WorkflowsSetting source) => source.Repository is { } url
+            ? new(url, source.Credential?.Key, source.Credential?.Version) : null;
+        return new(settings.SourceId, Pair(WorkflowSourceTrust.Confirmed(settings)), Pair(WorkflowSourceTrust.Pending(settings)),
+            settings.PendingWorkflowsCommit, settings.WorkflowsConfirmedAt, settings.WorkflowsConfirmedBy,
+            WorkflowSourceTrust.Rejection(WorkflowSourceTrust.Pending(settings), options.Value.AllowLocalWorkflowSources));
+    }
 
     /// <summary>
     /// Where the head revision's workflows come from, the releases recorded for a workflows repository with what is wrong

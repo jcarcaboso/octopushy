@@ -38,6 +38,7 @@ export type Attempt = Schemas["AttemptDto"];
 export type Approval = Schemas["ApprovalDto"];
 export type LogChunk = Schemas["LogDto"];
 export type LogLine = Schemas["LogLineRecord"];
+export type ConfirmWorkflowSource = Schemas["ConfirmWorkflowSourceRequest"];
 export type Repository = Schemas["RepositoryDto"];
 export type RepositoryUpdate = Schemas["RepositoryUpdate"];
 export type Revision = Schemas["RevisionDto"];
