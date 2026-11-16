@@ -1045,6 +1045,32 @@ public class DeployTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_quorate_cluster_with_a_node_off_still_offers_vmids_and_counts_that_nodes_vms()
+    {
+        await using var setup = await StartAsync(observe: false);
+        // Proxmox lists an offline node's guests from the cluster's shared configuration, with no status.
+        await setup.ObserveRawAsync(JsonNode.Parse("""
+            { "cluster": { "name": "home", "quorate": true },
+              "hosts": [{ "name": "korriban", "online": true }, { "name": "dromund", "online": false }],
+              "guests": [{ "vmid": 100, "name": "gpu-box", "host": "dromund", "kind": "qemu", "status": "unknown" }],
+              "vmVisibility": { "complete": true } }
+            """)!.AsObject());
+
+        var next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        Assert.Null(next.Problem);
+        Assert.Equal(101, next.Vmid);
+
+        // A declared host the cluster does not list is not a member: what it holds is not known.
+        await setup.ObserveRawAsync(JsonNode.Parse("""
+            { "cluster": { "name": "home", "quorate": true }, "hosts": [{ "name": "dromund", "online": true }], "guests": [],
+              "vmVisibility": { "complete": true } }
+            """)!.AsObject());
+        next = (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!;
+        Assert.Null(next.Vmid);
+        Assert.Contains("korriban not listed", next.Problem);
+    }
+
+    [Fact]
     public async Task An_observation_through_another_endpoint_than_the_installation_has_at_landing_is_no_evidence()
     {
         await using var setup = await StartAsync();

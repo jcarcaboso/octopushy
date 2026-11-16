@@ -764,8 +764,8 @@ public sealed partial class ChangeService
 
     /// <summary>
     /// Why the installation's latest observation cannot say which VMIDs are free, or null: there is none, a later one failed,
-    /// it is older than <see cref="ObservationMaxAge"/>, or it did not see every host (one offline or missing, or a cluster
-    /// without quorum).
+    /// it is older than <see cref="ObservationMaxAge"/>, or it did not see every host: a cluster without quorum, a declared host it
+    /// does not list, or, for a standalone host, one offline. A node of a quorate cluster that is off hides no VMID.
     /// </summary>
     private async Task<string?> ObservationProblemAsync(OctopushyDb db, InstallationAt at, CancellationToken ct)
     {
@@ -811,16 +811,6 @@ public sealed partial class ChangeService
                    + "narrowed below, and Sys.Audit on /access, then observe it again.";
         if (latest.Data["hosts"] is not JsonArray { Count: > 0 } listed)
             return $"{installation}'s last observation lists no host, so the VMIDs it shows may be incomplete. Observe it again.";
-        var hosts = listed.OfType<JsonObject>().ToList();
-        var unknown = hosts.Where(h => h["online"] is not JsonValue o || !o.TryGetValue<bool>(out _)).Select(h => h["name"]?.ToString() ?? "?").ToList();
-        var offline = hosts.Where(h => h["online"] is JsonValue o && o.TryGetValue<bool>(out var up) && !up).Select(h => h["name"]?.ToString() ?? "?").ToList();
-        var missing = declaredHosts.Where(d => hosts.All(h => h["name"]?.ToString() != d)).ToList();
-        if (offline.Count > 0 || missing.Count > 0 || unknown.Count > 0)
-            return $"{installation}'s last observation, at {Time(latest.ObservedAt)}, did not see every host"
-                   + (offline.Count > 0 ? $" ({string.Join(", ", offline)} offline)" : "")
-                   + (unknown.Count > 0 ? $" ({string.Join(", ", unknown)} without an online state)" : "")
-                   + (missing.Count > 0 ? $" ({string.Join(", ", missing)} not listed)" : "")
-                   + ", so the VMIDs it shows may be incomplete. Observe it again once every host is up.";
         // A cluster says it is one and whether it is quorate; a standalone host says it is none. Anything else is not known.
         if (!latest.Data.ContainsKey("cluster"))
             return $"{installation}'s last observation does not say whether it is a cluster. Observe it again.";
@@ -836,6 +826,20 @@ public sealed partial class ChangeService
         {
             return $"{installation} is declared a cluster, and its last observation saw a standalone host. Observe it again.";
         }
+
+        // A quorate cluster keeps every guest's configuration, an offline node's too, in its shared configuration, and lists
+        // them all: a node that is off hides no VMID. A host that is not listed at all is not a member, and may hold any.
+        var clustered = latest.Data["cluster"] is JsonObject;
+        var hosts = listed.OfType<JsonObject>().ToList();
+        var unknown = clustered ? new List<string>() : hosts.Where(h => h["online"] is not JsonValue o || !o.TryGetValue<bool>(out _)).Select(h => h["name"]?.ToString() ?? "?").ToList();
+        var offline = clustered ? new List<string>() : hosts.Where(h => h["online"] is JsonValue o && o.TryGetValue<bool>(out var up) && !up).Select(h => h["name"]?.ToString() ?? "?").ToList();
+        var missing = declaredHosts.Where(d => hosts.All(h => h["name"]?.ToString() != d)).ToList();
+        if (offline.Count > 0 || missing.Count > 0 || unknown.Count > 0)
+            return $"{installation}'s last observation, at {Time(latest.ObservedAt)}, did not see every host"
+                   + (offline.Count > 0 ? $" ({string.Join(", ", offline)} offline)" : "")
+                   + (unknown.Count > 0 ? $" ({string.Join(", ", unknown)} without an online state)" : "")
+                   + (missing.Count > 0 ? $" ({string.Join(", ", missing)} not listed)" : "")
+                   + ", so the VMIDs it shows may be incomplete. Observe it again once every host is up.";
 
         return null;
     }
