@@ -87,7 +87,7 @@ server_bin=$root/backend/src/Octopushy.Server/bin/Debug/net10.0
   ConnectionStrings__Octopushy="Host=127.0.0.1;Port=55432;Database=built_templates;Username=octopushy;Password=octopushy" \
   Octopushy__DataDirectory="$work/server" Octopushy__ApiPort=18080 Octopushy__AgentChannel__Port=18443 \
   Octopushy__AgentChannel__BindAddress=127.0.0.1 Octopushy__AgentChannel__PublicUrl=https://127.0.0.1:18443 \
-  Octopushy__MigrateOnStart=true exec ./octopushy-server
+  Octopushy__AllowLocalWorkflowSources=true Octopushy__MigrateOnStart=true exec ./octopushy-server
 ) >"$work/backend.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 60); do curl -sf "$api/api/health" >/dev/null && break; sleep 1; done
@@ -102,6 +102,17 @@ call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/privileged-token",
 call -X PUT "$api/api/variables" -d '{"key":"proxmox/korriban/e2e-nixos-01/host-key","value":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY","visibility":"plain"}'
 call -X PUT "$api/api/repository" -d "{\"url\":\"$work/lab\",\"branch\":\"main\",\"pollSeconds\":10,\"credentialKind\":\"none\"}" >/dev/null
 call -X POST "$api/api/repository/sync" >/dev/null
+# This disposable fixture explicitly authorizes its local workflows pair, just as the UI does.
+for _ in $(seq 1 30); do
+  repository=$(call "$api/api/repository")
+  [[ $(jq -r '.workflowsTrust.pending.repository // empty' <<<"$repository") == "$work/workflows.git" ]] && break
+  sleep 1
+done
+jq -e --arg url "$work/workflows.git" '.workflowsTrust.pending.repository == $url' <<<"$repository" >/dev/null \
+  || fail "the workflows source was not discovered"
+confirmation=$(jq '.workflowsTrust | {sourceId, commit: .pendingCommit, repository: .pending.repository,
+  credentialKey: .pending.credentialKey, credentialVersion: .pending.credentialVersion}' <<<"$repository")
+call -X POST "$api/api/repository/workflows/trust" -d "$confirmation" >/dev/null
 trust_fixture_installations "$work/lab" "$(git -C "$work/lab" rev-parse HEAD)"
 
 log "The template, before any agent"

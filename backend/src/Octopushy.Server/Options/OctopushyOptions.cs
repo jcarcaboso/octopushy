@@ -31,6 +31,9 @@ public sealed class OctopushyOptions
 
     public SchedulingOptions Scheduling { get; set; } = new();
 
+    /// <summary>Allow repository-declared workflow sources to read server-local paths or file:// URLs. Off by default.</summary>
+    public bool AllowLocalWorkflowSources { get; set; }
+
     public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
 
     public ChangeOptions Changes { get; set; } = new();

@@ -136,10 +136,41 @@ public sealed class RepositorySync(
             var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
             await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
-            // The workflows repository is the one this commit names, fetched on the same poll as the branch.
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));
-            if (workflows.Repository is { } workflowsUrl)
-                await FetchWorkflowsAsync(store, settings, workflowsUrl, workflows.Credential, cancellationToken);
+            var confirmed = WorkflowSourceTrust.Confirmed(settings);
+            var trusted = !workflows.External || workflows == confirmed;
+            var currentSource = await engine.ExecuteAsync(async (db, _) =>
+            {
+                var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
+                if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch
+                    || WorkflowSourceTrust.Confirmed(current) != confirmed)
+                    return false;
+                current.LastFetchAt = clock.GetUtcNow();
+                current.LastFetchError = null;
+                if (trusted)
+                    WorkflowSourceTrust.ClearPending(current);
+                else
+                {
+                    current.PendingWorkflowsRepository = workflows.Repository;
+                    current.PendingWorkflowsCredentialKey = workflows.Credential?.Key;
+                    current.PendingWorkflowsCredentialVersion = workflows.Credential?.Version;
+                    current.PendingWorkflowsCommit = head;
+                }
+                await db.SaveChangesAsync(cancellationToken);
+                return true;
+            }, cancellationToken);
+            if (!currentSource) return poll;
+            if (WorkflowSourceTrust.Rejection(workflows, options.Value.AllowLocalWorkflowSources) is { } rejection)
+                throw new GitException(rejection);
+            // Never read a proposed credential or fetch a proposed URL. Keep the confirmed mirror
+            // available while the new declaration waits; the applied revision and its work stay intact.
+            if (confirmed.Repository is { } workflowsUrl)
+            {
+                if (WorkflowSourceTrust.Rejection(confirmed, options.Value.AllowLocalWorkflowSources) is { } confirmedRejection)
+                    throw new GitException(confirmedRejection);
+                await FetchWorkflowsAsync(store, settings, workflowsUrl, confirmed.Credential, cancellationToken);
+            }
+            if (!trusted) return poll;
             var resolved = await revisions.ResolveAsync(head, ReleasesAsync, cancellationToken);
             var repository = resolved.Repository;
             await engine.ExecuteAsync(async (db, services) =>
@@ -148,7 +179,8 @@ public sealed class RepositorySync(
                 // transaction: a crash between them used to leave a head whose runs were never proposed, and the next sync skipped it.
                 await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
                 var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
-                if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch)
+                if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch
+                    || WorkflowSourceTrust.Confirmed(current) != confirmed)
                     return false;
                 current.LastFetchAt = clock.GetUtcNow();
                 current.LastFetchError = null;
@@ -219,7 +251,8 @@ public sealed class RepositorySync(
             await engine.ExecuteAsync(async (db, _) =>
             {
                 var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
-                if (current.SourceId == settings.SourceId && current.Url == settings.Url && current.Branch == settings.Branch)
+                if (current.SourceId == settings.SourceId && current.Url == settings.Url && current.Branch == settings.Branch
+                    && WorkflowSourceTrust.Confirmed(current) == WorkflowSourceTrust.Confirmed(settings))
                 {
                     current.LastFetchAt = clock.GetUtcNow();
                     current.LastFetchError = e.Message;
@@ -253,15 +286,15 @@ public sealed class RepositorySync(
 
         await engine.ExecuteAsync(async (db, _) =>
         {
+            var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
+            if (current.SourceId != settings.SourceId || current.Url != settings.Url || current.Branch != settings.Branch
+                || WorkflowSourceTrust.Confirmed(current) != WorkflowSourceTrust.Confirmed(settings))
+                return 0;
             if (tags is not null)
                 await WorkflowReleaseBook.RecordAsync(db, url, workflows, tags, clock.GetUtcNow(), cancellationToken);
-            var current = await db.RepositorySettings.SingleAsync(s => s.Id == 1, cancellationToken);
-            if (current.SourceId == settings.SourceId)
-            {
-                current.WorkflowsRepository = url;
-                current.WorkflowsLastFetchAt = clock.GetUtcNow();
-                current.WorkflowsLastFetchError = error;
-            }
+            current.WorkflowsRepository = url;
+            current.WorkflowsLastFetchAt = clock.GetUtcNow();
+            current.WorkflowsLastFetchError = error;
             await db.SaveChangesAsync(cancellationToken);
             return 0;
         }, cancellationToken);
@@ -347,8 +380,7 @@ public sealed class RepositorySync(
         CancellationToken cancellationToken)
     {
         var scheme = GitUrls.Scheme(url);
-        // The address and the key are whatever the newest commit says, read before that commit is validated. So nothing goes
-        // out in the clear, no key of the server's own is given, and the lab repository's token goes only to its own host.
+        // Confirmation does not permit cleartext credentials, system keys, or forwarding the lab token to another host.
         var cleartext = url.StartsWith("http://", StringComparison.Ordinal);
         if (key is not null)
         {

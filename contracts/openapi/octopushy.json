@@ -2118,6 +2118,66 @@
         }
       }
     },
+    "/api/repository/workflows/trust": {
+      "post": {
+        "tags": [
+          "Repository"
+        ],
+        "operationId": "trustWorkflowSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmWorkflowSourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/repository/sync": {
       "post": {
         "tags": [
@@ -6293,6 +6353,41 @@
           }
         }
       },
+      "ConfirmWorkflowSourceRequest": {
+        "required": [
+          "sourceId",
+          "commit",
+          "repository",
+          "credentialKey",
+          "credentialVersion"
+        ],
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "credentialKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "credentialVersion": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "CreatedOperatorToken": {
         "required": [
           "id",
@@ -8932,6 +9027,16 @@
                 "$ref": "#/components/schemas/WorkflowsSourceDto"
               }
             ]
+          },
+          "workflowsTrust": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowSourceTrustDto"
+              }
+            ]
           }
         }
       },
@@ -10907,6 +11012,95 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowReleaseDto"
             }
+          }
+        }
+      },
+      "WorkflowSourcePairDto": {
+        "required": [
+          "repository",
+          "credentialKey",
+          "credentialVersion"
+        ],
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "credentialKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "credentialVersion": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "WorkflowSourceTrustDto": {
+        "required": [
+          "sourceId",
+          "confirmed",
+          "pending",
+          "pendingCommit",
+          "confirmedAt",
+          "confirmedBy",
+          "blockedReason"
+        ],
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "confirmed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowSourcePairDto"
+              }
+            ]
+          },
+          "pending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowSourcePairDto"
+              }
+            ]
+          },
+          "pendingCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "confirmedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "confirmedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "blockedReason": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

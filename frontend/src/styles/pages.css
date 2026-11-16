@@ -1532,6 +1532,7 @@
 
 .repo-status__dot--success { background: color-mix(in srgb, var(--success-fg) 70%, var(--surface)); }
 .repo-status__dot--danger { background: var(--meter-danger); }
+.repo-status__dot--warning { background: var(--meter-warning); }
 
 .repo {
   display: grid;

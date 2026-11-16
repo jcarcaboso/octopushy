@@ -345,6 +345,12 @@ followed, and a deleted tag stays a release while its commit is in the mirror.
 _Avoid_: Tag, when meaning the recorded commit
 _Avoid_: Recipe, the earlier format of one stage; run, when referring to the reusable procedure
 
+**Confirmed workflows source**:
+The workflows repository URL and credential reference an operator has authorized
+for fetching. A different pair proposed by a commit waits for trust without
+replacing the confirmed source used by existing work.
+_Avoid_: Trusted revision, automatic trust on first fetch
+
 **Workflow version**:
 `M.m`, declared in `workflow.yaml` as a quoted string. A new major is a breaking change,
 such as an input removed or narrowed, or a change that would replace machines; a new

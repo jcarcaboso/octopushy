@@ -72,7 +72,7 @@ start() {
 
 call() {
   local method=$1 path=$2 body=${3:-}
-  curl -sS --fail-with-body -b "$jar" -c "$jar" -H 'Content-Type: application/json' -X "$method" "$api$path" ${body:+-d "$body"}
+  curl -sS --fail-with-body -b "$jar" -c "$jar" -H "Origin: $api" -H 'Content-Type: application/json' -X "$method" "$api$path" ${body:+-d "$body"}
 }
 
 put_variable() { call PUT /api/variables "$1" >/dev/null; }

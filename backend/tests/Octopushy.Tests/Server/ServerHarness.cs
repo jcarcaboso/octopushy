@@ -221,6 +221,19 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public async Task SyncAsync() => await Services.GetRequiredService<RepositorySync>().SyncOnceAsync(CancellationToken.None);
 
+    /// <summary>Explicit fixture setup for tests that need a confirmed external workflows source. Never called by SyncAsync.</summary>
+    public async Task ConfirmWorkflowSourceAsync(HttpClient? client = null)
+    {
+        client ??= await SignedInClientAsync();
+        await SyncAsync();
+        var repository = (await client.GetFromJsonAsync<Octopushy.Server.Api.RepositoryDto>("/api/repository"))!;
+        var trust = repository.WorkflowsTrust!;
+        var pending = Assert.IsType<Octopushy.Server.Api.WorkflowSourcePairDto>(trust.Pending);
+        (await client.PostAsJsonAsync("/api/repository/workflows/trust", new Octopushy.Server.Api.ConfirmWorkflowSourceRequest(
+            trust.SourceId, trust.PendingCommit!, pending.Repository, pending.CredentialKey, pending.CredentialVersion))).EnsureSuccessStatusCode();
+        await SyncAsync();
+    }
+
     /// <summary>Syncs, then trusts every installation with untrusted endpoints through the authenticated API.</summary>
     public async Task SyncAndTrustAsync(HttpClient? client = null)
     {
