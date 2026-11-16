@@ -25,6 +25,7 @@ use octopushy_proto::v1::{
     AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, AttemptStateSnapshot,
     Outcome, agent_message::Kind,
 };
+use prost::Message;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -36,6 +37,9 @@ use crate::outbox::{Outbox, OutboxRecord};
 use crate::paths::is_safe_id;
 use limiter::Limiter;
 use logs::{AttemptLogger, LogBuffer, MAX_BATCH_LINES};
+
+/// Operator-requested interruption of a running change, never ordinary cancel.
+pub const FORCE_STOP_CAPABILITY: &str = "forced-mutation-stop-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -53,6 +57,7 @@ struct Entry {
     /// Whether the executor started. A finished attempt can be one that never did.
     started: bool,
     mutating: bool,
+    force_stopped: bool,
     cancel: CancellationToken,
     logs: Arc<LogBuffer>,
     logger: AttemptLogger,
@@ -129,6 +134,7 @@ impl AttemptManager {
                     // The executor and action are unknown after a restart. If the stored result
                     // is later unreadable, that must read as "cannot tell", never as a failure.
                     mutating: true,
+                    force_stopped: false,
                     cancel: CancellationToken::new(),
                     logs,
                     logger,
@@ -148,6 +154,15 @@ impl AttemptManager {
     }
 
     pub fn set_concurrency(&self, max: u32) {
+        let max = if !self.exec.runtime.is_container() {
+            tracing::warn!(
+                requested = max,
+                "local tools share the agent user; limiting concurrency to one attempt"
+            );
+            1
+        } else {
+            max
+        };
         self.limiter.set_limit(max as usize);
     }
 
@@ -216,6 +231,7 @@ impl AttemptManager {
                     state: State::Queued,
                     started: false,
                     mutating: executors::is_mutating(&assignment.executor, &assignment.action),
+                    force_stopped: false,
                     cancel: cancel.clone(),
                     logs,
                     logger: logger.clone(),
@@ -371,7 +387,19 @@ impl AttemptManager {
     }
 
     /// Stores the result and marks the attempt finished.
-    fn finish(&self, id: &str, result: AttemptResult) {
+    fn finish(&self, id: &str, mut result: AttemptResult) {
+        let (mutating, force_stopped) = self
+            .entries
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|e| (e.mutating, e.force_stopped))
+            .unwrap_or_default();
+        if force_stopped {
+            result.outcome = Outcome::Uncertain as i32;
+            result.error = "force stopped by the operator; the change is uncertain, inspect the target before planning again".into();
+        }
+        bound_result(&mut result, mutating);
         let on_disk = self
             .entries
             .lock()
@@ -401,17 +429,22 @@ impl AttemptManager {
         self.wake.notify_one();
     }
 
-    /// Handles `CancelAttempt`. Mutations are never interrupted.
+    /// Ordinary cancellation never interrupts a running mutation.
     pub fn cancel(&self, id: &str) {
-        let entries = self.entries.lock().unwrap();
-        let Some(entry) = entries.get(id) else {
+        self.cancel_requested(id, false);
+    }
+
+    /// Forced cancellation is the operator-only exception advertised in Hello.
+    pub fn cancel_requested(&self, id: &str, force: bool) {
+        let mut entries = self.entries.lock().unwrap();
+        let Some(entry) = entries.get_mut(id) else {
             tracing::debug!(attempt = %id, "cancel for an unknown attempt");
             return;
         };
         match entry.state {
             State::Finished => {}
             State::Queued => entry.cancel.cancel(),
-            State::Running if entry.mutating => {
+            State::Running if entry.mutating && !force => {
                 entry.logger.agent(format!(
                     "cancel requested; refused, because {}/{} must not be interrupted",
                     entry.executor, entry.action
@@ -419,9 +452,12 @@ impl AttemptManager {
                 tracing::warn!(attempt = %id, "refusing to cancel a running {}/{}", entry.executor, entry.action);
             }
             State::Running => {
-                entry
-                    .logger
-                    .agent("cancel requested by the server; stopping");
+                entry.force_stopped = entry.mutating;
+                entry.logger.agent(if entry.force_stopped {
+                    "force stop requested by the operator; stopping the tool, outcome uncertain"
+                } else {
+                    "cancel requested by the server; stopping"
+                });
                 entry.cancel.cancel();
             }
         }
@@ -601,6 +637,31 @@ impl AttemptManager {
             }
         }
         self.outbox.get(id)
+    }
+}
+
+/// Leave 1 MiB for the AgentMessage envelope and future fields.
+const MAX_RESULT_BYTES: usize = crate::connection::MAX_MESSAGE_BYTES - 1024 * 1024;
+
+fn bound_result(result: &mut AttemptResult, mutating: bool) {
+    let bytes = result.encoded_len();
+    if bytes <= MAX_RESULT_BYTES {
+        return;
+    }
+    let outputs = result.outputs_json.len();
+    let artifacts: usize = result.artifacts.iter().map(|a| a.content.len()).sum();
+    result.outcome = if mutating {
+        Outcome::Uncertain
+    } else {
+        Outcome::Failed
+    } as i32;
+    result.outputs_json = "{}".into();
+    result.error = format!(
+        "result too large: protobuf={bytes} bytes, outputs={outputs} bytes, artifacts={artifacts} bytes, limit={MAX_RESULT_BYTES} bytes"
+    );
+    result.artifacts.retain(|a| a.name == state::ARTIFACT);
+    if result.encoded_len() > MAX_RESULT_BYTES {
+        result.artifacts.clear();
     }
 }
 

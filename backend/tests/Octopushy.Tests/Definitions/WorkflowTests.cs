@@ -23,6 +23,29 @@ public class WorkflowTests
         string.Join("\n", Errors(LabRepositoryLoader.Load(test.Root)).Select(i => i.Message));
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(60)]
+    [InlineData(1440)]
+    public void OpenTofu_stages_accept_a_bounded_timeout(int minutes)
+    {
+        using var test = TestRepository.Minimal();
+        Replace(test, MachineWorkflow, "executor: opentofu", $"executor: opentofu\n    timeoutMinutes: {minutes}");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.Empty(Errors(repository));
+        Assert.Equal(minutes, repository.Guest(Guest)!.Workflow!.Machine!.TimeoutMinutes);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1441)]
+    public void OpenTofu_stages_reject_an_invalid_timeout(int minutes)
+    {
+        using var test = TestRepository.Minimal();
+        Replace(test, MachineWorkflow, "executor: opentofu", $"executor: opentofu\n    timeoutMinutes: {minutes}");
+        Assert.NotEmpty(Errors(LabRepositoryLoader.Load(test.Root)));
+    }
+
+    [Theory]
     [InlineData("0.0", 0, 0)]
     [InlineData("2.3", 2, 3)]
     [InlineData("2.10", 2, 10)]

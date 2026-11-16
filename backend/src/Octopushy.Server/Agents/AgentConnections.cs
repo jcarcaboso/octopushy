@@ -9,6 +9,11 @@ namespace Octopushy.Server.Agents;
 public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors, IReadOnlyList<string>? capabilities = null,
     string? toolRuntime = null)
 {
+    /// <summary>The operator-only ability to stop a running mutating tool.</summary>
+    public const string ForcedMutationStopCapability = "forced-mutation-stop-v1";
+
+    public bool SupportsForcedMutationStop => Capabilities.Contains(ForcedMutationStopCapability);
+
     /// <summary>The outbound capacity, shared by assignments, cancels, acknowledgements and probes.</summary>
     public const int OutboundCapacity = 256;
 

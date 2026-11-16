@@ -159,6 +159,9 @@ public sealed record WorkflowStage(
     /// </summary>
     public bool ManagedHostKey { get; init; }
 
+    /// <summary>The OpenTofu stage timeout, in minutes; null uses the agent default of 60.</summary>
+    public int? TimeoutMinutes { get; init; }
+
     /// <summary>
     /// For an Ansible stage of <c>manages: service</c>, the interface slot it fills, such as <c>dns</c>: it runs only where the
     /// service's installation binds the slot. See docs/workflows.md#interfaces.

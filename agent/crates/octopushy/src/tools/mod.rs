@@ -29,7 +29,7 @@ pub const CONTAINER_PLUGIN_CACHE: &str = "/octopushy/plugin-cache";
 /// Lines of stderr kept for error messages.
 const STDERR_TAIL: usize = 20;
 /// Largest captured stdout (`show -json`, `output -json`).
-const MAX_CAPTURE: u64 = 512 * 1024 * 1024;
+const MAX_CAPTURE: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum RuntimeKind {
@@ -459,14 +459,18 @@ impl ToolRuntime {
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
+        let capture_failed = CancellationToken::new();
         let mut out_task = {
+            let capture_failed = capture_failed.clone();
             let log = log.clone();
             let capture = inv.capture_stdout;
             tokio::spawn(async move {
                 if capture {
-                    let mut buf = Vec::new();
-                    stdout.take(MAX_CAPTURE).read_to_end(&mut buf).await?;
-                    Ok::<_, std::io::Error>(buf)
+                    let captured = capture_stdout(stdout, MAX_CAPTURE).await;
+                    if captured.is_err() {
+                        capture_failed.cancel();
+                    }
+                    captured
                 } else {
                     lines::for_each_line(stdout, |l| {
                         log.stdout(&l);
@@ -504,10 +508,14 @@ impl ToolRuntime {
         let mut cancelled = false;
         let status = tokio::select! {
             status = child.wait() => status?,
+            _ = capture_failed.cancelled() => {
+                self.terminate(&mut child, &inv.name, inv.tool).await;
+                child.wait().await?
+            }
             _ = cancel.cancelled() => {
                 cancelled = true;
                 log.agent("stopping the tool");
-                self.terminate(&mut child, &inv.name).await;
+                self.terminate(&mut child, &inv.name, inv.tool).await;
                 child.wait().await?
             }
         };
@@ -517,8 +525,8 @@ impl ToolRuntime {
         let (mut out_read, mut err_read) = (None, None);
         tokio::select! {
             () = drain(&mut out_task, &mut err_task, &mut out_read, &mut err_read) => {}
-            _ = cancel.cancelled() => {
-                cancelled = true;
+            _ = async { tokio::select! { _ = cancel.cancelled() => {}, _ = capture_failed.cancelled() => {} } } => {
+                cancelled |= cancel.is_cancelled();
                 log.agent("stopping what the tool left running");
                 self.kill_group(&inv.name, pgid).await;
                 let rest = drain(&mut out_task, &mut err_task, &mut out_read, &mut err_read);
@@ -547,15 +555,24 @@ impl ToolRuntime {
         })
     }
 
-    /// SIGTERM (forwarded to the tool by the container runtime), then after the
-    /// grace period a hard kill of the container and the process group.
-    async fn terminate(&self, child: &mut Child, container: &str) {
+    /// OpenTofu gets SIGINT first so it can finish in-flight work and save state.
+    /// After one grace period, escalate to SIGTERM, then a hard kill. Other tools
+    /// start at SIGTERM. Waiting stays bounded even when a container CLI hangs.
+    async fn terminate(&self, child: &mut Child, container: &str, tool: Tool) {
         let Some(pid) = child.id() else { return };
         let pgid = pid as libc::pid_t;
-        // SAFETY: plain signal delivery to our own child's process group.
-        unsafe {
-            libc::kill(-pgid, libc::SIGTERM);
+        if tool == Tool::OpenTofu {
+            self.signal_group(container, pgid, libc::SIGINT, "SIGINT")
+                .await;
+            if tokio::time::timeout(self.kill_grace, child.wait())
+                .await
+                .is_ok()
+            {
+                return;
+            }
         }
+        self.signal_group(container, pgid, libc::SIGTERM, "SIGTERM")
+            .await;
         if tokio::time::timeout(self.kill_grace, child.wait())
             .await
             .is_ok()
@@ -563,6 +580,25 @@ impl ToolRuntime {
             return;
         }
         self.kill_group(container, Some(pgid)).await;
+    }
+
+    async fn signal_group(&self, container: &str, pgid: libc::pid_t, signal: i32, name: &str) {
+        if self.is_container() {
+            // Signal the container itself, not just the attached CLI process.
+            let kill = Command::new(&self.container_binary)
+                .args(["kill", "--signal", name, container])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .status();
+            let _ = tokio::time::timeout(self.kill_grace, kill).await;
+        } else {
+            // SAFETY: plain signal delivery to our own child's process group.
+            unsafe {
+                libc::kill(-pgid, signal);
+            }
+        }
     }
 
     /// A hard kill of the container and the process group.
@@ -587,6 +623,20 @@ impl ToolRuntime {
     }
 }
 
+async fn capture_stdout(
+    reader: impl tokio::io::AsyncRead + Unpin,
+    cap: u64,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    reader.take(cap).read_to_end(&mut buf).await?;
+    if buf.len() as u64 >= cap {
+        return Err(std::io::Error::other(format!(
+            "stdout capture reached the {cap} byte cap"
+        )));
+    }
+    Ok(buf)
+}
+
 /// Waits for both readers, keeping what each returned: a handle cannot be awaited twice, and
 /// this can be stopped and called again.
 async fn drain<A, B>(
@@ -606,6 +656,77 @@ async fn drain<A, B>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn opentofu_stop_escalates_from_interrupt_to_term_to_kill() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("tofu");
+        let signals = dir.path().join("signals");
+        std::fs::write(&binary, format!("#!/bin/bash\ntrap 'echo INT >> {}' INT\ntrap 'echo TERM >> {}' TERM\ntouch ready\nwhile :; do sleep 1; done\n", signals.display(), signals.display())).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut runtime = ToolRuntime::new(RuntimeKind::Local, None, binary, None);
+        runtime.kill_grace = Duration::from_millis(100);
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let ready = dir.path().join("ready");
+        let canceller = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            stop.cancel();
+        });
+        let log = AttemptLogger::new(
+            Arc::new(crate::attempts::logs::LogBuffer::default()),
+            Arc::new(crate::masking::Masker::default()),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let invocation = Invocation {
+            tool: Tool::OpenTofu,
+            name: "test-stop".into(),
+            image: "",
+            workspace: dir.path(),
+            workdir: dir.path(),
+            plugin_cache: None,
+            args: vec![],
+            settings: vec![],
+            env: vec![],
+            stdin: None,
+            capture_stdout: false,
+            stderr_mark: None,
+            control_prefix: None,
+        };
+        let output = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.run(invocation, &log, &cancel),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        canceller.await.unwrap();
+        assert!(output.cancelled);
+        assert_eq!(output.code, None, "the stubborn tool was hard-killed");
+        assert_eq!(std::fs::read_to_string(signals).unwrap(), "INT\nTERM\n");
+    }
+
+    #[tokio::test]
+    async fn capture_fails_at_cap_instead_of_truncating() {
+        assert_eq!(capture_stdout(&b"abc"[..], 4).await.unwrap(), b"abc");
+        for data in [&b"abcd"[..], &b"abcde"[..]] {
+            assert!(
+                capture_stdout(data, 4)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("4 byte cap")
+            );
+        }
+    }
 
     #[test]
     fn container_paths() {

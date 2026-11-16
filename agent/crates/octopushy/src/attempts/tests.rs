@@ -16,11 +16,15 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_runtime(RuntimeKind::Podman)
+}
+
+fn harness_runtime(kind: RuntimeKind) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let work = dir.path().join("work");
     let outbox_dir = dir.path().join("outbox");
     let exec = Arc::new(ExecutorConfig {
-        runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
+        runtime: ToolRuntime::new(kind, None, "false".into(), None),
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_millis(10),
         proxmox_timeout: Duration::from_secs(1),
@@ -158,8 +162,9 @@ async fn runs_reports_resends_and_cleans_up_after_ack() {
 
 #[tokio::test]
 async fn respects_concurrency() {
-    let h = harness();
-    h.manager.set_concurrency(1);
+    let h = harness_runtime(RuntimeKind::Local);
+    h.manager.set_concurrency(20);
+    assert_eq!(h.manager.concurrency(), 1);
     h.manager
         .accept(assignment("s1", "test", "sleep", r#"{"ms":200}"#));
     h.manager
@@ -447,4 +452,92 @@ async fn an_attempt_that_never_ran_does_not_claim_to_have_started() {
         })
         .collect();
     assert_eq!(started, ["running-1"]);
+}
+
+#[tokio::test]
+async fn oversized_result_keeps_state_and_does_not_block_later_results() {
+    use octopushy_proto::v1::Artifact;
+    let h = harness();
+    h.manager
+        .accept(assignment("large", "test", "mutate", r#"{"ms":0}"#));
+    let mut c = Collector::default();
+    c.result(&h.manager, "large").await;
+    let mut large = result("large", Outcome::Succeeded, "");
+    large.outputs_json = "x".repeat(MAX_RESULT_BYTES);
+    large.artifacts = vec![
+        Artifact {
+            name: state::ARTIFACT.into(),
+            content: b"state".to_vec(),
+            ..Default::default()
+        },
+        Artifact {
+            name: "plan.tar.gz".into(),
+            content: vec![1; 10],
+            ..Default::default()
+        },
+    ];
+    h.manager.finish("large", large);
+    let stored = h
+        .manager
+        .outbox
+        .get("large")
+        .unwrap()
+        .unwrap()
+        .to_result()
+        .unwrap();
+    assert_eq!(stored.outcome(), Outcome::Uncertain);
+    assert!(stored.error.contains("result too large"));
+    assert_eq!(stored.artifacts.len(), 1);
+    assert_eq!(stored.artifacts[0].content, b"state");
+    assert!(stored.encoded_len() < crate::connection::MAX_MESSAGE_BYTES);
+    h.manager.accept(assignment("later", "test", "echo", "{}"));
+    let mut reconnected = Collector::default();
+    assert_eq!(
+        reconnected.result(&h.manager, "later").await.outcome(),
+        Outcome::Succeeded
+    );
+    assert!(reconnected.find("large").is_some());
+}
+
+#[test]
+fn oversized_state_is_dropped_and_reads_fail() {
+    let mut r = result("read", Outcome::Succeeded, "");
+    r.artifacts.push(octopushy_proto::v1::Artifact {
+        name: state::ARTIFACT.into(),
+        content: vec![0; MAX_RESULT_BYTES],
+        ..Default::default()
+    });
+    bound_result(&mut r, false);
+    assert_eq!(r.outcome(), Outcome::Failed);
+    assert!(r.artifacts.is_empty());
+    assert!(r.encoded_len() < MAX_RESULT_BYTES);
+}
+
+#[tokio::test]
+async fn forced_mutations_remain_uncertain_even_if_the_executor_returns_success() {
+    let h = harness();
+    h.manager
+        .accept(assignment("forced", "test", "mutate", r#"{"ms":100}"#));
+    let mut c = Collector::default();
+    for _ in 0..100 {
+        c.poll(&h.manager);
+        if c.msgs
+            .iter()
+            .any(|m| matches!(&m.kind, Some(Kind::Started(s)) if s.attempt_id == "forced"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    h.manager.cancel_requested("forced", true);
+    h.manager.accept(assignment("after", "test", "echo", "{}"));
+    assert_eq!(
+        c.result(&h.manager, "forced").await.outcome(),
+        Outcome::Uncertain
+    );
+    assert_eq!(
+        c.result(&h.manager, "after").await.outcome(),
+        Outcome::Succeeded
+    );
+    assert!(h.manager.is_idle());
 }

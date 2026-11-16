@@ -133,6 +133,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         .then(|| state::CAPABILITY.to_owned())
         .into_iter()
         .chain([
+            crate::attempts::FORCE_STOP_CAPABILITY.to_owned(),
             reachability::CAPABILITY.to_owned(),
             reachability::UPTIME_CAPABILITY.to_owned(),
             reachability::UPTIME_TCP_CAPABILITY.to_owned(),

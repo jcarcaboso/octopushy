@@ -16,6 +16,33 @@ public class ProvisioningTests(PostgresFixture postgres)
     private const string Guest = "home/korriban/krb-app-01";
     private const string Installation = "home/korriban";
 
+    [Theory]
+    [InlineData(null, 60)]
+    [InlineData(17, 17)]
+    public async Task OpenTofu_assignments_carry_the_stage_timeout(int? configured, int expected)
+    {
+        using var repository = TestRepository.Minimal();
+        if (configured is { } minutes)
+        {
+            const string file = "workflows/test-vm/workflow.yaml";
+            repository.Write(file, File.ReadAllText(Path.Combine(repository.Root, file))
+                .Replace("executor: opentofu", $"executor: opentofu\n    timeoutMinutes: {minutes}"));
+        }
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        var plan = await agent.NextAsync("preview");
+        Assert.Equal(expected, JsonNode.Parse(plan.InputJson)!["timeoutMinutes"]!.GetValue<int>());
+        var artifact = FakeAgent.PlanArtifact();
+        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(hasChanges: true), artifacts: artifact);
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        if (approval.Status == StepStatuses.AwaitingApproval)
+            await server.Engine.ApproveAsync(run.Id, approval.Id, approval.PlanSha256!, "operator", null, CancellationToken.None);
+        var apply = await agent.NextAsync("apply");
+        Assert.Equal(expected, JsonNode.Parse(apply.InputJson)!["timeoutMinutes"]!.GetValue<int>());
+    }
+
     [Fact]
     public async Task A_new_guest_is_planned_applied_and_verified()
     {

@@ -170,12 +170,18 @@ async fn hello_only_advertises_usable_tool_capabilities() {
         let capabilities: &[&str] = if available {
             &[
                 "opentofu-builtin-state",
+                "forced-mutation-stop-v1",
                 "reachability-v1",
                 "uptime-v1",
                 "uptime-tcp-v1",
             ]
         } else {
-            &["reachability-v1", "uptime-v1", "uptime-tcp-v1"]
+            &[
+                "forced-mutation-stop-v1",
+                "reachability-v1",
+                "uptime-v1",
+                "uptime-tcp-v1",
+            ]
         };
         assert_eq!(hello.capabilities, capabilities, "{kind:?}: {binary}");
         shutdown.cancel();
@@ -581,6 +587,7 @@ async fn attempts_survive_reconnects_and_can_be_cancelled() {
         .await;
     server
         .send(ServerKind::Cancel(CancelAttempt {
+            force: false,
             attempt_id: "absent-1".into(),
         }))
         .await;

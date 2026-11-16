@@ -205,7 +205,8 @@ public sealed record OpenTofuContext(
     JsonObject Variables,
     Dictionary<string, string> Env,
     Dictionary<string, string> SecretEnv,
-    Definitions.TemplateImage? TemplateImage = null);
+    Definitions.TemplateImage? TemplateImage = null,
+    int? TimeoutMinutes = null);
 
 /// <summary>
 /// A configure run: one action of a workflow's Ansible stage, against one guest. <c>Workflow</c> is the workflow at its version. <see cref="Vars"/> holds no secret

@@ -303,7 +303,7 @@ fn handle(
         Some(In::Assignment(a)) => agent.manager.accept(a),
         Some(In::Cancel(c)) => {
             tracing::info!(attempt = %c.attempt_id, "cancel requested");
-            agent.manager.cancel(&c.attempt_id);
+            agent.manager.cancel_requested(&c.attempt_id, c.force);
         }
         Some(In::ResultAck(ack)) => {
             tracing::debug!(attempt = %ack.attempt_id, "result acknowledged");

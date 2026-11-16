@@ -112,7 +112,7 @@ What the agent does on the channel:
 - Renews its certificate when less than a third of its validity remains
   (`RenewCertificate` over the current connection), replaces key and certificate as
   a pair, and reconnects with the new identity.
-- `CancelAttempt` stops read-only attempts (`OUTCOME_CANCELLED`) but never an
+- Normal `CancelAttempt` stops read-only attempts (`OUTCOME_CANCELLED`) but never an
   `opentofu/apply`, `proxmox/set-protection`, or `ansible/run`;
   the refusal is logged in the attempt.
 - gRPC messages may be up to 64 MiB each way (repository files, saved plans).
@@ -197,7 +197,15 @@ shared checkout is required. See the opt-in
 - **docker**: the same flags without keep-id; on a rootful daemon it adds
   `--user <uid>:<gid>` and warns, because access to a rootful daemon equals root.
 - **local**: runs `--tofu-binary` directly with a cleared environment (only `PATH`
-  is kept), for development and tests.
+  is kept). The shipped agent container, Compose stack and Proxmox installer use
+  this mode. Tools run as the agent's own user, without a per-attempt OS boundary.
+  The agent limits local concurrency to one, regardless of the server's limit,
+  to prevent tools in different attempts from running alongside each other. This
+  is not a sandbox. Use only trusted tools until per-attempt isolation is available.
+
+Tool-written plans, lock files, prepared variables and state are read with byte
+caps, without following file or directory links, and must be regular files inside
+the attempt workspace.
 
 Environment: `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, `TF_PLUGIN_CACHE_DIR`, and `HOME`
 (inside the workspace) are passed as `-e NAME=VALUE`; the input's `env` and
@@ -205,8 +213,15 @@ Environment: `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, `TF_PLUGIN_CACHE_DIR`, and `HOM
 environment, so they never appear in `/proc/<pid>/cmdline`. Names the agent or the
 container runtime use (`HOME`, `PATH`, `TF_CLI_ARGS*`, `CONTAINERS_*`, …) are refused.
 
-Cancel sends SIGTERM to the tool's process group (podman forwards it to OpenTofu),
-then after 10 s kills the container (`podman kill`) and the group.
+OpenTofu has a 60-minute attempt timeout by default, configurable with
+`timeoutMinutes` from 1 to 1440. Stopping OpenTofu sends SIGINT to allow it to save
+state, then SIGTERM after 10 seconds, then a hard kill after another 10 seconds.
+A timed-out preview fails; a timed-out apply is uncertain and reports saved state.
+Other tools receive SIGTERM, then a hard kill after 10 seconds. Normal server
+cancellation still never interrupts a running change. An explicit operator Force
+stop is the exception: agents advertising `forced-mutation-stop-v1` stop the
+running tool and return uncertain, with complete saved state for OpenTofu. Ansible
+uses SIGTERM and then a hard kill. Older agents keep the tool running.
 
 Ansible runs the same way, without the provider cache, through `octopushy-ansible`
 from [`ansible/`](ansible/): its secrets arrive on stdin and stay in memory, so with

@@ -145,7 +145,7 @@ public sealed partial class RunEngine(
 
     /// <summary>
     /// Stops a run whose change is in progress, without waiting for its agent: for an agent that will never report, as one
-    /// stuck restarting itself. The agent is asked to cancel, and the change is uncertain, as when its lease runs out: a
+    /// stuck restarting itself. A capable agent is asked to force stop its tool, and the change is uncertain, as when its lease runs out: a
     /// later result still settles it, and otherwise the run is closed after the user has looked at the guest.
     /// </summary>
     public Task ForceStopAsync(Guid runId, string user, CancellationToken cancellationToken) =>
@@ -159,10 +159,11 @@ public sealed partial class RunEngine(
             }
 
             var now = clock.GetUtcNow();
+            var cancels = new List<(AgentSession Session, ServerMessage Message)>();
             foreach (var attempt in active)
             {
                 if (attempt.AgentId is { } agentId && connections.Get(agentId) is { } session)
-                    session.TrySend(new ServerMessage { Cancel = new CancelAttempt { AttemptId = attempt.Id.ToString() } });
+                    cancels.Add((session, new ServerMessage { Cancel = new CancelAttempt { AttemptId = attempt.Id.ToString(), Force = attempt.Mutating && session.SupportsForcedMutationStop } }));
                 attempt.Status = attempt.Mutating ? AttemptStatuses.Uncertain : AttemptStatuses.Cancelled;
                 attempt.Error = $"Stopped by {user} before the agent reported.";
                 attempt.FinishedAt = now;
@@ -176,6 +177,8 @@ public sealed partial class RunEngine(
             }
 
             await db.SaveChangesAsync(cancellationToken);
+            foreach (var (session, message) in cancels)
+                session.TrySend(message);
             await AdvanceAsync(db, run.Id, cancellationToken);
             signal.Wake();
         }, cancellationToken);

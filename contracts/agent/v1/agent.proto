@@ -209,6 +209,9 @@ message Assignment {
 
 message CancelAttempt {
   string attempt_id = 1;
+  // Operator Force stop only. Sent only when Hello.capabilities includes
+  // "forced-mutation-stop-v1". A normal cancel never interrupts a running change.
+  bool force = 2;
 }
 
 message ResultAck {

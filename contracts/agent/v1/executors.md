@@ -17,6 +17,22 @@ again on each new connection while an attempt runs. `Hello.capabilities` lists f
 that are not executors; a controller sends built-in OpenTofu state work only to agents
 that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 
+### Cancellation and operator Force stop
+
+Normal `CancelAttempt`, with `force` absent or false, cancels queued work and
+read-only attempts. It never interrupts a running mutation. Lease loss and agent
+draining do not override that rule.
+
+An agent advertising `forced-mutation-stop-v1` accepts `CancelAttempt.force=true`
+for an explicit operator Force stop. The controller must not send force from
+normal cancellation or to an agent without that capability. A forced queued
+attempt is cancelled before starting. A forced running mutation is uncertain,
+even if its tool exits zero after stopping. OpenTofu uses the SIGINT, SIGTERM,
+hard-kill sequence described below and reports complete saved state. Ansible
+terminates the playbook process, then escalates to a hard kill. Remote work may
+continue; force does not roll back changes or permit an automatic retry. Older
+agents refuse to interrupt mutations, so their tools keep running.
+
 ## Enrollment token and CA
 
 An enrollment token is `opy1.<secret>.<fingerprint>`: `secret` is base64url without
@@ -197,7 +213,11 @@ The controller sends it for the `unprotect` step with `protection: false` and fo
 
 Runs OpenTofu in a container image (`image`), rootless, with only the attempt's
 workspace and the agent's provider cache mounted. The `local` tool runtime runs a
-`tofu` binary on the agent instead, for development and tests.
+`tofu` binary on the agent instead. The shipped agent image, Compose stack and
+Proxmox installer use `local`. Tools share the agent's user and are not sandboxed
+from its files. Local concurrency is capped at one attempt, even if the server
+allows more. Tool-written files must be regular files inside the workspace;
+agent reads reject links in every path component and enforce byte caps.
 
 Input (the same for both actions):
 
@@ -209,10 +229,19 @@ Input (the same for both actions):
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
   "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token" },
-  "destroy": false
+  "destroy": false,
+  "timeoutMinutes": 60
 }
 ```
 
+- `timeoutMinutes` is optional, an integer from 1 to 1440, default 60. It is one
+  deadline across the OpenTofu commands in an attempt, not a new allowance for
+  each command. A timeout stops OpenTofu with SIGINT so it can finish the resource
+  in flight and save state. After 10 seconds it escalates to SIGTERM, then after
+  another 10 seconds kills the process group or container. A timed-out preview
+  fails. A timed-out apply is uncertain, even if graceful shutdown exits zero,
+  and includes any complete saved state. A workflow's OpenTofu stage may set
+  `timeoutMinutes`; the controller includes it in both preview and apply inputs.
 - `files_tar_gz` holds the repository snapshot (without `.git`); `root` is a
   directory inside it. The executor extracts it into the attempt's workspace and
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
@@ -489,7 +518,7 @@ The controller records the artifact's SHA-256 as `planSha256`, which the approva
 
 ### `run`
 
-**Mutating and not cancellable.** The assignment carries `preview.json`, whose SHA-256 is
+**Mutating and not normally cancellable.** The assignment carries `preview.json`, whose SHA-256 is
 checked, and the secrets `ansible.ssh-key`, `ansible.var.<name>` and `ansible.file.<name>`. They
 reach `octopushy-ansible` on stdin as `{"sshKey", "secretVars", "secretFiles"}`, never in argv,
 the environment or the workspace. A secret file's extra var holds its path.

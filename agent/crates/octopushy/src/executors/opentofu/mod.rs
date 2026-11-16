@@ -24,6 +24,8 @@ pub mod state;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use octopushy_proto::v1::Artifact;
 use serde::Deserialize;
@@ -35,6 +37,7 @@ use crate::tls::sha256_hex;
 use crate::tools::{Invocation, Tool, ToolOutput};
 
 pub const PLAN_ARTIFACT: &str = "plan.tar.gz";
+const MAX_PLAN_BYTES: usize = 32 * 1024 * 1024;
 const LOCK_FILE: &str = ".terraform.lock.hcl";
 const TFVARS_FILE: &str = "octopushy.auto.tfvars.json";
 const BACKEND_FILE: &str = "octopushy_backend.tf.json";
@@ -66,6 +69,8 @@ struct Input {
     secret_env: BTreeMap<String, String>,
     #[serde(default)]
     destroy: bool,
+    #[serde(default)]
+    timeout_minutes: Option<u64>,
     /// The SSH host keys a provider may connect to, as `known_hosts` lines. The Proxmox provider
     /// reads `$HOME/.ssh/known_hosts` and refuses a host whose key differs, but adds any host it
     /// has not seen, so without this its first connection would trust whoever answered.
@@ -175,11 +180,17 @@ struct Prepared {
     out_dir: PathBuf,
     settings: Vec<(String, String)>,
     env: Vec<(String, String)>,
+    deadline: Instant,
 }
 
 /// Validates the input, extracts the repository, and writes the generated files.
 fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure> {
     let input: Input = ctx.input()?;
+    let minutes = input.timeout_minutes.unwrap_or(60);
+    if !(1..=1440).contains(&minutes) {
+        return Err(Failure::msg("timeoutMinutes must be between 1 and 1440"));
+    }
+    let deadline = Instant::now() + Duration::from_secs(minutes * 60);
     let rt = &cfg.runtime;
     let ws = &ctx.workspace;
 
@@ -297,6 +308,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         out_dir,
         settings,
         env,
+        deadline,
     })
 }
 
@@ -369,31 +381,63 @@ impl Tofu<'_> {
     ) -> Result<ToolOutput, Failure> {
         let mut name = format!("octopushy-{}-{step}", self.ctx.attempt_id);
         name.truncate(200);
-        let out = self
-            .cfg
-            .runtime
-            .run(
-                Invocation {
-                    tool: Tool::OpenTofu,
-                    name,
-                    image: &self.prep.input.image,
-                    workspace: &self.ctx.workspace,
-                    workdir: &self.prep.root,
-                    plugin_cache: Some(&self.cfg.provider_cache),
-                    args,
-                    settings: self.prep.settings.clone(),
-                    env: self.prep.env.clone(),
-                    stdin: None,
-                    capture_stdout: capture,
-                    stderr_mark: (step == "apply").then_some(state::NOT_SAVED),
-                    control_prefix: None,
-                },
-                &self.ctx.log,
-                &self.ctx.cancel,
-            )
-            .await?;
+        let timeout = || {
+            let message = format!(
+                "OpenTofu exceeded timeoutMinutes={} while running {step}",
+                self.prep.input.timeout_minutes.unwrap_or(60)
+            );
+            if self.ctx.action == "apply" {
+                Failure::Uncertain(message)
+            } else {
+                Failure::msg(message)
+            }
+        };
+        if Instant::now() >= self.prep.deadline {
+            return Err(timeout());
+        }
+        let stop = self.ctx.cancel.child_token();
+        let run = self.cfg.runtime.run(
+            Invocation {
+                tool: Tool::OpenTofu,
+                name,
+                image: &self.prep.input.image,
+                workspace: &self.ctx.workspace,
+                workdir: &self.prep.root,
+                plugin_cache: Some(&self.cfg.provider_cache),
+                args,
+                settings: self.prep.settings.clone(),
+                env: self.prep.env.clone(),
+                stdin: None,
+                capture_stdout: capture,
+                stderr_mark: (step == "apply").then_some(state::NOT_SAVED),
+                control_prefix: None,
+            },
+            &self.ctx.log,
+            &stop,
+        );
+        tokio::pin!(run);
+        let mut timed_out = false;
+        let out = tokio::select! {
+            out = &mut run => out,
+            _ = tokio::time::sleep_until(self.prep.deadline) => {
+                timed_out = true;
+                self.ctx.log.agent("OpenTofu timeout reached; stopping gracefully to save state");
+                stop.cancel();
+                run.await
+            }
+        };
+        if timed_out {
+            return Err(timeout());
+        }
+        let out = out?;
         if out.cancelled {
-            return Err(Failure::Cancelled);
+            return Err(if self.ctx.action == "apply" {
+                Failure::Uncertain(
+                    "OpenTofu was stopped; inspect its saved state before planning again".into(),
+                )
+            } else {
+                Failure::Cancelled
+            });
         }
         Ok(out)
     }
@@ -498,16 +542,20 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 
     if has_changes {
-        let plan_bin = fs::read(&plan_path)
-            .map_err(|e| Failure::msg(format!("reading the saved plan: {e}")))?;
+        let plan_bin = read_plan(&ctx.workspace, &plan_path)?;
         let lock_path = prep.root.join(LOCK_FILE);
-        let lock = fs::read(&lock_path).ok();
+        let lock = read_lock(&ctx.workspace, &lock_path)?;
         let mut files: Vec<(&str, &[u8])> = vec![("plan.bin", &plan_bin)];
         match &lock {
             Some(l) => files.push((LOCK_FILE, l)),
             None => ctx.log.agent("no .terraform.lock.hcl after init (no providers); the artifact holds only plan.bin"),
         }
         let content = archive::pack(&files)?;
+        if content.len() > MAX_PLAN_BYTES {
+            return Err(Failure::msg(format!(
+                "saved plan artifact exceeds the {MAX_PLAN_BYTES} byte cap"
+            )));
+        }
         let sha256 = sha256_hex(&content);
         ctx.log.agent(format!(
             "saved plan: {} to create, {} to update, {} to delete, {} to replace (artifact sha256 {sha256})",
@@ -583,15 +631,15 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         return Err(Failure::msg(format!("{PLAN_ARTIFACT} holds no plan.bin")));
     }
     let saved_lock = prep.out_dir.join(LOCK_FILE);
-    if saved_lock.is_file() {
-        let lock = fs::read(&saved_lock).map_err(anyhow::Error::from)?;
-        write_fresh(&prep.root.join(LOCK_FILE), &lock)?;
+    let lock = read_lock(&ctx.workspace, &saved_lock)?;
+    if let Some(lock) = &lock {
+        write_fresh(&prep.root.join(LOCK_FILE), lock)?;
         ctx.log
             .agent("restored .terraform.lock.hcl from the preview");
     }
 
     tofu.version().await?;
-    tofu.init(saved_lock.is_file()).await?;
+    tofu.init(lock.is_some()).await?;
     let plan_arg = tofu.path(&plan_path)?;
     let watcher = tokio::spawn(state::watch(
         ctx.workspace.clone(),
@@ -612,6 +660,8 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         .await;
     watcher.abort();
     let applied = applied?;
+    state::read_checked(&ctx.workspace)
+        .map_err(|e| Failure::Uncertain(format!("cannot read the saved OpenTofu state: {e:#}")))?;
     if applied.code != Some(0) {
         // OpenTofu exits 1 after saving what it did. Anything else, such as being
         // killed, leaves work done since its last write out of the state.
@@ -663,9 +713,54 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     })))
 }
 
+fn read_plan(workspace: &Path, path: &Path) -> Result<Vec<u8>, Failure> {
+    crate::fsutil::read_tool_file(workspace, path, MAX_PLAN_BYTES).map_err(Failure::from)
+}
+
+fn read_lock(workspace: &Path, path: &Path) -> Result<Option<Vec<u8>>, Failure> {
+    match crate::fsutil::read_tool_file(workspace, path, 1024 * 1024) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_saved_and_tool_written_lock_links_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        for file in [".terraform.lock.hcl", "saved.lock"] {
+            let path = dir.path().join(file);
+            symlink("/etc/passwd", &path).unwrap();
+            let error = read_lock(dir.path(), &path).unwrap_err();
+            assert!(error.message().contains("without following links"));
+        }
+    }
+
+    #[test]
+    fn saved_plan_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.bin");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_PLAN_BYTES as u64 + 1).unwrap();
+        assert!(
+            read_plan(dir.path(), &path)
+                .unwrap_err()
+                .message()
+                .contains("byte cap")
+        );
+        fs::write(&path, b"plan").unwrap();
+        assert_eq!(read_plan(dir.path(), &path).unwrap(), b"plan");
+    }
 
     #[test]
     fn known_hosts_lines() {
