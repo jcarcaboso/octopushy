@@ -5,6 +5,11 @@ Agents run separately (see [`agent/`](../agent)). Any Linux host with Podman (th
 Docker-compatible API, or `podman compose`) or Docker Engine with the Compose plugin
 works.
 
+Only one backend server may run against a database. The server holds a PostgreSQL
+advisory lock on a dedicated connection and refuses to start if another server owns
+it. If that connection is lost, the server stops so the container can restart and
+acquire ownership again. Do not use rolling updates with overlapping backends.
+
 To run it in a Proxmox LXC container with Docker, created and updated by script, see
 [`proxmox/`](proxmox/README.md).
 
