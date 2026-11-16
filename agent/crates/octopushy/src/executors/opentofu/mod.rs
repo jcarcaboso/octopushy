@@ -23,6 +23,7 @@ pub mod state;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use octopushy_proto::v1::Artifact;
@@ -35,6 +36,7 @@ use crate::tls::sha256_hex;
 use crate::tools::{Invocation, Tool, ToolOutput};
 
 pub const PLAN_ARTIFACT: &str = "plan.tar.gz";
+const MAX_PLAN_BYTES: usize = 32 * 1024 * 1024;
 const LOCK_FILE: &str = ".terraform.lock.hcl";
 const TFVARS_FILE: &str = "octopushy.auto.tfvars.json";
 const BACKEND_FILE: &str = "octopushy_backend.tf.json";
@@ -498,8 +500,7 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 
     if has_changes {
-        let plan_bin = fs::read(&plan_path)
-            .map_err(|e| Failure::msg(format!("reading the saved plan: {e}")))?;
+        let plan_bin = read_plan(&plan_path)?;
         let lock_path = prep.root.join(LOCK_FILE);
         let lock = fs::read(&lock_path).ok();
         let mut files: Vec<(&str, &[u8])> = vec![("plan.bin", &plan_bin)];
@@ -508,6 +509,11 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             None => ctx.log.agent("no .terraform.lock.hcl after init (no providers); the artifact holds only plan.bin"),
         }
         let content = archive::pack(&files)?;
+        if content.len() > MAX_PLAN_BYTES {
+            return Err(Failure::msg(format!(
+                "saved plan artifact exceeds the {MAX_PLAN_BYTES} byte cap"
+            )));
+        }
         let sha256 = sha256_hex(&content);
         ctx.log.agent(format!(
             "saved plan: {} to create, {} to update, {} to delete, {} to replace (artifact sha256 {sha256})",
@@ -663,9 +669,33 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     })))
 }
 
+fn read_plan(path: &Path) -> Result<Vec<u8>, Failure> {
+    let mut content = Vec::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(MAX_PLAN_BYTES as u64 + 1).read_to_end(&mut content))
+        .map_err(|e| Failure::msg(format!("reading the saved plan: {e}")))?;
+    if content.len() > MAX_PLAN_BYTES {
+        return Err(Failure::msg(format!(
+            "saved plan exceeds the {MAX_PLAN_BYTES} byte cap"
+        )));
+    }
+    Ok(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_plan_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.bin");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_PLAN_BYTES as u64 + 1).unwrap();
+        assert!(read_plan(&path).unwrap_err().message().contains("byte cap"));
+        fs::write(&path, b"plan").unwrap();
+        assert_eq!(read_plan(&path).unwrap(), b"plan");
+    }
 
     #[test]
     fn known_hosts_lines() {

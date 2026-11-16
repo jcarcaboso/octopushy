@@ -448,3 +448,62 @@ async fn an_attempt_that_never_ran_does_not_claim_to_have_started() {
         .collect();
     assert_eq!(started, ["running-1"]);
 }
+
+#[tokio::test]
+async fn oversized_result_keeps_state_and_does_not_block_later_results() {
+    use octopushy_proto::v1::Artifact;
+    let h = harness();
+    h.manager
+        .accept(assignment("large", "test", "mutate", r#"{"ms":0}"#));
+    let mut c = Collector::default();
+    c.result(&h.manager, "large").await;
+    let mut large = result("large", Outcome::Succeeded, "");
+    large.outputs_json = "x".repeat(MAX_RESULT_BYTES);
+    large.artifacts = vec![
+        Artifact {
+            name: state::ARTIFACT.into(),
+            content: b"state".to_vec(),
+            ..Default::default()
+        },
+        Artifact {
+            name: "plan.tar.gz".into(),
+            content: vec![1; 10],
+            ..Default::default()
+        },
+    ];
+    h.manager.finish("large", large);
+    let stored = h
+        .manager
+        .outbox
+        .get("large")
+        .unwrap()
+        .unwrap()
+        .to_result()
+        .unwrap();
+    assert_eq!(stored.outcome(), Outcome::Uncertain);
+    assert!(stored.error.contains("result too large"));
+    assert_eq!(stored.artifacts.len(), 1);
+    assert_eq!(stored.artifacts[0].content, b"state");
+    assert!(stored.encoded_len() < crate::connection::MAX_MESSAGE_BYTES);
+    h.manager.accept(assignment("later", "test", "echo", "{}"));
+    let mut reconnected = Collector::default();
+    assert_eq!(
+        reconnected.result(&h.manager, "later").await.outcome(),
+        Outcome::Succeeded
+    );
+    assert!(reconnected.find("large").is_some());
+}
+
+#[test]
+fn oversized_state_is_dropped_and_reads_fail() {
+    let mut r = result("read", Outcome::Succeeded, "");
+    r.artifacts.push(octopushy_proto::v1::Artifact {
+        name: state::ARTIFACT.into(),
+        content: vec![0; MAX_RESULT_BYTES],
+        ..Default::default()
+    });
+    bound_result(&mut r, false);
+    assert_eq!(r.outcome(), Outcome::Failed);
+    assert!(r.artifacts.is_empty());
+    assert!(r.encoded_len() < MAX_RESULT_BYTES);
+}

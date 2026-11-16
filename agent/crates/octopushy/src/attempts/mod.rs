@@ -25,6 +25,7 @@ use octopushy_proto::v1::{
     AgentMessage, Assignment, AttemptLog, AttemptResult, AttemptStarted, AttemptStateSnapshot,
     Outcome, agent_message::Kind,
 };
+use prost::Message;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -371,7 +372,14 @@ impl AttemptManager {
     }
 
     /// Stores the result and marks the attempt finished.
-    fn finish(&self, id: &str, result: AttemptResult) {
+    fn finish(&self, id: &str, mut result: AttemptResult) {
+        let mutating = self
+            .entries
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|e| e.mutating);
+        bound_result(&mut result, mutating);
         let on_disk = self
             .entries
             .lock()
@@ -601,6 +609,31 @@ impl AttemptManager {
             }
         }
         self.outbox.get(id)
+    }
+}
+
+/// Leave 1 MiB for the AgentMessage envelope and future fields.
+const MAX_RESULT_BYTES: usize = crate::connection::MAX_MESSAGE_BYTES - 1024 * 1024;
+
+fn bound_result(result: &mut AttemptResult, mutating: bool) {
+    let bytes = result.encoded_len();
+    if bytes <= MAX_RESULT_BYTES {
+        return;
+    }
+    let outputs = result.outputs_json.len();
+    let artifacts: usize = result.artifacts.iter().map(|a| a.content.len()).sum();
+    result.outcome = if mutating {
+        Outcome::Uncertain
+    } else {
+        Outcome::Failed
+    } as i32;
+    result.outputs_json = "{}".into();
+    result.error = format!(
+        "result too large: protobuf={bytes} bytes, outputs={outputs} bytes, artifacts={artifacts} bytes, limit={MAX_RESULT_BYTES} bytes"
+    );
+    result.artifacts.retain(|a| a.name == state::ARTIFACT);
+    if result.encoded_len() > MAX_RESULT_BYTES {
+        result.artifacts.clear();
     }
 }
 
