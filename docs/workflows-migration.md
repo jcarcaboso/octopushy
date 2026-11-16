@@ -1,3 +1,5 @@
+> Historical migration plan. See `workflows.md`, `../contracts/agent/v1/executors.md` and `adr/` for the implemented workflow system and current decisions. Migrations are now append-only.
+
 # Workflows migration
 
 **Draft, November 3, 2026, after review by two independent agents.** This plan takes Octopushy from "an engine that
