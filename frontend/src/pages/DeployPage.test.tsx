@@ -101,11 +101,11 @@ function api(extra: Record<string, (r: RecordedRequest) => unknown> = {}) {
   });
 }
 
-function renderWizard() {
+function renderWizard(entry = "/deploy") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/deploy"]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/changes/:id" element={<p>The change page</p>} />
@@ -180,6 +180,37 @@ describe("DeployPage", () => {
     // Bound to what was reviewed: the release and the files.
     expect(deployed).toMatchObject({ approveAtDeploy: true, name: "w2", vmid: 311, reviewedRelease: `octopushy-worker@1.1 at ${base}`,
       reviewDigest: "d".repeat(64) });
+  });
+
+  it("attaches a VM that exists: where it is comes from Proxmox, and it brings its own keys", async () => {
+    const user = userEvent.setup();
+    const { requests } = api();
+    renderWizard("/deploy?attach=120&installation=home%2Fpve01&host=pve01&name=Legacy+App");
+
+    expect(await screen.findByRole("heading", { name: "Attach VM 120" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("radio", { name: /octopushy-worker/ }));
+    await user.click(screen.getByRole("button", { name: /Next: where/ }));
+    expect(screen.getByRole("radio", { name: /home\/pve01/ })).toBeChecked();
+    expect(screen.getByLabelText("Host")).toBeDisabled();
+    expect(screen.getByLabelText("VMID")).toHaveValue("120");
+    expect(screen.getByLabelText("VMID")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: /Next free/ })).toBeNull();
+    expect(screen.getByLabelText("Name")).toHaveValue("legacy-app");
+    await user.click(screen.getByRole("button", { name: /Next: form/ }));
+    await user.click(await screen.findByRole("button", { name: /Next: secrets/ }));
+    expect(screen.getByLabelText("SSH key, as a store key")).toHaveValue("proxmox/pve01/legacy-app/ssh-key");
+    expect(screen.getByLabelText("Host key, as a store key")).toHaveValue("proxmox/pve01/legacy-app/host-key");
+    await user.click(screen.getByRole("button", { name: /Review the deploy/ }));
+
+    await waitFor(() => expect(requests.some((r) => r.method === "POST" && r.path === "/api/deploy/preview")).toBe(true));
+    expect(requests.find((r) => r.method === "POST" && r.path === "/api/deploy/preview")!.body).toMatchObject({
+      attach: true, vmid: 120, host: "pve01", name: "legacy-app", template: null, approveAtDeploy: false,
+      sshKey: "proxmox/pve01/legacy-app/ssh-key", hostKey: "proxmox/pve01/legacy-app/host-key",
+    });
+    await user.click(await screen.findByRole("button", { name: /Next: deploy/ }));
+    expect(screen.queryByRole("checkbox", { name: /Approve the plan/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Commit the attach" }));
+    expect(await screen.findByText("The change page")).toBeInTheDocument();
   });
 
   it("deploys without approval when the box is left unticked", async () => {

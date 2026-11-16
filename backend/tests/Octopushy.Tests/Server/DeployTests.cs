@@ -1045,6 +1045,33 @@ public class DeployTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task An_attach_writes_a_guest_for_a_vm_that_exists_and_nothing_else_holds()
+    {
+        await using var setup = await StartAsync(observe: false);
+        await setup.ObserveRawAsync(JsonNode.Parse("""
+            { "cluster": null, "hosts": [{ "name": "korriban", "online": true }], "vmVisibility": { "complete": true },
+              "guests": [{ "vmid": 400, "name": "legacy", "host": "korriban", "kind": "qemu", "status": "running" },
+                         { "vmid": 401, "name": "ct", "host": "korriban", "kind": "lxc", "status": "running" }] }
+            """)!.AsObject());
+
+        var change = await DeployAsync(setup, Guest(setup.RemoteHead, 400, name: "legacy") with { Attach = true });
+        var written = setup.RemoteFile("labs/home/proxmox/korriban/guests/legacy/guest.yaml");
+        Assert.Contains("machine: attached", written);
+        Assert.Contains("vmid: 400", written);
+        Assert.StartsWith("legacy: attach test-vm@1", change.Message);
+
+        var unseen = await RefusedAsync(setup, Guest(setup.RemoteHead, 402, name: "ghost") with { Attach = true });
+        Assert.Contains("shows no VM at VMID 402", unseen.Message);
+        var container = await RefusedAsync(setup, Guest(setup.RemoteHead, 401, name: "ct") with { Attach = true });
+        Assert.Contains("is a container", container.Message);
+        // Written in a guest's folder now: held, so it cannot be attached twice.
+        var twice = await RefusedAsync(setup, Guest(setup.RemoteHead, 400, name: "again") with { Attach = true });
+        Assert.Contains("cannot be attached: written in", twice.Message);
+        var withTemplate = await RefusedAsync(setup, Guest(setup.RemoteHead, 400, name: "tpl") with { Attach = true, Template = "fedora" });
+        Assert.Contains("takes no template", withTemplate.Message);
+    }
+
+    [Fact]
     public async Task A_quorate_cluster_with_a_node_off_still_offers_vmids_and_counts_that_nodes_vms()
     {
         await using var setup = await StartAsync(observe: false);

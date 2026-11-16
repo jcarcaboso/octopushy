@@ -1,7 +1,7 @@
 import { Play } from "lucide-react";
 import { isNotFound } from "../api/client";
 import { Link, useNavigate, useParams } from "react-router";
-import { usePlanGuest, useGuest, useUptime } from "../api/queries";
+import { useAttachGuest, usePlanGuest, useGuest, useUptime } from "../api/queries";
 import type { GuestDetail } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
@@ -132,6 +132,7 @@ export function GuestPage() {
   const { id = "" } = useParams();
   const { data, error, isPending } = useGuest(id);
   const plan = usePlanGuest();
+  const attach = useAttachGuest();
   const navigate = useNavigate();
   useHashScroll(Boolean(data));
 
@@ -173,20 +174,45 @@ export function GuestPage() {
             {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
             {data.missingSince || data.retiredAt ? null : <ChangeActions resourceId={guest.id} kind="guest" />}
             {data.missingSince && !data.retiredAt ? <DetachGuest id={guest.id} address={guest.address} noun={noun} /> : null}
+            {/* An attached machine has no provision runs: Octopushy never plans it. */}
+            {data.attachable || data.attachedAt ? null : (
             <button
-              type="button"
-              className="button button--primary"
-              onClick={() => plan.mutate(id, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
-              disabled={plan.isPending}
-            >
-              <Play size={15} aria-hidden="true" />
-              {plan.isPending ? "Starting…" : data.missingSince && !data.retiredAt ? "Plan removal" : "Plan now"}
-            </button>
+                type="button"
+                className="button button--primary"
+                onClick={() => plan.mutate(id, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}
+                disabled={plan.isPending}
+              >
+                <Play size={15} aria-hidden="true" />
+                {plan.isPending ? "Starting…" : data.missingSince && !data.retiredAt ? "Plan removal" : "Plan now"}
+              </button>
+            )}
           </>
         }
       />
       <div className="stack stack--large">
         <ErrorMessage error={plan.error} />
+        <ErrorMessage error={attach.error} />
+        {data.attachable ? (
+          <Callout
+            kind="info"
+            title={`Attach to the ${noun} at VMID ${guest.vmid ?? "—"} on ${guest.host ?? "—"}`}
+            actions={
+              <button type="button" className="button button--primary" disabled={attach.isPending}
+                onClick={() => attach.mutate(id, { onSuccess: (started) => navigate(`/runs/${started.runId}`) })}>
+                {attach.isPending ? "Starting…" : "Attach"}
+              </button>
+            }
+          >
+            Octopushy did not create this {noun}. Attaching it verifies it is at that VMID on that host, turns its protection on, and
+            binds the guest to it, recorded as your decision. From then on its setup and services run on it, and Octopushy never
+            plans, replaces or deletes it: retiring the guest or deleting its folder detaches it.
+          </Callout>
+        ) : null}
+        {data.attachedAt ? (
+          <Callout kind="info" title={<>Attached <RelativeTime value={data.attachedAt} /></>}>
+            {data.attachedBy} attached this guest to a {noun} Octopushy did not create. Octopushy never plans, replaces or deletes it.
+          </Callout>
+        ) : null}
         {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
         {data.missingSince && !data.retiredAt ? (
           <Callout kind="warning" title={<>Folder deleted <RelativeTime value={data.missingSince} /></>}>

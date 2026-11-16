@@ -189,6 +189,24 @@ describe("installation page", () => {
 describe("force delete server", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("offers to attach a VM Octopushy does not manage, and only a VM", async () => {
+    const vm = (vmid: number, name: string, kind: string) => ({
+      vmid, name, host: "korriban", status: "running", template: false, tags: [], maxCpu: 2, maxMemoryBytes: null, uptimeSeconds: null,
+      managedBy: null, managedById: null, kind,
+    });
+    mockApi({
+      [`GET /api/installations/${id}`]: () => ({
+        ...detail({ ...summary({ untrusted: [], trustedAt: "2026-10-27T10:00:00Z", trustedBy: "ops" }), unmanagedCount: 2, observedAt: "2026-11-13T08:00:00Z" }),
+        observedGuests: [vm(120, "Legacy App", "qemu"), vm(121, "ct", "lxc")],
+      }),
+    });
+    renderPage();
+    await screen.findByText("Legacy App");
+    const attach = screen.getByRole("link", { name: "Attach" });
+    expect(attach).toHaveAttribute("href", "/deploy?attach=120&installation=home%2Fkorriban&host=korriban&name=Legacy+App");
+    expect(screen.getAllByRole("link", { name: "Attach" })).toHaveLength(1);
+  });
+
   it("requires the installation address before deleting and explains the scope", async () => {
     const user = userEvent.setup();
     const { requests } = mockApi({

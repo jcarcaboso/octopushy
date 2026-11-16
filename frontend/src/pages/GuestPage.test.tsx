@@ -172,6 +172,27 @@ describe("GuestPage", () => {
     expect(screen.queryByText(/verified absent/)).toBeNull();
   });
 
+  it("attaches a guest that waits for it, and offers no plan for an attached machine", async () => {
+    const user = userEvent.setup();
+    const { requests } = mockApi({
+      "GET /api/guests/guest-1": () => detail({ attachable: true, binding: null }, { status: "pending" }),
+      "POST /api/guests/guest-1/attach": () => ({ runId: "run-9" }),
+      "GET /api/runs/run-9": () => new Response(null, { status: 404 }),
+    });
+    const first = renderAt(<GuestPage />, route);
+    expect(await screen.findByText(/Octopushy did not create this VM/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Plan now" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Attach" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "POST" && r.path === "/api/guests/guest-1/attach")).toBe(true));
+    first.unmount();
+
+    mockApi({ "GET /api/guests/guest-1": () => detail({ attachedAt: "2026-11-13T09:00:00Z", attachedBy: "ops" }, { status: "in-sync" }) });
+    renderAt(<GuestPage />, route);
+    expect(await screen.findByText(/ops attached this guest/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Attach" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Plan now" })).toBeNull();
+  });
+
   it("marks the values that are not what was last applied, and none once the guest is in sync", async () => {
     const before = text.replace("memory: 8192", "memory: 4096").replace("bridge: vmbr1", "bridge: vmbr0");
     mockApi({ "GET /api/guests/guest-1": () => detail({ appliedDefinitionText: before }), "GET /api/uptime": () => ({ checks: [] }) });

@@ -54,30 +54,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var connection = inputs.Installation.Connection;
         var endpoint = ProvisionInputs.EndpointFor(inputs.Installation, inputs.Host);
 
-        var readRole = connection.SharedToken ? SecretNames.ProxmoxSharedToken : SecretNames.ProxmoxReadOnlyToken;
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [readRole] = connection.ReadOnlyToken.Key,
-        };
-        if (!connection.SharedToken)
-            secrets[SecretNames.ProxmoxPrivilegedToken] = connection.PrivilegedToken.Key;
-        var requestedVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (connection.ReadOnlyToken.Version is { } tokenVersion)
-        {
-            requestedVersions[readRole] = tokenVersion;
-        }
-        if (!connection.SharedToken && connection.PrivilegedToken.Version is { } privilegedVersion)
-        {
-            requestedVersions[SecretNames.ProxmoxPrivilegedToken] = privilegedVersion;
-        }
-        if (connection.CaCertificate is { } ca)
-        {
-            secrets[SecretNames.ProxmoxCa] = ca.Key;
-            if (ca.Version is { } caVersion)
-            {
-                requestedVersions[SecretNames.ProxmoxCa] = caVersion;
-            }
-        }
+        var (secrets, requestedVersions) = ProxmoxSecrets(connection);
 
         var env = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -404,6 +381,76 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// Refuses a run in an installation Octopushy only observes. Its guests are invalid already; this is
     /// asked again where every run is made, and the engine asks once more before anything is sent.
     /// </summary>
+    /// <summary>The installation's Proxmox tokens and CA, by role, and the versions the definition pins.</summary>
+    private static (Dictionary<string, string> Secrets, Dictionary<string, int> Versions) ProxmoxSecrets(ConnectionDefinition connection)
+    {
+        var readRole = connection.SharedToken ? SecretNames.ProxmoxSharedToken : SecretNames.ProxmoxReadOnlyToken;
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { [readRole] = connection.ReadOnlyToken.Key };
+        var versions = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (connection.ReadOnlyToken.Version is { } tokenVersion)
+            versions[readRole] = tokenVersion;
+        if (!connection.SharedToken)
+        {
+            secrets[SecretNames.ProxmoxPrivilegedToken] = connection.PrivilegedToken.Key;
+            if (connection.PrivilegedToken.Version is { } privilegedVersion)
+                versions[SecretNames.ProxmoxPrivilegedToken] = privilegedVersion;
+        }
+        if (connection.CaCertificate is { } ca)
+        {
+            secrets[SecretNames.ProxmoxCa] = ca.Key;
+            if (ca.Version is { } caVersion)
+                versions[SecretNames.ProxmoxCa] = caVersion;
+        }
+
+        return (secrets, versions);
+    }
+
+    /// <summary>
+    /// An attach run, which <paramref name="actor"/> started by choosing to attach <paramref name="guest"/>, declared
+    /// <c>machine: attached</c>, to the machine at its VMID: verify that machine on its host, turn its protection on, and the
+    /// guest is bound to it. The person's choice is the run's approval, recorded as theirs. Nothing else is changed.
+    /// </summary>
+    public Run Attach(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision, string actor)
+    {
+        if (!guest.Attached)
+            throw new RunException("Only a guest declared machine: attached is attached to an existing machine.");
+        if (guest.Retired)
+            throw new RunException("A retired guest is not attached.");
+        Managed(repository, guest.InstallationAddress);
+        var installation = repository.Installation(guest.InstallationAddress)!;
+        var host = installation.Hosts[guest.Host];
+        var policy = PolicyResolver.For(repository, guest);
+        var labels = PolicyResolver.AgentLabels(repository, guest);
+        var (secrets, requestedVersions) = ProxmoxSecrets(installation.Connection);
+        var context = new RunContext
+        {
+            Address = guest.Address,
+            Commit = revision.Commit,
+            AgentLabels = labels.Value,
+            AgentLabelsSetBy = labels.SetBy,
+            HostKey = $"{installation.Address}/{host.Id}",
+            HostLimit = host.ConcurrentOperations,
+            Policy = new PolicyContext(policy.Approval.Value, policy.Approval.SetBy, policy.Destructive.Value, policy.Destructive.SetBy, policy.DestructiveExplicit),
+            // Not its name or address: a machine someone else made is the one at its VMID, on its host, of its kind.
+            Proxmox = new ProxmoxContext(ProvisionInputs.EndpointFor(installation, host), installation.Connection.VerifyTls,
+                installation.Connection.CaCertificate?.Key, guest.Host, guest.Vmid, null, null, guest.ProxmoxKind),
+            Secrets = secrets,
+            RequestedSecretVersions = requestedVersions,
+        };
+        var run = NewRun(resource, Operations.Attach, revision, "manual", context);
+        AddSteps(run, [StepNames.Approval, StepNames.Verify, StepNames.Protect]);
+        var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
+        var now = clock.GetUtcNow();
+        approval.Status = StepStatuses.Succeeded;
+        approval.ApprovalRequired = true;
+        approval.Decision = "approved";
+        approval.DecidedBy = actor;
+        approval.DecidedAt = now;
+        approval.DecisionNote = $"{actor} chose to attach {guest.Address} to the {(guest.Type == GuestTypes.Container ? "container" : "VM")} at VMID {guest.Vmid} on {guest.Host}.";
+        approval.StartedAt = approval.FinishedAt = now;
+        return run;
+    }
+
     private static void Managed(LabRepository repository, string installation)
     {
         if (repository.Installation(installation) is not { Managed: true })

@@ -154,7 +154,7 @@ public sealed partial class ChangeService
             {
                 try
                 {
-                    await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, null, ct);
+                    await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, null, ct, Attaching(request));
                 }
                 catch (ChangeRefusal taken)
                 {
@@ -199,7 +199,7 @@ public sealed partial class ChangeService
                     (composed, var generations) = await ComposeDeployAsync(db, request, id, target, ct);
                     CheckReviewed(request, target, composed);
                     if (target.ResourceKind == ResourceKinds.Guest)
-                        await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, null, ct);
+                        await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, null, ct, Attaching(request));
                     // On record before anything is generated or pushed, with each value it will make: whatever happens to this
                     // request, the branch never moves, and no value is left in the store, without a change that says why.
                     var recorded = RecordDeploy(id, target, composed, request, actor);
@@ -226,7 +226,7 @@ public sealed partial class ChangeService
                     var landing = (await revisions.ResolveAsync(candidate.Commit!, WorkflowReleaseBook.Of(db, workflowMirrors), ct)).Repository;
                     await CheckLandingAsync(request, deployed, landing, candidate.Commit!, ct);
                     if (deployed.ResourceKind == ResourceKinds.Guest)
-                        await CheckVmidAsync(db, deployed, request.Vmid!.Value, candidate.Remote, landing, id, ct);
+                        await CheckVmidAsync(db, deployed, request.Vmid!.Value, candidate.Remote, landing, id, ct, Attaching(request));
                 }
 
                 var commit = await PushOutsideEngineAsync(deployed.Settings, deployed.Address, composed!, change, request.BaseCommit, actor, Check, ct);
@@ -363,6 +363,8 @@ public sealed partial class ChangeService
             if (request.Vmid is not (>= VmidFloor and <= MaxVmid))
                 throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"A VMID is a number from {VmidFloor} to {MaxVmid}.",
                     fieldIssues: [new FieldIssueDto("/vmid", $"A number from {VmidFloor}.")]);
+            if (request.Attach && (request.Template is not null || request.ApproveAtDeploy))
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, "An attached VM exists already: it takes no template, and has no plan to approve.");
             if (request.Template is { } template && !repository.Templates.ContainsKey(template))
                 throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"There is no template {template} in the repository.",
                     fieldIssues: [new FieldIssueDto("/template", "Choose a template the repository defines.")]);
@@ -443,9 +445,14 @@ public sealed partial class ChangeService
         if (guest)
         {
             document["type"] = "vm";
+            if (request.Attach)
+            {
+                document["machine"] = GuestMachines.Attached;
+                comments["machine"] = "an existing VM: attach it on the guest's page once this is synced";
+            }
             document["host"] = request.Host;
             document["vmid"] = request.Vmid;
-            comments["vmid"] = $"free on {target.Installation} when deployed";
+            comments["vmid"] = request.Attach ? $"the VM on {request.Host} when attached" : $"free on {target.Installation} when deployed";
             if (request.Template is { } template)
                 document["template"] = template;
         }
@@ -465,16 +472,24 @@ public sealed partial class ChangeService
         }
 
         var generations = await SecretsAsync(db, request, target, document, comments, ct);
-        if (guest && (request.AccessUser is not null || request.HostKey is not null))
+        if (guest && (request.AccessUser is not null || request.HostKey is not null || request.SshKey is not null))
         {
             var access = new JsonObject();
             if (!string.IsNullOrWhiteSpace(request.AccessUser))
                 access["user"] = request.AccessUser.Trim();
+            if (!string.IsNullOrWhiteSpace(request.SshKey))
+            {
+                CheckKey(request.SshKey.Trim(), "/sshKey");
+                access["sshKey"] = new JsonObject { ["store"] = request.SshKey.Trim() };
+                comments["access.sshKey"] = "a secret: the private key that logs in to the VM";
+            }
             if (!string.IsNullOrWhiteSpace(request.HostKey))
             {
                 CheckKey(request.HostKey.Trim(), "/hostKey");
                 access["hostKey"] = new JsonObject { ["store"] = request.HostKey.Trim() };
-                comments["access.hostKey"] = "a plain entry: set it from the console after the first boot";
+                comments["access.hostKey"] = request.Attach
+                    ? "a plain entry: the VM's own SSH host key, read from its console"
+                    : "a plain entry: set it from the console after the first boot";
             }
 
             if (access.Count > 0)
@@ -498,7 +513,7 @@ public sealed partial class ChangeService
         }
 
         var where = guest ? $"{target.Installation}, host {request.Host}, VMID {request.Vmid}" : target.Address[..target.Address.LastIndexOf('/')];
-        var subject = ChangeComposer.Truncate($"{target.Name}: deploy {reference} on {where}", 200);
+        var subject = ChangeComposer.Truncate($"{target.Name}: {(request.Attach ? "attach" : "deploy")} {reference} on {where}", 200);
         var details = generations.Select(g => $"{g.Secret}: generated, {g.Detail}, in {g.Key}").ToList();
         var composed = new ComposedChange(target.Kind, target.ResourceKind, target.Address, target.Name, target.File,
             [new Git.DraftFileChange(target.File, text)], [target.File], target.Folder, subject, ChangeComposer.Message(subject, details, id), text, document,
@@ -657,16 +672,40 @@ public sealed partial class ChangeService
         return written;
     }
 
-    /// <summary>Refuses a VMID that is not free on the installation, offering the next free one.</summary>
+    /// <summary>The host an attach deploy names, or null for a deploy that creates its VM.</summary>
+    private static string? Attaching(DeployRequest request) => request.Attach ? request.Host : null;
+
+    /// <summary>
+    /// Refuses a VMID that is not free on the installation, offering the next free one. For an attach, on
+    /// <paramref name="attachOn"/>, the opposite: the VMID has to be a VM the latest observation shows on that host, and nothing
+    /// else may hold it, as a guest's folder, a binding or reservation, or another deploy.
+    /// </summary>
     /// <param name="declaredAt">The commit whose guest files are read: the head, or the branch a push lands on.</param>
     /// <param name="defines">The repository that defines the installation, such as the commit a push would land; by default
     /// <paramref name="declaredAt"/>'s.</param>
     private async Task CheckVmidAsync(OctopushyDb db, DeployTarget target, int vmid, string declaredAt, LabRepository? defines, Guid? except,
-        CancellationToken ct)
+        CancellationToken ct, string? attachOn = null)
     {
         defines ??= (await revisions.ResolveAsync(declaredAt, WorkflowReleaseBook.Of(db, workflowMirrors), ct)).Repository;
         var installation = defines.Installation(target.Installation)
             ?? throw new ChangeRefusal(ChangeRefusal.Reasons.Unavailable, $"{target.Installation} is not defined on the branch any more.");
+        if (attachOn is not null)
+        {
+            var held = await TakenVmidsAsync(db, InstallationAt.Of(installation), declaredAt, except, ct, observed: false);
+            if (held.TryGetValue(vmid, out var holder))
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"VMID {vmid} on {target.Installation} cannot be attached: {holder}.",
+                    fieldIssues: [new FieldIssueDto("/vmid", $"Held: {holder}.")]);
+            var seen = (await ObservationAsync(db, target.Installation, ct))?.Data["guests"] as JsonArray ?? [];
+            var vm = seen.OfType<JsonObject>().FirstOrDefault(g => g["vmid"] is JsonValue v && v.TryGetValue<int>(out var id) && id == vmid);
+            if (vm is null || vm["host"]?.ToString() != attachOn || vm["kind"]?.ToString() is { } kind && kind != "qemu")
+                throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid,
+                    vm is null ? $"{target.Installation}'s latest observation shows no VM at VMID {vmid} to attach."
+                    : vm["host"]?.ToString() != attachOn ? $"VMID {vmid} is on {vm["host"]}, not {attachOn}, at the latest observation."
+                    : $"VMID {vmid} is a container: the wizard attaches VMs.",
+                    fieldIssues: [new FieldIssueDto("/vmid", "Not a VM on this host at the latest observation.")]);
+            return;
+        }
+
         var taken = await TakenVmidsAsync(db, InstallationAt.Of(installation), declaredAt, except, ct);
         if (!taken.TryGetValue(vmid, out var why))
             return;
@@ -682,7 +721,8 @@ public sealed partial class ChangeService
     /// deploy that is not settled yet. It fails closed: without a successful, complete and recent observation, or with a
     /// <c>guest.yaml</c> that cannot be read, which VMIDs are free is not known, and it refuses (<c>vmids-unknown</c>).
     /// </summary>
-    private async Task<Dictionary<int, string>> TakenVmidsAsync(OctopushyDb db, InstallationAt at, string declaredAt, Guid? except, CancellationToken ct)
+    private async Task<Dictionary<int, string>> TakenVmidsAsync(OctopushyDb db, InstallationAt at, string declaredAt, Guid? except, CancellationToken ct,
+        bool observed = true)
     {
         var installation = at.Address;
         var folder = at.Folder;
@@ -690,7 +730,7 @@ public sealed partial class ChangeService
             throw new ChangeRefusal(ChangeRefusal.Reasons.VmidsUnknown, problem, fieldIssues: [new FieldIssueDto("/vmid", problem)]);
         var taken = new Dictionary<int, string>();
         var observation = await ObservationAsync(db, installation, ct);
-        foreach (var vm in (observation?.Data["guests"] as JsonArray ?? []).OfType<JsonObject>())
+        foreach (var vm in observed ? (observation?.Data["guests"] as JsonArray ?? []).OfType<JsonObject>() : [])
         {
             if (vm["vmid"] is JsonValue v && v.TryGetValue<int>(out var vmid))
                 taken.TryAdd(vmid, $"observed on {vm["host"]?.ToString() ?? "a host"}{(vm["name"]?.ToString() is { Length: > 0 } n ? $" as {n}" : "")}");

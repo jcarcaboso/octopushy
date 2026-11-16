@@ -273,6 +273,8 @@ public static class StepNames
     public const string Apply = "apply";
     /// <summary>Added to a provision run whose apply did not finish after it lifted the VM's protection.</summary>
     public const string Reprotect = "reprotect";
+    /// <summary>An attach run's last step: turns on the protection of the machine a person attached.</summary>
+    public const string Protect = "protect";
     public const string Verify = "verify";
     public const string VerifyAbsent = "verify-absent";
     public const string Observe = "observe";

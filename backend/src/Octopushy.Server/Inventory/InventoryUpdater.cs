@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Definitions;
 using Octopushy.Server.Data;
@@ -113,7 +114,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 (resource.ReservedInstallation, resource.ReservedNode, resource.ReservedVmid, resource.ReservedAt, resource.ReservationAppliedAt) = (null, null, null, null, null);
             // A VM the installation's latest observation shows at this VMID, and that is not this guest's, for a
             // provision and a retire alike. Observations are runtime data, so the dispatch of the plan asks again.
-            if (problem is null)
+            // An attached guest names a machine that exists and that it does not own yet, on purpose: a person attaches it.
+            if (problem is null && !definition.Attached)
                 problem = await SafetyBoundary.VmidCollisionAsync(db, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
             if (problem is not null)
             {
@@ -142,10 +144,11 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                     cancellationToken, keepRemoval: true);
                 // Deleting a folder asks for removal; the destructive policy decides whether it waits for approval.
                 if (resource.Kind != ResourceKinds.Guest) continue;
-                // Unless it was deleted by a detach: then the guest is forgotten and its machine left as it is. One that cannot be
-                // done yet waits, and is tried again at each sync: it never becomes a removal.
+                // Unless it was deleted by a detach, or is an attached machine Octopushy never deletes: then the guest is forgotten
+                // and its machine left as it is. One that cannot be done yet waits, and is tried again at each sync: it never
+                // becomes a removal.
                 resource.ProvisionWaiting = null;
-                if (await DetachedByChangeAsync(db, resource, cancellationToken) is { } detaching)
+                if ((await DetachedByChangeAsync(db, resource, cancellationToken) ?? (WasAttached(resource) ? "repository" : null)) is { } detaching)
                 {
                     try
                     {
@@ -233,6 +236,37 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         CancellationToken cancellationToken)
     {
         var guest = repository.Guest(resource.Address)!;
+        // An attached machine is never planned: a person attaches it, and retiring it detaches it.
+        if (guest.Attached)
+        {
+            // What was proposed while it was a managed guest is not for it any more. Its attach run stays.
+            foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.Operation is Operations.Provision or Operations.Retire
+                         && RunEngine.CanSupersede(r)).ToList())
+            {
+                await engine.CancelInternalAsync(db, run.Id, $"{resource.Address} is machine: attached in {Short(revision.Commit)}: it has no provision runs.", cancellationToken);
+                activeRuns.Remove(run);
+            }
+
+            if (guest.Retired)
+            {
+                try
+                {
+                    await engine.DetachInternalAsync(db, resource, "repository", cancellationToken);
+                    activeRuns.RemoveAll(r => r.ResourceId == resource.Id);
+                }
+                catch (RunException error)
+                {
+                    resource.ProvisionWaiting = $"Retiring an attached guest detaches it, which waits: {error.Message}";
+                }
+
+                return null;
+            }
+
+            resource.ProvisionWaiting = resource.BoundVmid is null ? "Waiting to be attached: use Attach on the guest's page." : null;
+            resource.DesiredRevisionId = revision.Id;
+            return null;
+        }
+
         var image = TemplateImages.For(repository, guest, images);
         var inputs = ProvisionInputs.Build(repository, guest, revision.Commit, keyIssued, hostKeyIssued, image);
         var desired = guest.Retired ? RunFactory.RetireHash(inputs.Hash) : inputs.Hash;
@@ -428,9 +462,19 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             return $"This guest is bound to VMID {bound} on {resource.BoundInstallation}. Changing it would make a different VM; retire this guest and add a new one instead.";
         }
 
+        // A machine a person attached was not made by the workflow's machine stage, which would plan it from nothing.
+        if (resource.AttachedAt is not null && !guest.Attached)
+            return $"This guest was attached to VMID {resource.BoundVmid} by {resource.AttachedBy}; Octopushy did not create it, so it stays machine: attached. "
+                + "To manage it with a machine stage, detach it and deploy a new guest.";
+
         var other = guests.FirstOrDefault(r => r.Id != resource.Id && r.BoundVmid == guest.Vmid && r.BoundInstallation == guest.InstallationAddress);
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
     }
+
+    /// <summary>Whether the guest's last definition said <c>machine: attached</c>, or a person attached it.</summary>
+    private static bool WasAttached(Resource guest) =>
+        guest.AttachedAt is not null
+        || guest.Definition is { } definition && JsonNode.Parse(definition)?["machine"]?.GetValue<string>() == GuestMachines.Attached;
 
     /// <summary>
     /// Who asked to detach a guest whose folder is gone, or null when nobody did: the latest change that deletes its folder, a

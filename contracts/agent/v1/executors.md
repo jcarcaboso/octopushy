@@ -118,6 +118,9 @@ meant. The status, configuration and addresses are read from that kind's endpoin
 `/nodes/{node}/lxc/{vmid}/status/current`, `/config` and `/interfaces` for a container,
 whose addresses Proxmox reads from its network namespace, with no agent inside.
 
+An attach run, which checks a machine Octopushy did not create, sends `name` and `expectIpv4` as
+null and `expectRunning: false`: what it checks is the machine at the VMID, on `node`, of `kind`.
+
 `expectIpv4` is null for plain DHCP without a declared reservation; then any non-loopback IPv4 address
 reported by the QEMU guest agent, or for a container by Proxmox, satisfies the address check. The executor polls
 every 5 seconds until every check passes or `waitSeconds` runs out.
@@ -206,8 +209,10 @@ and fails when it is on another node than `node`. It is `uncertain` when the wri
 have reached Proxmox, or was accepted and could not be read back, because a plain failure
 tells the controller that protection did not change.
 
-The controller sends it for the `unprotect` step with `protection: false` and for the
-`reprotect` step with `protection: true`, always with the run's own `node` and `vmid`.
+The controller sends it for the `unprotect` step with `protection: false`, for the
+`reprotect` step with `protection: true`, and for an attach run's `protect` step with
+`protection: true`, after a person chose to attach the machine and the run's `verify-guest`
+passed. It always sends the run's own `node` and `vmid`.
 
 ## `opentofu`
 

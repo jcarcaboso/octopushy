@@ -38,7 +38,7 @@ public sealed partial class AssignmentBuilder(
     {
         StepNames.Plan => new StepAction("opentofu", "preview", false),
         StepNames.Apply => new StepAction("opentofu", "apply", true),
-        StepNames.Unprotect or StepNames.Reprotect => new StepAction("proxmox", "set-protection", true),
+        StepNames.Unprotect or StepNames.Reprotect or StepNames.Protect => new StepAction("proxmox", "set-protection", true),
         StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
         StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
         StepNames.Observe => new StepAction("proxmox", "observe", false),
@@ -76,7 +76,7 @@ public sealed partial class AssignmentBuilder(
     };
 
     public static string TokenFor(string stepName) => stepName is
-        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect
+        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect or StepNames.Protect
         ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
@@ -122,7 +122,9 @@ public sealed partial class AssignmentBuilder(
             throw new AssignmentException(collision);
         // Check authority and artifact integrity BEFORE resolving any plaintext, even
         // for native actions or callers that bypass normal engine advancement.
-        var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
+        var approvedPlan = TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken && run is { Operation: Operations.Attach }
+            ? await AttachAuthorizedAsync(run, stepName, cancellationToken)
+            : TokenFor(stepName) == SecretNames.ProxmoxPrivilegedToken
             ? await ApprovedPlanAsync(run ?? throw new AssignmentException("Privileged work requires a run."), stepName, cancellationToken) : null;
         var names = SecretsFor(stepName, context);
         var problems = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, names);
@@ -233,10 +235,11 @@ public sealed partial class AssignmentBuilder(
                 // qemu or lxc: verify and protection go to that endpoint, and a machine of the other kind fails them.
                 ["kind"] = proxmox.MachineKind,
                 ["name"] = proxmox.Name,
-                ["expectRunning"] = true,
+                // A machine being attached is whatever it is: stopped, it is still the one a person chose.
+                ["expectRunning"] = run is not { Operation: Operations.Attach },
                 ["expectIpv4"] = proxmox.ExpectIpv4,
                 ["waitSeconds"] = stepName == StepNames.VerifyAbsent ? 60 : options.Value.Scheduling.VerifyWaitSeconds,
-                ["protection"] = stepName == StepNames.Reprotect,
+                ["protection"] = stepName is StepNames.Reprotect or StepNames.Protect,
             };
             // A container's host keys, from the create task of the apply that made it, for its Ansible work to be pinned to.
             // The request is kept with the attempt it was made for: only that attempt's answer is ever pinned.
@@ -388,6 +391,28 @@ public sealed partial class AssignmentBuilder(
         if (GuestVmPlan.MakesGuestMachine(outputs, context) || GuestVmPlan.RemovesGuestVm(outputs, context) || GuestVmPlan.MakesUnnamedMachine(outputs))
             await ContainerHostKeys.WithdrawAsync(db, run.ResourceId, clock.GetUtcNow(),
                 $"Run {run.Id} applies a plan that may replace or remove container {context.Proxmox.Vmid}: this pin was read from the one before.", cancellationToken);
+    }
+
+    /// <summary>
+    /// What lets an attach run turn on the protection of a machine it has no plan for: a person's decision to attach it, the
+    /// run's verify of that machine, and that it is still nobody else's. Nothing else is released to it. Returns no plan.
+    /// </summary>
+    private async Task<Artifact?> AttachAuthorizedAsync(Run run, string stepName, CancellationToken cancellationToken)
+    {
+        var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
+        var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
+        var verify = steps.SingleOrDefault(s => s.Name == StepNames.Verify);
+        if (stepName != StepNames.Protect || approval is not { Status: StepStatuses.Succeeded, Decision: "approved" } || approval.DecidedBy is null or "policy"
+            || verify?.Status != StepStatuses.Succeeded)
+            throw new AssignmentException("Attaching a machine requires a person's decision and a successful verify of it in this run.");
+        var context = RunContext.Parse(run.Context);
+        var guest = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, cancellationToken)
+            ?? throw new AssignmentException("The guest is gone.");
+        if (context.Proxmox.Vmid is not { } vmid || guest.ParentAddress is not { } installation)
+            throw new AssignmentException("The attach run names no machine.");
+        if (await SafetyBoundary.AttachProblemAsync(db, guest, installation, vmid, cancellationToken) is { } problem)
+            throw new AssignmentException($"This machine cannot be attached: {problem}");
+        return null;
     }
 
     /// <summary>The plan the run's approval names; any other plan is refused.</summary>

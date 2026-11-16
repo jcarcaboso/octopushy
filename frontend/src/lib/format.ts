@@ -37,6 +37,7 @@ const operations: Record<string, string> = {
   configure: "Configure",
   pipeline: "Pipeline",
   "rotate-access": "Rotate key",
+  attach: "Attach",
 };
 
 export function operationLabel(operation: string): string {

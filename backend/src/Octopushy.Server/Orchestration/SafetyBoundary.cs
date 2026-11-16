@@ -214,6 +214,31 @@ public static class SafetyBoundary
     /// included, could be at this one:
     /// what cannot be read is unknown, not absent, so it is returned as a VM at this VMID with nothing else known of it.
     /// </summary>
+    /// <summary>
+    /// Why <paramref name="guest"/>, declared <c>machine: attached</c>, may not be attached to the machine at
+    /// <paramref name="vmid"/>, or null: it is bound to another one, another guest owns or reserved that VMID, or the
+    /// installation's latest observation shows no machine there. A person decides the rest, as an attach run's approval.
+    /// </summary>
+    public static async Task<string?> AttachProblemAsync(OctopushyDb db, Resource guest, string installation, int vmid, CancellationToken cancellationToken)
+    {
+        if (guest.BoundVmid is { } bound && (bound != vmid || guest.BoundInstallation != installation))
+            return $"the guest is bound to VMID {bound} on {guest.BoundInstallation}";
+        var holder = await db.Resources.AsNoTracking()
+            .Where(r => r.Id != guest.Id && r.Kind == ResourceKinds.Guest && r.RetiredAt == null
+                        && (r.BoundVmid == vmid && r.BoundInstallation == installation || r.ReservedVmid == vmid && r.ReservedInstallation == installation))
+            .Select(r => r.Address).FirstOrDefaultAsync(cancellationToken);
+        if (holder is not null)
+            return $"VMID {vmid} on {installation} is {holder}'s";
+        var installationId = await db.Resources.AsNoTracking()
+            .Where(r => r.Kind == ResourceKinds.Installation && r.Address == installation && r.RetiredAt == null)
+            .Select(r => (Guid?)r.Id).FirstOrDefaultAsync(cancellationToken);
+        var data = installationId is null ? null : await db.Observations.AsNoTracking()
+            .Where(o => o.ResourceId == installationId).OrderByDescending(o => o.ObservedAt).Select(o => o.Data).FirstOrDefaultAsync(cancellationToken);
+        if (data is null)
+            return $"{installation} has not been observed, so there is no machine at VMID {vmid} to attach yet";
+        return Observed(data, vmid) is { Count: > 0 } ? null : $"{installation}'s latest observation shows no machine at VMID {vmid}";
+    }
+
     private static JsonObject? Observed(string data, int vmid)
     {
         var guests = (JsonNode.Parse(data)?["guests"] as JsonArray ?? []).OfType<JsonObject>().ToList();

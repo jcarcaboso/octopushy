@@ -82,6 +82,8 @@ public static class ManagedHostKey
     /// <inheritdoc cref="TrustOf(LabRepository, GuestDefinition)"/>
     public static HostKeyTrust TrustOf(InstallationDefinition? installation, GuestDefinition guest) =>
         guest.Json["access"]?["hostKey"] is not null ? HostKeyTrust.Declared
+        // A machine Octopushy did not create has no key of its making, and no create task of its own to read one from.
+        : guest.Attached ? HostKeyTrust.None
         : guest.Type == GuestTypes.Container ? HostKeyTrust.Container
         : Offered(installation, guest) ? HostKeyTrust.Managed
         : HostKeyTrust.None;
@@ -92,7 +94,7 @@ public static class ManagedHostKey
 
     /// <inheritdoc cref="Offered(LabRepository, GuestDefinition)"/>
     public static bool Offered(InstallationDefinition? installation, GuestDefinition guest) =>
-        IsVm(guest) && Delivers(guest.Workflow) && installation is not null && Settings(installation)?.Hosts.ContainsKey(guest.Host) == true;
+        IsVm(guest) && !guest.Attached && Delivers(guest.Workflow) && installation is not null && Settings(installation)?.Hosts.ContainsKey(guest.Host) == true;
 
     /// <summary>
     /// A guest whose host key is Octopushy's: one Octopushy provisions and runs Ansible work on, from its workflow's

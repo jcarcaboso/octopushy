@@ -434,7 +434,14 @@ public sealed record GuestDetailDto(
     string? AppliedDefinitionText = null,
     /// <summary>When and by whom the guest was detached: forgotten, with its machine left as it was. <c>RetiredAt</c> is set too.</summary>
     DateTimeOffset? DetachedAt = null,
-    string? DetachedBy = null);
+    string? DetachedBy = null,
+    /// <summary>
+    /// For a guest declared <c>machine: attached</c>: <c>Attachable</c> while it waits for a person to attach it, then when and by
+    /// whom it was attached.
+    /// </summary>
+    bool Attachable = false,
+    DateTimeOffset? AttachedAt = null,
+    string? AttachedBy = null);
 
 /// <summary>Detaches a guest whose folder was deleted, in place of its removal: <c>Address</c> is typed to confirm it.</summary>
 public sealed record DetachGuestRequest(string Address);

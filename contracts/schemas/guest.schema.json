@@ -8,6 +8,11 @@
     "description": { "type": "string" },
     "type": { "enum": ["vm", "container"], "description": "vm: a QEMU VM. container: a Proxmox (LXC) container. The workflow's manages has to be the same." },
     "lifecycle": { "enum": ["active", "retired"] },
+    "machine": {
+      "description": "managed (the default): the workflow's machine stage creates and changes the machine. attached: a machine Octopushy did not create, attached by a person once its folder is synced. Octopushy never plans, replaces or deletes it: retiring or deleting the folder detaches the guest. It needs access.sshKey and access.hostKey for Ansible work.",
+      "enum": ["managed", "attached"],
+      "default": "managed"
+    },
     "renamedFrom": { "$ref": "common.schema.json#/$defs/id" },
     "host": { "$ref": "common.schema.json#/$defs/id" },
     "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999 },

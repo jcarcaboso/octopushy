@@ -253,6 +253,14 @@ export function usePlanGuest() {
   });
 }
 
+export function useAttachGuest() {
+  const refresh = useRefreshRuns();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/guests/{id}/attach", { params: { path: { id } } })),
+    onSuccess: () => refresh(),
+  });
+}
+
 export function useDetachGuest() {
   const client = useQueryClient();
   return useMutation({

@@ -621,6 +621,67 @@
         }
       }
     },
+    "/api/guests/{id}/attach": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "attachGuest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/guests/{id}/detach": {
       "post": {
         "tags": [
@@ -6788,6 +6849,16 @@
               "null",
               "string"
             ]
+          },
+          "attach": {
+            "type": "boolean",
+            "default": false
+          },
+          "sshKey": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         },
         "additionalProperties": false
@@ -7551,6 +7622,23 @@
             "format": "date-time"
           },
           "detachedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "attachable": {
+            "type": "boolean",
+            "default": false
+          },
+          "attachedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "attachedBy": {
             "type": [
               "null",
               "string"

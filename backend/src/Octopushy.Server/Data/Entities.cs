@@ -536,6 +536,14 @@ public sealed class Resource
     /// <summary>Who detached the guest, or <c>repository</c> when a detach change's commit did.</summary>
     public string? DetachedBy { get; set; }
 
+    /// <summary>
+    /// When a person attached the guest to a machine Octopushy did not create (<c>machine: attached</c>), and who: the binding
+    /// it made, to <see cref="BoundVmid"/>, comes from them and not from a confirmed creation.
+    /// </summary>
+    public DateTimeOffset? AttachedAt { get; set; }
+
+    public string? AttachedBy { get; set; }
+
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
 
@@ -758,6 +766,8 @@ public static class Operations
     /// <summary>A service's stages: everything planned, one approval, then everything applied in order.</summary>
     public const string Pipeline = "pipeline";
     public const string RotateAccess = "rotate-access";
+    /// <summary>A person attaching a guest to a machine Octopushy did not create: verify it, protect it, bind to it.</summary>
+    public const string Attach = "attach";
 }
 
 /// <summary>Why a run was started, where something depends on it.</summary>

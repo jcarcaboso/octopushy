@@ -172,6 +172,7 @@ export function guestDetail(id: string): GuestDetail | null {
   const applied = summaryNow.lastRun?.status === "succeeded" ? summaryNow.lastRun : null;
   return {
     guest: summaryNow,
+    attachable: false,
     definitionFile: guestFile(g),
     definitionText: guestYaml(g),
     issues: [],

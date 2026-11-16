@@ -147,8 +147,24 @@ public sealed record GuestDefinition(
 
     public bool Retired => Lifecycle == "retired";
 
+    /// <summary>
+    /// A machine Octopushy did not create, as <c>machine: attached</c> says: a person attaches it, and no machine stage ever
+    /// runs for it. See <see cref="GuestMachines"/>.
+    /// </summary>
+    public bool Attached => Json["machine"]?.GetValue<string>() == GuestMachines.Attached;
+
     /// <summary>The workflow's Ansible stage that sets the machine up, if it has one.</summary>
     public WorkflowStage? Setup => Workflow?.Setup;
+}
+
+/// <summary>What a guest's <c>machine</c> says of how its machine came to be.</summary>
+public static class GuestMachines
+{
+    /// <summary>The workflow's machine stage creates and changes it: the default.</summary>
+    public const string Managed = "managed";
+
+    /// <summary>It existed before: a person attached it, and Octopushy never plans, replaces or deletes it.</summary>
+    public const string Attached = "attached";
 }
 
 /// <summary>
