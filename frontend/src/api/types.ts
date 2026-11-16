@@ -123,6 +123,9 @@ export interface DeployRequest {
   secrets?: Record<string, SecretChoice> | null;
   accessUser?: string | null;
   hostKey?: string | null;
+  /** Attach the VM that exists at `vmid` on `host`, as `machine: attached`, in place of creating one. */
+  attach?: boolean;
+  sshKey?: string | null;
   approveAtDeploy?: boolean;
   /** What the review returned: a deploy whose workflow release or files differ from it is refused. */
   reviewedRelease?: string | null;

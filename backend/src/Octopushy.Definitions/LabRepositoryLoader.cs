@@ -824,6 +824,8 @@ public sealed partial class LabRepositoryLoader
 
         if (ConfigureInputs.AddressOf(guest) is null)
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.address, or a static or reserved address.");
+        if (guest.Attached && guest.Json["access"]?["sshKey"] is null)
+            Invalid("/access", $"{workflow.Label} sets the guest up over SSH, and an attached machine has no key of Octopushy's: set access.sshKey.");
         if (guest.Json["access"]?["user"] is null)
             Invalid("/access", $"{workflow.Label} sets the guest up over SSH, so it needs access.user.");
         if (ManagedHostKey.TrustOf(installations.Find(i => i.Address == guest.InstallationAddress), guest) == HostKeyTrust.None)
@@ -900,6 +902,8 @@ public sealed partial class LabRepositoryLoader
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.address, or a static or reserved address.");
             if (guest.Json["access"]?["user"] is null)
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.user.");
+            if (guest.Attached && guest.Json["access"]?["sshKey"] is null)
+                Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, and an attached machine has no key of Octopushy's: set access.sshKey on the guest.");
             if (ManagedHostKey.TrustOf(installations.Find(i => i.Address == guest.InstallationAddress), guest) == HostKeyTrust.None)
                 Invalid("/workflow", $"Stage '{ansible[0].Name}' runs on the guest, which needs access.hostKey, unless the guest's machine stage "
                     + $"has hostKey: managed and its installation lists host {guest.Host} under snippets.hosts. A container needs none: its keys are pinned from its create task.");

@@ -195,6 +195,11 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("planGuest");
 
+        api.MapPost("/guests/{id:guid}/attach", async (Guid id, Planner planner, HttpContext http, CancellationToken ct) =>
+            TypedResults.Ok(new StartedRun(await planner.AttachGuestAsync(id, http.User.Identity!.Name!, ct))))
+            .WithTags("Inventory")
+            .WithName("attachGuest");
+
         api.MapPost("/guests/{id:guid}/detach", async Task<NoContent> (Guid id, DetachGuestRequest request, RunEngine engine, HttpContext http, CancellationToken ct) =>
         {
             await engine.DetachGuestAsync(id, request.Address, http.User.Identity!.Name!, ct);

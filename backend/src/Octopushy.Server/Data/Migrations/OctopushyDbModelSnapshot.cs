@@ -1208,6 +1208,14 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("applied_revision_id");
 
+                    b.Property<DateTimeOffset?>("AttachedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("attached_at");
+
+                    b.Property<string>("AttachedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("attached_by");
+
                     b.Property<DateTimeOffset?>("BoundAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");

@@ -16,6 +16,7 @@ public static class ManagedAccess
     /// </param>
     public static bool Wanted(LabRepository repository, GuestDefinition guest, bool keyIssued) =>
         guest.Json["access"]?["sshKey"] is null
+        && !guest.Attached
         && (keyIssued || guest.Setup is not null || RunsPlaybooks(repository, guest));
 
     /// <summary>Whether a valid service on the guest has a stage that runs on it: an Ansible stage.</summary>

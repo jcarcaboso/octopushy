@@ -64,8 +64,10 @@ public static class GuestWork
                 && (r.Status == RunStatuses.Succeeded || r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
                     || db.Attempts.Any(a => a.RunId == r.Id && a.Mutating && a.Status != AttemptStatuses.Queued && a.Status != AttemptStatuses.Cancelled)))
             .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
-        if (guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
-            return "Waiting for the guest's provisioning to catch up with its definition.";
+        // An attached machine has no provisioning: once a person attached it, it is as it is.
+        if (definition.Attached ? guest.BoundVmid is null || guest.AttachedAt is null
+            : guest.BoundVmid is null || guest.SyncedInputsHash != guest.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+            return definition.Attached ? "Waiting for the guest to be attached." : "Waiting for the guest's provisioning to catch up with its definition.";
         if (definition.Setup?.Configure?.OnChange is not null)
         {
             var setup = await db.GuestConfigurations.AsNoTracking().FirstOrDefaultAsync(c => c.ResourceId == guest.Id, cancellationToken);

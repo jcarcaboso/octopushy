@@ -192,6 +192,21 @@ shows a VM at that VMID: then the create failed on a VM that was there first. A
 reservation is cleared when the guest's VMID or node changes while it is unbound, and
 when the guest is retired.
 
+## Attaching a machine Octopushy did not create
+
+A guest declared `machine: attached` names a VM that exists. Its VMID being an observed VM it
+does not own is expected, and is not refused at sync. It is bound only by an **attach run**, which
+a person starts on the guest's page, and whose approval is that person's decision:
+
+1. **Verify** the machine at the guest's VMID is on its host and of its kind, running or not.
+2. **Protect** it, with the installation's privileged token. That token is released to an attach
+   run only after the person's decision and the verify, and only while the VMID is not another
+   guest's, bound or reserved, and the latest observation shows a machine there.
+3. Bind the guest to it, recording who attached it.
+
+An attached guest never gets a provision or retire run, so no plan of it can create, replace or
+delete its machine. Retiring it, or deleting its folder, detaches it.
+
 ## A machine that is gone, or on another host
 
 A binding is to an installation and a VMID, not to a host, so a VM that moves within a

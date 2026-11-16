@@ -240,6 +240,10 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             return (GuestStatuses.Failed, last.Detail);
         }
 
+        // An attached machine has no provisioning to catch up with: attached, it is as it should be.
+        if (resource.AttachedAt is not null && resource.BoundVmid is not null)
+            return (GuestStatuses.InSync, null);
+
         return resource.SyncedInputsHash is not null && resource.SyncedInputsHash == resource.DesiredInputsHash
             ? (GuestStatuses.InSync, null)
             : (GuestStatuses.Pending, last is { Status: RunStatuses.Cancelled } ? last.Detail : "Not provisioned from the current definition yet.");
@@ -490,7 +494,11 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             await ManagedHostKeyAsync(id, cancellationToken),
             text is null ? null : await AppliedDefinitionTextAsync(commits.GetValueOrDefault(resource.AppliedRevisionId ?? Guid.Empty), latest!.Commit, resource.DefinitionFile, cancellationToken),
             resource.DetachedAt,
-            resource.DetachedBy);
+            resource.DetachedBy,
+            resource.RetiredAt is null && resource.MissingSince is null && resource.Valid && resource.AttachedAt is null
+                && resource.Definition is { } attachedJson && JsonNode.Parse(attachedJson)?["machine"]?.GetValue<string>() == GuestMachines.Attached,
+            resource.AttachedAt,
+            resource.AttachedBy);
     }
 
     /// <summary>The guest's host key, when it is Octopushy's: the pin, and the version plans carry when that is another.</summary>

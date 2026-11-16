@@ -253,6 +253,9 @@ public static class ChangeTracker
                 return resource?.RetiredAt is not null
                     ? (ChangeStatuses.Applied, $"{change.Address} is retired.")
                     : (ChangeStatuses.Failed, $"{Short(revision.Commit)} proposed no removal of {change.Address}; use Plan removal on its page.");
+            // An attached machine has no provision run: the deploy that wrote it is done once a person attached it.
+            if (change.Kind == ChangeKinds.CreateGuest && resource?.AttachedAt is not null)
+                return (ChangeStatuses.Applied, $"{change.Address} is attached to its VM, by {resource.AttachedBy}.");
             return (ChangeStatuses.NoChange, $"{Short(revision.Commit)} proposes no run for {change.Address}: nothing a run is built from changed.");
         }
 

@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, Rocket, RotateCcw, Search, Wand2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { changeRefusal, errorMessage } from "../api/client";
 import { useDeploy, useDeployTargets, useNextVmid, useObserveInstallation, usePreviewDeploy, useVariables, useWorkflows } from "../api/queries";
 import type {
@@ -107,6 +107,8 @@ function labelsOf(text: string): string[] {
 export function DeployPage() {
   const targets = useDeployTargets();
   const workflows = useWorkflows();
+  const [params] = useSearchParams();
+  const attach = readAttach(params);
   if (targets.isPending || workflows.isPending) return <PageSkeleton rows={4} />;
   if (!targets.data) return <ErrorMessage error={targets.error} title="Where to deploy could not be loaded" />;
   if (!workflows.data) return <ErrorMessage error={workflows.error} title="The workflows could not be loaded" />;
@@ -114,15 +116,36 @@ export function DeployPage() {
     <Wizard
       key={targets.data.baseCommit ?? "none"}
       targets={targets.data}
-      // The wizard deploys VMs and services only for now; container guests are written in Git.
-      workflows={workflows.data.workflows.filter((w) => w.manages !== "container")}
+      // The wizard deploys VMs and services only for now; container guests are written in Git. An attach is of a VM.
+      workflows={workflows.data.workflows.filter((w) => (attach ? w.manages === "vm" : w.manages !== "container"))}
+      attach={attach}
       reload={() => void targets.refetch()}
       reloading={targets.isFetching}
     />
   );
 }
 
-function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTargets; workflows: WorkflowSummary[]; reload: () => void; reloading: boolean }) {
+/** A VM Octopushy did not create, which the installation page offers to attach: where it is, and what Proxmox calls it. */
+interface Attach {
+  installation: string;
+  host: string;
+  vmid: string;
+  name: string;
+}
+
+function readAttach(params: URLSearchParams): Attach | null {
+  const vmid = params.get("attach");
+  const installation = params.get("installation");
+  const host = params.get("host");
+  if (!vmid || !/^\d+$/.test(vmid) || !installation || !host) return null;
+  // A guest's id: lowercase letters, digits and dashes.
+  const name = (params.get("name") ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
+  return { installation, host, vmid, name };
+}
+
+function Wizard({ targets, workflows, attach, reload, reloading }: {
+  targets: DeployTargets; workflows: WorkflowSummary[]; attach: Attach | null; reload: () => void; reloading: boolean;
+}) {
   const navigate = useNavigate();
   const nextVmid = useNextVmid();
   const preview = usePreviewDeploy();
@@ -132,11 +155,11 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
 
   const [step, setStep] = useState<Step>("workflow");
   const [chosen, setChosen] = useState<Chosen | null>(null);
-  const [installation, setInstallation] = useState("");
-  const [host, setHost] = useState("");
+  const [installation, setInstallation] = useState(attach?.installation ?? "");
+  const [host, setHost] = useState(attach?.host ?? "");
   const [guest, setGuest] = useState("");
-  const [name, setName] = useState("");
-  const [vmid, setVmid] = useState("");
+  const [name, setName] = useState(attach?.name ?? "");
+  const [vmid, setVmid] = useState(attach?.vmid ?? "");
   const [vmidProblem, setVmidProblem] = useState<string | null>(null);
   const [template, setTemplate] = useState("");
   const [value, setValue] = useState<JsonObject>({});
@@ -144,6 +167,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   const [secrets, setSecrets] = useState<Record<string, SecretState>>({});
   const [accessUser, setAccessUser] = useState("");
   const [hostKey, setHostKey] = useState("");
+  const [sshKey, setSshKey] = useState("");
   const [approve, setApprove] = useState(false);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
   const [reviewed, setReviewed] = useState<ChangePreview | null>(null);
@@ -227,8 +251,10 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
       };
     }
     setSecrets(next);
-    // A workflow that installs Octopushy's own host key needs none, where the installation is set up for snippet uploads.
-    if (version.setup && !hostKey && !version.managedHostKey) setHostKey(`${keyPrefix}/host-key`);
+    // A workflow that installs Octopushy's own host key needs none, where the installation is set up for snippet uploads. An
+    // attached VM always needs one, and a key to log in with: Octopushy made neither.
+    if (version.setup && !hostKey && (attach || !version.managedHostKey)) setHostKey(`${keyPrefix}/host-key`);
+    if (version.setup && attach && !sshKey) setSshKey(`${keyPrefix}/ssh-key`);
     setStep("secrets");
   };
 
@@ -254,15 +280,16 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
         : {
             host,
             vmid: Number.parseInt(vmid, 10),
-            template: template || null,
+            template: attach ? null : template || null,
             hardware: section("hardware"),
             network: section("network"),
             inputs: section("inputs"),
             accessUser: version!.setup ? accessUser.trim() || null : null,
             hostKey: version!.setup ? hostKey.trim() || null : null,
+            ...(attach ? { attach: true, sshKey: version!.setup ? sshKey.trim() || null : null } : {}),
           }),
       secrets: Object.keys(choices).length > 0 ? choices : null,
-      approveAtDeploy: approve,
+      approveAtDeploy: attach ? false : approve,
       reviewedRelease: reviewed?.reviewedRelease ?? null,
       reviewDigest: reviewed?.reviewDigest ?? null,
       ...overrides,
@@ -337,10 +364,13 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
   return (
     <>
       <PageHeader
-        title="Deploy"
+        title={attach ? `Attach VM ${attach.vmid}` : "Deploy"}
         meta={
           <span className="muted small">
-            A new guest or service from a workflow, committed to the lab repository; loaded at <Commit commit={targets.baseCommit} />
+            {attach
+              ? `A guest for the VM at VMID ${attach.vmid} on ${attach.host}, which Octopushy did not create. It never plans, replaces or deletes it. `
+              : "A new guest or service from a workflow, committed to the lab repository; "}
+            loaded at <Commit commit={targets.baseCommit} />
           </span>
         }
       />
@@ -424,7 +454,8 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                   {targets.installations.map((choice) => (
                     <label key={choice.address} className={choice.managed ? "radio" : "radio radio--disabled"}>
                       <input type="radio" name="installation" value={choice.address} checked={installation === choice.address}
-                        disabled={!choice.managed || Boolean(blocked)} onChange={() => chooseInstallation(choice)} />
+                        disabled={!choice.managed || Boolean(blocked) || (attach !== null && choice.address !== attach.installation)}
+                        onChange={() => chooseInstallation(choice)} />
                       <span className="stack stack--tiny">
                         <span>
                           <span className="mono">{choice.address}</span> <span className="muted small">{choice.name} · {choice.type}</span>
@@ -442,7 +473,8 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                 <div className="form__row">
                   <div className="field">
                     <label htmlFor="deploy-host">Host</label>
-                    <select id="deploy-host" value={host} onChange={(e) => setHost(e.target.value)} aria-invalid={issueAt("/host").length > 0}>
+                    <select id="deploy-host" value={host} onChange={(e) => setHost(e.target.value)} aria-invalid={issueAt("/host").length > 0}
+                      disabled={attach !== null}>
                       <option value="">Choose a host</option>
                       {target.hosts.map((h) => (
                         <option key={h.name} value={h.name} disabled={!h.declared}>
@@ -461,15 +493,21 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                     <label htmlFor="deploy-vmid">VMID</label>
                     <div className="inline-form">
                       <input id="deploy-vmid" className="input--narrow mono" inputMode="numeric" value={vmid} onChange={(e) => setVmid(e.target.value.replace(/\D/g, ""))}
-                        aria-invalid={issueAt("/vmid").length > 0} />
-                      <button type="button" className="button" onClick={() => proposeVmid(installation)} disabled={nextVmid.isPending}>
-                        <Wand2 size={15} aria-hidden="true" />
-                        {nextVmid.isPending ? "Finding…" : "Next free"}
-                      </button>
+                        aria-invalid={issueAt("/vmid").length > 0} readOnly={attach !== null} />
+                      {attach ? null : (
+                        <button type="button" className="button" onClick={() => proposeVmid(installation)} disabled={nextVmid.isPending}>
+                          <Wand2 size={15} aria-hidden="true" />
+                          {nextVmid.isPending ? "Finding…" : "Next free"}
+                        </button>
+                      )}
                     </div>
                     <span className="field__hint">
-                      {hints.vmid?.generate === generators.nextVmid ? "The next free VMID, proposed by the workflow. " : ""}
-                      Free means not observed anywhere on {installation}, not declared, and not held by another deploy. It is checked again when deployed.
+                      {attach
+                        ? `The VM Proxmox shows at this VMID on ${attach.host}. Nothing else may hold it; that is checked again when committed.`
+                        : <>
+                            {hints.vmid?.generate === generators.nextVmid ? "The next free VMID, proposed by the workflow. " : ""}
+                            Free means not observed anywhere on {installation}, not declared, and not held by another deploy. It is checked again when deployed.
+                          </>}
                     </span>
                     {vmidProblem ? (
                       <span className="field__error" role="alert">
@@ -483,7 +521,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                     ) : null}
                     <FieldErrors issues={issueAt("/vmid")} />
                   </div>
-                  {targets.templates.length > 0 ? (
+                  {targets.templates.length > 0 && !attach ? (
                     <div className="field">
                       <label htmlFor="deploy-template">Template</label>
                       <select id="deploy-template" value={template} onChange={(e) => setTemplate(e.target.value)}>
@@ -583,13 +621,27 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                     <div className="field">
                       <label htmlFor="deploy-access-user">Login</label>
                       <input id="deploy-access-user" className="mono" value={accessUser} onChange={(e) => setAccessUser(e.target.value)} />
-                      <span className="field__hint">The user the setup stage logs in as. Octopushy makes and installs its own key for this guest.</span>
+                      <span className="field__hint">
+                        {attach
+                          ? "The user the setup stage logs in as, with the key below."
+                          : "The user the setup stage logs in as. Octopushy makes and installs its own key for this guest."}
+                      </span>
                     </div>
+                    {attach ? (
+                      <div className="field">
+                        <label htmlFor="deploy-ssh-key">SSH key, as a store key</label>
+                        <input id="deploy-ssh-key" className="mono" value={sshKey} onChange={(e) => setSshKey(e.target.value)} aria-invalid={issueAt("/sshKey").length > 0} />
+                        <span className="field__hint">A secret: the private key that logs in to the VM. Octopushy installs no key on a VM it did not create.</span>
+                        <FieldErrors issues={issueAt("/sshKey")} />
+                      </div>
+                    ) : null}
                     <div className="field">
                       <label htmlFor="deploy-host-key">Host key, as a store key</label>
                       <input id="deploy-host-key" className="mono" value={hostKey} onChange={(e) => setHostKey(e.target.value)} aria-invalid={issueAt("/hostKey").length > 0} />
                       <span className="field__hint">
-                        {version.managedHostKey
+                        {attach
+                          ? "A plain entry: the VM's own SSH host key, read from its console. Setup connects to it and nothing else."
+                          : version.managedHostKey
                           ? "Leave it empty: this workflow gives the guest a host key of Octopushy's, delivered when it is created and pinned on its own. That needs the installation to list the guest's host under snippets.hosts; validation says if it does not."
                           : "A plain entry you set from the guest's console after its first boot. Setup waits for it: Octopushy never scans a host."}
                       </span>
@@ -674,7 +726,9 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                 )}
                 .
               </p>
-              <label className="checkbox">
+              {attach ? (
+                <p className="muted">Once this is synced, attach it on the guest's page: that verifies the VM, turns its protection on and binds the guest to it.</p>
+              ) : <label className="checkbox">
                 <input type="checkbox" checked={approve} onChange={(e) => setApprove(e.target.checked)} />
                 <span className="stack stack--tiny">
                   <span>Approve the plan in the same click</span>
@@ -684,7 +738,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                     deletion.
                   </span>
                 </span>
-              </label>
+              </label>}
               <div className="button-row">
                 <button type="button" className="button" onClick={() => setStep("review")} disabled={deploy.isPending}>
                   <ArrowLeft size={15} aria-hidden="true" />
@@ -692,7 +746,7 @@ function Wizard({ targets, workflows, reload, reloading }: { targets: DeployTarg
                 </button>
                 <button type="button" className="button button--primary" onClick={commit} disabled={deploy.isPending || Boolean(blocked)}>
                   <Rocket size={15} aria-hidden="true" />
-                  {deploy.isPending ? "Deploying…" : approve ? "Deploy and approve" : "Deploy"}
+                  {deploy.isPending ? "Deploying…" : attach ? "Commit the attach" : approve ? "Deploy and approve" : "Deploy"}
                 </button>
               </div>
             </div>

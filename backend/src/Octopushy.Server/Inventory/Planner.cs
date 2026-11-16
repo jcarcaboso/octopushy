@@ -26,6 +26,8 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
         if (missing is not null)
         {
+            if (missing.AttachedAt is not null)
+                throw new RunException("An attached guest is not removed: Octopushy never deletes its machine. Use Detach instead on its page.");
             var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
                 ?? throw new RunException("Sync the current repository source before planning this guest's removal.");
             var removal = await GuestRemoval.ProposeAsync(db, revisions, factory, missing, head, force: true, cancellationToken)
@@ -36,6 +38,8 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
 
         var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
         var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+        if (guest.Attached)
+            throw new RunException("An attached guest has no provision runs: Octopushy never plans its machine. Use Attach on its page to attach it.");
         // The latest observation may be newer than the sync that found this guest valid.
         if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
             throw new RunException(collision);
@@ -50,6 +54,29 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         await engine.AddRunsAsync(db, [run], cancellationToken);
         return run.Id;
     }
+
+    /// <summary>
+    /// Attaches a guest declared <c>machine: attached</c> to the machine at its VMID, as <paramref name="actor"/> chose: an attach
+    /// run that verifies the machine on its host, turns its protection on, and binds the guest to it.
+    /// </summary>
+    public Task<Guid> AttachGuestAsync(Guid resourceId, string actor, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, _) =>
+        {
+            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+            if (!guest.Attached)
+                throw new RunException("Only a guest declared machine: attached is attached to an existing machine.");
+            if (resource.AttachedAt is not null)
+                throw new RunException($"The guest is already attached, by {resource.AttachedBy}.");
+            if (await SafetyBoundary.AttachProblemAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } problem)
+                throw new RunException($"The guest cannot be attached: {problem}.");
+            if (await db.Runs.AnyAsync(r => r.ResourceId == resource.Id && r.Operation == Operations.Attach
+                    && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled, cancellationToken))
+                throw new RunException("An attach of this guest is already under way.");
+            var run = factory.Attach(repository, guest, resource, revision, actor);
+            await engine.AddRunsAsync(db, [run], cancellationToken);
+            return run.Id;
+        }, cancellationToken);
 
     /// <summary>
     /// Runs one action of a guest's workflow at the latest revision; by default the one that
@@ -73,8 +100,10 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         var lastProvision = await db.Runs.AsNoTracking()
             .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
             .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
-        if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
-            throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
+        if (guest.Attached ? resource.BoundVmid is null || resource.AttachedAt is null
+            : resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+            throw new RunException(guest.Attached ? "This guest is not attached yet: use Attach on its page first."
+                : "This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
         // By hand or on a schedule alike: a schedule's refusal is noted on the guest, and nothing starts.
         if (await GuestWork.OwnKeyRefusedAsync(db, resource.Id, guest, cancellationToken) is { } refused)
             throw new RunException(refused);
@@ -146,10 +175,12 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
 
             // A guest whose provisioning has caught up and that nothing holds: a run that is
             // active, waiting or uncertain keeps every automatic run off it.
+            // An attached machine has no provisioning: being attached is its catching up.
             var ready = db.Resources.Where(r => r.Valid && r.RetiredAt == null && r.MissingSince == null && r.BoundVmid != null
-                && r.SyncedInputsHash == r.DesiredInputsHash
-                && db.Runs.Where(run => run.ResourceId == r.Id && run.Operation == Operations.Provision)
-                    .OrderByDescending(run => run.CreatedAt).Select(run => run.Status).FirstOrDefault() == RunStatuses.Succeeded
+                && (r.AttachedAt != null
+                    || r.SyncedInputsHash == r.DesiredInputsHash
+                    && db.Runs.Where(run => run.ResourceId == r.Id && run.Operation == Operations.Provision)
+                        .OrderByDescending(run => run.CreatedAt).Select(run => run.Status).FirstOrDefault() == RunStatuses.Succeeded)
                 && !db.Runs.Any(run => run.ResourceId == r.Id && run.Status != RunStatuses.Succeeded
                     && run.Status != RunStatuses.Failed && run.Status != RunStatuses.Cancelled));
             var due = await db.GuestConfigurations

@@ -196,6 +196,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/guests/{id}/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["attachGuest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/guests/{id}/detach": {
         parameters: {
             query?: never;
@@ -1551,6 +1567,9 @@ export interface components {
             approveAtDeploy: boolean;
             reviewedRelease?: null | string;
             reviewDigest?: null | string;
+            /** @default false */
+            attach: boolean;
+            sshKey?: null | string;
         };
         DeployTargetsDto: {
             baseCommit: null | string;
@@ -1710,6 +1729,11 @@ export interface components {
             /** Format: date-time */
             detachedAt?: null | string;
             detachedBy?: null | string;
+            /** @default false */
+            attachable: boolean;
+            /** Format: date-time */
+            attachedAt?: null | string;
+            attachedBy?: null | string;
         };
         GuestScheduleDto: {
             action: string;
@@ -3120,6 +3144,55 @@ export interface operations {
         };
     };
     planGuest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    attachGuest: {
         parameters: {
             query?: never;
             header?: never;

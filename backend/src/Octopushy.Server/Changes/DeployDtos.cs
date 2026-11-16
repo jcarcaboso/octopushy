@@ -18,6 +18,8 @@ public sealed record SecretChoice(string? Store = null, string? Generate = null,
 /// <c>HostKey</c> (a store key) are how a workflow's setup stage logs in. <c>ApproveAtDeploy</c> approves the first plan in
 /// the same click, when it only creates. <c>BaseCommit</c> is the commit the wizard was loaded from. <c>ReviewedRelease</c>
 /// and <c>ReviewDigest</c> are what the review returned: a deploy whose workflow release or files differ is refused.
+/// <c>Attach</c> writes a guest for the VM that already exists at <c>Vmid</c> on <c>Host</c>, as <c>machine: attached</c>, for a
+/// person to attach once it is synced; its setup logs in with <c>SshKey</c>, a secret store key, since Octopushy made no key for it.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record DeployRequest(
@@ -37,7 +39,9 @@ public sealed record DeployRequest(
     string? HostKey = null,
     bool ApproveAtDeploy = false,
     string? ReviewedRelease = null,
-    string? ReviewDigest = null);
+    string? ReviewDigest = null,
+    bool Attach = false,
+    string? SshKey = null);
 
 /// <summary>
 /// A value a deploy generates when it is committed, as the review shows it: the secret, the store key it goes in, the

@@ -27,7 +27,13 @@ import { formatBytes, humanize, operationLabel, plural } from "../lib/format";
 import { formatUptime } from "../lib/time";
 import { folderLink } from "./variables/folders";
 
-function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolean }) {
+/** Where Attach starts: the deploy wizard, set to the VM that is there. */
+function attachLink(installation: string, vm: ObservedGuest): string {
+  const params = new URLSearchParams({ attach: String(vm.vmid), installation, host: vm.host ?? "", name: vm.name ?? "" });
+  return `/deploy?${params.toString()}`;
+}
+
+function ObservedVms({ vms, observed, attachTo }: { vms: ObservedGuest[]; observed: boolean; attachTo: string | null }) {
   return (
     <Table label="Observed guests" className="table--observed">
       <thead>
@@ -73,7 +79,14 @@ function ObservedVms({ vms, observed }: { vms: ObservedGuest[]; observed: boolea
               ) : vm.template ? (
                 <span className="muted">Template</span>
               ) : (
-                <Badge tone="neutral">Unmanaged</Badge>
+                <span className="inline-group">
+                  <Badge tone="neutral">Unmanaged</Badge>
+                  {attachTo && vm.kind === "qemu" && vm.host ? (
+                    <Link to={attachLink(attachTo, vm)} className="button button--small" title="Manage this VM's setup and services, without Octopushy ever replacing or deleting it.">
+                      Attach
+                    </Link>
+                  ) : null}
+                </span>
               )}
             </td>
           </tr>
@@ -303,7 +316,8 @@ export function InstallationPage() {
               id="observed"
               flush
             >
-              <ObservedVms vms={data.observedGuests} observed={Boolean(installation.observedAt)} />
+              <ObservedVms vms={data.observedGuests} observed={Boolean(installation.observedAt)}
+                attachTo={installation.managed && installation.valid ? installation.address : null} />
             </Card>
             {installation.hosts.length === 1 && installation.hosts[0].declared ? null : (
               <Card title="Hosts" flush>

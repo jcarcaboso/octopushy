@@ -705,6 +705,26 @@ public sealed partial class RunEngine(
             case StepNames.Apply:
                 resource.Outputs = null;
                 break;
+            // An attached machine: verified at its VMID, on its host, of its kind, then protected. Only then is the guest bound,
+            // on a person's word, recorded as the run's approval. Octopushy did not create it, so nothing else could bind it.
+            case StepNames.Verify when run.Operation == Operations.Attach:
+                resource.VerifiedAt = now;
+                break;
+            case StepNames.Protect when run.Operation == Operations.Attach:
+                var attaching = RunContext.Parse(run.Context);
+                if (await SafetyBoundary.AttachProblemAsync(db, resource, resource.ParentAddress!, attaching.Proxmox.Vmid!.Value, cancellationToken) is { } problem)
+                {
+                    step.Status = StepStatuses.Failed;
+                    step.Detail = $"Protection is on, and the guest is not attached: {problem}.";
+                    break;
+                }
+                resource.BoundInstallation = resource.ParentAddress;
+                resource.BoundVmid = attaching.Proxmox.Vmid;
+                resource.BoundAt = now;
+                resource.AttachedAt = now;
+                resource.AttachedBy = run.Steps.Single(s => s.Name == StepNames.Approval).DecidedBy;
+                resource.ProvisionWaiting = null;
+                break;
             case StepNames.Verify:
                 // Ownership comes only from a confirmed creation: an apply of an approved plan of this guest created
                 // its VMID on its node, and the VM verified now carries Octopushy's marks. Nothing else binds.

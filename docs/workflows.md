@@ -118,6 +118,14 @@ layout, and the lab repository has neither.
     deleted the folder, a removal or a detach, decides, so it never turns into a removal. Octopushy's login key
     stays in the machine's `authorized_keys`, and its private half is deleted.
 
+    **Attach** brings a VM Octopushy did not create under its setup and services. On the installation page, each unmanaged
+    VM offers **Attach**, which opens the wizard set to that VM: its VMID, its host, and a name from Proxmox. The guest is
+    written with `machine: attached`, and its setup logs in with `access.sshKey` and pins `access.hostKey`, both required,
+    since Octopushy made no key for it. Once synced, **Attach** on the guest's page starts an attach run, recorded as that
+    person's decision: it verifies the VM at that VMID, on that host, of that kind, turns its protection on, and binds the
+    guest to it. An attached guest never has a provision or retire run: nothing plans, replaces or deletes its machine.
+    Retiring it, or deleting its folder, detaches it. A guest that was attached stays `machine: attached`.
+
     If the entire server has been removed from Git and is offline or permanently gone, use **Force delete server** in its
     inventory node details or installation page after syncing the repository. Type the installation address to confirm.
     This forgets the entire installation, including every node of a cluster, its guests and services, run history,
