@@ -47,6 +47,7 @@ public sealed partial class AssignmentBuilder
                 ["stack"] = tofu.Stack,
                 ["root"] = tofu.Root,
                 ["image"] = tofu.Image,
+                ["timeoutMinutes"] = tofu.TimeoutMinutes ?? 60,
                 ["variables"] = tofu.Variables.DeepClone(),
                 ["env"] = new JsonObject(),
                 ["secretEnv"] = new JsonObject(),

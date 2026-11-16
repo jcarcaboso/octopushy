@@ -85,6 +85,9 @@ JSON
       echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
     fi
     if [ "${FAKE_LINK:-}" = state ]; then rm "$state"; ln -s "$REC/args.log" "$state"; fi
+    if [ -n "${FAKE_GRACEFUL:-}" ]; then
+      trap 'echo "{\"version\":4,\"serial\":10,\"lineage\":\"l\"}" > "$state"; echo interrupted > "$REC/stopped"; exit 0' INT
+    fi
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
     if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
     if [ -n "${FAKE_NOT_SAVED:-}" ]; then
@@ -1158,4 +1161,99 @@ async fn a_tool_written_state_link_makes_apply_uncertain() {
     assert!(matches!(error, Failure::Uncertain(_)));
     assert!(error.message().contains("without following links"));
     assert!(state::read(&applied.workspace).is_none());
+}
+
+#[tokio::test]
+async fn opentofu_timeout_fails_plans_and_preserves_interrupted_apply_state_and_frees_slots() {
+    async fn check(action: &str) {
+        use octopushy::attempts::{AttemptManager, SessionCursor};
+        use octopushy::outbox::Outbox;
+        use octopushy_proto::v1::{Assignment, Outcome, agent_message::Kind};
+        let fx = Fixture::new();
+        let mut values = input(
+            false,
+            if action == "apply" {
+                json!({"FAKE_APPLY_SLEEP": "600", "FAKE_GRACEFUL": "1"})
+            } else {
+                json!({"FAKE_PLAN_SLEEP": "600"})
+            },
+        );
+        values["timeoutMinutes"] = json!(1);
+        let artifacts = if action == "apply" {
+            let content = archive::pack(&[("plan.bin", &b"PLAN"[..])]).unwrap();
+            vec![Artifact {
+                name: "plan.tar.gz".into(),
+                sha256: octopushy::tls::sha256_hex(&content),
+                content,
+            }]
+        } else {
+            vec![]
+        };
+        let secrets = HashMap::from([
+            ("proxmox.token".into(), PVE_TOKEN.into()),
+            ("extra.secret".into(), EXTRA_SECRET.into()),
+        ]);
+        let work = fx.dir.path().join("managed");
+        let manager = AttemptManager::new(
+            work,
+            Outbox::open(fx.dir.path().join("outbox")).unwrap(),
+            Arc::new(fx.cfg),
+        );
+        manager.set_concurrency(10);
+        manager.accept(Assignment {
+            attempt_id: "timeout".into(),
+            executor: "opentofu".into(),
+            action: action.into(),
+            input_json: values.to_string(),
+            files_tar_gz: repo_tar(None),
+            artifacts,
+            secrets,
+            ..Default::default()
+        });
+        manager.accept(Assignment {
+            attempt_id: "next".into(),
+            executor: "unknown".into(),
+            ..Default::default()
+        });
+        let mut cursor = SessionCursor::default();
+        let mut results = HashMap::new();
+        tokio::time::timeout(Duration::from_secs(75), async {
+            while results.len() < 2 {
+                for message in manager.collect(&mut cursor) {
+                    if let Some(Kind::Result(result)) = message.kind {
+                        results.insert(result.attempt_id.clone(), result);
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timeout must release the attempt slot");
+        let result = &results["timeout"];
+        assert!(
+            result.error.contains("timeoutMinutes=1"),
+            "{}",
+            result.error
+        );
+        assert_eq!(
+            result.outcome(),
+            if action == "apply" {
+                Outcome::Uncertain
+            } else {
+                Outcome::Failed
+            }
+        );
+        if action == "apply" {
+            assert!(fx.rec.join("stopped").exists(), "SIGINT handler ran");
+            let state = result
+                .artifacts
+                .iter()
+                .find(|a| a.name == state::ARTIFACT)
+                .expect("saved state");
+            assert!(String::from_utf8_lossy(&state.content).contains("\"serial\":10"));
+        }
+        assert!(manager.is_idle());
+        assert!(results["next"].error.contains("unknown executor"));
+    }
+    tokio::join!(check("preview"), check("apply"));
 }

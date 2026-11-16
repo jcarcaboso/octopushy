@@ -41,7 +41,8 @@ public sealed partial class RunFactory
                     definition.Image ?? options.Value.Tools.OpenTofuImage,
                     stage.Inputs.DeepClone().AsObject(),
                     [],
-                    []), null));
+                    [],
+                    TimeoutMinutes: definition.TimeoutMinutes), null));
                 continue;
             }
 

@@ -24,6 +24,8 @@ pub mod state;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use octopushy_proto::v1::Artifact;
 use serde::Deserialize;
@@ -67,6 +69,8 @@ struct Input {
     secret_env: BTreeMap<String, String>,
     #[serde(default)]
     destroy: bool,
+    #[serde(default)]
+    timeout_minutes: Option<u64>,
     /// The SSH host keys a provider may connect to, as `known_hosts` lines. The Proxmox provider
     /// reads `$HOME/.ssh/known_hosts` and refuses a host whose key differs, but adds any host it
     /// has not seen, so without this its first connection would trust whoever answered.
@@ -176,11 +180,17 @@ struct Prepared {
     out_dir: PathBuf,
     settings: Vec<(String, String)>,
     env: Vec<(String, String)>,
+    deadline: Instant,
 }
 
 /// Validates the input, extracts the repository, and writes the generated files.
 fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure> {
     let input: Input = ctx.input()?;
+    let minutes = input.timeout_minutes.unwrap_or(60);
+    if !(1..=1440).contains(&minutes) {
+        return Err(Failure::msg("timeoutMinutes must be between 1 and 1440"));
+    }
+    let deadline = Instant::now() + Duration::from_secs(minutes * 60);
     let rt = &cfg.runtime;
     let ws = &ctx.workspace;
 
@@ -298,6 +308,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         out_dir,
         settings,
         env,
+        deadline,
     })
 }
 
@@ -370,31 +381,63 @@ impl Tofu<'_> {
     ) -> Result<ToolOutput, Failure> {
         let mut name = format!("octopushy-{}-{step}", self.ctx.attempt_id);
         name.truncate(200);
-        let out = self
-            .cfg
-            .runtime
-            .run(
-                Invocation {
-                    tool: Tool::OpenTofu,
-                    name,
-                    image: &self.prep.input.image,
-                    workspace: &self.ctx.workspace,
-                    workdir: &self.prep.root,
-                    plugin_cache: Some(&self.cfg.provider_cache),
-                    args,
-                    settings: self.prep.settings.clone(),
-                    env: self.prep.env.clone(),
-                    stdin: None,
-                    capture_stdout: capture,
-                    stderr_mark: (step == "apply").then_some(state::NOT_SAVED),
-                    control_prefix: None,
-                },
-                &self.ctx.log,
-                &self.ctx.cancel,
-            )
-            .await?;
+        let timeout = || {
+            let message = format!(
+                "OpenTofu exceeded timeoutMinutes={} while running {step}",
+                self.prep.input.timeout_minutes.unwrap_or(60)
+            );
+            if self.ctx.action == "apply" {
+                Failure::Uncertain(message)
+            } else {
+                Failure::msg(message)
+            }
+        };
+        if Instant::now() >= self.prep.deadline {
+            return Err(timeout());
+        }
+        let stop = self.ctx.cancel.child_token();
+        let run = self.cfg.runtime.run(
+            Invocation {
+                tool: Tool::OpenTofu,
+                name,
+                image: &self.prep.input.image,
+                workspace: &self.ctx.workspace,
+                workdir: &self.prep.root,
+                plugin_cache: Some(&self.cfg.provider_cache),
+                args,
+                settings: self.prep.settings.clone(),
+                env: self.prep.env.clone(),
+                stdin: None,
+                capture_stdout: capture,
+                stderr_mark: (step == "apply").then_some(state::NOT_SAVED),
+                control_prefix: None,
+            },
+            &self.ctx.log,
+            &stop,
+        );
+        tokio::pin!(run);
+        let mut timed_out = false;
+        let out = tokio::select! {
+            out = &mut run => out,
+            _ = tokio::time::sleep_until(self.prep.deadline) => {
+                timed_out = true;
+                self.ctx.log.agent("OpenTofu timeout reached; stopping gracefully to save state");
+                stop.cancel();
+                run.await
+            }
+        };
+        if timed_out {
+            return Err(timeout());
+        }
+        let out = out?;
         if out.cancelled {
-            return Err(Failure::Cancelled);
+            return Err(if self.ctx.action == "apply" {
+                Failure::Uncertain(
+                    "OpenTofu was stopped; inspect its saved state before planning again".into(),
+                )
+            } else {
+                Failure::Cancelled
+            });
         }
         Ok(out)
     }

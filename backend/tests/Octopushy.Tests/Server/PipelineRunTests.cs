@@ -112,6 +112,29 @@ public class PipelineRunTests(PostgresFixture postgres)
             return id;
         });
 
+    [Theory]
+    [InlineData(null, 60)]
+    [InlineData(23, 23)]
+    public async Task OpenTofu_pipeline_assignments_carry_the_stage_timeout(int? configured, int expected)
+    {
+        var test = Repository.Repository(Repository.TofuOnly);
+        if (configured is { } minutes)
+        {
+            const string file = "workflows/web-rules/workflow.yaml";
+            test.Write(file, File.ReadAllText(Path.Combine(test.Root, file))
+                .Replace("executor: opentofu,", $"executor: opentofu, timeoutMinutes: {minutes},"));
+        }
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        var plan = await agent.NextAsync("preview");
+        Assert.Equal(expected, JsonNode.Parse(plan.InputJson)!["timeoutMinutes"]!.GetValue<int>());
+        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        Assert.Equal(expected, JsonNode.Parse(apply.InputJson)!["timeoutMinutes"]!.GetValue<int>());
+    }
+
     [Fact]
     public async Task A_deployed_pipeline_with_an_ansible_stage_is_never_approved_at_deploy()
     {

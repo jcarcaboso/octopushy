@@ -213,8 +213,12 @@ Environment: `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, `TF_PLUGIN_CACHE_DIR`, and `HOM
 environment, so they never appear in `/proc/<pid>/cmdline`. Names the agent or the
 container runtime use (`HOME`, `PATH`, `TF_CLI_ARGS*`, `CONTAINERS_*`, …) are refused.
 
-Cancel sends SIGTERM to the tool's process group (podman forwards it to OpenTofu),
-then after 10 s kills the container (`podman kill`) and the group.
+OpenTofu has a 60-minute attempt timeout by default, configurable with
+`timeoutMinutes` from 1 to 1440. Stopping OpenTofu sends SIGINT to allow it to save
+state, then SIGTERM after 10 seconds, then a hard kill after another 10 seconds.
+A timed-out preview fails; a timed-out apply is uncertain and reports saved state.
+Other tools receive SIGTERM, then a hard kill after 10 seconds. Normal server
+cancellation still never interrupts a running change.
 
 Ansible runs the same way, without the provider cache, through `octopushy-ansible`
 from [`ansible/`](ansible/): its secrets arrive on stdin and stay in memory, so with

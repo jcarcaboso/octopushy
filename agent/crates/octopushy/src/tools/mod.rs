@@ -509,13 +509,13 @@ impl ToolRuntime {
         let status = tokio::select! {
             status = child.wait() => status?,
             _ = capture_failed.cancelled() => {
-                self.terminate(&mut child, &inv.name).await;
+                self.terminate(&mut child, &inv.name, inv.tool).await;
                 child.wait().await?
             }
             _ = cancel.cancelled() => {
                 cancelled = true;
                 log.agent("stopping the tool");
-                self.terminate(&mut child, &inv.name).await;
+                self.terminate(&mut child, &inv.name, inv.tool).await;
                 child.wait().await?
             }
         };
@@ -555,15 +555,24 @@ impl ToolRuntime {
         })
     }
 
-    /// SIGTERM (forwarded to the tool by the container runtime), then after the
-    /// grace period a hard kill of the container and the process group.
-    async fn terminate(&self, child: &mut Child, container: &str) {
+    /// OpenTofu gets SIGINT first so it can finish in-flight work and save state.
+    /// After one grace period, escalate to SIGTERM, then a hard kill. Other tools
+    /// start at SIGTERM. Waiting stays bounded even when a container CLI hangs.
+    async fn terminate(&self, child: &mut Child, container: &str, tool: Tool) {
         let Some(pid) = child.id() else { return };
         let pgid = pid as libc::pid_t;
-        // SAFETY: plain signal delivery to our own child's process group.
-        unsafe {
-            libc::kill(-pgid, libc::SIGTERM);
+        if tool == Tool::OpenTofu {
+            self.signal_group(container, pgid, libc::SIGINT, "SIGINT")
+                .await;
+            if tokio::time::timeout(self.kill_grace, child.wait())
+                .await
+                .is_ok()
+            {
+                return;
+            }
         }
+        self.signal_group(container, pgid, libc::SIGTERM, "SIGTERM")
+            .await;
         if tokio::time::timeout(self.kill_grace, child.wait())
             .await
             .is_ok()
@@ -571,6 +580,25 @@ impl ToolRuntime {
             return;
         }
         self.kill_group(container, Some(pgid)).await;
+    }
+
+    async fn signal_group(&self, container: &str, pgid: libc::pid_t, signal: i32, name: &str) {
+        if self.is_container() {
+            // Signal the container itself, not just the attached CLI process.
+            let kill = Command::new(&self.container_binary)
+                .args(["kill", "--signal", name, container])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .status();
+            let _ = tokio::time::timeout(self.kill_grace, kill).await;
+        } else {
+            // SAFETY: plain signal delivery to our own child's process group.
+            unsafe {
+                libc::kill(-pgid, signal);
+            }
+        }
     }
 
     /// A hard kill of the container and the process group.
@@ -628,6 +656,63 @@ async fn drain<A, B>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn opentofu_stop_escalates_from_interrupt_to_term_to_kill() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("tofu");
+        let signals = dir.path().join("signals");
+        std::fs::write(&binary, format!("#!/bin/bash\ntrap 'echo INT >> {}' INT\ntrap 'echo TERM >> {}' TERM\ntouch ready\nwhile :; do sleep 1; done\n", signals.display(), signals.display())).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut runtime = ToolRuntime::new(RuntimeKind::Local, None, binary, None);
+        runtime.kill_grace = Duration::from_millis(100);
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let ready = dir.path().join("ready");
+        let canceller = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            stop.cancel();
+        });
+        let log = AttemptLogger::new(
+            Arc::new(crate::attempts::logs::LogBuffer::default()),
+            Arc::new(crate::masking::Masker::default()),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let invocation = Invocation {
+            tool: Tool::OpenTofu,
+            name: "test-stop".into(),
+            image: "",
+            workspace: dir.path(),
+            workdir: dir.path(),
+            plugin_cache: None,
+            args: vec![],
+            settings: vec![],
+            env: vec![],
+            stdin: None,
+            capture_stdout: false,
+            stderr_mark: None,
+            control_prefix: None,
+        };
+        let output = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.run(invocation, &log, &cancel),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        canceller.await.unwrap();
+        assert!(output.cancelled);
+        assert_eq!(output.code, None, "the stubborn tool was hard-killed");
+        assert_eq!(std::fs::read_to_string(signals).unwrap(), "INT\nTERM\n");
+    }
 
     #[tokio::test]
     async fn capture_fails_at_cap_instead_of_truncating() {

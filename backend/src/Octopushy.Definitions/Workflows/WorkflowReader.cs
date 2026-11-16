@@ -234,6 +234,7 @@ public sealed class WorkflowReader
                 node["image"]?.GetValue<string>(),
                 configure)
             {
+                TimeoutMinutes = executor == Executors.OpenTofu ? node["timeoutMinutes"]?.GetValue<int>() : null,
                 ManagedHostKey = makesVm && node["hostKey"]?.GetValue<string>() == "managed",
                 Interface = slot,
                 InterfaceSchema = slotSchema,

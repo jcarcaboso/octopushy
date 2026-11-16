@@ -196,6 +196,7 @@ public sealed partial class AssignmentBuilder(
                 ["stack"] = tofu.Stack,
                 ["root"] = tofu.Root,
                 ["image"] = tofu.Image,
+                ["timeoutMinutes"] = tofu.TimeoutMinutes ?? 60,
                 ["variables"] = await VariablesAsync(run, context, tofu, cancellationToken),
                 ["env"] = new JsonObject(tofu.Env.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value))),
                 // Only what this step holds: the agent refuses a name it was not given a value for.

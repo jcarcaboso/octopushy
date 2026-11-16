@@ -213,10 +213,19 @@ Input (the same for both actions):
   "variables": { "octopushy": { … }, "guest": { … }, "host": { … } },
   "env": { "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/", "PROXMOX_VE_INSECURE": "true" },
   "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token" },
-  "destroy": false
+  "destroy": false,
+  "timeoutMinutes": 60
 }
 ```
 
+- `timeoutMinutes` is optional, an integer from 1 to 1440, default 60. It is one
+  deadline across the OpenTofu commands in an attempt, not a new allowance for
+  each command. A timeout stops OpenTofu with SIGINT so it can finish the resource
+  in flight and save state. After 10 seconds it escalates to SIGTERM, then after
+  another 10 seconds kills the process group or container. A timed-out preview
+  fails. A timed-out apply is uncertain, even if graceful shutdown exits zero,
+  and includes any complete saved state. A workflow's OpenTofu stage may set
+  `timeoutMinutes`; the controller includes it in both preview and apply inputs.
 - `files_tar_gz` holds the repository snapshot (without `.git`); `root` is a
   directory inside it. The executor extracts it into the attempt's workspace and
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
