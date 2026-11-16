@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.4:
+Milestone 1 has shipped, up to release 0.9.5:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,39 @@ Milestone 1 has shipped, up to release 0.9.4:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.9.5:
+
+- The fixes the November backend and agent review named must-haves, from #140 to #145 (roadmap #137):
+  - A push to the lab repository no longer holds the engine lock, from #145: runs advance, agents' results are recorded
+    and the Changes page answers while Git waits on the network. A push a request starts stops after
+    `Octopushy__RepositoryEditor__PushTimeoutSeconds` (90) and says so.
+  - The workflows repository is fetched only from a source an operator confirmed, from #144: a commit that names a new
+    URL or credential key shows **Waiting for trust** on the Repository page until a signed-in operator confirms it.
+    Repository-declared absolute paths and `file://` sources are refused unless `Octopushy__AllowLocalWorkflowSources`
+    is set. See [ADR 0009](docs/adr/0009-workflows-source-trust.md).
+  - Heartbeats and log batches never wait for the engine lock, a second server on the same database refuses to start,
+    four run-handling races are closed, and one failing run, attempt or agent message no longer stops the others, from
+    #143.
+  - On the agent, from #142: a result too large for the channel is cut down before it is queued, tool-written files are
+    read without following links, the local runtime runs one attempt at a time, OpenTofu steps take `timeoutMinutes`
+    and stop gracefully with their state saved, and **Force stop** ends the tool on an agent that advertises
+    `forced-mutation-stop-v1`.
+  - Run history, from #141: parent links are enforced, finished runs older than 180 days beyond the newest 50 per
+    resource are pruned with their logs and artifacts (history that is still read is kept), and `/api/health` returns
+    503 when the engine has stopped ticking or the database is unreachable.
+  - From #140: nine smaller review fixes, among them that a commit can no longer make the server send a `system/` key,
+    or any credential over `http://`, to a workflows repository; and `AGENTS.md`.
+- **Force delete** an offline installation and the data Octopushy stored for it, from #139, once its definitions are
+  removed and synced, without contacting Proxmox.
+- Cookie-authenticated writes from another origin are refused, from #138. A script that signs in with a cookie must
+  send an `Origin` header matching the server.
+
+Upgrading: two migrations (`RunHistoryIntegrity`, which first deletes orphaned history rows, and
+`WorkflowSourceTrust`) run on start. Stop the old backend before starting the new one: only one server may own the
+database, so overlapping rolling updates fail. A lab that names an external workflows repository waits for trust until
+an operator confirms it once on the Repository page. The agent contract grows and stays compatible: update the backend
+first; older agents keep working, and Force stop and OpenTofu time limits need agents at 0.9.5.
 
 New in 0.9.4:
 
