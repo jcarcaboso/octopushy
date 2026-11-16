@@ -5,6 +5,7 @@ import { useInventory, useUptime } from "../api/queries";
 import type { UptimeCheck } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
+import { DeleteInstallation } from "../components/DeleteInstallation";
 import { IssueList } from "../components/IssueList";
 import { Meter } from "../components/Meter";
 import { ObserveError } from "../components/ObserveError";
@@ -262,6 +263,7 @@ function NodeDetail({ node, span }: { node: NodeEntry; span: UptimeWindow }) {
             <Link className="button button--small" to={`/installations/${node.installation.id}`}>
               Installation
             </Link>
+            <DeleteInstallation installation={node.installation} />
           </>
         }
       />

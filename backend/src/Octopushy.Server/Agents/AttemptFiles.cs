@@ -173,7 +173,14 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
         UnderGateAsync(attemptId, gate =>
         {
             _secrets.TryRemove(attemptId, out _);
-            File.Delete(PathFor(attemptId));
+            try
+            {
+                File.Delete(PathFor(attemptId));
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // An attempt that never logged anything has no log directory yet.
+            }
             gate.Next = 0;
             return Task.FromResult(0L);
         }, cancellationToken);
@@ -262,6 +269,13 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 public sealed class ArtifactStore(IOptions<OctopushyOptions> options, Envelope envelope)
 {
     private readonly string _directory = Path.Combine(options.Value.DataDirectory, "artifacts");
+
+    public void Delete(Guid attemptId)
+    {
+        var directory = Path.Combine(_directory, attemptId.ToString());
+        if (Directory.Exists(directory))
+            Directory.Delete(directory, recursive: true);
+    }
 
     public static string Sha256(ReadOnlySpan<byte> content) => Convert.ToHexStringLower(SHA256.HashData(content));
 

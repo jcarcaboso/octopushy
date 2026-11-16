@@ -323,6 +323,18 @@ export function useObserveInstallation() {
   });
 }
 
+export function useDeleteInstallation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, address }: { id: string; address: string }) =>
+      unwrap(api.DELETE("/api/installations/{id}", { params: { path: { id }, query: { address } } })),
+    onSuccess: async () => {
+      client.removeQueries({ predicate: (query) => ["installation", "guest", "service", "run", "changes"].includes(String(query.queryKey[0])) });
+      await client.invalidateQueries({ predicate: (query) => query.queryKey[0] !== "auth" });
+    },
+  });
+}
+
 interface Decision {
   runId: string;
   stepId: string;

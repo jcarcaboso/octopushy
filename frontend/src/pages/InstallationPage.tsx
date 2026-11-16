@@ -8,6 +8,7 @@ import { Callout } from "../components/Callout";
 import { Card } from "../components/Card";
 import { DefinitionSheet, ViewYamlButton } from "../components/DefinitionSheet";
 import { Glance } from "../components/Glance";
+import { DeleteInstallation } from "../components/DeleteInstallation";
 import { GuestTable } from "../components/GuestTable";
 import { ObserveError } from "../components/ObserveError";
 import { HostTable } from "../components/HostTable";
@@ -272,6 +273,7 @@ export function InstallationPage() {
               <Eye size={15} aria-hidden="true" />
               {observing ? "Observing…" : "Observe now"}
             </button>
+            <DeleteInstallation installation={installation} />
           </>
         }
       />

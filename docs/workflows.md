@@ -106,6 +106,13 @@ layout, and the lab repository has neither.
       cancelled. Restoring the folder cancels a removal that has not started changing anything.
 
     Either way, the history is kept. *Decided October 28, 2026.*
+
+    If the entire server has been removed from Git and is offline or permanently gone, use **Force delete server** in its
+    inventory node details or installation page after syncing the repository. Type the installation address to confirm.
+    This forgets the entire installation, including every node of a cluster, its guests and services, run history,
+    observations, uptime history, OpenTofu state and Octopushy-managed keys. It does not destroy infrastructure or require
+    the server to answer. User variables, shared credentials and repository revision history stay. An active apply must
+    finish, lose its lease or be force stopped first; an unsettled repository change must also be settled.
 11. **Deletes have their own setting,** `policy.destructive`: `manual` or `automatic`. When it is not set, it takes the
     resource's approval setting, so a manual resource never deletes without approval. Setting `destructive: manual` on an
     automatic resource holds back only its deletes. Destructive means deleting a guest, data such as disks or volumes, or a

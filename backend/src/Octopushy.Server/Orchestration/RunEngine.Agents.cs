@@ -12,6 +12,17 @@ namespace Octopushy.Server.Orchestration;
 
 public sealed partial class RunEngine
 {
+    // ponytail: serialize log batches with run changes; use per-attempt gates if log traffic becomes a bottleneck.
+    public Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
+        IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct) =>
+        WithDbAsync(async db =>
+        {
+            if (!await db.Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct))
+                return;
+            using (await masks.EnsureAsync(attemptId, ct))
+                await logs.AppendAsync(attemptId, firstSequence, lines, ct);
+        }, ct);
+
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
     public async Task DispatchAsync(CancellationToken cancellationToken)
     {
