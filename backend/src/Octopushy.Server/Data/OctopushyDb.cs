@@ -148,6 +148,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Number).UseIdentityAlwaysColumn();
             e.HasIndex(x => x.Number).IsUnique();
             e.HasIndex(x => new { x.ResourceId, x.CreatedAt });
+            e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.Status);
             e.Property(x => x.Context).HasColumnType("jsonb");
             e.HasMany(x => x.Steps).WithOne(x => x.Run).HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
@@ -190,6 +191,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
         model.Entity<Attempt>(e =>
         {
+            e.HasOne<Run>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.Status, x.CreatedAt });
             e.HasIndex(x => x.AgentId);
             e.HasIndex(x => new { x.ResourceId, x.CreatedAt }).HasFilter("resource_id IS NOT NULL");
@@ -199,6 +201,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
         model.Entity<ArtifactRecord>(e =>
         {
+            e.HasOne<Attempt>().WithMany().HasForeignKey(x => x.AttemptId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.AttemptId, x.Name }).IsUnique();
         });
 
@@ -237,7 +240,9 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
         model.Entity<SecretResolution>(e =>
         {
+            e.HasOne<Attempt>().WithMany().HasForeignKey(x => x.AttemptId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => x.AttemptId);
+            e.HasIndex(x => x.Key);
         });
 
         model.Entity<DeletedStoreKey>(e => e.HasKey(x => x.Key));

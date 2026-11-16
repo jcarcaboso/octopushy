@@ -300,6 +300,9 @@ namespace Octopushy.Server.Data.Migrations
                     b.HasIndex("AgentId")
                         .HasDatabaseName("ix_attempts_agent_id");
 
+                    b.HasIndex("RunId")
+                        .HasDatabaseName("ix_attempts_run_id");
+
                     b.HasIndex("StepId")
                         .HasDatabaseName("ix_attempts_step_id");
 
@@ -1576,6 +1579,9 @@ namespace Octopushy.Server.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_runs");
 
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_runs_created_at");
+
                     b.HasIndex("Number")
                         .IsUnique()
                         .HasDatabaseName("ix_runs_number");
@@ -1624,6 +1630,9 @@ namespace Octopushy.Server.Data.Migrations
 
                     b.HasIndex("AttemptId")
                         .HasDatabaseName("ix_secret_resolutions_attempt_id");
+
+                    b.HasIndex("Key")
+                        .HasDatabaseName("ix_secret_resolutions_key");
 
                     b.ToTable("secret_resolutions", (string)null);
                 });
@@ -2112,8 +2121,24 @@ namespace Octopushy.Server.Data.Migrations
                     b.ToTable("workflow_releases", (string)null);
                 });
 
+            modelBuilder.Entity("Octopushy.Server.Data.ArtifactRecord", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Attempt", null)
+                        .WithMany()
+                        .HasForeignKey("AttemptId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_artifacts_attempts_attempt_id");
+                });
+
             modelBuilder.Entity("Octopushy.Server.Data.Attempt", b =>
                 {
+                    b.HasOne("Octopushy.Server.Data.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .HasConstraintName("fk_attempts_runs_run_id");
+
                     b.HasOne("Octopushy.Server.Data.Step", "Step")
                         .WithMany("Attempts")
                         .HasForeignKey("StepId")
@@ -2171,6 +2196,16 @@ namespace Octopushy.Server.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_operator_tokens_users_user_id");
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.SecretResolution", b =>
+                {
+                    b.HasOne("Octopushy.Server.Data.Attempt", null)
+                        .WithMany()
+                        .HasForeignKey("AttemptId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_secret_resolutions_attempts_attempt_id");
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.ServiceIcon", b =>
