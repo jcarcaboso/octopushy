@@ -504,6 +504,16 @@ public static partial class Endpoints
 
                 if (update.Disabled is { } disabled)
                 {
+                    if (disabled && await db.Attempts.AsNoTracking()
+                        .Where(a => a.AgentId == id
+                            && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
+                                || a.Mutating && a.Status == AttemptStatuses.Uncertain && a.Step!.Status == StepStatuses.Uncertain))
+                        .OrderByDescending(a => a.Mutating)
+                        .Select(a => new { a.Id, a.Action, Run = (long?)a.Step!.Run!.Number })
+                        .FirstOrDefaultAsync(ct) is { } active)
+                        return TypedResults.Problem(title: $"The agent is running or settling {active.Action} in "
+                            + (active.Run is { } number ? $"run #{number}" : $"attempt {active.Id}")
+                            + "; drain its work and inspect uncertain outcomes before disabling it.", statusCode: 409);
                     agent.Disabled = disabled;
                 }
                 if (update.Draining is { } draining) agent.Draining = draining;

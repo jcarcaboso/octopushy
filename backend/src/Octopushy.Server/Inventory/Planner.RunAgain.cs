@@ -12,9 +12,8 @@ public sealed partial class Planner
     /// service's page. Nothing of the failed run is reused: the new run plans again and takes its own approval, so it
     /// is refused for the same reasons starting it there would be.
     /// </summary>
-    public async Task<Guid> RunAgainAsync(Guid runId, CancellationToken cancellationToken)
-    {
-        var (resourceId, operation, action) = await engine.ExecuteAsync(async (db, _) =>
+    public Task<Guid> RunAgainAsync(Guid runId, CancellationToken cancellationToken) =>
+        engine.ExecuteAsync(async (db, services) =>
         {
             var run = await db.Runs.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId, cancellationToken)
                 ?? throw new RunException("There is no such run.");
@@ -22,18 +21,15 @@ public sealed partial class Planner
                 throw new RunException("Only a failed run can be run again.");
             if (await NewerRunAsync(db, run, cancellationToken) is { } newer)
                 throw new RunException($"Run #{newer} is newer and does the same work.");
-            return (run.ResourceId, run.Operation, RunContext.Parse(run.Context).Ansible?.Action);
+            return run.Operation switch
+            {
+                Operations.Provision or Operations.Retire => await PlanGuestAsync(db, run.ResourceId, cancellationToken),
+                Operations.Configure => await ConfigureGuestAsync(db, run.ResourceId, RunContext.Parse(run.Context).Ansible?.Action, cancellationToken),
+                Operations.Pipeline => await DeployServiceAsync(db, run.ResourceId, cancellationToken),
+                Operations.RotateAccess => await RotateAccessAsync(db, services, run.ResourceId, cancellationToken),
+                _ => throw new RunException($"A {run.Operation} run cannot be run again."),
+            };
         }, cancellationToken);
-
-        return operation switch
-        {
-            Operations.Provision or Operations.Retire => await PlanGuestAsync(resourceId, cancellationToken),
-            Operations.Configure => await ConfigureGuestAsync(resourceId, action, cancellationToken),
-            Operations.Pipeline => await DeployServiceAsync(resourceId, cancellationToken),
-            Operations.RotateAccess => await RotateAccessAsync(resourceId, cancellationToken),
-            _ => throw new RunException($"A {operation} run cannot be run again."),
-        };
-    }
 
     /// <summary>Whether a failed run is the latest of its work, so running it again does not repeat what a newer run did.</summary>
     public static async Task<bool> CanRunAgainAsync(OctopushyDb db, Run run, CancellationToken cancellationToken) =>

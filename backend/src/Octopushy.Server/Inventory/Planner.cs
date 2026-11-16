@@ -18,36 +18,38 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
     /// whose folder was deleted is planned for removal.
     /// </summary>
     public Task<Guid> PlanGuestAsync(Guid resourceId, CancellationToken cancellationToken) =>
-        engine.ExecuteAsync(async (db, _) =>
-        {
-            var missing = await db.Resources.FirstOrDefaultAsync(r => r.Id == resourceId && r.Kind == ResourceKinds.Guest
-                && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
-            if (missing is not null)
-            {
-                var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
-                    ?? throw new RunException("Sync the current repository source before planning this guest's removal.");
-                var removal = await GuestRemoval.ProposeAsync(db, revisions, factory, missing, head, force: true, cancellationToken)
-                    ?? throw new RunException("A removal of this guest is already under way.");
-                await engine.AddRunsAsync(db, [removal], cancellationToken);
-                return removal.Id;
-            }
+        engine.ExecuteAsync((db, _) => PlanGuestAsync(db, resourceId, cancellationToken), cancellationToken);
 
-            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
-            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            // The latest observation may be newer than the sync that found this guest valid.
-            if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
-                throw new RunException(collision);
-            // A guest whose template is built is planned with its image, and waits while there is none: see RunFactory.WaitingForImage.
-            var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
-                await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken),
-                await Images.TemplateImages.ForAsync(db, repository, guest, cancellationToken));
-            resource.ProvisionWaiting = null;
-            // Planned by hand, it is still the run of the work it plans: the desired work already recorded keeps its occurrence,
-            // so cancelling it on purpose is not undone by the next sync.
-            GuestRemoval.Record(resource, run.InputsHash!, revision.Id, run, sameWork: resource.DesiredInputsHash == run.InputsHash);
-            await engine.AddRunsAsync(db, [run], cancellationToken);
-            return run.Id;
-        }, cancellationToken);
+    private async Task<Guid> PlanGuestAsync(OctopushyDb db, Guid resourceId, CancellationToken cancellationToken)
+    {
+        var missing = await db.Resources.FirstOrDefaultAsync(r => r.Id == resourceId && r.Kind == ResourceKinds.Guest
+            && r.MissingSince != null && r.RetiredAt == null, cancellationToken);
+        if (missing is not null)
+        {
+            var head = await RepositoryTrust.HeadRevisions(db).AsNoTracking().OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken)
+                ?? throw new RunException("Sync the current repository source before planning this guest's removal.");
+            var removal = await GuestRemoval.ProposeAsync(db, revisions, factory, missing, head, force: true, cancellationToken)
+                ?? throw new RunException("A removal of this guest is already under way.");
+            await engine.AddRunsAsync(db, [removal], cancellationToken);
+            return removal.Id;
+        }
+
+        var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+        var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+        // The latest observation may be newer than the sync that found this guest valid.
+        if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
+            throw new RunException(collision);
+        // A guest whose template is built is planned with its image, and waits while there is none: see RunFactory.WaitingForImage.
+        var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
+            await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken),
+            await Images.TemplateImages.ForAsync(db, repository, guest, cancellationToken));
+        resource.ProvisionWaiting = null;
+        // Planned by hand, it is still the run of the work it plans: the desired work already recorded keeps its occurrence,
+        // so cancelling it on purpose is not undone by the next sync.
+        GuestRemoval.Record(resource, run.InputsHash!, revision.Id, run, sameWork: resource.DesiredInputsHash == run.InputsHash);
+        await engine.AddRunsAsync(db, [run], cancellationToken);
+        return run.Id;
+    }
 
     /// <summary>
     /// Runs one action of a guest's workflow at the latest revision; by default the one that
@@ -55,73 +57,77 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
     /// is refused, so nothing piles up behind a run that is waiting or uncertain.
     /// </summary>
     public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual", DateTimeOffset? scheduledFor = null) =>
-        engine.ExecuteAsync(async (db, _) =>
+        engine.ExecuteAsync((db, _) => ConfigureGuestAsync(db, resourceId, action, cancellationToken, reason, scheduledFor), cancellationToken);
+
+    private async Task<Guid> ConfigureGuestAsync(OctopushyDb db, Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual", DateTimeOffset? scheduledFor = null)
+    {
+        var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+        var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+        if (guest.Setup is null)
+            throw new RunException($"This guest's workflow, {guest.Workflow?.Label ?? guest.WorkflowReference.ToString()}, has no setup stage.");
+        if (reason == RunReasons.Schedule
+            && await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
+                    && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                .OrderBy(r => r.CreatedAt).FirstOrDefaultAsync(cancellationToken) is { } active)
+            throw new RunException($"Run #{active.Number} is {active.Status}.");
+        var lastProvision = await db.Runs.AsNoTracking()
+            .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
+            .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
+        if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
+            throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
+        // By hand or on a schedule alike: a schedule's refusal is noted on the guest, and nothing starts.
+        if (await GuestWork.OwnKeyRefusedAsync(db, resource.Id, guest, cancellationToken) is { } refused)
+            throw new RunException(refused);
+        var inputs = ConfigureInputs.Build(repository, guest);
+        var chosen = action ?? inputs.Configure.OnChange?.Id
+            ?? throw new RunException("Choose an action: the workflow's setup stage runs none on change.");
+        var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken, scheduledFor);
+        // However it is started, a run of the onChange action delivers the current inputs and
+        // store versions, so neither is owed another automatic run.
+        if (chosen == inputs.Configure.OnChange?.Id
+            && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
         {
-            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
-            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            if (guest.Setup is null)
-                throw new RunException($"This guest's workflow, {guest.Workflow?.Label ?? guest.WorkflowReference.ToString()}, has no setup stage.");
-            if (reason == RunReasons.Schedule
-                && await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
-                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
-                    .OrderBy(r => r.CreatedAt).FirstOrDefaultAsync(cancellationToken) is { } active)
-                throw new RunException($"Run #{active.Number} is {active.Status}.");
-            var lastProvision = await db.Runs.AsNoTracking()
-                .Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Provision)
-                .OrderByDescending(r => r.CreatedAt).Select(r => r.Status).FirstOrDefaultAsync(cancellationToken);
-            if (resource.BoundVmid is null || resource.SyncedInputsHash != resource.DesiredInputsHash || lastProvision != RunStatuses.Succeeded)
-                throw new RunException("This guest's provisioning has not caught up with its definition. Finish that before configuring it.");
-            // By hand or on a schedule alike: a schedule's refusal is noted on the guest, and nothing starts.
-            if (await GuestWork.OwnKeyRefusedAsync(db, resource.Id, guest, cancellationToken) is { } refused)
-                throw new RunException(refused);
-            var inputs = ConfigureInputs.Build(repository, guest);
-            var chosen = action ?? inputs.Configure.OnChange?.Id
-                ?? throw new RunException("Choose an action: the workflow's setup stage runs none on change.");
-            var run = await ConfigureRunAsync(db, repository, guest, resource, revision, chosen, reason, cancellationToken, scheduledFor);
-            // However it is started, a run of the onChange action delivers the current inputs and
-            // store versions, so neither is owed another automatic run.
-            if (chosen == inputs.Configure.OnChange?.Id
-                && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken) is { } configuration)
-            {
-                configuration.ProposedHash = inputs.Hash;
-                await FollowedSecrets.RecordAsync(db, configuration, inputs.FollowedSecrets, cancellationToken);
-            }
-            await engine.AddRunsAsync(db, [run], cancellationToken);
-            return run.Id;
-        }, cancellationToken);
+            configuration.ProposedHash = inputs.Hash;
+            await FollowedSecrets.RecordAsync(db, configuration, inputs.FollowedSecrets, cancellationToken);
+        }
+        await engine.AddRunsAsync(db, [run], cancellationToken);
+        return run.Id;
+    }
 
     /// <summary>
     /// Starts a staged rotation of a guest's own key. Its first step proves the key in use with a
     /// login, because it adds the next key with that one, so it cannot be how a guest gets its first.
     /// </summary>
     public Task<Guid> RotateAccessAsync(Guid resourceId, CancellationToken cancellationToken) =>
-        engine.ExecuteAsync(async (db, services) =>
-        {
-            var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
-            var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
-            if (!ManagedAccess.Wanted(repository, guest, await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken)))
-                throw new RunException("This guest has no key of Octopushy's to rotate.");
-            if (await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
-                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
-                    .FirstOrDefaultAsync(cancellationToken) is { } active)
-                throw new RunException($"Run #{active.Number} is {active.Status}.");
-            var name = GuestAccessCredentials.Key(resource.Id);
-            var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
-            var inUse = current is null ? null
-                : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == resource.Id && k.Version == current, cancellationToken);
-            if (inUse is null)
-                throw new RunException("This guest has no key of Octopushy's yet, so there is nothing to log in with.");
+        engine.ExecuteAsync((db, services) => RotateAccessAsync(db, services, resourceId, cancellationToken), cancellationToken);
 
-            var candidate = await GuestAccessCredentials.StageAsync(
-                db, services.GetRequiredService<VariableStore>(), resource.Id, guest.Id, inUse.Version, clock.GetUtcNow(), cancellationToken);
-            // Every version of Octopushy's own that may still be on the guest, and nothing else.
-            var remove = await db.GuestAccessKeys.AsNoTracking()
-                .Where(k => k.ResourceId == resource.Id && k.RemovedAt == null && k.Version != candidate.Version)
-                .OrderBy(k => k.Version).Select(k => k.Version).ToListAsync(cancellationToken);
-            var run = factory.RotateAccess(repository, guest, resource, revision, new AccessRotationContext(inUse.Version, candidate.Version, remove));
-            await engine.AddRunsAsync(db, [run], cancellationToken);
-            return run.Id;
-        }, cancellationToken);
+    private async Task<Guid> RotateAccessAsync(OctopushyDb db, IServiceProvider services, Guid resourceId, CancellationToken cancellationToken)
+    {
+        var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
+        var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
+        if (!ManagedAccess.Wanted(repository, guest, await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken)))
+            throw new RunException("This guest has no key of Octopushy's to rotate.");
+        if (await db.Runs.AsNoTracking().Where(r => r.ResourceId == resource.Id
+                    && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                .FirstOrDefaultAsync(cancellationToken) is { } active)
+            throw new RunException($"Run #{active.Number} is {active.Status}.");
+        var name = GuestAccessCredentials.Key(resource.Id);
+        var current = await db.StoreEntries.AsNoTracking().Where(e => e.Key == name).Select(e => (int?)e.CurrentVersion).FirstOrDefaultAsync(cancellationToken);
+        var inUse = current is null ? null
+            : await db.GuestAccessKeys.AsNoTracking().FirstOrDefaultAsync(k => k.ResourceId == resource.Id && k.Version == current, cancellationToken);
+        if (inUse is null)
+            throw new RunException("This guest has no key of Octopushy's yet, so there is nothing to log in with.");
+
+        var candidate = await GuestAccessCredentials.StageAsync(
+            db, services.GetRequiredService<VariableStore>(), resource.Id, guest.Id, inUse.Version, clock.GetUtcNow(), cancellationToken);
+        // Every version of Octopushy's own that may still be on the guest, and nothing else.
+        var remove = await db.GuestAccessKeys.AsNoTracking()
+            .Where(k => k.ResourceId == resource.Id && k.RemovedAt == null && k.Version != candidate.Version)
+            .OrderBy(k => k.Version).Select(k => k.Version).ToListAsync(cancellationToken);
+        var run = factory.RotateAccess(repository, guest, resource, revision, new AccessRotationContext(inUse.Version, candidate.Version, remove));
+        await engine.AddRunsAsync(db, [run], cancellationToken);
+        return run.Id;
+    }
 
     /// <summary>
     /// Proposes the onChange action of each guest whose configure inputs have changed, once its

@@ -19,6 +19,36 @@ public class RunAgainTests(PostgresFixture postgres)
         (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{runId}"))!["canRunAgain"]!.GetValue<bool>();
 
     [Fact]
+    public async Task Concurrent_run_again_checks_and_creation_share_one_engine_operation()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var http = await server.SignedInClientAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Failed, error: "invalid input");
+        await server.TickAsync();
+        var failed = await server.LatestRunAsync(Guest, Operations.Provision);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = server.Engine.ExecuteAsync(async (_, _) =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return true;
+        }, CancellationToken.None);
+        await entered.Task;
+        var planner = server.Services.GetRequiredService<Planner>();
+        async Task<Exception?> AgainAsync() => await Record.ExceptionAsync(() => planner.RunAgainAsync(failed.Id, CancellationToken.None));
+        var first = AgainAsync();
+        var second = AgainAsync();
+        release.SetResult();
+        await holder;
+        var outcomes = await Task.WhenAll(first, second);
+        Assert.Single(outcomes, e => e is null);
+        Assert.Contains("is newer", Assert.Single(outcomes, e => e is not null)!.Message);
+    }
+
+    [Fact]
     public async Task A_failed_configure_run_runs_its_action_again_as_a_new_run_once()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

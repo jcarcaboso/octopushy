@@ -120,12 +120,13 @@ public sealed class AgentChannelService(
         {
             RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
         };
-        connections.Add(session);
-        reachability.OnConnected(session);
-        logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
         var writer = Task.CompletedTask;
         try
         {
+            await engine.OnHelloAsync(agent.Id, hello, call.Token);
+            connections.Add(session);
+            reachability.OnConnected(session);
+            logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage
             {
                 Welcome = new Welcome
@@ -135,7 +136,6 @@ public sealed class AgentChannelService(
                     HeartbeatSeconds = (uint)options.Value.AgentChannel.HeartbeatSeconds,
                 },
             }, call.Token);
-            await engine.OnHelloAsync(agent.Id, hello, call.Token);
             // Back on the version an update set: the update is done, and its pause lifted.
             try
             {
