@@ -98,6 +98,12 @@ public sealed class RepositoryEditorOptions
 {
     /// <summary>Explicitly allow publishing drafts as commits pushed with the configured repository credential.</summary>
     public bool PublishEnabled { get; set; }
+
+    /// <summary>
+    /// How long a push that a request started may take, fetches, merges and retries included. Shorter than a Git command's own
+    /// five minutes, so a request is not held that long; a sync's fetch keeps the longer limit.
+    /// </summary>
+    public int PushTimeoutSeconds { get; set; } = 90;
 }
 
 public sealed class AgentChannelOptions

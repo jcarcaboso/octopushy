@@ -184,84 +184,102 @@ public sealed partial class ChangeService
     public async Task<(ChangeDto? Change, ChangeRefusedDto? Refused)> DeployAsync(DeployRequest request, string actor, CancellationToken ct)
     {
         var id = Guid.CreateVersion7();
-        var (committed, refused) = await engine.ExecuteAsync(async (db, services) =>
+        ResourceChange? committed;
+        ChangeRefusedDto? refused;
+        // As for a change: the Git gate, not the engine's, is held across the push.
+        using (await gitGate.EnterAsync(ct))
         {
             DeployTarget? target = null;
             ComposedChange? composed = null;
-            ResourceChange? change = null;
             try
             {
-                target = await DeployTargetAsync(db, request, ct);
-                (composed, var generations) = await ComposeDeployAsync(db, request, id, target, ct);
-                var deployed = target;
-                CheckReviewed(request, deployed, composed);
-                if (deployed.ResourceKind == ResourceKinds.Guest)
-                    await CheckVmidAsync(db, deployed, request.Vmid!.Value, deployed.Settings.HeadCommit ?? request.BaseCommit, null, null, ct);
-                // On record before anything is generated or pushed, with each value it will make: whatever happens to this
-                // request, the branch never moves, and no value is left in the store, without a change that says why.
-                change = RecordDeploy(id, deployed, composed, request, actor);
-                change.StoreKeys = GeneratedValues.StoreKeysOf(composed);
-                change.Status = ChangeStatuses.Committing;
-                change.Detail = "Pushing its commit.";
-                db.Changes.Add(change);
-                var now = clock.GetUtcNow();
-                var values = generations.Select(g => new GeneratedValue
+                var change = await engine.ExecuteAsync(async (db, services) =>
                 {
-                    Id = Guid.CreateVersion7(), ChangeId = id, Secret = g.Secret, Key = g.Key, Generator = g.Generator,
-                    StoreDescription = $"Generated at deploy for {deployed.Address} ({g.Generator}, change {id}).", CreatedAt = now, UpdatedAt = now,
-                }).ToList();
-                db.GeneratedValues.AddRange(values);
-                await db.SaveChangesAsync(ct);
-                await GenerateAsync(db, services, generations, values, ct);
-                var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
-                Func<PublishCandidate, Task> check = async candidate =>
+                    target = await DeployTargetAsync(db, request, ct);
+                    (composed, var generations) = await ComposeDeployAsync(db, request, id, target, ct);
+                    CheckReviewed(request, target, composed);
+                    if (target.ResourceKind == ResourceKinds.Guest)
+                        await CheckVmidAsync(db, target, request.Vmid!.Value, target.Settings.HeadCommit ?? request.BaseCommit, null, null, ct);
+                    // On record before anything is generated or pushed, with each value it will make: whatever happens to this
+                    // request, the branch never moves, and no value is left in the store, without a change that says why.
+                    var recorded = RecordDeploy(id, target, composed, request, actor);
+                    recorded.StoreKeys = GeneratedValues.StoreKeysOf(composed);
+                    recorded.Status = ChangeStatuses.Committing;
+                    recorded.Detail = "Pushing its commit.";
+                    db.Changes.Add(recorded);
+                    var now = clock.GetUtcNow();
+                    var values = generations.Select(g => new GeneratedValue
+                    {
+                        Id = Guid.CreateVersion7(), ChangeId = id, Secret = g.Secret, Key = g.Key, Generator = g.Generator,
+                        StoreDescription = $"Generated at deploy for {target.Address} ({g.Generator}, change {id}).", CreatedAt = now, UpdatedAt = now,
+                    }).ToList();
+                    db.GeneratedValues.AddRange(values);
+                    await db.SaveChangesAsync(ct);
+                    await GenerateAsync(db, services, generations, values, ct);
+                    return recorded;
+                }, ct);
+                var deployed = target!;
+                async Task Check(OctopushyDb db, PublishCandidate candidate)
                 {
                     // At the commit this attempt would land: what resolves there must be what was reviewed, and the VMID
                     // must still be free on the installation as that commit defines it.
-                    var landing = (await revisions.ResolveAsync(candidate.Commit!, releases, ct)).Repository;
+                    var landing = (await revisions.ResolveAsync(candidate.Commit!, WorkflowReleaseBook.Of(db, workflowMirrors), ct)).Repository;
                     await CheckLandingAsync(request, deployed, landing, candidate.Commit!, ct);
                     if (deployed.ResourceKind == ResourceKinds.Guest)
                         await CheckVmidAsync(db, deployed, request.Vmid!.Value, candidate.Remote, landing, id, ct);
-                };
-                var commit = await PushAsync(db, services, deployed.Settings, deployed.Address, composed, change, request.BaseCommit, actor, check, ct);
+                }
+
+                var commit = await PushOutsideEngineAsync(deployed.Settings, deployed.Address, composed!, change, request.BaseCommit, actor, Check, ct);
                 // The push happened: what follows is recorded even if the request is gone by now.
-                change.Commit = commit;
-                change.Status = ChangeStatuses.Committed;
-                change.Detail = "Waiting for the sync.";
-                change.UpdatedAt = clock.GetUtcNow();
-                await db.SaveChangesAsync(CancellationToken.None);
-                return ((ResourceChange?)change, (ChangeRefusedDto?)null);
+                committed = await engine.ExecuteAsync(async (db, _) =>
+                {
+                    var stored = await db.Changes.SingleAsync(c => c.Id == id, CancellationToken.None);
+                    stored.Commit = commit;
+                    stored.Status = ChangeStatuses.Committed;
+                    stored.Detail = "Waiting for the sync.";
+                    stored.UpdatedAt = clock.GetUtcNow();
+                    await db.SaveChangesAsync(CancellationToken.None);
+                    return stored;
+                }, CancellationToken.None);
+                refused = null;
             }
             catch (ChangeRefusal refusal)
             {
-                if (target is null || composed is null)
-                    return ((ResourceChange?)null, (ChangeRefusedDto?)refusal.Dto());
-                if (change is null)
-                {
-                    change = RecordDeploy(id, target, composed, request, actor);
-                    db.Changes.Add(change);
-                }
+                committed = null;
+                refused = target is null || composed is null
+                    ? refusal.Dto()
+                    : await engine.ExecuteAsync(async (db, _) =>
+                    {
+                        // Looked up, not assumed: a refusal may come after the change was recorded.
+                        var stored = await db.Changes.FirstOrDefaultAsync(c => c.Id == id, CancellationToken.None);
+                        if (stored is null)
+                        {
+                            stored = RecordDeploy(id, target, composed, request, actor);
+                            db.Changes.Add(stored);
+                        }
 
-                // Refused before any push: nothing was committed, for good, and what it generated goes. After a push was
-                // attempted, one of its commits may still land: the change is left for reconciliation, or for a person to dismiss.
-                var attempted = change.CandidateCommits.Count > 0;
-                change.Status = !attempted ? ChangeStatuses.Refused : refusal.Unverified ? ChangeStatuses.Uncertain : ChangeStatuses.Unknown;
-                change.Detail = !attempted ? refusal.Message
-                    : $"{refusal.Message} A push was attempted: each sync looks for its commit on the branch, until it is found or the change is dismissed.";
-                if (!attempted)
-                {
-                    change.PreApproval = null;
-                    change.PreApprovalDetail = null;
-                }
+                        // Refused before any push: nothing was committed, for good, and what it generated goes. After a push was
+                        // attempted, one of its commits may still land: the change is left for reconciliation, or for a person to dismiss.
+                        var attempted = stored.CandidateCommits.Count > 0;
+                        stored.Status = !attempted ? ChangeStatuses.Refused : refusal.Unverified ? ChangeStatuses.Uncertain : ChangeStatuses.Unknown;
+                        stored.Detail = !attempted ? refusal.Message
+                            : $"{refusal.Message} A push was attempted: each sync looks for its commit on the branch, until it is found or the change is dismissed.";
+                        if (!attempted)
+                        {
+                            stored.PreApproval = null;
+                            stored.PreApprovalDetail = null;
+                        }
 
-                change.UpdatedAt = clock.GetUtcNow();
-                await db.SaveChangesAsync(CancellationToken.None);
-                // Refused for good: what it generated goes now, under the same guards as at every sync.
-                if (!attempted && await HeadReferencedKeysAsync(db, CancellationToken.None) is { } referenced)
-                    await GeneratedValues.CleanUpAsync(db, mirror, referenced, logger, clock.GetUtcNow(), id);
-                return ((ResourceChange?)null, (ChangeRefusedDto?)refusal.Dto(id, change.Status));
+                        stored.UpdatedAt = clock.GetUtcNow();
+                        await db.SaveChangesAsync(CancellationToken.None);
+                        // Refused for good: what it generated goes now, under the same guards as at every sync.
+                        if (!attempted && await HeadReferencedKeysAsync(db, CancellationToken.None) is { } referenced)
+                            await GeneratedValues.CleanUpAsync(db, mirror, referenced, logger, clock.GetUtcNow(), id);
+                        return refusal.Dto(id, stored.Status);
+                    }, CancellationToken.None);
             }
-        }, ct);
+        }
+
         if (committed is null)
             return (null, refused);
 

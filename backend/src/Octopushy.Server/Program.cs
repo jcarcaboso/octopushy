@@ -46,6 +46,7 @@ builder.Services.AddScoped<VariableStore>();
 builder.Services.AddScoped<TofuStateStore>();
 builder.Services.AddSingleton<GitCli>();
 builder.Services.AddSingleton<RepositoryMirror>();
+builder.Services.AddSingleton<GitNetworkGate>();
 builder.Services.AddSingleton<WorkflowsMirrors>();
 builder.Services.AddSingleton<RunBundles>();
 builder.Services.AddSingleton<RevisionCache>();

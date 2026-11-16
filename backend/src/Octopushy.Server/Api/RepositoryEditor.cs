@@ -107,8 +107,12 @@ public static partial class RepositoryEditor
             return draft is null ? TypedResults.NotFound() : TypedResults.Ok(await DetailAsync(db, mirror, options.Value, draft, ct));
         }).WithName("getDraft");
 
-        group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, RunEngine engine, RepositoryMirror mirror, CancellationToken ct) =>
-            await engine.ExecuteAsync<Results<NoContent, NotFound>>(async (db, _) =>
+        // Every change to a draft takes the Git gate, as its publication does, so none overlaps a push of it.
+        group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, RunEngine engine, GitNetworkGate gitGate,
+            RepositoryMirror mirror, CancellationToken ct) =>
+        {
+            using var held = await gitGate.EnterAsync(ct);
+            return await engine.ExecuteAsync<Results<NoContent, NotFound>>(async (db, _) =>
             {
                 var draft = await db.RepositoryDrafts.SingleOrDefaultAsync(d => d.Id == id, ct);
                 if (draft is null) return TypedResults.NotFound();
@@ -116,7 +120,8 @@ public static partial class RepositoryEditor
                 db.RepositoryDrafts.Remove(draft);
                 await db.SaveChangesAsync(ct);
                 return TypedResults.NoContent();
-            }, ct)).WithName("discardDraft");
+            }, ct);
+        }).WithName("discardDraft");
 
         group.MapGet("/{id:guid}/file", async Task<Results<Ok<DraftFileContentDto>, NotFound, ProblemHttpResult>> (Guid id, string path,
             OctopushyDb db, RepositoryMirror mirror, CancellationToken ct) =>
@@ -135,13 +140,14 @@ public static partial class RepositoryEditor
         }).WithName("getDraftFile");
 
         group.MapPost("/{id:guid}/changes", async Task<Results<Ok<DraftDetailDto>, NotFound, ProblemHttpResult>> (Guid id,
-            DraftChangesRequest request, RunEngine engine, RepositoryMirror mirror, IOptions<OctopushyOptions> options,
+            DraftChangesRequest request, RunEngine engine, GitNetworkGate gitGate, RepositoryMirror mirror, IOptions<OctopushyOptions> options,
             TimeProvider clock, CancellationToken ct) =>
         {
             if (request.Changes is null || request.ExpectedHead is null)
                 return TypedResults.Problem(statusCode: 400, title: "Send the draft's head and at least one change.");
             try
             {
+                using var held = await gitGate.EnterAsync(ct);
                 return await engine.ExecuteAsync<Results<Ok<DraftDetailDto>, NotFound, ProblemHttpResult>>(async (db, _) =>
                 {
                     var draft = await db.RepositoryDrafts.SingleOrDefaultAsync(d => d.Id == id, ct);
@@ -166,11 +172,12 @@ public static partial class RepositoryEditor
         }).WithName("changeDraft");
 
         group.MapPost("/{id:guid}/update", async Task<Results<Ok<DraftDetailDto>, NotFound, ProblemHttpResult>> (Guid id,
-            DraftUpdateRequest request, RunEngine engine, RepositoryMirror mirror, IOptions<OctopushyOptions> options,
+            DraftUpdateRequest request, RunEngine engine, GitNetworkGate gitGate, RepositoryMirror mirror, IOptions<OctopushyOptions> options,
             TimeProvider clock, CancellationToken ct) =>
         {
             try
             {
+                using var held = await gitGate.EnterAsync(ct);
                 return await engine.ExecuteAsync<Results<Ok<DraftDetailDto>, NotFound, ProblemHttpResult>>(async (db, _) =>
                 {
                     var draft = await db.RepositoryDrafts.SingleOrDefaultAsync(d => d.Id == id, ct);
@@ -202,8 +209,8 @@ public static partial class RepositoryEditor
         }).WithName("validateDraft");
 
         group.MapPost("/{id:guid}/publish", async Task<Results<Ok<DraftPublishedDto>, NotFound, ProblemHttpResult>> (Guid id,
-            DraftPublishRequest request, HttpContext http, RunEngine engine, RepositoryMirror mirror, RepositorySync sync,
-            IOptions<OctopushyOptions> options, TimeProvider clock, CancellationToken ct) =>
+            DraftPublishRequest request, HttpContext http, OctopushyDb db, VariableStore store, RevisionCache revisions,
+            WorkflowsMirrors workflows, GitNetworkGate gitGate, RepositoryMirror mirror, RepositorySync sync, IOptions<OctopushyOptions> options, TimeProvider clock, CancellationToken ct) =>
         {
             var message = request.Message?.Trim() ?? "";
             if (!request.ConfirmRepositoryWrite)
@@ -215,16 +222,16 @@ public static partial class RepositoryEditor
                 return TypedResults.Problem(statusCode: 400, title: "An authenticated operator is required.");
             try
             {
-                return await engine.ExecuteAsync<Results<Ok<DraftPublishedDto>, NotFound, ProblemHttpResult>>(async (db, services) =>
+                // Drafts are not run state: the push holds the Git gate, never the engine's.
+                using (await gitGate.EnterAsync(ct))
                 {
                     var draft = await db.RepositoryDrafts.SingleOrDefaultAsync(d => d.Id == id, ct);
                     if (draft is null) return TypedResults.NotFound();
                     var settings = await db.RepositorySettings.AsNoTracking().SingleAsync(s => s.Id == 1, ct);
                     if (draft.HeadCommit != request.ExpectedHead) throw new DraftChangedException();
                     if (PublishBlockedReason(draft, settings, options.Value, changedFiles: null) is { } blocked) throw new GitException(blocked);
-                    var credential = await CredentialAsync(services.GetRequiredService<VariableStore>(), settings, ct);
-                    var revisions = services.GetRequiredService<RevisionCache>();
-                    var releases = WorkflowReleaseBook.Of(db, services.GetRequiredService<WorkflowsMirrors>());
+                    var credential = await CredentialAsync(store, settings, ct);
+                    var releases = WorkflowReleaseBook.Of(db, workflows);
                     var candidate = await PushDraftAsync(mirror, settings, credential, draft.BaseCommit, draft.HeadCommit, message, AuthorOf(actor),
                         async candidate =>
                         {
@@ -240,7 +247,7 @@ public static partial class RepositoryEditor
                                     .Take(3).Select(i => $"{i.File}{(i.Line is { } line ? $":{line}" : "")}: {i.Message}");
                                 throw new GitException($"The draft does not validate: {string.Join("; ", first)}");
                             }
-                        }, ct);
+                        }, TimeSpan.FromSeconds(options.Value.RepositoryEditor.PushTimeoutSeconds), ct);
                     // The published commit and its parent are on the branch, so the draft keeps
                     // showing exactly what it published after its own ref is gone.
                     draft.BaseCommit = candidate.Remote;
@@ -252,7 +259,7 @@ public static partial class RepositoryEditor
                     await mirror.DeleteDraftAsync(id, ct);
                     sync.Trigger();
                     return TypedResults.Ok(new DraftPublishedDto(candidate.Commit!, Summary(draft, settings, await CountChangesAsync(mirror, draft, ct))));
-                }, ct);
+                }
             }
             catch (GitException e) { return TypedResults.Problem(statusCode: 409, title: e.Message); }
         }).WithName("publishDraft");
@@ -279,24 +286,35 @@ public static partial class RepositoryEditor
     /// Octopushy writes to the lab repository: the editor's drafts and the changes made in forms both go through it.
     /// </summary>
     internal static async Task<PublishCandidate> PushDraftAsync(RepositoryMirror mirror, RepositorySettings settings, GitCredential credential,
-        string baseCommit, string draftHead, string message, CommitAuthor author, Func<PublishCandidate, Task> check, CancellationToken ct)
+        string baseCommit, string draftHead, string message, CommitAuthor author, Func<PublishCandidate, Task> check, TimeSpan timeout,
+        CancellationToken ct)
     {
-        // ponytail: one bounded fetch/merge/validate/push loop under the engine gate; a branch
+        // ponytail: one bounded fetch/merge/validate/push loop under the Git gate; a branch
         // that keeps moving fails after a few attempts and keeps the draft.
-        for (var attempt = 1; ; attempt++)
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(timeout);
+        try
         {
-            var candidate = await mirror.PreparePublishAsync(settings.Url!, settings.Branch, credential, baseCommit, draftHead, message, author, ct);
-            await check(candidate);
-            try
+            for (var attempt = 1; ; attempt++)
             {
-                await mirror.PushAsync(settings.Url!, settings.Branch, credential, candidate.Remote, candidate.Commit!, ct);
-                return candidate;
+                var candidate = await mirror.PreparePublishAsync(settings.Url!, settings.Branch, credential, baseCommit, draftHead, message, author, limit.Token);
+                await check(candidate);
+                try
+                {
+                    await mirror.PushAsync(settings.Url!, settings.Branch, credential, candidate.Remote, candidate.Commit!, limit.Token);
+                    return candidate;
+                }
+                catch (GitException) when (attempt < PushAttempts)
+                {
+                    // Retry only when the branch moved under the push; any other failure is reported.
+                    if (await mirror.FetchAsync(settings.Url!, settings.Branch, credential, limit.Token) == candidate.Remote) throw;
+                }
             }
-            catch (GitException) when (attempt < PushAttempts)
-            {
-                // Retry only when the branch moved under the push; any other failure is reported.
-                if (await mirror.FetchAsync(settings.Url!, settings.Branch, credential, ct) == candidate.Remote) throw;
-            }
+        }
+        catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new PushTimedOutException($"Pushing to {settings.Branch} did not finish within {timeout.TotalSeconds:0} seconds, the limit for a push "
+                + "a request starts, and was stopped.");
         }
     }
 

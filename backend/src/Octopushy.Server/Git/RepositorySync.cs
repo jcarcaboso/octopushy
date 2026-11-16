@@ -22,6 +22,7 @@ public sealed class RepositorySync(
     WorkflowsMirrors workflowMirrors,
     RevisionCache revisions,
     RunEngine engine,
+    GitNetworkGate gitGate,
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
     ILogger<RepositorySync> logger) : BackgroundService
@@ -131,10 +132,15 @@ public sealed class RepositorySync(
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
             // Changes whose push is not confirmed, or whose commit is being followed, picked before the fetch: everything they
-            // hold was pushed before it began, so the head it returns can judge them.
-            var watched = await ChangeReconciler.SelectAsync(engine, options.Value.Changes.ReconcileBatch, cancellationToken);
-            var head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
-            await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
+            // hold was pushed before it began, so the head it returns can judge them. The Git gate keeps pushes out until they
+            // are judged, so no change is seen half-pushed.
+            string head;
+            using (await gitGate.EnterAsync(cancellationToken))
+            {
+                var watched = await ChangeReconciler.SelectAsync(engine, options.Value.Changes.ReconcileBatch, cancellationToken);
+                head = await mirror.FetchAsync(settings.Url, settings.Branch, credential, cancellationToken);
+                await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
+            }
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));
             var confirmed = WorkflowSourceTrust.Confirmed(settings);

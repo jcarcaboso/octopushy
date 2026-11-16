@@ -448,6 +448,80 @@ public class ChangeTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_push_held_by_the_remote_does_not_hold_the_engine_and_the_sync_waits_for_it()
+    {
+        await using var setup = await StartAsync();
+        // The remote takes the push only once the test lets it, as a slow Git host would.
+        var received = Path.Combine(setup.Remote.Root, "push-received");
+        var release = Path.Combine(setup.Remote.Root, "push-release");
+        var hook = Path.Combine(setup.Remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, $"#!/bin/sh\ncat >/dev/null\ntouch '{received}'\nwhile [ ! -e '{release}' ]; do sleep 0.1; done\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var agentId = Guid.NewGuid();
+        var attemptId = Guid.NewGuid();
+        await setup.Server.WithDbAsync(async db =>
+        {
+            db.Agents.Add(new AgentRecord { Id = agentId, Name = "held-push", CertificateSerial = "held-push" });
+            db.Attempts.Add(new Attempt
+            {
+                Id = attemptId, Executor = "proxmox", Action = "observe", AgentId = agentId, Status = AttemptStatuses.Running,
+                LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5), CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        });
+        var form = await setup.FormAsync();
+        var commit = setup.Client.PostAsJsonAsync("/api/changes", new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        for (var i = 0; i < 300 && !File.Exists(received); i++)
+            await Task.Delay(100);
+        Assert.True(File.Exists(received), "The push never reached the remote.");
+
+        try
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // While the push is held: a tick completes, an agent's result is recorded, and the changes list answers.
+            await setup.Server.Engine.TickAsync(limit.Token);
+            Assert.True(await setup.Server.Engine.OnResultAsync(agentId,
+                new AttemptResult { AttemptId = attemptId.ToString(), Outcome = Outcome.Failed, Error = "stopped" }, limit.Token));
+            Assert.NotEqual(AttemptStatuses.Running, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == attemptId).Select(a => a.Status).SingleAsync()));
+            var listed = (await setup.Client.GetFromJsonAsync<List<ChangeDto>>("/api/changes", limit.Token))!;
+            Assert.Equal(ChangeStatuses.Committing, Assert.Single(listed).Status);
+            // A sync waits for the push: it never judges the change while its push is under way.
+            var sync = setup.Server.SyncAsync();
+            await Task.Delay(500, limit.Token);
+            Assert.False(sync.IsCompleted);
+            Assert.Equal(ChangeStatuses.Committing, (await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().SingleAsync())).Status);
+            File.WriteAllText(release, "");
+            var response = await commit;
+            Assert.True(response.IsSuccessStatusCode, $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+            await sync;
+        }
+        finally
+        {
+            File.WriteAllText(release, "");
+        }
+
+        var change = Assert.Single(await setup.Server.QueryAsync(db => db.Changes.AsNoTracking().ToListAsync()));
+        Assert.Equal(setup.RemoteHead, change.Commit);
+        Assert.NotEqual(ChangeStatuses.Refused, change.Status);
+    }
+
+    [Fact]
+    public async Task A_push_a_request_started_stops_at_its_limit_and_says_so()
+    {
+        await using var setup = await StartAsync(settings: new() { ["Octopushy:RepositoryEditor:PushTimeoutSeconds"] = "2" });
+        var hook = Path.Combine(setup.Remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, "#!/bin/sh\ncat >/dev/null\nsleep 30\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var form = await setup.FormAsync();
+        var refused = await RefusedAsync(setup, new ChangeRequest(form.ResourceId, form.BaseCommit!, Hardware: Hardware(2, 4096)));
+        Assert.Contains("did not finish within 2 seconds", refused.Message);
+        Assert.Equal(form.BaseCommit, setup.RemoteHead);
+        // Its commit was on record before the push, and the branch is not fetched again to check it: the next sync's
+        // reconciliation decides whether it landed.
+        Assert.Equal(ChangeStatuses.Uncertain, refused.Status);
+    }
+
+    [Fact]
     public async Task A_change_is_recorded_before_its_push_so_a_request_that_dies_after_it_still_ends_in_its_commit()
     {
         await using var setup = await StartAsync();

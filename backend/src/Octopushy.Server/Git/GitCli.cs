@@ -5,6 +5,9 @@ namespace Octopushy.Server.Git;
 
 public class GitException(string message) : Exception(message);
 
+/// <summary>A push a request started that ran out of its time: whether it landed is left to reconciliation.</summary>
+public sealed class PushTimedOutException(string message) : GitException(message);
+
 /// <summary>Runs the Git CLI without a shell, without prompts, and only over allowed transports.</summary>
 public sealed class GitCli(ILogger<GitCli> logger)
 {
