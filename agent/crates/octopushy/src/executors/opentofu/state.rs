@@ -8,8 +8,10 @@
 //! an apply runs, changes also go out as snapshots, so a lost machine loses
 //! little. They and the final state are never logged.
 
+use crate::fsutil::read_tool_file;
+use anyhow::{Context, Result, bail};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,7 +61,7 @@ fn root_record(workspace: &Path) -> PathBuf {
 
 /// The backend's `path`, from the root. It is relative because a saved plan keeps
 /// it and applies from another workspace, and a container sees other absolute paths.
-pub fn backend_path(workspace: &Path, root: &Path) -> Result<String, Failure> {
+pub fn backend_path(workspace: &Path, root: &Path) -> std::result::Result<String, Failure> {
     let workspace = workspace.canonicalize().map_err(anyhow::Error::from)?;
     let depth = root
         .strip_prefix(&workspace)
@@ -70,7 +72,7 @@ pub fn backend_path(workspace: &Path, root: &Path) -> Result<String, Failure> {
 }
 
 /// Writes the state the assignment carries, if it carries one yet.
-pub fn restore(ctx: &ExecContext) -> Result<(), Failure> {
+pub fn restore(ctx: &ExecContext) -> std::result::Result<(), Failure> {
     let path = file(&ctx.workspace);
     let directory = path.parent().expect("the state file has a directory");
     fs::create_dir_all(directory)
@@ -90,7 +92,7 @@ pub fn restore(ctx: &ExecContext) -> Result<(), Failure> {
 
 /// Records where OpenTofu runs. A file of that name from the repository goes first:
 /// it is not this apply's emergency state.
-pub fn record_root(workspace: &Path, root: &Path) -> Result<(), Failure> {
+pub fn record_root(workspace: &Path, root: &Path) -> std::result::Result<(), Failure> {
     let workspace = workspace.canonicalize().map_err(anyhow::Error::from)?;
     let relative = root
         .strip_prefix(&workspace)
@@ -107,42 +109,68 @@ pub fn record_root(workspace: &Path, root: &Path) -> Result<(), Failure> {
 }
 
 /// OpenTofu's emergency state, if it left one, however complete.
-fn emergency(workspace: &Path) -> Option<PathBuf> {
-    let root = fs::read_to_string(root_record(workspace)).ok()?;
+fn optional_file(workspace: &Path, path: &Path, cap: usize) -> Result<Option<Vec<u8>>> {
+    match read_tool_file(workspace, path, cap) {
+        Ok(content) => Ok(Some(content)),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn emergency(workspace: &Path) -> Result<Option<PathBuf>> {
+    let Some(root) = optional_file(workspace, &root_record(workspace), 16 * 1024)? else {
+        return Ok(None);
+    };
+    let root = String::from_utf8(root).context("invalid OpenTofu root record")?;
+    if !Path::new(&root)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+    {
+        bail!("OpenTofu root record leaves the workspace");
+    }
     let path = workspace.join(root).join(ERRORED);
-    path.symlink_metadata().is_ok().then_some(path)
+    Ok(path.symlink_metadata().is_ok().then_some(path))
 }
 
 /// Whether OpenTofu left an emergency state, complete or not.
 pub fn has_emergency(workspace: &Path) -> bool {
-    emergency(workspace).is_some()
+    emergency(workspace).ok().flatten().is_some()
 }
 
-/// The newest complete state in the workspace. An emergency state replaces the
-/// backend file, which is then out of date, so one that cannot be read means there
-/// is no state to report, never that the backend file will do.
+/// The newest complete state. Refuse unsafe files rather than sending their contents.
 pub fn read(workspace: &Path) -> Option<Artifact> {
-    match emergency(workspace) {
-        Some(path) => complete(&path),
-        None => complete(&file(workspace)),
+    match read_checked(workspace) {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::error!("cannot read OpenTofu state: {e:#}");
+            None
+        }
     }
 }
 
-/// The state at `path`, if it is complete. OpenTofu rewrites the backend file in
-/// place, so a read during an apply can see part of it.
-fn complete(path: &Path) -> Option<Artifact> {
-    let content = fs::read(path).ok()?;
-    if content.len() > MAX_BYTES {
-        tracing::error!("the OpenTofu state is too large to send");
-        return None;
+pub fn read_checked(workspace: &Path) -> Result<Option<Artifact>> {
+    let path = emergency(workspace)?.unwrap_or_else(|| file(workspace));
+    let Some(content) = optional_file(workspace, &path, MAX_BYTES)? else {
+        return Ok(None);
+    };
+    // A read during an apply can see a partial rewrite. Only complete states count.
+    let parsed: Value = match serde_json::from_slice(&content) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    if parsed.get("lineage").and_then(Value::as_str).is_none() {
+        return Ok(None);
     }
-    let parsed: Value = serde_json::from_slice(&content).ok()?;
-    parsed.get("lineage")?.as_str()?;
-    Some(Artifact {
+    Ok(Some(Artifact {
         name: ARTIFACT.to_owned(),
         sha256: sha256_hex(&content),
         content,
-    })
+    }))
 }
 
 /// Offers each new state as a snapshot, until it is aborted.
@@ -173,6 +201,24 @@ mod tests {
             "../../../../state/terraform.tfstate"
         );
         assert!(backend_path(&ws, Path::new("/elsewhere")).is_err());
+    }
+
+    #[test]
+    fn tool_written_state_and_root_links_are_rejected() {
+        use std::os::unix::fs::symlink;
+        for target in [ARTIFACT, "root"] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join("state")).unwrap();
+            symlink("/etc/passwd", dir.path().join("state").join(target)).unwrap();
+            let error = read_checked(dir.path()).unwrap_err();
+            assert!(error.to_string().contains("without following links"));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("state")).unwrap();
+        fs::create_dir(dir.path().join("repo")).unwrap();
+        record_root(dir.path(), &dir.path().join("repo")).unwrap();
+        symlink("/etc/passwd", dir.path().join("repo").join(ERRORED)).unwrap();
+        assert!(read_checked(dir.path()).is_err());
     }
 
     #[test]

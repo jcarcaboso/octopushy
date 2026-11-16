@@ -666,16 +666,9 @@ fn task_lines(stdout: &[u8]) -> Vec<String> {
         .collect()
 }
 
-fn read_prepared(path: &Path) -> Result<Map<String, Value>, Failure> {
-    let size = fs::metadata(path)
-        .map_err(|_| Failure::msg("the prepare playbook wrote nothing to OCTOPUSHY_PREPARED_FILE"))?
-        .len();
-    if size > MAX_PREPARED {
-        return Err(Failure::msg(format!(
-            "the prepare playbook wrote {size} bytes; the limit is {MAX_PREPARED}"
-        )));
-    }
-    let text = fs::read(path).map_err(anyhow::Error::from)?;
+fn read_prepared(workspace: &Path, path: &Path) -> Result<Map<String, Value>, Failure> {
+    let text = crate::fsutil::read_tool_file(workspace, path, MAX_PREPARED as usize)
+        .map_err(Failure::from)?;
     let value: Value = serde_json::from_slice(&text)
         .map_err(|e| Failure::msg(format!("the prepare playbook did not write JSON: {e}")))?;
     let Value::Object(prepared) = value else {
@@ -767,7 +760,7 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                 false,
             )
             .await?;
-            Some(read_prepared(&file)?)
+            Some(read_prepared(&ctx.workspace, &file)?)
         }
     };
 
@@ -1203,6 +1196,16 @@ fn unreachable_failure(prep: &Prepared, recap: &Recap, outputs: &Value) -> Failu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prepared_file_links_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("prepared.json");
+        symlink("/etc/passwd", &file).unwrap();
+        let error = super::read_prepared(dir.path(), &file).unwrap_err();
+        assert!(error.message().contains("without following links"));
+    }
+
     use super::*;
 
     fn host(key: &str, port: u16) -> Host {

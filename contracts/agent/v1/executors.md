@@ -197,7 +197,11 @@ The controller sends it for the `unprotect` step with `protection: false` and fo
 
 Runs OpenTofu in a container image (`image`), rootless, with only the attempt's
 workspace and the agent's provider cache mounted. The `local` tool runtime runs a
-`tofu` binary on the agent instead, for development and tests.
+`tofu` binary on the agent instead. The shipped agent image, Compose stack and
+Proxmox installer use `local`. Tools share the agent's user and are not sandboxed
+from its files. Local concurrency is capped at one attempt, even if the server
+allows more. Tool-written files must be regular files inside the workspace;
+agent reads reject links in every path component and enforce byte caps.
 
 Input (the same for both actions):
 

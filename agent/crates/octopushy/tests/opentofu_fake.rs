@@ -51,6 +51,10 @@ case "$1" in
     out=""; destroy=0
     for a in "$@"; do case "$a" in -out=*) out="${a#-out=}" ;; -destroy) destroy=1 ;; esac; done
     echo "PLAN destroy=$destroy" > "$out"
+    case "${FAKE_LINK:-}" in
+      plan) rm "$out"; ln -s "$REC/args.log" "$out" ;;
+      lock) rm .terraform.lock.hcl; ln -s "$REC/args.log" .terraform.lock.hcl ;;
+    esac
     if [ -n "$state" ] && [ -f "$state" ]; then cp "$state" "$REC/state-at-plan.json"; fi
     if [ -e .octopushy-images ]; then ls -A .octopushy-images > "$REC/images-at-plan.txt"; fi
     if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
@@ -80,6 +84,7 @@ JSON
       [ -f "$state" ] && cp "$state" "$REC/state-at-apply.json"
       echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
     fi
+    if [ "${FAKE_LINK:-}" = state ]; then rm "$state"; ln -s "$REC/args.log" "$state"; fi
     if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
     if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
     if [ -n "${FAKE_NOT_SAVED:-}" ]; then
@@ -1098,4 +1103,59 @@ async fn a_template_image_is_fetched_into_the_root_before_tofu_runs() {
             .unwrap_or_default();
         assert!(left.is_empty(), "{n}: {left:?}");
     }
+}
+
+#[tokio::test]
+async fn tool_written_plan_and_lock_links_fail_the_preview() {
+    for target in ["plan", "lock"] {
+        let fx = Fixture::new();
+        let r = run(
+            &fx,
+            "unsafe",
+            "preview",
+            &input(false, json!({"FAKE_LINK": target})),
+            repo_tar(None),
+            vec![],
+            CancellationToken::new(),
+        )
+        .await;
+        let error = r.result.unwrap_err();
+        assert!(matches!(error, Failure::Failed { .. }));
+        assert!(
+            error.message().contains("without following links"),
+            "{}",
+            error.message()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_tool_written_state_link_makes_apply_uncertain() {
+    let fx = Fixture::new();
+    let preview = run(
+        &fx,
+        "preview-link",
+        "preview",
+        &input(false, json!({})),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await
+    .result
+    .unwrap();
+    let applied = run(
+        &fx,
+        "apply-link",
+        "apply",
+        &input(false, json!({"FAKE_LINK": "state"})),
+        repo_tar(None),
+        preview.artifacts,
+        CancellationToken::new(),
+    )
+    .await;
+    let error = applied.result.unwrap_err();
+    assert!(matches!(error, Failure::Uncertain(_)));
+    assert!(error.message().contains("without following links"));
+    assert!(state::read(&applied.workspace).is_none());
 }

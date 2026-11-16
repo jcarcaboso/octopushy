@@ -184,6 +184,11 @@ fn inside(repo: &Path, rel: &str, what: &str) -> Result<PathBuf, Failure> {
     Ok(canonical)
 }
 
+fn read_lock(workspace: &Path, repo: &Path, lock: &str) -> Result<Vec<u8>, Failure> {
+    let source = repo.join(check_root(lock)?);
+    crate::fsutil::read_tool_file(workspace, &source, 1024 * 1024).map_err(Failure::from)
+}
+
 async fn build(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let input: Input = ctx.input()?;
     check_attr("output", &input.output)?;
@@ -224,12 +229,7 @@ async fn build(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         )));
     }
     if let Some(lock) = &input.lock {
-        let source = inside(&repo, lock, "lock")?;
-        if !source.is_file() {
-            return Err(Failure::msg(format!("lock {lock:?} is not a file")));
-        }
-        let bytes =
-            fs::read(&source).map_err(|e| Failure::msg(format!("reading lock {lock:?}: {e}")))?;
+        let bytes = read_lock(&ctx.workspace, &repo, lock)?;
         write_fresh(&flake.join("flake.lock"), &bytes)?;
         ctx.log
             .agent(format!("using {lock} as {}/flake.lock", input.flake));
@@ -541,6 +541,17 @@ async fn collect_garbage(cfg: &ExecutorConfig, ctx: &ExecContext, settings: &[(S
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn lock_file_links_are_rejected_before_building() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        fs::write(repo.join("real.lock"), b"{}").unwrap();
+        symlink("real.lock", repo.join("flake.lock")).unwrap();
+        let error = read_lock(dir.path(), &repo, "flake.lock").unwrap_err();
+        assert!(error.message().contains("without following links"));
+    }
 
     #[test]
     fn image_resolution() {

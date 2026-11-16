@@ -197,7 +197,15 @@ shared checkout is required. See the opt-in
 - **docker**: the same flags without keep-id; on a rootful daemon it adds
   `--user <uid>:<gid>` and warns, because access to a rootful daemon equals root.
 - **local**: runs `--tofu-binary` directly with a cleared environment (only `PATH`
-  is kept), for development and tests.
+  is kept). The shipped agent container, Compose stack and Proxmox installer use
+  this mode. Tools run as the agent's own user, without a per-attempt OS boundary.
+  The agent limits local concurrency to one, regardless of the server's limit,
+  to prevent tools in different attempts from running alongside each other. This
+  is not a sandbox. Use only trusted tools until per-attempt isolation is available.
+
+Tool-written plans, lock files, prepared variables and state are read with byte
+caps, without following file or directory links, and must be regular files inside
+the attempt workspace.
 
 Environment: `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, `TF_PLUGIN_CACHE_DIR`, and `HOME`
 (inside the workspace) are passed as `-e NAME=VALUE`; the input's `env` and

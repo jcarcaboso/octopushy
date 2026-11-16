@@ -16,11 +16,15 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_runtime(RuntimeKind::Podman)
+}
+
+fn harness_runtime(kind: RuntimeKind) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let work = dir.path().join("work");
     let outbox_dir = dir.path().join("outbox");
     let exec = Arc::new(ExecutorConfig {
-        runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
+        runtime: ToolRuntime::new(kind, None, "false".into(), None),
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_millis(10),
         proxmox_timeout: Duration::from_secs(1),
@@ -158,8 +162,9 @@ async fn runs_reports_resends_and_cleans_up_after_ack() {
 
 #[tokio::test]
 async fn respects_concurrency() {
-    let h = harness();
-    h.manager.set_concurrency(1);
+    let h = harness_runtime(RuntimeKind::Local);
+    h.manager.set_concurrency(20);
+    assert_eq!(h.manager.concurrency(), 1);
     h.manager
         .accept(assignment("s1", "test", "sleep", r#"{"ms":200}"#));
     h.manager

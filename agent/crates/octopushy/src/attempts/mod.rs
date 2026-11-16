@@ -149,6 +149,15 @@ impl AttemptManager {
     }
 
     pub fn set_concurrency(&self, max: u32) {
+        let max = if !self.exec.runtime.is_container() {
+            tracing::warn!(
+                requested = max,
+                "local tools share the agent user; limiting concurrency to one attempt"
+            );
+            1
+        } else {
+            max
+        };
         self.limiter.set_limit(max as usize);
     }
 

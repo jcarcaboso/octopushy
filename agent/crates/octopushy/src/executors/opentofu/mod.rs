@@ -23,7 +23,6 @@ pub mod state;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use octopushy_proto::v1::Artifact;
@@ -500,9 +499,9 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 
     if has_changes {
-        let plan_bin = read_plan(&plan_path)?;
+        let plan_bin = read_plan(&ctx.workspace, &plan_path)?;
         let lock_path = prep.root.join(LOCK_FILE);
-        let lock = fs::read(&lock_path).ok();
+        let lock = read_lock(&ctx.workspace, &lock_path)?;
         let mut files: Vec<(&str, &[u8])> = vec![("plan.bin", &plan_bin)];
         match &lock {
             Some(l) => files.push((LOCK_FILE, l)),
@@ -589,15 +588,15 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         return Err(Failure::msg(format!("{PLAN_ARTIFACT} holds no plan.bin")));
     }
     let saved_lock = prep.out_dir.join(LOCK_FILE);
-    if saved_lock.is_file() {
-        let lock = fs::read(&saved_lock).map_err(anyhow::Error::from)?;
-        write_fresh(&prep.root.join(LOCK_FILE), &lock)?;
+    let lock = read_lock(&ctx.workspace, &saved_lock)?;
+    if let Some(lock) = &lock {
+        write_fresh(&prep.root.join(LOCK_FILE), lock)?;
         ctx.log
             .agent("restored .terraform.lock.hcl from the preview");
     }
 
     tofu.version().await?;
-    tofu.init(saved_lock.is_file()).await?;
+    tofu.init(lock.is_some()).await?;
     let plan_arg = tofu.path(&plan_path)?;
     let watcher = tokio::spawn(state::watch(
         ctx.workspace.clone(),
@@ -618,6 +617,8 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         .await;
     watcher.abort();
     let applied = applied?;
+    state::read_checked(&ctx.workspace)
+        .map_err(|e| Failure::Uncertain(format!("cannot read the saved OpenTofu state: {e:#}")))?;
     if applied.code != Some(0) {
         // OpenTofu exits 1 after saving what it did. Anything else, such as being
         // killed, leaves work done since its last write out of the state.
@@ -669,17 +670,21 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     })))
 }
 
-fn read_plan(path: &Path) -> Result<Vec<u8>, Failure> {
-    let mut content = Vec::new();
-    fs::File::open(path)
-        .and_then(|f| f.take(MAX_PLAN_BYTES as u64 + 1).read_to_end(&mut content))
-        .map_err(|e| Failure::msg(format!("reading the saved plan: {e}")))?;
-    if content.len() > MAX_PLAN_BYTES {
-        return Err(Failure::msg(format!(
-            "saved plan exceeds the {MAX_PLAN_BYTES} byte cap"
-        )));
+fn read_plan(workspace: &Path, path: &Path) -> Result<Vec<u8>, Failure> {
+    crate::fsutil::read_tool_file(workspace, path, MAX_PLAN_BYTES).map_err(Failure::from)
+}
+
+fn read_lock(workspace: &Path, path: &Path) -> Result<Option<Vec<u8>>, Failure> {
+    match crate::fsutil::read_tool_file(workspace, path, 1024 * 1024) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
     }
-    Ok(content)
 }
 
 #[cfg(test)]
@@ -687,14 +692,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn both_saved_and_tool_written_lock_links_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        for file in [".terraform.lock.hcl", "saved.lock"] {
+            let path = dir.path().join(file);
+            symlink("/etc/passwd", &path).unwrap();
+            let error = read_lock(dir.path(), &path).unwrap_err();
+            assert!(error.message().contains("without following links"));
+        }
+    }
+
+    #[test]
     fn saved_plan_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plan.bin");
         let file = fs::File::create(&path).unwrap();
         file.set_len(MAX_PLAN_BYTES as u64 + 1).unwrap();
-        assert!(read_plan(&path).unwrap_err().message().contains("byte cap"));
+        assert!(
+            read_plan(dir.path(), &path)
+                .unwrap_err()
+                .message()
+                .contains("byte cap")
+        );
         fs::write(&path, b"plan").unwrap();
-        assert_eq!(read_plan(&path).unwrap(), b"plan");
+        assert_eq!(read_plan(dir.path(), &path).unwrap(), b"plan");
     }
 
     #[test]
