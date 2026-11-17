@@ -668,6 +668,12 @@ public sealed partial class RunEngine(
 
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
+        if (StepEffectFor(step.Name) is { } effect)
+        {
+            await effect.ApplyAsync(this, db, store, run, step, resource, outputs, now, cancellationToken);
+            return;
+        }
+
         switch (step.Name)
         {
             case StepNames.Plan:
@@ -801,9 +807,6 @@ public sealed partial class RunEngine(
                 await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
-                break;
-            case StepNames.Playbook or StepNames.PlaybookApproved:
-                await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
                 break;
             case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.ConfirmRefused:
                 await ApplyRotationEffectsAsync(db, run, step, outputs, now, cancellationToken);
