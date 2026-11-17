@@ -88,7 +88,6 @@ public sealed partial class AssignmentBuilder
             values[SecretNames.AnsibleSshKey] = await ReleaseAsync(inUse);
             if (step.Name == StepNames.ConfirmRefused)
                 values[SecretNames.AnsibleRefusedKeys] = await ReleaseAsync(rotation!.Remove);
-            await db.SaveChangesAsync(cancellationToken);
         }
 
         if (ownPin)
@@ -99,7 +98,6 @@ public sealed partial class AssignmentBuilder
             {
                 values[SecretNames.AnsibleHostKey] = pin;
                 db.SecretResolutions.Add(new SecretResolution { Key = key, Version = version, AttemptId = attempt.Id, AgentId = agentId, ResolvedAt = clock.GetUtcNow() });
-                await db.SaveChangesAsync(cancellationToken);
             }
             else
                 missing.Add($"{key} v{version}");

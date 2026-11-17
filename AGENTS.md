@@ -57,7 +57,10 @@ the OpenAPI document and client when an API changes. Do not hand-edit the client
 - A change is never retried and normal cancellation never interrupts it. Only an
   explicit operator Force stop may interrupt one, on an agent advertising
   `forced-mutation-stop-v1`. A lost lease means uncertain, and one late result may
-  still settle it.
+  still settle it. An assignment the server never began to write to the stream was
+  never sent, so putting it back in the queue is not a retry. That is decided by the
+  server's own writer alone (`AgentSession.WriteAllAsync`), never by anything an agent
+  says: once a write began, a lost assignment is uncertain.
 - One writer for runs. Writes to runs, steps and attempts go through the engine
   lock in `RunEngine`. Do not replace it with row versions. Atomic, conditional
   heartbeat lease renewals are the narrow exception.

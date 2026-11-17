@@ -180,7 +180,7 @@ public sealed partial class RunEngine
                         // Only agents with fresh evidence of every connection the step makes; the rest are asked, never waited for.
                         // Labels, executors and capabilities above, and capacity, preference and every check of the assignment
                         // below, still apply to those that remain.
-                        var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
+                        var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, attempt.RequiredLabels, cancellationToken);
                         if (candidates.Count == 0)
                         {
                             var labelled = agents.Where(a => attempt.RequiredLabels.All(a.Labels.Contains))
@@ -294,19 +294,31 @@ public sealed partial class RunEngine
                         prepared = (session, new ServerMessage { Assignment = assignment }, attempt.Id);
                     }
                     await PrepareAsync();
+                    // Secrets are recorded as released, and a reservation changed, in the save that assigns the attempt: never
+                    // before it, and never for an attempt that is not handed off.
+                    var reservation = ReservationChanged(db);
+                    if (prepared is null)
+                    {
+                        DropReleases(db);
+                        if (reservation is { } unchanged)
+                            Restore(db.ChangeTracker.Entries<Resource>().Single(e => e.Entity.Id == unchanged.ResourceId).Entity, unchanged.Before);
+                    }
                     await db.SaveChangesAsync(cancellationToken);
                     // Hand off each saved assignment before preparing the next, under the same gate as revocation.
                     if (prepared is { } ready)
                     {
+                        var handOff = new HandOff(ready.Session.AgentId, ready.Session.Id,
+                            db.ChangeTracker.Entries<SecretResolution>().Where(e => e.Entity.AttemptId == attempt.Id).Select(e => e.Entity.Id).ToArray(),
+                            reservation);
                         if (ready.Session.TrySend(ready.Message))
                         {
                             handedOff = true;
                             sent++;
+                            _handOffs[attempt.Id] = handOff;
                         }
                         else
                         {
-                            Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
-                            if (attempt.Step is { } step) step.Status = StepStatuses.Queued;
+                            await UndoHandOffAsync(db, attempt, handOff, cancellationToken);
                             await db.SaveChangesAsync(cancellationToken);
                         }
                     }
@@ -331,6 +343,103 @@ public sealed partial class RunEngine
             return sent;
         }, cancellationToken);
     }
+
+    /// <summary>What a guest's reservation held, field by field.</summary>
+    private sealed record ReservationValues(string? Installation, string? Node, int? Vmid, DateTimeOffset? At, DateTimeOffset? AppliedAt)
+    {
+        public static ReservationValues Of(Resource r) => new(r.ReservedInstallation, r.ReservedNode, r.ReservedVmid, r.ReservedAt, r.ReservationAppliedAt);
+
+        /// <summary>Whether these are <paramref name="other"/> as the database keeps them: times to the microsecond.</summary>
+        public bool Matches(ReservationValues other) =>
+            this with { At = Micro(At), AppliedAt = Micro(AppliedAt) } == other with { At = Micro(other.At), AppliedAt = Micro(other.AppliedAt) };
+
+        private static DateTimeOffset? Micro(DateTimeOffset? time) => time?.AddTicks(-(time.Value.Ticks % 10));
+    }
+
+    /// <summary>A reservation a hand-off changed, from what to what.</summary>
+    private sealed record ReservationChange(Guid ResourceId, ReservationValues Before, ReservationValues After);
+
+    /// <summary>
+    /// An assignment put on a session's queue, with what was recorded for it: the secrets released and the reservation made.
+    /// The session is the one it was handed to: only that session can say it never wrote it.
+    /// </summary>
+    private sealed record HandOff(Guid AgentId, Guid SessionId, long[] Releases, ReservationChange? Reservation);
+
+    // Protected by the gate. In memory only: after a restart nothing is put back, and a lost assignment is decided by its lease.
+    private readonly Dictionary<Guid, HandOff> _handOffs = [];
+
+    /// <summary>The reservation building an assignment changed, if it did.</summary>
+    private static ReservationChange? ReservationChanged(OctopushyDb db) =>
+        db.ChangeTracker.Entries<Resource>()
+            .Where(e => e.State == EntityState.Modified)
+            .Select(e => new ReservationChange(e.Entity.Id, new ReservationValues(
+                    e.OriginalValues.GetValue<string?>(nameof(Resource.ReservedInstallation)), e.OriginalValues.GetValue<string?>(nameof(Resource.ReservedNode)),
+                    e.OriginalValues.GetValue<int?>(nameof(Resource.ReservedVmid)), e.OriginalValues.GetValue<DateTimeOffset?>(nameof(Resource.ReservedAt)),
+                    e.OriginalValues.GetValue<DateTimeOffset?>(nameof(Resource.ReservationAppliedAt))),
+                ReservationValues.Of(e.Entity)))
+            .FirstOrDefault(c => c.Before != c.After);
+
+    private static void Restore(Resource resource, ReservationValues values) =>
+        (resource.ReservedInstallation, resource.ReservedNode, resource.ReservedVmid, resource.ReservedAt, resource.ReservationAppliedAt) =
+        (values.Installation, values.Node, values.Vmid, values.At, values.AppliedAt);
+
+    /// <summary>Forgets the releases recorded while building an assignment that is not handed off.</summary>
+    private static void DropReleases(OctopushyDb db)
+    {
+        foreach (var release in db.ChangeTracker.Entries<SecretResolution>().Where(e => e.State == EntityState.Added).ToList())
+            release.State = EntityState.Detached;
+    }
+
+    /// <summary>
+    /// Puts an attempt whose assignment certainly never left this process back in the queue, as if it had not been handed off:
+    /// the secrets it recorded as released and the reservation it made are taken back, the reservation only while it is still
+    /// what the hand-off made it. The caller saves.
+    /// </summary>
+    private static async Task UndoHandOffAsync(OctopushyDb db, Attempt attempt, HandOff handOff, CancellationToken cancellationToken)
+    {
+        db.SecretResolutions.RemoveRange(await db.SecretResolutions.Where(r => handOff.Releases.Contains(r.Id)).ToListAsync(cancellationToken));
+        if (handOff.Reservation is { } change
+            && await db.Resources.FindAsync([change.ResourceId], cancellationToken) is { } guest
+            && ReservationValues.Of(guest).Matches(change.After))
+            Restore(guest, change.Before);
+        Requeue(attempt, "The agent channel is full or disconnected; waiting to reassign.");
+        if (attempt.Step is { } step) step.Status = StepStatuses.Queued;
+    }
+
+    /// <summary>
+    /// A session closed, with these assignments never written: none of it left this process, so the agent never had them. Each
+    /// that is still assigned to the agent through that very hand-off, and never started, goes back in the queue as when the
+    /// hand-off itself fails (<see cref="UndoHandOffAsync"/>). That is not a retry: nothing was sent. An assignment whose write
+    /// began is never reported here, and is decided by its result or its lease. See docs/safety-boundary.md.
+    /// </summary>
+    public Task OnSessionClosedAsync(Guid agentId, Guid sessionId, IReadOnlyList<Guid> attemptIds, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            // Whatever the session did write is decided by results and leases; its records are of no more use.
+            var others = _handOffs.Where(h => h.Value.SessionId == sessionId && !attemptIds.Contains(h.Key)).Select(h => h.Key).ToList();
+            foreach (var id in others)
+                _handOffs.Remove(id);
+            var requeued = 0;
+            foreach (var attemptId in attemptIds.Distinct())
+            {
+                if (!_handOffs.TryGetValue(attemptId, out var handOff) || handOff.AgentId != agentId || handOff.SessionId != sessionId)
+                    continue;
+                _handOffs.Remove(attemptId);
+                var attempt = await db.Attempts.Include(a => a.Step)
+                    .FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
+                if (attempt is not { Status: AttemptStatuses.Assigned, StartedAt: null })
+                    continue;
+                await UndoHandOffAsync(db, attempt, handOff, cancellationToken);
+                logger.LogInformation("The assignment of attempt {Attempt} was never written to agent {Agent}; it is queued again.", attemptId, agentId);
+                requeued++;
+            }
+
+            if (requeued > 0)
+            {
+                await db.SaveChangesAsync(cancellationToken);
+                signal.Wake();
+            }
+        }, cancellationToken);
 
     private async Task FailUnsentAttemptAsync(Guid attemptId, Exception error, CancellationToken cancellationToken)
     {
@@ -421,14 +530,20 @@ public sealed partial class RunEngine
 
     /// <summary>
     /// The candidates that may get the attempt as far as its connections go, and what the rest wait for. A step whose
-    /// connections are not modeled, or that makes none, keeps them all.
+    /// connections are not modeled, or that makes none, keeps them all. Evidence only chooses between agents: the one agent
+    /// that could ever take the work (<see cref="OnlyAgentAsync"/>) gets it without, unless it runs on the guest the step
+    /// configures.
     /// </summary>
     private async Task<(List<AgentRecord> Agents, IReadOnlyDictionary<Guid, AgentSession>? Sessions, string Waiting)> ReachableAsync(
-        OctopushyDb db, Step? step, RunContext context, List<AgentRecord> candidates, CancellationToken cancellationToken)
+        OctopushyDb db, Step? step, RunContext context, List<AgentRecord> candidates, string[] requiredLabels, CancellationToken cancellationToken)
     {
         var needs = await NetworkRequirements.ForAsync(db, step?.Name ?? StepNames.Observe, context.ForStep(step), cancellationToken);
         if (needs.Targets.Count == 0)
             return (candidates, null, "");
+        if (candidates is [var lone] && connections.Get(lone.Id) is { } alone
+            && !needs.Targets.Any(t => NetworkRequirements.RunsOn(t, alone.RemoteAddress))
+            && await OnlyAgentAsync(db, lone.Id, requiredLabels, cancellationToken))
+            return (candidates, new Dictionary<Guid, AgentSession> { [lone.Id] = alone }, "");
         var able = new List<AgentRecord>();
         var sessions = new Dictionary<Guid, AgentSession>();
         var reasons = new List<string>();
@@ -454,6 +569,17 @@ public sealed partial class RunEngine
         var waiting = $"Waiting for an agent with fresh evidence that it reaches {string.Join(" and ", needs.Targets.Select(t => t.Label))}. "
                       + string.Join("; ", reasons) + ".";
         return (able, sessions, waiting.Length <= 2000 ? waiting : waiting[..1999] + "…");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="agentId"/> is the only enrolled agent, connected or not, that is not disabled and has every label
+    /// the work requires: the only one that could take it while it waits, whatever executors it offers now. Waiting for its
+    /// evidence then cannot change which agent gets the work.
+    /// </summary>
+    private static async Task<bool> OnlyAgentAsync(OctopushyDb db, Guid agentId, string[] requiredLabels, CancellationToken cancellationToken)
+    {
+        var enrolled = await db.Agents.AsNoTracking().Where(a => !a.Disabled).Select(a => new { a.Id, a.Labels }).ToListAsync(cancellationToken);
+        return enrolled.Where(a => requiredLabels.All(a.Labels.Contains)).Select(a => a.Id).ToList() is [var only] && only == agentId;
     }
 
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>
@@ -565,6 +691,8 @@ public sealed partial class RunEngine
         WithDbAsync(async db =>
         {
             var attempt = await db.Attempts.FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
+            if (attempt is not null)
+                _handOffs.Remove(attempt.Id);
             if (attempt?.Status == AttemptStatuses.Assigned)
             {
                 attempt.Status = AttemptStatuses.Running;
@@ -616,6 +744,8 @@ public sealed partial class RunEngine
                 logger.LogWarning("Agent {Agent} reported a result for attempt {Attempt}, which is not assigned to it.", agentId, attemptId);
                 return true;
             }
+
+            _handOffs.Remove(attempt.Id);
 
             // The result this attempt was settled with, sent again: nothing to do.
             if (attempt.ResultSha256 == received)
@@ -853,6 +983,7 @@ public sealed partial class RunEngine
             .ToListAsync(cancellationToken);
         foreach (var attempt in expired)
         {
+            _handOffs.Remove(attempt.Id);
             attempt.Status = AttemptStatuses.Uncertain;
             attempt.Error = LeaseExpired;
             attempt.FinishedAt = now;

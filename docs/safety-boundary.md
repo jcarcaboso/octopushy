@@ -25,6 +25,15 @@ changed.
 Normal cancellation never interrupts a running change. Losing a lease, draining
 an agent or reconnecting does not authorize an interruption or a retry.
 
+An assignment the controller never began to write to the agent's stream was never
+sent: it was still queued, or taken off the queue after the connection had closed.
+The controller puts that attempt back in the queue and takes back the secrets it
+recorded as released and the reservation it made, as when the hand-off itself fails.
+That is not a retry. Once the write of an assignment began, a lost assignment is a
+change that may have run, uncertain when its lease runs out, even if the agent says
+it never got it: an agent restored from a snapshot cannot know what it received, so
+the controller never asks.
+
 There are two narrow exceptions to letting a mutating tool finish. Its configured
 OpenTofu timeout bounds a hung attempt. Separately, only an explicit operator
 **Force stop** may request interruption of a running change. The controller sends

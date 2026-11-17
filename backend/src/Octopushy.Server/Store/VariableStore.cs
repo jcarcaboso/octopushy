@@ -545,10 +545,8 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
 
             values.Clear();
         }
-        else
-        {
-            await db.SaveChangesAsync(cancellationToken);
-        }
+
+        // The audit rows are saved by the caller with the hand-off that sends the values, never before it.
         return (values, missing);
     }
 

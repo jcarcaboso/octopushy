@@ -159,10 +159,7 @@ public sealed class AgentChannelService(
             {
                 try
                 {
-                    await foreach (var message in session.Outbound.ReadAllAsync(call.Token))
-                    {
-                        await responseStream.WriteAsync(message, call.Token);
-                    }
+                    await session.WriteAllAsync(message => responseStream.WriteAsync(message, call.Token), call.Token);
                 }
                 catch (OperationCanceledException)
                 {
@@ -303,6 +300,18 @@ public sealed class AgentChannelService(
         {
             connections.Remove(session);
             await call.CancelAsync();
+            // Once the writer has stopped: what it never began to write certainly did not reach the agent.
+            await Task.WhenAny(writer);
+            var unwritten = session.TakeUnwritten();
+            try
+            {
+                await engine.OnSessionClosedAsync(agent.Id, session.Id, unwritten, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                logger.LogError(e, "Putting back the {Count} assignment(s) never written to agent {Agent} failed; their leases decide them.", unwritten.Count, agent.Id);
+            }
+
             await writer;
             try
             {

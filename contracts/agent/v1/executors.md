@@ -12,7 +12,11 @@ older agents. An executor that cannot parse its input fails the attempt. Outputs
 
 Messages are at most 64 MiB in each direction. `Welcome.max_concurrency` 0 means 1
 and `heartbeat_seconds` 0 means 10. `Hello.running_attempt_ids` includes attempts the
-agent accepted and is still holding for capacity. The agent sends `AttemptStarted`
+agent accepted and is still holding for capacity. The controller assigns an attempt before it
+writes its `Assignment`. One it never began to write, because the connection closed first,
+goes back in its queue and may be sent to any agent; nothing is asked of the agent. One whose
+write began is decided by its result or its lease: a change is then uncertain, because an agent
+restored from a snapshot cannot know what it received. The agent sends `AttemptStarted`
 again on each new connection while an attempt runs. `Hello.capabilities` lists features
 that are not executors; a controller sends built-in OpenTofu state work only to agents
 that advertise `opentofu-builtin-state`, and older agents send no capabilities.

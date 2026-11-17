@@ -151,6 +151,7 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
         var clock = new TestClock { Now = DateTimeOffset.UtcNow };
         await using var server = await ServerHarness.StartAsync(postgres, clock: clock);
         var local = await server.ConnectProbedAgentAsync("A", "local", "home");
+        await OfflineSpareAsync(server);
         await server.SyncAndTrustAsync();
         for (var i = 0; i < 3; i++)
             await server.TickAsync();
@@ -206,6 +207,7 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
         var clock = new TestClock { Now = DateTimeOffset.UtcNow };
         await using var server = await ServerHarness.StartAsync(postgres, clock: clock);
         var agent = await server.ConnectProbedAgentAsync("A", "local", "home");
+        await OfflineSpareAsync(server);
         await server.SyncAndTrustAsync();
         await server.TickAsync();
         await AnswerAsync(agent, _ => WorkerReachability.Reachable);
@@ -341,6 +343,7 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectProbedAgentAsync("A", "local", "home");
+        await OfflineSpareAsync(server);
         var connections = server.Services.GetRequiredService<AgentConnections>();
         string[] executors = ["opentofu", "proxmox", "ansible"];
         string[] capabilities = [TofuStateStore.AgentCapability, WorkerReachability.Capability];
@@ -387,6 +390,7 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         var agent = await server.ConnectProbedAgentAsync("A", "local", "home");
+        await OfflineSpareAsync(server);
         await server.SyncAndTrustAsync();
         // A busy channel: probes wait, well before it is full.
         for (var i = 0; i < WorkerReachability.MaxQueued; i++)
@@ -500,5 +504,15 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal("tls-untrusted", WorkerReachability.JudgeChain(caPem, [FakeAgent.Certificate("pve.lan")], "pve.lan", now).Status);
         Assert.Equal("tls-untrusted", WorkerReachability.JudgeChain(caPem, [Leaf("pve.lan")], "pve.lan", now.AddDays(60)).Status);
         Assert.Equal("tls-untrusted", WorkerReachability.JudgeChain(caPem, [[1, 2, 3]], "pve.lan", now).Status);
+    }
+
+    /// <summary>
+    /// Another agent with the same label, enrolled and offline: work then still waits for evidence, which only chooses between
+    /// agents and is skipped for the only one that could take it.
+    /// </summary>
+    internal static async Task OfflineSpareAsync(ServerHarness server)
+    {
+        var spare = await server.ConnectProbedAgentAsync("spare", "local", "home");
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(spare.Id);
     }
 }
