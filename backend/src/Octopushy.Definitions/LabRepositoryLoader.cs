@@ -792,7 +792,8 @@ public sealed partial class LabRepositoryLoader
             };
             foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
-                Error(guest.File, LineOf(guest.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {guest.Workflow.Label})", guest.Address);
+                Error(guest.File, LineOf(guest.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {guest.Workflow.Label})", guest.Address,
+                    IssueSources.WorkflowSchema);
             }
         }
     }
@@ -932,7 +933,8 @@ public sealed partial class LabRepositoryLoader
             var instance = new JsonObject { ["inputs"] = service.Json["inputs"]?.DeepClone() ?? new JsonObject() };
             foreach (var error in SchemaCatalog.Evaluate(schema, instance))
             {
-                Invalid(error.Pointer, $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {workflow.Label})");
+                Error(service.File, LineOf(service.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {workflow.Label})", service.Address,
+                    IssueSources.WorkflowSchema);
             }
         }
 
@@ -1069,9 +1071,9 @@ public sealed partial class LabRepositoryLoader
 
     private int ErrorCount() => _issues.Count(i => i.Severity == IssueSeverity.Error);
 
-    private void Error(string file, int? line, string message, string? address = null)
+    private void Error(string file, int? line, string message, string? address = null, string source = IssueSources.Definition)
     {
-        _issues.Add(new DefinitionIssue(IssueSeverity.Error, file, line, message, address));
+        _issues.Add(new DefinitionIssue(IssueSeverity.Error, file, line, message, address, source));
         if (address is null)
         {
             _repositoryValid = false;

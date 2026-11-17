@@ -238,7 +238,7 @@ public sealed partial class RunEngine
             if (failed.Name == StepNames.Apply && await StateMovedAsync(db, run, failed, cancellationToken))
                 throw new RunException("The failed apply changed this stage's state, so OpenTofu will not use the saved plan. Deploy again to plan what is left.");
 
-            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal && s.Detail != "The plan has no changes."))
+            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal && !PlannedNoChanges(run, s)))
             {
                 step.Status = StepStatuses.Pending;
                 step.Detail = null;
@@ -250,9 +250,16 @@ public sealed partial class RunEngine
             run.Status = RunStatuses.Running;
             run.FinishedAt = null;
             run.Detail = null;
+            run.EndReason = null;
             await db.SaveChangesAsync(cancellationToken);
             signal.Wake();
         }, cancellationToken);
+
+    /// <summary>An apply skipped because its stage's plan has nothing to apply: repeating an earlier stage does not change that.</summary>
+    internal static bool PlannedNoChanges(Run run, Step step) =>
+        step is { Name: StepNames.Apply, Status: StepStatuses.Skipped }
+        && run.Steps.SingleOrDefault(s => s.Stage == step.Stage && s.Name == StepNames.Plan)?.Outputs is { } outputs
+        && JsonNode.Parse(outputs)?["hasChanges"]?.GetValue<bool>() == false;
 
     private static async Task<bool> StateMovedAsync(OctopushyDb db, Run run, Step apply, CancellationToken cancellationToken)
     {

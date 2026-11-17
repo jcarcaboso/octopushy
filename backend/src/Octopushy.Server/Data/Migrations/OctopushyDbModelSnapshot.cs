@@ -1614,6 +1614,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("BlockReason")
+                        .HasColumnType("text")
+                        .HasColumnName("block_reason");
+
                     b.Property<string>("Commit")
                         .HasColumnType("text")
                         .HasColumnName("commit");
@@ -1630,6 +1634,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("Detail")
                         .HasColumnType("text")
                         .HasColumnName("detail");
+
+                    b.Property<string>("EndReason")
+                        .HasColumnType("text")
+                        .HasColumnName("end_reason");
 
                     b.Property<DateTimeOffset?>("FinishedAt")
                         .HasColumnType("timestamp with time zone")

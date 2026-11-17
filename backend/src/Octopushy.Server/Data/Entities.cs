@@ -793,6 +793,20 @@ public static class RunStatuses
     public static bool IsTerminal(string status) => status is Succeeded or Failed or Cancelled;
 }
 
+/// <summary>Why a run was ended, where something depends on it. See <see cref="Run.EndReason"/>.</summary>
+public static class RunEndReasons
+{
+    /// <summary>Cancelled before it changed anything, because a later revision proposes the resource's work again.</summary>
+    public const string Superseded = "superseded";
+}
+
+/// <summary>Why a run is blocked, where something depends on it. See <see cref="Run.BlockReason"/>.</summary>
+public static class RunBlockReasons
+{
+    /// <summary>Its installation, or the endpoint it would send credentials to, waits for an operator's trust.</summary>
+    public const string InstallationTrust = "installation-trust";
+}
+
 /// <summary>One requested execution of an operation against one resource at a fixed revision.</summary>
 public sealed class Run
 {
@@ -816,7 +830,18 @@ public sealed class Run
 
     public string Status { get; set; } = RunStatuses.Queued;
 
+    /// <summary>What happened, for a person to read. Nothing decides on it: see <see cref="EndReason"/> and <see cref="BlockReason"/>.</summary>
     public string? Detail { get; set; }
+
+    /// <summary>Why the run was ended, where something depends on it: one of <see cref="RunEndReasons"/>, or null.</summary>
+    public string? EndReason { get; set; }
+
+    /// <summary>
+    /// Why the run is blocked, where something depends on it: one of <see cref="RunBlockReasons"/>, or null. It holds only
+    /// while the status is <see cref="RunStatuses.Blocked"/>: each way into that status sets it, and a detail written while it
+    /// stays blocked clears it.
+    /// </summary>
+    public string? BlockReason { get; set; }
 
     public string? InputsHash { get; set; }
 

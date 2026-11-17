@@ -11,7 +11,7 @@ namespace Octopushy.Server.Git;
 /// </summary>
 public static class RepositoryTrust
 {
-    /// <summary>The start of every reason that an installation trust resolves.</summary>
+    /// <summary>The start of every reason that an installation trust resolves. Read by people: <see cref="RunBlockReasons.InstallationTrust"/> marks such a wait.</summary>
     public const string WaitingForInstallation = "Waiting for trust";
 
     public static bool IsCurrentSource(DefinitionRevision revision, RepositorySettings? settings) =>
@@ -43,28 +43,40 @@ public static class RepositoryTrust
         BlockedReasonAsync(db, run.RevisionId, run.Commit, RunContext.Parse(run.Context), ct);
 
     /// <summary>Why work built from this revision and context, such as an observation, may not be sent yet.</summary>
-    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, CancellationToken ct)
+    public static async Task<string?> BlockedReasonAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, CancellationToken ct) =>
+        (await BlockAsync(db, revisionId, commit, context, ct))?.Detail;
+
+    public static Task<Block?> BlockAsync(OctopushyDb db, Run run, CancellationToken ct) =>
+        BlockAsync(db, run.RevisionId, run.Commit, RunContext.Parse(run.Context), ct);
+
+    /// <summary>As <see cref="BlockedReasonAsync(OctopushyDb, Guid?, string?, RunContext, CancellationToken)"/>, with the block reason a run that waits for it takes.</summary>
+    public static async Task<Block?> BlockAsync(OctopushyDb db, Guid? revisionId, string? commit, RunContext context, CancellationToken ct)
     {
         if (revisionId is not { } id || commit is null
             || !await EligibleRevisions(db).AnyAsync(r => r.Id == id && r.Commit == commit, ct))
         {
-            return "Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.";
+            return new("Waiting for the current repository source: this work was built from a previous source or an invalid revision. Plan it again.", null);
         }
         var address = InstallationAddress(context.Address);
         var endpoint = context.Proxmox.Endpoint;
         var trust = await db.InstallationTrusts.AsNoTracking().FirstOrDefaultAsync(t => t.Address == address, ct);
         if (trust is null)
-            return $"{WaitingForInstallation}: {address} is a new Proxmox installation. Trust it on its page before its credentials are sent to {endpoint}.";
+            return Untrusted($"{WaitingForInstallation}: {address} is a new Proxmox installation. Trust it on its page before its credentials are sent to {endpoint}.");
         if (!trust.Endpoints.Contains(endpoint))
-            return $"{WaitingForInstallation}: {endpoint} is a new endpoint for {address}. Trust the installation again on its page before its credentials are sent there.";
+            return Untrusted($"{WaitingForInstallation}: {endpoint} is a new endpoint for {address}. Trust the installation again on its page before its credentials are sent there.");
         // A grant is for the management mode it was given in, as well as for its endpoints.
         var observedOnly = await db.Resources.Where(r => r.Kind == ResourceKinds.Installation && r.Address == address && r.RetiredAt == null)
             .Select(r => (bool?)r.ObservedOnly).FirstOrDefaultAsync(ct);
         if (observedOnly is { } mode && mode != trust.ObservedOnly)
-            return trust.ObservedOnly
+            return Untrusted(trust.ObservedOnly
                 ? $"{WaitingForInstallation}: {address} was trusted while it was observed only (manage: false), and now asks to be managed. "
                   + "Trust it again on its page before Octopushy works on it."
-                : $"{WaitingForInstallation}: {address} was trusted as managed and is now observed only. Trust it again on its page.";
+                : $"{WaitingForInstallation}: {address} was trusted as managed and is now observed only. Trust it again on its page.");
         return null;
     }
+
+    private static Block Untrusted(string detail) => new(detail, RunBlockReasons.InstallationTrust);
+
+    /// <summary>Why work may not be sent yet: the words, and the <see cref="RunBlockReasons"/> value, if any, a run waiting for it takes.</summary>
+    public sealed record Block(string Detail, string? Reason);
 }

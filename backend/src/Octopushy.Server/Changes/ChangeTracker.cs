@@ -219,7 +219,7 @@ public static class ChangeTracker
 
         // A run given up for a later revision: the change moves on with it while that revision still carries it.
         if (runs.Count > 0 && runs.All(r => RunStatuses.IsTerminal(r.Status))
-            && runs.FirstOrDefault(r => r.Status == RunStatuses.Cancelled && r.Detail?.StartsWith("Superseded by ", StringComparison.Ordinal) == true) is not null
+            && runs.FirstOrDefault(r => r.Status == RunStatuses.Cancelled && r.EndReason == RunEndReasons.Superseded) is not null
             && await NewerHeadAsync(db, mirror, change, revision, ct) is { } newer)
         {
             if (await LostAsync(revisions, change, newer, ct) is { } lost)

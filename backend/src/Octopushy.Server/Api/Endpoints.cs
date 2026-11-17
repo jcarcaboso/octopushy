@@ -306,12 +306,12 @@ public static partial class Endpoints
                     resource.ObservedOnlyStoreKeys = [];
                     resource.ObservedOnlyEndpoints = [];
                 }
-                foreach (var run in await db.Runs.Where(r => r.Status == RunStatuses.Blocked && r.Detail != null
-                    && r.Detail.StartsWith(RepositoryTrust.WaitingForInstallation)).ToListAsync(ct))
+                foreach (var run in await db.Runs.Where(r => r.Status == RunStatuses.Blocked && r.BlockReason == RunBlockReasons.InstallationTrust).ToListAsync(ct))
                 {
                     if (RepositoryTrust.InstallationAddress(RunContext.Parse(run.Context).Address) != resource.Address) continue;
                     run.Status = run.StartedAt is null ? RunStatuses.Queued : RunStatuses.Running;
                     run.Detail = null;
+                    run.BlockReason = null;
                 }
                 await db.SaveChangesAsync(ct);
                 signal.Wake();

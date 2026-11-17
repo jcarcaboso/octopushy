@@ -138,14 +138,15 @@ public sealed partial class RunEngine
                         }
 
                         if (await (run is null
-                                ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
-                                : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
+                                ? RepositoryTrust.BlockAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+                                : RepositoryTrust.BlockAsync(db, run, cancellationToken)) is { } block)
                         {
-                            attempt.WaitingReason = trustReason;
+                            attempt.WaitingReason = block.Detail;
                             if (run is not null)
                             {
                                 run.Status = RunStatuses.Blocked;
-                                run.Detail = trustReason;
+                                run.Detail = block.Detail;
+                                run.BlockReason = block.Reason;
                             }
                             return;
                         }
@@ -235,6 +236,7 @@ public sealed partial class RunEngine
                             attempt.WaitingReason = e.Message;
                             run.Status = RunStatuses.Blocked;
                             run.Detail = e.Message;
+                            run.BlockReason = (e as ExecutionUntrustedException)?.BlockReason;
                             return;
                         }
                         catch (Exception e) when (e is ExecutionUntrustedException or StateBusyException)
