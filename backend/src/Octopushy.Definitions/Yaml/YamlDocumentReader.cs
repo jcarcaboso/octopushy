@@ -85,8 +85,9 @@ public static partial class YamlDocumentReader
         var stream = new YamlStream();
         try
         {
-            // YamlDotNet builds nodes recursively, so depth is checked as the parser reads, before it can exhaust the stack.
-            stream.Load(new DepthLimitedParser(new Parser(new StringReader(text))));
+            // YamlDotNet builds nodes recursively, keeps every expanded tag, and formats a repeated key with its aliases
+            // expanded. So depth, tags and keys are checked as the parser reads, before it builds anything from them.
+            stream.Load(new BoundedParser(new Parser(new StringReader(text))));
         }
         catch (YamlException e)
         {
@@ -256,9 +257,16 @@ public static partial class YamlDocumentReader
     private static YamlReadException TooDeep(Mark mark) =>
         new($"The file nests deeper than {MaxDepth} levels, the limit on depth in a YAML file.", LineOf(mark));
 
-    private sealed class DepthLimitedParser(IParser inner) : IParser
+    private sealed class BoundedParser(IParser inner) : IParser
     {
         private int _depth;
+        private long _tagCharacters;
+
+        // One entry per open mapping or sequence: whether a mapping's next node is a key, or null in a sequence.
+        private readonly Stack<bool?> _open = new();
+
+        // The anchors that name a mapping or a sequence, so an alias to one is known as a key.
+        private readonly HashSet<string> _collections = new(StringComparer.Ordinal);
 
         public ParsingEvent? Current => inner.Current;
 
@@ -266,12 +274,51 @@ public static partial class YamlDocumentReader
         {
             if (!inner.MoveNext())
                 return false;
-            switch (inner.Current)
+            var current = inner.Current;
+            var collection = current is MappingStart or SequenceStart;
+            if (current is NodeEvent or AnchorAlias && _open.TryPeek(out var key) && key is { } isKey)
+            {
+                if (isKey && (collection || current is AnchorAlias alias && _collections.Contains(alias.Value.Value)))
+                {
+                    throw new YamlReadException("Mapping keys must be plain strings.", LineOf(current.Start));
+                }
+
+                _open.Pop();
+                _open.Push(!isKey);
+            }
+
+            if (current is NodeEvent node)
+            {
+                // A %TAG prefix is written once and repeated in the tag of every node that uses its handle.
+                if (!node.Tag.IsEmpty && (_tagCharacters += node.Tag.Value.Length) > MaxExpandedCharacters)
+                {
+                    throw new YamlReadException(
+                        $"The file's tags hold more than {MaxExpandedCharacters} characters once their prefixes are expanded, the limit on text in a YAML file.",
+                        LineOf(node.Start));
+                }
+
+                if (!node.Anchor.IsEmpty)
+                {
+                    if (collection)
+                        _collections.Add(node.Anchor.Value);
+                    else
+                        _collections.Remove(node.Anchor.Value);
+                }
+            }
+
+            switch (current)
             {
                 case MappingStart or SequenceStart when ++_depth > MaxDepth:
-                    throw TooDeep(inner.Current.Start);
+                    throw TooDeep(current.Start);
+                case MappingStart:
+                    _open.Push(true);
+                    break;
+                case SequenceStart:
+                    _open.Push(null);
+                    break;
                 case MappingEnd or SequenceEnd:
                     _depth--;
+                    _open.Pop();
                     break;
             }
 

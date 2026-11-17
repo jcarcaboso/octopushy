@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
 using Octopushy.Definitions.Yaml;
@@ -98,6 +99,40 @@ public class YamlDocumentReaderTests
 
         var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text.ToString()));
         Assert.Contains($"more than {YamlDocumentReader.MaxExpandedCharacters} characters", error.Message);
+    }
+
+    [Fact]
+    public void Refuses_tags_whose_prefix_expands_past_the_character_limit()
+    {
+        // The prefix is written once and kept again in the tag of each of the 2,100 nodes: 8.6 million characters.
+        var text = new StringBuilder("%TAG !e! tag:example.com,2000:").Append('p', 4_096).Append("\n---\n");
+        for (var i = 0; i < 2_100; i++)
+            text.Append("- !e!s []\n");
+
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text.ToString()));
+        Assert.Contains($"more than {YamlDocumentReader.MaxExpandedCharacters} characters", error.Message);
+    }
+
+    [Theory]
+    // The same sequence as a key twice: the library would name the repeated key with its 1,000 aliases expanded.
+    [InlineData("? [{0}]\n: 1\n? [{0}]\n: 2\n")]
+    [InlineData("? {{k: [{0}]}}\n: 1\n")]
+    // An alias to a sequence is a sequence.
+    [InlineData("list: &list [{0}]\n? *list\n: 1\n")]
+    public void Refuses_a_key_that_is_not_plain_text_before_it_is_expanded(string body)
+    {
+        var aliases = string.Join(", ", Enumerable.Repeat("*a", 1_000));
+        var text = "a: &a \"" + new string('x', 4_096) + "\"\n" + string.Format(CultureInfo.InvariantCulture, body, aliases);
+
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text));
+        Assert.Equal("Mapping keys must be plain strings.", error.Message);
+    }
+
+    [Fact]
+    public void An_alias_to_text_is_still_a_key()
+    {
+        var root = (JsonObject)YamlDocumentReader.Read("name: &name web\n? *name\n: 1\n").Root!;
+        Assert.Equal(1, root["web"]!.GetValue<long>());
     }
 
     [Fact]
