@@ -33,6 +33,15 @@ pub fn is_mutating(executor: &str, action: &str) -> bool {
     ) || cfg!(test) && matches!((executor, action), ("test", "mutate") | ("test", "change"))
 }
 
+/// Actions that are a change whatever the server says: nothing makes `tofu apply` or the
+/// protection PUT a read. A playbook is not listed, since one that only verifies is a read.
+pub fn always_changes(executor: &str, action: &str) -> bool {
+    matches!(
+        (executor, action),
+        ("opentofu", "apply") | ("proxmox", "set-protection")
+    )
+}
+
 /// Actions whose every path calls [`ExecContext::begin_change`] before the first thing that
 /// changes anything: `tofu apply`, each playbook run, the protection PUT. Only for these does a
 /// restart before that call mean nothing changed. An action that is not listed, or whose marker

@@ -674,6 +674,21 @@ async fn an_attempt_whose_change_marker_cannot_be_written_changes_nothing() {
     assert!(r.error.contains("not started"), "{}", r.error);
 }
 
+#[test]
+fn the_server_cannot_call_an_apply_or_a_protection_write_a_read() {
+    for (executor, action, expected) in [
+        ("opentofu", "apply", true),
+        ("proxmox", "set-protection", true),
+        // A playbook that only verifies is a read, so the server's word stands.
+        ("ansible", "run", false),
+        ("opentofu", "preview", false),
+    ] {
+        let mut a = assignment("a", executor, action, "{}");
+        a.mutating = Some(false);
+        assert_eq!(effective_mutating(&a), expected, "{executor}/{action}");
+    }
+}
+
 #[tokio::test]
 async fn the_servers_flag_decides_whether_an_attempt_is_a_change() {
     let h = harness();

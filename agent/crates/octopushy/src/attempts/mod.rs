@@ -669,10 +669,13 @@ fn bound_result(result: &mut AttemptResult, mutating: bool) {
 
 /// Whether an assignment may change infrastructure: the server's word when it gives one, which
 /// can make a playbook that only verifies a read, and the agent's own table for an older server.
+/// The server cannot make a read of an action that always changes.
 fn effective_mutating(assignment: &Assignment) -> bool {
+    let (executor, action) = (&assignment.executor, &assignment.action);
     assignment
         .mutating
-        .unwrap_or_else(|| executors::is_mutating(&assignment.executor, &assignment.action))
+        .unwrap_or_else(|| executors::is_mutating(executor, action))
+        || executors::always_changes(executor, action)
 }
 
 fn result(id: &str, outcome: Outcome, error: &str) -> AttemptResult {

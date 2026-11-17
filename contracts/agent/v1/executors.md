@@ -23,7 +23,8 @@ that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 sets it from the attempt's own record, the same flag that decides on its side whether a
 lost or cancelled attempt is uncertain. So an `ansible` `run` that only verifies a login
 is a read, and a playbook that changes the guest is a change. The agent follows the flag
-when it is set, either way. When it is absent, from an older controller, the agent decides
+when it is set, either way, with one exception: `opentofu` `apply` and `proxmox`
+`set-protection` are changes whatever the flag says. When it is absent, from an older controller, the agent decides
 by executor and action: `opentofu` `apply`, `proxmox` `set-protection` and every
 `ansible` `run` are changes. An older agent ignores the flag and uses that table.
 
