@@ -326,7 +326,7 @@ public static partial class Endpoints
 
         group.MapGet("", async (OctopushyDb db, Guid? resourceId, string? status, int? limit, CancellationToken ct) =>
         {
-            var query = db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsQueryable();
+            var query = db.Runs.AsNoTracking();
             if (resourceId is { } resource)
             {
                 query = query.Where(r => r.ResourceId == resource);
@@ -337,7 +337,7 @@ public static partial class Endpoints
                 query = query.Where(r => r.Status == status);
             }
 
-            var runs = await query.OrderByDescending(r => r.CreatedAt).Take(Math.Clamp(limit ?? 50, 1, 500)).ToListAsync(ct);
+            var runs = await Views.ForSummary(query.OrderByDescending(r => r.CreatedAt).Take(Math.Clamp(limit ?? 50, 1, 500))).ToListAsync(ct);
             var ids = runs.Select(r => r.ResourceId).Distinct().ToList();
             var resources = await db.Resources.AsNoTracking().Where(r => ids.Contains(r.Id)).Select(r => new { r.Id, r.Address, r.Kind })
                 .ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), ct);

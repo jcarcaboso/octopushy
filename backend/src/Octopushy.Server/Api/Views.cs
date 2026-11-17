@@ -74,6 +74,49 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
 
     public static RunSummaryDto Summary(Run run, (string Address, string Kind) resource) => Summary(run, resource.Address, resource.Kind);
 
+    /// <summary>Test only: <see cref="ForSummary"/> loads whole runs, as the lists did before, to compare their responses.</summary>
+    internal static bool WholeRuns { get; set; }
+
+    /// <summary>
+    /// The runs with only what <see cref="Summary(Run, string, string)"/> and the guest and service statuses read: no context,
+    /// and only an unfinished run's plan outputs and its attempts that are queued or under way.
+    /// </summary>
+    public static IQueryable<Run> ForSummary(IQueryable<Run> runs) => WholeRuns
+        ? runs.Include(r => r.Steps).ThenInclude(s => s.Attempts)
+        : runs.Select(r => new Run
+        {
+            Id = r.Id,
+            Number = r.Number,
+            ResourceId = r.ResourceId,
+            Operation = r.Operation,
+            Commit = r.Commit,
+            Reason = r.Reason,
+            ReasonDetail = r.ReasonDetail,
+            Status = r.Status,
+            Detail = r.Detail,
+            CreatedAt = r.CreatedAt,
+            StartedAt = r.StartedAt,
+            FinishedAt = r.FinishedAt,
+            Steps = r.Steps.Select(s => new Step
+            {
+                Id = s.Id,
+                Ordinal = s.Ordinal,
+                Name = s.Name,
+                Kind = s.Kind,
+                Status = s.Status,
+                PlanSha256 = s.PlanSha256,
+                Outputs = s.Name == StepNames.Plan
+                          && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
+                    ? s.Outputs
+                    : null,
+                Attempts = s.Attempts
+                    .Where(a => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled
+                                && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+                    .Select(a => new Attempt { Number = a.Number, Status = a.Status, Mutating = a.Mutating, WaitingReason = a.WaitingReason, Executor = "", Action = "" })
+                    .ToList(),
+            }).ToList(),
+        });
+
     /// <summary>Why a run that has not finished is not making progress right now, or null when it is.</summary>
     public static string? Waiting(Run run)
     {
@@ -819,14 +862,14 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         // Only the three columns: a resource row also carries its definition, outputs and issues.
         var addresses = await db.Resources.AsNoTracking().Select(r => new { r.Id, r.Address, r.Kind })
             .ToDictionaryAsync(r => r.Id, r => (r.Address, r.Kind), cancellationToken);
-        var attention = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+        var attention = await ForSummary(db.Runs.AsNoTracking()
             .Where(r => r.Status == RunStatuses.AwaitingApproval || r.Status == RunStatuses.Blocked || r.Status == RunStatuses.Uncertain)
             .OrderBy(r => r.CreatedAt)
-            .Take(50)
+            .Take(50))
             .ToListAsync(cancellationToken);
-        var recent = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+        var recent = await ForSummary(db.Runs.AsNoTracking()
             .OrderByDescending(r => r.CreatedAt)
-            .Take(15)
+            .Take(15))
             .ToListAsync(cancellationToken);
         var observeErrors = await db.Resources.AsNoTracking()
             .Where(r => r.Kind == ResourceKinds.Installation && r.RetiredAt == null && r.MissingSince == null && r.ObserveError != null)
@@ -1011,9 +1054,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
 
     private async Task<Dictionary<Guid, (Run? Active, Run? Last)>> LatestRunsAsync(List<Guid> resourceIds, CancellationToken cancellationToken)
     {
-        var active = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts)
+        var active = await ForSummary(db.Runs.AsNoTracking()
             .Where(r => resourceIds.Contains(r.ResourceId)
-                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled)
+                        && r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed && r.Status != RunStatuses.Cancelled))
             .ToListAsync(cancellationToken);
         var lastIds = await db.Runs.AsNoTracking()
             .Where(r => resourceIds.Contains(r.ResourceId)
@@ -1021,7 +1064,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             .GroupBy(r => r.ResourceId)
             .Select(g => g.OrderByDescending(r => r.CreatedAt).Select(r => r.Id).First())
             .ToListAsync(cancellationToken);
-        var last = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).Where(r => lastIds.Contains(r.Id)).ToListAsync(cancellationToken);
+        var last = await ForSummary(db.Runs.AsNoTracking().Where(r => lastIds.Contains(r.Id))).ToListAsync(cancellationToken);
         return resourceIds.ToDictionary(
             id => id,
             id => (active.Where(r => r.ResourceId == id).MinBy(r => r.CreatedAt), last.FirstOrDefault(r => r.ResourceId == id)));
