@@ -387,6 +387,22 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         }
     }
 
+    /// <summary>Deletes a server-owned key and its versions, which nothing else refers to, keeping its last version number.</summary>
+    public async Task DeleteInternalAsync(string key, string actor, CancellationToken cancellationToken)
+    {
+        var entry = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == key, cancellationToken);
+        if (entry is null)
+        {
+            return;
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await db.StoreEntries.Where(e => e.Key == key).ExecuteDeleteAsync(cancellationToken);
+        await db.StoreVersions.Where(v => v.Key == key).ExecuteDeleteAsync(cancellationToken);
+        await RecordDeletionAsync(db, key, entry.LatestVersion, actor, clock.GetUtcNow(), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Deletes one version that is not the active one: its encrypted value goes, and its number is never given to another value.
     /// Who received it stays on record in <see cref="SecretResolution"/>. Refused while a definition pins it, or a run or an attempt

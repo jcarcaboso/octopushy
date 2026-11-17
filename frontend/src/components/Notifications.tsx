@@ -23,11 +23,15 @@ const marks: Record<string, string> = {
   "run-approval": "awaiting-approval",
   "run-failed": "failed",
   "run-uncertain": "uncertain",
+  "agent-offline": "failed",
+  "agent-online": "succeeded",
+  "agent-update-failed": "failed",
 };
 
 function pathOf(item: NotificationItem): string | null {
   if (item.runId) return `/runs/${item.runId}`;
   if (item.resourceId && item.resourceKind) return runResourcePath({ resourceKind: item.resourceKind, resourceId: item.resourceId });
+  if (item.agentId) return "/agents";
   return null;
 }
 

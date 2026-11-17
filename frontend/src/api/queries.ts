@@ -26,6 +26,7 @@ export const keys = {
   inventory: ["inventory"] as const,
   uptime: ["uptime"] as const,
   notifications: ["notifications"] as const,
+  webhook: ["notifications", "webhook"] as const,
   guest: (id: string) => ["guest", id] as const,
   service: (id: string) => ["service", id] as const,
   icons: ["icons"] as const,
@@ -98,6 +99,27 @@ export function useNotifications() {
     queryFn: () => unwrap(api.GET("/api/notifications")),
     refetchInterval: 10_000,
   });
+}
+
+/** The webhook notifications are sent to: whether one is set, its host and how its sending stands. Never its URL. */
+export function useWebhook() {
+  return useQuery({
+    queryKey: keys.webhook,
+    queryFn: () => unwrap(api.GET("/api/notifications/webhook")),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useDeleteWebhook() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/api/notifications/webhook")),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.webhook }),
+  });
+}
+
+export function useTestWebhook() {
+  return useMutation({ mutationFn: () => unwrap(api.POST("/api/notifications/webhook/test")) });
 }
 
 export function useGuest(id: string) {

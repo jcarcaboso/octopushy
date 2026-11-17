@@ -1167,6 +1167,12 @@ public sealed class AgentRecord
 
     /// <summary>Whether the update paused the agent, so it lifts that pause and never one a person set.</summary>
     public bool UpdatePaused { get; set; }
+
+    /// <summary>
+    /// When it was told offline (<see cref="NotificationKinds.AgentOffline"/>); null once told online again, or never told.
+    /// Written only by <see cref="Agents.AgentPresence"/>.
+    /// </summary>
+    public DateTimeOffset? OfflineNotifiedAt { get; set; }
 }
 
 /// <summary>Where an agent's update stands, when one was asked for. See docs/worker-routing.md.</summary>
@@ -1447,6 +1453,17 @@ public static class NotificationKinds
 
     /// <summary>A run stopped for a person to approve its plan.</summary>
     public const string RunApproval = "run-approval";
+
+    /// <summary>An enabled agent has not been connected for <see cref="Agents.AgentPresence.OfflineAfter"/>.</summary>
+    public const string AgentOffline = "agent-offline";
+
+    /// <summary>An agent told offline is connected again. Told once for each <see cref="AgentOffline"/>.</summary>
+    public const string AgentOnline = "agent-online";
+
+    /// <summary>An agent's update to the server's version failed.</summary>
+    public const string AgentUpdateFailed = "agent-update-failed";
+
+    public static readonly IReadOnlyList<string> All = [CheckDown, CheckUp, RunFailed, RunUncertain, RunApproval, AgentOffline, AgentOnline, AgentUpdateFailed];
 }
 
 /// <summary>
@@ -1471,7 +1488,62 @@ public sealed class Notification
 
     public Guid? RunId { get; set; }
 
+    /// <summary>The agent it is about, for the agent kinds. Not a foreign key either.</summary>
+    public Guid? AgentId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
+/// The one webhook notifications are sent to, and where its sending stands: a single row, id 1. Its URL and signing secret are
+/// in the variable store under <see cref="Notifications.Webhook.UrlKey"/> and <see cref="Notifications.Webhook.SecretKey"/>.
+/// Only the settings endpoint saves it; <see cref="Notifications.WebhookDelivery"/> writes its delivery state with conditional
+/// bulk updates, which the engine does not count as saves. See docs/notifications.md.
+/// </summary>
+public sealed class WebhookState
+{
+    public int Id { get; set; } = 1;
+
+    /// <summary>Whether the worker sends: a URL is set and the receiver has not answered 410 Gone since.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>The URL's host, the one part of it the API shows.</summary>
+    public string? Host { get; set; }
+
+    /// <summary>The <see cref="NotificationKinds"/> it sends.</summary>
+    public string[] Kinds { get; set; } = [];
+
+    /// <summary>Moves on with every change of settings, so a delivery that was under way meanwhile records nothing.</summary>
+    public int Generation { get; set; }
+
+    /// <summary>The id of the last notification delivered, dropped or passed over; the next is sent after it.</summary>
+    public long Position { get; set; }
+
+    /// <summary>Failed attempts of the notification after <see cref="Position"/>.</summary>
+    public int Attempts { get; set; }
+
+    public DateTimeOffset? NextAttemptAt { get; set; }
+
+    /// <summary>Notifications given up: too old, too many waiting, or refused by the receiver.</summary>
+    public long Dropped { get; set; }
+
+    public DateTimeOffset? LastAttemptAt { get; set; }
+
+    public long? LastEventId { get; set; }
+
+    public bool LastDelivered { get; set; }
+
+    public int? LastStatus { get; set; }
+
+    /// <summary>What the last attempt came to, for people, bounded and without control characters.</summary>
+    public string? LastResult { get; set; }
+
+    public DateTimeOffset? LastDeliveredAt { get; set; }
+
+    /// <summary>When the receiver answered 410 Gone and sending stopped.</summary>
+    public DateTimeOffset? StoppedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 /// <summary>

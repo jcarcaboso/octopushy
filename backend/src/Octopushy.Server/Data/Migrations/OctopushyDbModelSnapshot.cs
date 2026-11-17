@@ -78,6 +78,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("name");
 
+                    b.Property<DateTimeOffset?>("OfflineNotifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("offline_notified_at");
+
                     b.Property<string>("PreviousCertificateSerial")
                         .HasColumnType("text")
                         .HasColumnName("previous_certificate_serial");
@@ -948,6 +952,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnName("id");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
 
                     b.Property<string>("Body")
                         .HasColumnType("text")
@@ -2173,6 +2181,85 @@ namespace Octopushy.Server.Data.Migrations
                         .HasDatabaseName("ix_users_username");
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Octopushy.Server.Data.WebhookState", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<long>("Dropped")
+                        .HasColumnType("bigint")
+                        .HasColumnName("dropped");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<int>("Generation")
+                        .HasColumnType("integer")
+                        .HasColumnName("generation");
+
+                    b.Property<string>("Host")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("host");
+
+                    b.PrimitiveCollection<string[]>("Kinds")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("kinds");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<bool>("LastDelivered")
+                        .HasColumnType("boolean")
+                        .HasColumnName("last_delivered");
+
+                    b.Property<DateTimeOffset?>("LastDeliveredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_delivered_at");
+
+                    b.Property<long?>("LastEventId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("last_event_id");
+
+                    b.Property<string>("LastResult")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("last_result");
+
+                    b.Property<int?>("LastStatus")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_status");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<long>("Position")
+                        .HasColumnType("bigint")
+                        .HasColumnName("position");
+
+                    b.Property<DateTimeOffset?>("StoppedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("stopped_at");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_webhook");
+
+                    b.ToTable("webhook", (string)null);
                 });
 
             modelBuilder.Entity("Octopushy.Server.Data.WorkflowReleaseRecord", b =>

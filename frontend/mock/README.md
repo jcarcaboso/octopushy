@@ -37,6 +37,10 @@ ten seconds, and more than three at once fold into one line:
 curl -X POST 'http://127.0.0.1:18280/api/mock/notifications?count=5'
 ```
 
+The [Notifications](http://127.0.0.1:5176/notifications) page shows a webhook set to `hooks.example.org`, whose last
+try failed with a 503. Saving a URL shows a made-up signing secret once. A test event is delivered, unless the URL's host
+has `down` in it.
+
 Icons: `GET /api/icons` lists twelve predefined files, each drawn as a coloured square with its first two letters.
 traefik, jellyfin, samba, fleet and open-webui match one by name; app, technitium and proxmox-backup show their letter.
 Change icon on a service's page chooses a file, uploads a picture (kept in memory and served back) or goes back to the

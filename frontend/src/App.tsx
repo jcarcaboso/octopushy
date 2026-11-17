@@ -21,6 +21,7 @@ import { RunsPage } from "./pages/RunsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { VariablesPage } from "./pages/VariablesPage";
 import { OperatorAccessPage } from "./pages/OperatorAccessPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { EditorPage } from "./pages/EditorPage";
 import { ChangeEditorPage } from "./pages/ChangeEditorPage";
 import { ChangePage } from "./pages/ChangePage";
@@ -59,6 +60,7 @@ export function AppRoutes() {
         <Route path="variables" element={<VariablesPage />} />
         <Route path="repository" element={<RepositoryPage />} />
         <Route path="editor" element={<EditorPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route
           path="editor/:id"
           element={

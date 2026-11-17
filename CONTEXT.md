@@ -200,7 +200,8 @@ records the moment and is never changed afterwards; the current state stays on t
 _Avoid_: Alert, which suggests it stays raised until someone clears it; event
 
 **Notification provider**:
-A place notifications are delivered to besides the app, such as Telegram or Discord. None exists yet.
+A place notifications are delivered to besides the app. The one that exists is the webhook: one URL that is posted a
+signed event for each notification of the kinds the operator chose. Telegram, Discord and the like are not built.
 _Avoid_: Channel, which is the connection between an agent and the server
 
 **Deployment instance**:
