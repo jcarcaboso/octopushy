@@ -133,6 +133,8 @@ public sealed class AgentChannelService(
         {
             await engine.OnHelloAsync(agent.Id, hello, call.Token);
             connections.Add(session);
+            // Again, now that this is the agent's connection: one it replaced may have stored its own offer since the Hello's.
+            await engine.StoreOfferAsync(session, call.Token);
             reachability.OnConnected(session);
             logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage

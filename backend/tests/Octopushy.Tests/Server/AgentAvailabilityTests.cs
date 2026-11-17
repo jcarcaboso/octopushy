@@ -75,6 +75,21 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         }
     }
 
+    /// <summary>Fails the next statement that stores an agent's offer, once.</summary>
+    private sealed class OfferWriteFails : DbCommandInterceptor
+    {
+        public bool Armed { get; set; }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (!Armed || !command.CommandText.Contains("unavailable"))
+                return ValueTask.FromResult(result);
+            Armed = false;
+            throw new InvalidOperationException("The offer could not be stored.");
+        }
+    }
+
     /// <summary>Connects <paramref name="agent"/> again over a stream, as a real agent does, with its Hello.</summary>
     private static async Task<(AgentStream Stream, AgentSession Session)> StreamAsync(ServerHarness server, FakeAgent agent, Hello hello)
     {
@@ -409,6 +424,56 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.False(session.OfferUnsaved);
         Assert.Equal(2, logs.Count - lines);
         Assert.Equal(2, signal.Wakes - wakes);
+        stream.Complete();
+    }
+
+    [Fact]
+    public async Task A_connection_a_newer_one_replaced_stores_nothing_over_the_newer_ones_offer()
+    {
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres, clock: clock);
+        var agent = await server.ConnectAgentAsync("home");
+        var (oldStream, old) = await StreamAsync(server, agent, new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+        // The older connection holds an offer it has not stored yet.
+        Assert.True(old.SetExecutors(["proxmox"], new SortedDictionary<string, string> { ["opentofu"] = "as the older connection saw it" }));
+        old.OfferUnsaved = true;
+
+        var (stream, current) = await StreamAsync(server, agent,
+            new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox" }, Unavailable = { ["ansible"] = "as the newer connection says" } });
+        Assert.NotSame(old, current);
+        clock.Now += RunEngine.OfferEffectsEvery;
+        await server.Engine.FlushOfferAsync(old, CancellationToken.None);
+        await server.Engine.OnExecutorsChangedAsync(old, new ExecutorsChanged { Executors = { "ansible" } }, CancellationToken.None);
+
+        var stored = await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => new { a.Executors, a.Unavailable }).SingleAsync());
+        Assert.Equal(["opentofu", "proxmox"], stored.Executors);
+        Assert.Equal("as the newer connection says", Assert.Single(AgentAvailability.Deserialize(stored.Unavailable)).Value);
+        oldStream.Complete();
+        stream.Complete();
+    }
+
+    [Fact]
+    public async Task An_offer_whose_write_failed_is_stored_by_a_later_heartbeat()
+    {
+        var clock = new TestClock { Now = Start };
+        var failing = new OfferWriteFails();
+        await using var server = await ServerHarness.StartAsync(postgres, clock: clock,
+            services: s => s.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(failing)));
+        var (stream, session) = await StreamAsync(server, await server.ConnectAgentAsync("home"),
+            new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+        Task<string?> StoredAsync() => server.QueryAsync(db => db.Agents.Where(a => a.Id == session.AgentId).Select(a => a.Unavailable).SingleAsync());
+
+        failing.Armed = true;
+        stream.Send(new AgentMessage { ExecutorsChanged = new ExecutorsChanged { Executors = { "proxmox", "ansible" }, Unavailable = { ["opentofu"] = "gone" } } });
+        await WaitUntilAsync("the write was tried and failed", () => Task.FromResult(!failing.Armed));
+        await Task.Delay(100);
+        Assert.Empty(AgentAvailability.Deserialize(await StoredAsync()));
+        Assert.True(session.OfferUnsaved);
+
+        clock.Now += RunEngine.OfferEffectsEvery;
+        stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
+        await WaitUntilAsync("the offer is stored", async () => AgentAvailability.Deserialize(await StoredAsync()).GetValueOrDefault("opentofu") == "gone");
+        Assert.False(session.OfferUnsaved);
         stream.Complete();
     }
 }

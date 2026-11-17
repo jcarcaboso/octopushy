@@ -500,19 +500,40 @@ public sealed partial class RunEngine
     public Task FlushOfferAsync(AgentSession session, CancellationToken cancellationToken) =>
         WithDbAsync(db => ApplyOfferEffectsAsync(db, session, cancellationToken), cancellationToken);
 
+    /// <summary>
+    /// Stores what a connection that has just replaced an older one of its agent offers. Its Hello stored the same before the
+    /// older connection was replaced, and a change of that one still queued then may have stored over it since.
+    /// </summary>
+    public Task StoreOfferAsync(AgentSession session, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            if (connections.Get(session.AgentId) == session)
+                await WriteOfferAsync(db, session, cancellationToken);
+        }, cancellationToken);
+
+    private static Task WriteOfferAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
+    {
+        // What the session holds now: the latest offer, whichever report brought it.
+        var executors = session.Executors.ToArray();
+        var reasons = AgentAvailability.Serialize(session.Unavailable);
+        return db.Agents.Where(a => a.Id == session.AgentId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, executors).SetProperty(a => a.Unavailable, reasons), cancellationToken);
+    }
+
     private async Task ApplyOfferEffectsAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
         if (!session.OfferUnsaved || now < session.OfferEffectsAfter)
             return;
+        // A connection a newer one of the same agent replaced stores nothing: the record is the newer one's now.
+        if (connections.Get(session.AgentId) != session)
+            return;
         session.OfferEffectsAfter = now + OfferEffectsEvery;
-        session.OfferUnsaved = false;
-        // What the session holds now: the latest offer, whichever report brought it.
-        var executors = session.Executors.ToArray();
+        var executors = session.Executors;
         var unavailable = session.Unavailable;
-        var reasons = AgentAvailability.Serialize(unavailable);
-        await db.Agents.Where(a => a.Id == session.AgentId)
-            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, executors).SetProperty(a => a.Unavailable, reasons), cancellationToken);
+        await WriteOfferAsync(db, session, cancellationToken);
+        // Only now: a write that failed is tried again by the next heartbeat after the interval.
+        session.OfferUnsaved = false;
         logger.LogInformation("Agent {Name} ({Agent}) now offers {Executors}; without {Unavailable}.", session.Name, session.AgentId,
             string.Join(",", executors.Where(AgentAvailability.KnownExecutors.Contains)), string.Join(",", unavailable.Keys));
         signal.Wake();
