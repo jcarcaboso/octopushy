@@ -3,3 +3,11 @@ overrides:
   monaco-editor>dompurify: 3.4.17
   # GHSA-g3hv-75wg-m249: denial of service, fixed in 11.0.1.
   minimatch@<11.0.1: ^11.0.1
+
+auditConfig:
+  ignoreGhsas:
+    # ReDoS in picomatch <= 4.0.7, and no fixed version is published yet. It reaches this project
+    # only through development tools (vitest, vite, tinyglobby), which match glob patterns this
+    # repository writes; `pnpm audit --prod` finds nothing. Remove this entry and update picomatch
+    # when a fixed version exists.
+    - GHSA-fc5q-39xc-vjpf
