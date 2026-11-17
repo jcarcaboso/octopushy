@@ -1423,6 +1423,47 @@ public sealed class UptimeBucket
     public long LatencyMsTotal { get; set; }
 }
 
+public static class NotificationKinds
+{
+    /// <summary>An uptime check that answered up answers down.</summary>
+    public const string CheckDown = "check-down";
+
+    /// <summary>An uptime check that answered down answers up.</summary>
+    public const string CheckUp = "check-up";
+
+    public const string RunFailed = "run-failed";
+
+    public const string RunUncertain = "run-uncertain";
+
+    /// <summary>A run stopped for a person to approve its plan.</summary>
+    public const string RunApproval = "run-approval";
+}
+
+/// <summary>
+/// Something that happened and that an operator is told once. Rows are added only by
+/// <see cref="Notifications.NotificationHub"/> and never changed. See docs/notifications.md.
+/// </summary>
+public sealed class Notification
+{
+    /// <summary>Ascending in the order notifications were added, so a reader can keep its place by it.</summary>
+    public long Id { get; set; }
+
+    /// <summary>One of <see cref="NotificationKinds"/>.</summary>
+    public required string Kind { get; set; }
+
+    /// <summary>What happened, as text fixed when it happened.</summary>
+    public required string Title { get; set; }
+
+    public string? Body { get; set; }
+
+    /// <summary>The resource it is about, if it still exists. Not a foreign key: a notification never fails the save it rides on.</summary>
+    public Guid? ResourceId { get; set; }
+
+    public Guid? RunId { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 /// <summary>
 /// The icon chosen for one service on the Services page: a file of the icons directory by name, or a picture uploaded for it.
 /// Only shown, so it lives here and not in the lab repository; see docs/service-icons.md.

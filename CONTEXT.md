@@ -194,6 +194,15 @@ Whether a node's Proxmox API, a machine's SSH or a service's link or name answer
 for 30 days. It is liveness from one agent's place in the network, not proof that anything works.
 _Avoid_: Health or verification, which a workflow establishes; reachability, which decides where work may go
 
+**Notification**:
+One thing that happened and that an operator is told once, such as an uptime check turning down or a run failing. It
+records the moment and is never changed afterwards; the current state stays on the resource's page.
+_Avoid_: Alert, which suggests it stays raised until someone clears it; event
+
+**Notification provider**:
+A place notifications are delivered to besides the app, such as Telegram or Discord. None exists yet.
+_Avoid_: Channel, which is the connection between an agent and the server
+
 **Deployment instance**:
 A service's installation on a particular target, with its own desired release,
 last applied release, and observed health.

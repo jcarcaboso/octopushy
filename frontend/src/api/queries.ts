@@ -25,6 +25,7 @@ export const keys = {
   overview: ["overview"] as const,
   inventory: ["inventory"] as const,
   uptime: ["uptime"] as const,
+  notifications: ["notifications"] as const,
   guest: (id: string) => ["guest", id] as const,
   service: (id: string) => ["service", id] as const,
   icons: ["icons"] as const,
@@ -87,6 +88,15 @@ export function useUptime() {
     queryKey: keys.uptime,
     queryFn: () => unwrap(api.GET("/api/uptime")),
     refetchInterval: 30_000,
+  });
+}
+
+/** The latest notifications, for the bell and the pop-ups of the shell. */
+export function useNotifications() {
+  return useQuery({
+    queryKey: keys.notifications,
+    queryFn: () => unwrap(api.GET("/api/notifications")),
+    refetchInterval: 10_000,
   });
 }
 

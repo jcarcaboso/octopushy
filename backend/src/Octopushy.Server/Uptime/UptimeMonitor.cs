@@ -335,12 +335,17 @@ public sealed class UptimeMonitor(
         await _storageGate.WaitAsync(cancellationToken);
         try
         {
+            UptimeTarget target;
             lock (_gate)
-                if (!_slots.ContainsKey(verdict.Key))
+            {
+                if (!_slots.TryGetValue(verdict.Key, out var slot))
                     return;
+                target = slot.Target;
+            }
+
             await using var scope = scopes.CreateAsyncScope();
             await RecordAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), verdict.Key, verdict.Up, verdict.Detail, verdict.ElapsedMs,
-                verdict.Agent, verdict.At, cancellationToken);
+                verdict.Agent, verdict.At, cancellationToken, target);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -400,9 +405,12 @@ public sealed class UptimeMonitor(
         }
     }
 
-    /// <summary>Stores one answer: the check's current state, and a count in its 15-minute bucket.</summary>
+    /// <summary>
+    /// Stores one answer: the check's current state, and a count in its 15-minute bucket. With <paramref name="target"/>, an
+    /// answer that turns the check from up to down or back is also a notification. A first answer turns nothing.
+    /// </summary>
     public static async Task RecordAsync(OctopushyDb db, string key, bool up, string? detail, int? elapsedMs, string? agent, DateTimeOffset at,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, UptimeTarget? target = null)
     {
         var check = await db.UptimeChecks.FirstOrDefaultAsync(c => c.Key == key, cancellationToken);
         if (check is null)
@@ -413,6 +421,8 @@ public sealed class UptimeMonitor(
         else if (check.Up != up)
         {
             check.Since = at;
+            if (target is not null)
+                await Notifications.NotificationHub.CheckTurnedAsync(db, target, up, detail, at, cancellationToken);
         }
 
         check.Up = up;
@@ -450,6 +460,8 @@ public sealed class UptimeMonitor(
             var before = now - Retention;
             await db.UptimeBuckets.Where(b => b.StartsAt < before).ExecuteDeleteAsync(cancellationToken);
             await db.UptimeChecks.Where(c => c.CheckedAt < before).ExecuteDeleteAsync(cancellationToken);
+            // ponytail: notifications have no loop of their own and go at the same age here; give them one if the ages must differ.
+            await db.Notifications.Where(n => n.CreatedAt < before).ExecuteDeleteAsync(cancellationToken);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {

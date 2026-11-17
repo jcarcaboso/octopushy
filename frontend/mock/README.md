@@ -30,6 +30,13 @@ down, jellyfin on media is degraded (its first link answers 502 since 40 minutes
 [/services](http://127.0.0.1:5176/services) lists the links under home.example.org, ops.example.org (fleet's three
 links, and open-webui) and No domain (technitium's address).
 
+Notifications: the bell starts with six, all unread. To see pop-ups, add some while a page is open; they show within
+ten seconds, and more than three at once fold into one line:
+
+```bash
+curl -X POST 'http://127.0.0.1:18280/api/mock/notifications?count=5'
+```
+
 Icons: `GET /api/icons` lists twelve predefined files, each drawn as a coloured square with its first two letters.
 traefik, jellyfin, samba, fleet and open-webui match one by name; app, technitium and proxmox-backup show their letter.
 Change icon on a service's page chooses a file, uploads a picture (kept in memory and served back) or goes back to the

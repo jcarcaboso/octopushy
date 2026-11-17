@@ -5,6 +5,7 @@
 - `backend/src/Octopushy.Server/` is the ASP.NET API, agent channel, database and
   orchestration engine. `Orchestration/RunEngine*.cs` owns run transitions.
   `Git/` reads repository revisions. `Changes/` writes and reconciles changes.
+  `Notifications/` records what operators are told; see `docs/notifications.md`.
 - `backend/src/Octopushy.Definitions/` parses and validates lab and workflow files.
 - `backend/src/Octopushy.Validate/` is the offline repository validator.
 - `backend/tests/Octopushy.Tests/` holds definition and server tests.

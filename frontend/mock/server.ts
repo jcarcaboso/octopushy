@@ -95,6 +95,11 @@ on("DELETE", "/api/auth/operator-tokens/{id}", ({ params }) => {
 on("GET", "/api/overview", data.overview);
 on("GET", "/api/inventory", data.inventory);
 on("GET", "/api/uptime", () => uptime(data.inventory()));
+on("GET", "/api/notifications", () => ({ items: data.notifications.slice(0, 50) }));
+// Mock only: adds `count` notifications, to see them pop up. See README.md.
+on("POST", "/api/mock/notifications", ({ query }) => {
+  for (let i = 0; i < (Number(query.get("count")) || 1); i++) data.notify();
+});
 on("GET", "/api/guests/{id}", ({ params }) => data.guestDetail(params.id) ?? notFound("guest"));
 on("GET", "/api/services/{id}", ({ params }) => data.serviceDetail(params.id) ?? notFound("service"));
 on("GET", "/api/installations/{id}", ({ params }) => data.installationDetail(params.id) ?? notFound("installation"));
