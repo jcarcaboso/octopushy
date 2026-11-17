@@ -51,6 +51,33 @@ public sealed class WebhookDelivery(
     private sealed record Bounded(Notification? Next, (long Last, int Count)? Backlog);
 
     /// <summary>
+    /// A transaction that holds the gapless boundary <see cref="BoundedAsync"/> describes: every notification read in it has
+    /// a lower id than any added after it began. Null when notifications were still being added after
+    /// <see cref="LockTimeoutSeconds"/>; nothing is held then. Keep it short: adding a notification waits for it to end.
+    /// </summary>
+    internal static async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BoundaryAsync(OctopushyDb db, CancellationToken ct)
+    {
+        var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(SetLockTimeout, ct);
+            await db.Database.ExecuteSqlRawAsync("LOCK TABLE notifications IN SHARE MODE", ct);
+            return transaction;
+        }
+        catch (Npgsql.PostgresException e) when (e.SqlState == Npgsql.PostgresErrorCodes.LockNotAvailable)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            await transaction.DisposeAsync();
+            return null;
+        }
+        catch
+        {
+            await transaction.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// The next notification to send and, when the oldest waiting is older than <paramref name="backlogBefore"/>, the waiting
     /// ones past <see cref="MaxBacklog"/>, read behind a gapless boundary. An id is taken by the INSERT that adds its row, after
     /// that statement holds ROW EXCLUSIVE on <c>notifications</c>, and its sequence hands out one value at a time. SHARE
@@ -64,17 +91,9 @@ public sealed class WebhookDelivery(
     /// </summary>
     private static async Task<Bounded?> BoundedAsync(OctopushyDb db, IQueryable<Notification> waiting, DateTimeOffset? backlogBefore, CancellationToken ct)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await db.Database.ExecuteSqlRawAsync(SetLockTimeout, ct);
-        try
-        {
-            await db.Database.ExecuteSqlRawAsync("LOCK TABLE notifications IN SHARE MODE", ct);
-        }
-        catch (Npgsql.PostgresException e) when (e.SqlState == Npgsql.PostgresErrorCodes.LockNotAvailable)
-        {
-            await transaction.RollbackAsync(CancellationToken.None);
+        await using var transaction = await BoundaryAsync(db, ct);
+        if (transaction is null)
             return null;
-        }
 
         // Read committed: each read below sees every row committed before the lock was granted.
         var next = await waiting.OrderBy(n => n.Id).FirstOrDefaultAsync(ct);

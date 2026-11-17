@@ -139,28 +139,51 @@ public static class WebhookEndpoints
             state.Kinds = NotificationKinds.All.Where(kinds.Contains).ToArray();
 
         string? secret = null;
-        if (url is not null)
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? boundary = null;
+        try
         {
-            secret = Webhook.NewSecret();
-            await store.AddInternalAsync(Webhook.UrlKey, url.OriginalString.Trim(), Visibilities.Secret, "The webhook notifications are sent to.", ct);
-            await store.AddInternalAsync(Webhook.SecretKey, secret, Visibilities.Secret, "The key the webhook's events are signed with.", ct);
-            state.Host = Webhook.Clean(url.IdnHost, 255);
-            // Sent from now on: what was told before the webhook was set, or while it was stopped, is not sent.
-            if (!state.Enabled)
+            if (url is not null)
             {
-                state.Position = await db.Notifications.MaxAsync(n => (long?)n.Id, ct) ?? 0;
-                state.Attempts = 0;
-                state.Refusals = 0;
-                state.NextAttemptAt = null;
+                secret = Webhook.NewSecret();
+                await store.AddInternalAsync(Webhook.UrlKey, url.OriginalString.Trim(), Visibilities.Secret, "The webhook notifications are sent to.", ct);
+                await store.AddInternalAsync(Webhook.SecretKey, secret, Visibilities.Secret, "The key the webhook's events are signed with.", ct);
+                state.Host = Webhook.Clean(url.IdnHost, 255);
+                // Sent from now on: what was told before the webhook was set, or while it was stopped, is not sent. "Now" is
+                // read behind the boundary the sender reads behind and saved in the same transaction, so a notification
+                // still being added then, with a lower id than the newest, is sent and not passed over.
+                if (!state.Enabled)
+                {
+                    boundary = await WebhookDelivery.BoundaryAsync(db, ct);
+                    if (boundary is null)
+                        return TypedResults.Problem(title: "Notifications are being added right now. Save the webhook again in a moment.", statusCode: 503);
+                    state.Position = await db.Notifications.MaxAsync(n => (long?)n.Id, ct) ?? 0;
+                    state.Attempts = 0;
+                    state.Refusals = 0;
+                    state.NextAttemptAt = null;
+                }
+
+                state.Enabled = true;
+                state.StoppedAt = null;
+                // Written whatever they were when read: the sender may have stopped sending since, on a 410.
+                if (db.Entry(state).State != EntityState.Added)
+                {
+                    db.Entry(state).Property(s => s.Enabled).IsModified = true;
+                    db.Entry(state).Property(s => s.StoppedAt).IsModified = true;
+                }
             }
 
-            state.Enabled = true;
-            state.StoppedAt = null;
+            state.Generation++;
+            state.UpdatedAt = now;
+            await db.SaveChangesAsync(ct);
+            if (boundary is not null)
+                await boundary.CommitAsync(ct);
+        }
+        finally
+        {
+            if (boundary is not null)
+                await boundary.DisposeAsync();
         }
 
-        state.Generation++;
-        state.UpdatedAt = now;
-        await db.SaveChangesAsync(ct);
         signal.Wake();
         return TypedResults.Ok(new WebhookSaved(Dto(state, options), secret));
     }

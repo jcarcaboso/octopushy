@@ -79,18 +79,25 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
 
         public int Count => Volatile.Read(ref _count);
 
-        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
             InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _count);
-            return ValueTask.FromResult(result);
+            if (BeforeWrite is { } before)
+                await before(command);
+            return result;
         }
 
-        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command, CommandEventData eventData,
+        /// <summary>Run before a statement that writes, for a test that needs something to happen in the middle of a save.</summary>
+        public Func<DbCommand, Task>? BeforeWrite { get; set; }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command, CommandEventData eventData,
             InterceptionResult<int> result, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _count);
-            return ValueTask.FromResult(result);
+            if (BeforeWrite is { } before)
+                await before(command);
+            return result;
         }
 
         public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(DbCommand command, CommandEventData eventData,
@@ -682,6 +689,69 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
         await setup.SendAsync();
         Assert.Equal([$"{a}", $"{b}"], setup.Receiver.Events.Select(e => e["id"]!.GetValue<string>()));
         Assert.Equal(b, (await setup.StateAsync()).Position);
+    }
+
+    [Fact]
+    public async Task The_webhook_is_not_set_while_a_notification_is_still_being_added_and_then_starts_after_all_of_them()
+    {
+        await using var setup = await StartAsync();
+        var connectionString = await setup.Server.QueryAsync(db => Task.FromResult(db.Database.GetConnectionString()!));
+        var http = await setup.Server.SignedInClientAsync();
+
+        // A takes the lower id and stays open while B commits. Starting "from now" after B would pass A over for good.
+        await using var open = new Npgsql.NpgsqlConnection(connectionString);
+        await open.OpenAsync();
+        await using var pending = await open.BeginTransactionAsync();
+        await using var insert = new Npgsql.NpgsqlCommand(
+            "INSERT INTO notifications (kind, title, created_at) VALUES ('run-approval', 'Provision run awaits approval', @at) RETURNING id", open, pending);
+        insert.Parameters.AddWithValue("at", Start);
+        var a = (long)(await insert.ExecuteScalarAsync())!;
+        var b = await setup.NotifyAsync();
+        Assert.True(a < b);
+
+        var refused = await http.PutAsJsonAsync("/api/notifications/webhook", new { url = Url });
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        var shown = (await http.GetFromJsonAsync<JsonObject>("/api/notifications/webhook"))!;
+        Assert.False(shown["configured"]!.GetValue<bool>());
+        Assert.False(shown["enabled"]!.GetValue<bool>());
+        Assert.Equal(0, await setup.Server.QueryAsync(db => db.Webhooks.CountAsync()));
+
+        // Once A is in, the webhook is set after both: neither is sent, and what follows is.
+        await pending.CommitAsync();
+        await setup.ConfigureAsync();
+        Assert.Equal(b, (await setup.StateAsync()).Position);
+        await setup.SendAsync();
+        Assert.Empty(setup.Receiver.Received);
+        var c = await setup.NotifyAsync();
+        await setup.SendAsync();
+        Assert.Equal([$"{c}"], setup.Receiver.Events.Select(e => e["id"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_url_saved_while_the_sender_stops_on_gone_leaves_the_webhook_sending()
+    {
+        await using var setup = await StartAsync();
+        await setup.ConfigureAsync();
+
+        // Between the save's read of the settings and its write, the sender stops, as its update on a 410 does.
+        var stopped = 0;
+        setup.Commands.BeforeWrite = async command =>
+        {
+            if (!command.CommandText.Contains("INSERT INTO") || Interlocked.Exchange(ref stopped, 1) == 1)
+                return;
+            await setup.Server.WithDbAsync(db => db.Webhooks.Where(w => w.Id == 1)
+                .ExecuteUpdateAsync(u => u.SetProperty(w => w.Enabled, false).SetProperty(w => w.StoppedAt, Start)));
+        };
+        await setup.ConfigureAsync("https://hooks.example.test/another");
+        setup.Commands.BeforeWrite = null;
+        Assert.Equal(1, stopped);
+
+        var state = await setup.StateAsync();
+        Assert.True(state.Enabled);
+        Assert.Null(state.StoppedAt);
+        var sent = await setup.NotifyAsync();
+        await setup.SendAsync();
+        Assert.Equal([$"{sent}"], setup.Receiver.Events.Select(e => e["id"]!.GetValue<string>()));
     }
 
     [Fact]

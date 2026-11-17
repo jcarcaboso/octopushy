@@ -180,3 +180,7 @@ all of them, so once the lock is granted no id below those it reads can still ap
 before it sends anything. When the lock is not granted within the second, it changes nothing and tries again ten
 seconds later, or as soon as a notification is saved. When nothing waits, it reads once without the lock and stops
 there.
+
+Saving the first URL, or one after sending stopped, reads where "from then on" begins behind the same lock, in the
+transaction that saves the settings. If a notification is still being added after a second, the save answers 503 and
+changes nothing; save again.
