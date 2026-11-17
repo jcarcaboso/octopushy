@@ -33,13 +33,18 @@ services:
     image: ${OCTOPUSHY_BACKEND_IMAGE:-localhost/octopushy-backend:dev}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://127.0.0.1:8080/api/health"]
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://backend-api:8080/api/health"]
       interval: 15s
       timeout: 6s
       retries: 3
       start_period: 60s
     environment:
       ConnectionStrings__Octopushy: Host=postgres;Database=octopushy;Username=octopushy;Password=${POSTGRES_PASSWORD}
+      # The API listens only on the backend's address on the default network, the frontend's, where
+      # `backend-api` resolves. The agents network reaches the agent port alone. Forwarded headers are
+      # honoured from the default network only; Octopushy__TrustedProxies__0 (a network or an address)
+      # overrides that.
+      Octopushy__ApiBindAddress: backend-api
       Octopushy__TrustForwardedHeaders: "true"
       Octopushy__Store__KeyFile: /run/secrets/kek
       # The name or address agents use to reach this host; it goes into the agent endpoint's certificate.
@@ -53,7 +58,10 @@ services:
       - data:/var/lib/octopushy
       # A folder of icons for the Services page, read-only; see docs/service-icons.md.
       # - /srv/icons:/var/lib/octopushy/icons:ro
-    networks: [default, agents]
+    networks:
+      default:
+        aliases: [backend-api]
+      agents:
     ports:
       # Agents connect here: gRPC over TLS with client certificates.
       - "${OCTOPUSHY_AGENT_PORT:-8443}:8443"

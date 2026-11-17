@@ -11,11 +11,19 @@ public sealed class OctopushyOptions
     /// <summary>Port of the REST API, reached through the frontend's web server.</summary>
     public int ApiPort { get; set; } = 8080;
 
-    /// <summary>Address the REST API listens on. It has no TLS of its own, so keep it private.</summary>
+    /// <summary>
+    /// Address the REST API listens on, or a host name resolved at start. It has no TLS of its own, so keep it private.
+    /// </summary>
     public string ApiBindAddress { get; set; } = "127.0.0.1";
 
-    /// <summary>Trust X-Forwarded-* headers on the API port, when it is reached only through the frontend.</summary>
+    /// <summary>Trust X-Forwarded-* headers on the API port from <see cref="TrustedProxies"/>.</summary>
     public bool TrustForwardedHeaders { get; set; }
+
+    /// <summary>
+    /// Networks (<c>10.1.0.0/24</c>) or addresses the frontend's proxy connects from. Empty: the networks of the
+    /// addresses the API listens on, which in the Compose project is the frontend's network alone.
+    /// </summary>
+    public List<string> TrustedProxies { get; set; } = [];
 
     /// <summary>Apply database migrations at start; otherwise run <c>octopushy-server migrate</c> first.</summary>
     public bool MigrateOnStart { get; set; }
