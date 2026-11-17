@@ -95,6 +95,9 @@ public sealed class AgentChannelService(
     TimeProvider clock,
     ILogger<AgentChannelService> logger) : AgentChannel.AgentChannelBase
 {
+    /// <summary>Queued behind an agent's ordered messages to store an offer a burst of changes left unsaved. Never sent by an agent.</summary>
+    private static readonly AgentMessage FlushOffer = new();
+
     public override async Task Connect(IAsyncStreamReader<AgentMessage> requestStream, IServerStreamWriter<ServerMessage> responseStream, ServerCallContext context)
     {
         var (agent, serial) = await AuthenticateAsync(context);
@@ -187,8 +190,20 @@ public sealed class AgentChannelService(
                             message = newestStates.Remove(waiting.AttemptId, out var newest) ? newest : message;
                     try
                     {
+                        if (ReferenceEquals(message, FlushOffer))
+                        {
+                            session.OfferFlushTaken();
+                            await engine.FlushOfferAsync(session, call.Token);
+                            continue;
+                        }
+
                         switch (message.KindCase)
                         {
+                            // Under the engine's gate, so dispatch never hands over work for an executor whose removal was
+                            // applied. In order: the last of several changes wins. Never coalesced, unlike a state.
+                            case AgentMessage.KindOneofCase.ExecutorsChanged:
+                                await engine.OnExecutorsChangedAsync(session, message.ExecutorsChanged, call.Token);
+                                break;
                             case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
                                 await engine.OnStartedAsync(agent.Id, started, call.Token);
                                 break;
@@ -240,7 +255,7 @@ public sealed class AgentChannelService(
                 }
 
                 if (message.KindCase is not (AgentMessage.KindOneofCase.Heartbeat or AgentMessage.KindOneofCase.Log
-                    or AgentMessage.KindOneofCase.Reachability or AgentMessage.KindOneofCase.ExecutorsChanged))
+                    or AgentMessage.KindOneofCase.Reachability))
                 {
                     ordered.Writer.TryWrite(message);
                     continue;
@@ -255,9 +270,10 @@ public sealed class AgentChannelService(
                         if (heartbeat.Storage is { } storage)
                             session.Storage = AgentAvailability.Storage(storage, clock.GetUtcNow());
                         await engine.OnHeartbeatAsync(agent.Id, heartbeat.RunningAttemptIds, call.Token);
+                        // An offer a burst of changes left unsaved is stored behind them, under the gate, never here.
+                        if (session.TryQueueOfferFlush(clock.GetUtcNow()))
+                            ordered.Writer.TryWrite(FlushOffer);
                     }
-                    else if (message.ExecutorsChanged is { } changed)
-                        await engine.OnExecutorsChangedAsync(session, changed, call.Token);
                     else if (message.Log is { } log && Guid.TryParse(log.AttemptId, out var attemptId))
                         await engine.OnLogAsync(agent.Id, attemptId, (long)log.FirstSequence,
                             log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);

@@ -87,9 +87,12 @@ public static class AgentAvailability
         return kept;
     }
 
-    /// <summary>Executor names as an agent sends them, bounded: at most 32, each at most 64 characters.</summary>
+    /// <summary>
+    /// Executor names as an agent sends them, as a set: each once, in ordinal order, at most 32 of at most 64 characters. The
+    /// same set in another order or with repeats is the same list, so it is no change.
+    /// </summary>
     public static List<string> Executors(IEnumerable<string> reported) =>
-        reported.Where(e => e.Length is > 0 and <= 64).Distinct(StringComparer.Ordinal).Take(32).ToList();
+        reported.Where(e => e.Length is > 0 and <= 64).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(32).ToList();
 
     /// <summary>The reasons as stored on the agent's record: null when there are none.</summary>
     public static string? Serialize(IReadOnlyDictionary<string, string> unavailable) =>

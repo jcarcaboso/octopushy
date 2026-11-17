@@ -477,23 +477,42 @@ public sealed partial class RunEngine
             signal.Wake();
         }, cancellationToken);
 
+    /// <summary>How often a changing offer is logged, woken for and stored, per connection: the engine ticks this often anyway.</summary>
+    public static readonly TimeSpan OfferEffectsEvery = TimeSpan.FromSeconds(5);
+
     /// <summary>
-    /// What an agent offers after it probed again. Dispatch reads the session, so work follows the new set at once; an
-    /// attempt already running is not touched. The agent's record is written only when something changed, outside the
-    /// engine's gate (it is no run's), and the engine is woken so waiting work is offered or its text updated.
+    /// What an agent offers after it probed again. Applied under the engine's gate, which dispatch holds from reading an agent's
+    /// executors to handing it work, so work for an executor is never handed over after its removal was applied; an attempt
+    /// already running is not touched. The session always takes the latest offer at once. Logging it, waking the engine and
+    /// storing it on the agent's record happen at most once per <see cref="OfferEffectsEvery"/> per connection, so an agent
+    /// that flaps costs no more; an offer not stored then is stored by <see cref="FlushOfferAsync"/>, which the next heartbeat
+    /// after the interval queues, or by the next change after it.
     /// </summary>
-    public async Task OnExecutorsChangedAsync(AgentSession session, ExecutorsChanged changed, CancellationToken cancellationToken)
+    public Task OnExecutorsChangedAsync(AgentSession session, ExecutorsChanged changed, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            if (session.SetExecutors(AgentAvailability.Executors(changed.Executors), AgentAvailability.Unavailable(changed.Unavailable)))
+                session.OfferUnsaved = true;
+            await ApplyOfferEffectsAsync(db, session, cancellationToken);
+        }, cancellationToken);
+
+    /// <summary>Stores an offer that a change left unsaved, once its interval is over.</summary>
+    public Task FlushOfferAsync(AgentSession session, CancellationToken cancellationToken) =>
+        WithDbAsync(db => ApplyOfferEffectsAsync(db, session, cancellationToken), cancellationToken);
+
+    private async Task ApplyOfferEffectsAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
     {
-        var executors = AgentAvailability.Executors(changed.Executors);
-        var unavailable = AgentAvailability.Unavailable(changed.Unavailable);
-        if (!session.SetExecutors(executors, unavailable))
+        var now = clock.GetUtcNow();
+        if (!session.OfferUnsaved || now < session.OfferEffectsAfter)
             return;
-        await using var scope = scopes.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
-        var stored = executors.ToArray();
+        session.OfferEffectsAfter = now + OfferEffectsEvery;
+        session.OfferUnsaved = false;
+        // What the session holds now: the latest offer, whichever report brought it.
+        var executors = session.Executors.ToArray();
+        var unavailable = session.Unavailable;
         var reasons = AgentAvailability.Serialize(unavailable);
         await db.Agents.Where(a => a.Id == session.AgentId)
-            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, stored).SetProperty(a => a.Unavailable, reasons), cancellationToken);
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, executors).SetProperty(a => a.Unavailable, reasons), cancellationToken);
         logger.LogInformation("Agent {Name} ({Agent}) now offers {Executors}; without {Unavailable}.", session.Name, session.AgentId,
             string.Join(",", executors.Where(AgentAvailability.KnownExecutors.Contains)), string.Join(",", unavailable.Keys));
         signal.Wake();

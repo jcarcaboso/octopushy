@@ -51,7 +51,40 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
         set => _storage = value;
     }
 
-    /// <summary>Replaces what the agent offers. Returns false when nothing changed.</summary>
+    // When the next offer change may be logged, woken for and stored (ticks of the server's clock), whether the latest one is not
+    // stored yet, and whether a flush of it is queued. Changed only under the engine's gate, except the flush flag.
+    private long _offerEffectsAfter = long.MinValue;
+    private int _offerUnsaved;
+    private int _offerFlushQueued;
+
+    /// <summary>The offer in memory is newer than what the agent's record holds.</summary>
+    public bool OfferUnsaved
+    {
+        get => Volatile.Read(ref _offerUnsaved) == 1;
+        set => Volatile.Write(ref _offerUnsaved, value ? 1 : 0);
+    }
+
+    /// <summary>Before this, a change of the offer is applied in memory only: no log line, no wake, no write.</summary>
+    public DateTimeOffset OfferEffectsAfter
+    {
+        get => Volatile.Read(ref _offerEffectsAfter) is var t && t == long.MinValue ? DateTimeOffset.MinValue : new DateTimeOffset(t, TimeSpan.Zero);
+        set => Volatile.Write(ref _offerEffectsAfter, value.UtcTicks);
+    }
+
+    /// <summary>
+    /// Whether an unsaved offer is due to be stored at <paramref name="now"/> and no flush is queued yet; if so, a flush counts
+    /// as queued until <see cref="OfferFlushTaken"/>.
+    /// </summary>
+    public bool TryQueueOfferFlush(DateTimeOffset now) =>
+        OfferUnsaved && now >= OfferEffectsAfter && Interlocked.CompareExchange(ref _offerFlushQueued, 1, 0) == 0;
+
+    public void OfferFlushTaken() => Volatile.Write(ref _offerFlushQueued, 0);
+
+    /// <summary>
+    /// Replaces what the agent offers. Returns false when nothing changed. <paramref name="executors"/> is a set as
+    /// <see cref="AgentAvailability.Executors"/> makes it. Called under the engine's gate, which dispatch holds from reading
+    /// <see cref="Executors"/> to handing work over.
+    /// </summary>
     public bool SetExecutors(IReadOnlyList<string> executors, IReadOnlyDictionary<string, string> unavailable)
     {
         var current = _offer;

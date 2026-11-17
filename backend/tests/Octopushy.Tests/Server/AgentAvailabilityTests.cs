@@ -1,6 +1,9 @@
+using System.Data.Common;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
@@ -13,6 +16,77 @@ namespace Octopushy.Tests.Server;
 public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
+    private static readonly DateTimeOffset Start = new(2026, 11, 17, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>Holds the first assignment build at its check of the agent, until released.</summary>
+    private sealed class BuildPause : DbCommandInterceptor
+    {
+        public bool Armed { get; set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private async Task HoldAsync(DbCommand command)
+        {
+            // AssignmentBuilder asks whether the chosen agent is disabled or draining; dispatch's own agent query has no EXISTS.
+            if (!Armed || !command.CommandText.Contains("EXISTS") || !command.CommandText.Contains("draining"))
+                return;
+            Armed = false;
+            Entered.SetResult();
+            await Release.Task;
+        }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            await HoldAsync(command);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<object>> ScalarExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<object> result, CancellationToken cancellationToken = default)
+        {
+            await HoldAsync(command);
+            return result;
+        }
+    }
+
+    /// <summary>Counts the engine's "now offers" lines.</summary>
+    private sealed class OfferLogs : ILoggerProvider, ILogger
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == typeof(RunEngine).FullName ? this : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).Contains(" now offers "))
+                Interlocked.Increment(ref _count);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>Connects <paramref name="agent"/> again over a stream, as a real agent does, with its Hello.</summary>
+    private static async Task<(AgentStream Stream, AgentSession Session)> StreamAsync(ServerHarness server, FakeAgent agent, Hello hello)
+    {
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        connections.Disconnect(agent.Id);
+        var stream = new AgentStream();
+        stream.Send(new AgentMessage { Hello = hello });
+        var service = ActivatorUtilities.CreateInstance<AgentChannelService>(server.Services);
+        _ = service.Connect(stream, stream, await AgentStream.CallAsAsync(server, agent));
+        await stream.ReadingMessages.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        return (stream, connections.Get(agent.Id)!);
+    }
 
     private static Task<Attempt> PreviewAsync(ServerHarness server) =>
         server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Action == "preview").OrderByDescending(a => a.CreatedAt).FirstAsync());
@@ -89,7 +163,8 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
     [Fact]
     public async Task An_agent_that_loses_an_executor_stops_being_offered_its_work_and_gets_it_again_without_reconnecting()
     {
-        await using var server = await ServerHarness.StartAsync(postgres);
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres, clock: clock);
         var agent = await server.ConnectAgentAsync("home");
         await server.Engine.OnExecutorsChangedAsync(agent.Session, new ExecutorsChanged
         {
@@ -102,9 +177,11 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.DoesNotContain(agent.TakeAssignments(), a => a.Executor == "opentofu");
         Assert.EndsWith("Without opentofu: fake: cannot run podman.", (await PreviewAsync(server)).WaitingReason);
         var record = await server.QueryAsync(db => db.Agents.AsNoTracking().SingleAsync(a => a.Id == agent.Id));
-        Assert.Equal(["proxmox", "ansible"], record.Executors);
+        Assert.Equal(["ansible", "proxmox"], record.Executors);
         Assert.Equal("cannot run podman", AgentAvailability.Deserialize(record.Unavailable)["opentofu"]);
 
+        // Past the interval, so the change is stored too, not only applied.
+        clock.Now += RunEngine.OfferEffectsEvery;
         await server.Engine.OnExecutorsChangedAsync(agent.Session, new ExecutorsChanged { Executors = { "opentofu", "proxmox", "ansible" } },
             CancellationToken.None);
         await server.TickAsync();
@@ -210,5 +287,128 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         shown = (await client.GetFromJsonAsync<JsonArray>("/api/agents"))!.Single(a => a!["id"]!.GetValue<Guid>() == agent.Id)!;
         Assert.False(shown["connected"]!.GetValue<bool>());
         Assert.Null(shown["storage"]);
+    }
+
+    [Fact]
+    public void An_offer_is_a_set()
+    {
+        Assert.Equal(["ansible", "opentofu", "proxmox"], AgentAvailability.Executors(["proxmox", "opentofu", "ansible", "opentofu", ""]));
+        var session = new AgentSession(Guid.NewGuid(), "a", AgentAvailability.Executors(["opentofu", "proxmox"]));
+        Assert.False(session.SetExecutors(AgentAvailability.Executors(["proxmox", "opentofu", "proxmox"]), new SortedDictionary<string, string>()));
+        Assert.True(session.SetExecutors(AgentAvailability.Executors(["proxmox"]), new SortedDictionary<string, string>()));
+    }
+
+    [Fact]
+    public async Task Removing_an_executor_waits_for_a_dispatch_that_is_building_its_assignment()
+    {
+        var pause = new BuildPause();
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: s => s.ConfigureDbContext<OctopushyDb>(o => o.AddInterceptors(pause)));
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+
+        pause.Armed = true;
+        var tick = server.TickAsync();
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Dispatch has chosen this agent for its opentofu preview and is building the assignment, holding the engine's gate.
+        List<Assignment>? sentBeforeChange = null;
+        var change = server.Engine.OnExecutorsChangedAsync(agent.Session, new ExecutorsChanged
+        {
+            Executors = { "proxmox", "ansible" },
+            Unavailable = { ["opentofu"] = "cannot run podman" },
+        }, CancellationToken.None).ContinueWith(t =>
+        {
+            t.GetAwaiter().GetResult();
+            // What had been handed to the agent when the change was applied: the preview, if it came first.
+            sentBeforeChange = agent.TakeAssignments();
+        }, TaskContinuationOptions.ExecuteSynchronously);
+        await Task.Delay(300);
+        Assert.False(change.IsCompleted, "The change was applied while dispatch held the gate.");
+        Assert.Contains("opentofu", agent.Session.Executors);
+
+        pause.Release.SetResult();
+        await tick.WaitAsync(TimeSpan.FromSeconds(30));
+        await change.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Handed over while the agent still offered opentofu, then the change: never the change, then the handoff.
+        Assert.Contains(sentBeforeChange!, a => a.Action == "preview");
+        Assert.Equal(AttemptStatuses.Assigned, (await PreviewAsync(server)).Status);
+        Assert.DoesNotContain("opentofu", agent.Session.Executors);
+    }
+
+    [Fact]
+    public async Task A_change_waits_for_the_gate_behind_the_agents_ordered_messages_while_heartbeats_go_on_and_the_last_wins()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var (stream, session) = await StreamAsync(server, await server.ConnectAgentAsync("home"),
+            new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+        var seen = await server.QueryAsync(db => db.Agents.Where(a => a.Id == session.AgentId).Select(a => a.LastSeenAt).SingleAsync());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = server.Engine.ExecuteAsync(async (_, _) =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return true;
+        }, CancellationToken.None);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        stream.Send(new AgentMessage { ExecutorsChanged = new ExecutorsChanged { Executors = { "proxmox" }, Unavailable = { ["opentofu"] = "first" } } });
+        stream.Send(new AgentMessage { ExecutorsChanged = new ExecutorsChanged { Executors = { "proxmox", "ansible" }, Unavailable = { ["opentofu"] = "last" } } });
+        await Task.Delay(50);
+        stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
+        await WaitUntilAsync("the heartbeat is handled while the gate is held", async () =>
+            await server.QueryAsync(db => db.Agents.Where(a => a.Id == session.AgentId).Select(a => a.LastSeenAt).SingleAsync()) > seen);
+        Assert.Equal(["ansible", "opentofu", "proxmox"], session.Executors);
+
+        release.SetResult();
+        await holder;
+        await WaitUntilAsync("the last change is applied", () => Task.FromResult(session.Unavailable.GetValueOrDefault("opentofu") == "last"));
+        Assert.Equal(["ansible", "proxmox"], session.Executors);
+        stream.Complete();
+    }
+
+    [Fact]
+    public async Task A_flapping_agent_costs_one_log_line_one_wake_and_one_write_per_interval_and_the_last_offer_is_stored()
+    {
+        var clock = new TestClock { Now = Start };
+        var logs = new OfferLogs();
+        await using var server = await ServerHarness.StartAsync(postgres, clock: clock, services: s => s.AddSingleton<ILoggerProvider>(logs));
+        var (stream, session) = await StreamAsync(server, await server.ConnectAgentAsync("home"),
+            new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+        var signal = server.Services.GetRequiredService<OrchestratorSignal>();
+        var wakes = signal.Wakes;
+        var lines = logs.Count;
+        Task<string?> StoredAsync() => server.QueryAsync(db => db.Agents.Where(a => a.Id == session.AgentId).Select(a => a.Unavailable).SingleAsync());
+
+        // 200 reports in one interval: every other one drops opentofu with a new reason; the rest reorder and repeat the full set.
+        for (var i = 0; i < 200; i++)
+            stream.Send(new AgentMessage
+            {
+                ExecutorsChanged = i % 2 == 1
+                    ? new ExecutorsChanged { Executors = { "proxmox", "ansible" }, Unavailable = { ["opentofu"] = $"flap {i}" } }
+                    : new ExecutorsChanged { Executors = { "proxmox", "ansible", "opentofu", "proxmox" } },
+            });
+        await WaitUntilAsync("the burst is applied", () => Task.FromResult(session.Unavailable.GetValueOrDefault("opentofu") == "flap 199"));
+
+        Assert.Equal(["ansible", "proxmox"], session.Executors);
+        Assert.Equal(1, logs.Count - lines);
+        Assert.Equal(1, signal.Wakes - wakes);
+        Assert.Equal("flap 1", AgentAvailability.Deserialize(await StoredAsync())["opentofu"]);
+        Assert.True(session.OfferUnsaved);
+
+        // A heartbeat inside the interval stores nothing; the first one after it stores the last offer.
+        stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
+        await Task.Delay(200);
+        Assert.Equal("flap 1", AgentAvailability.Deserialize(await StoredAsync())["opentofu"]);
+        clock.Now += RunEngine.OfferEffectsEvery;
+        stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
+        await WaitUntilAsync("the last offer is stored", async () => AgentAvailability.Deserialize(await StoredAsync())["opentofu"] == "flap 199");
+        Assert.Equal(["ansible", "proxmox"],
+            await server.QueryAsync(db => db.Agents.Where(a => a.Id == session.AgentId).Select(a => a.Executors).SingleAsync()));
+        Assert.False(session.OfferUnsaved);
+        Assert.Equal(2, logs.Count - lines);
+        Assert.Equal(2, signal.Wakes - wakes);
+        stream.Complete();
     }
 }
