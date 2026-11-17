@@ -82,8 +82,19 @@ public sealed partial class AssignmentBuilder(
     private static string TokenFor(string stepName, RunContext context) =>
         context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);
 
-    /// <summary>Builds the assignment for a step's attempt, or for an observation when <paramref name="step"/> and <paramref name="run"/> are null.</summary>
+    /// <summary>
+    /// Builds the assignment for a step's attempt, or for an observation when <paramref name="step"/> and <paramref name="run"/> are null.
+    /// It says whether the attempt is a change as the attempt records it, the same flag that decides here whether a lost or
+    /// cancelled attempt is uncertain, so the agent and the server never disagree on it.
+    /// </summary>
     public async Task<Assignment> BuildAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
+    {
+        var assignment = await BuildForAttemptAsync(attempt, step, run, context, agentId, cancellationToken);
+        assignment.Mutating = attempt.Mutating;
+        return assignment;
+    }
+
+    private async Task<Assignment> BuildForAttemptAsync(Attempt attempt, Step? step, Run? run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {
         // Only an observation reaches an installation Octopushy only observes. Asked first, so this fails and never waits.
         if (run is not null && await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, context, cancellationToken) is { } observedOnly)

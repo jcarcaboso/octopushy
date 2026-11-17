@@ -290,7 +290,7 @@ async fn drain_cancels_and_refuses_new_work() {
 #[tokio::test]
 async fn a_lost_stored_result_of_a_recovered_attempt_is_uncertain_not_failed() {
     let h = harness();
-    let ws = workspace::create(&h.work, "apply-1", "opentofu", "apply").unwrap();
+    let ws = workspace::create(&h.work, "apply-1", "opentofu", "apply", true).unwrap();
     workspace::mark_running(&ws).unwrap();
     assert_eq!(h.manager.recover().unwrap(), 1);
 
@@ -326,7 +326,7 @@ fn unreadable_success(h: &Harness, id: &str) -> bool {
 async fn a_stored_result_that_cannot_be_read_for_a_moment_is_read_again_not_replaced() {
     use std::os::unix::fs::PermissionsExt;
     let h = harness();
-    let ws = workspace::create(&h.work, "run-1", "ansible", "run").unwrap();
+    let ws = workspace::create(&h.work, "run-1", "ansible", "run", true).unwrap();
     workspace::mark_running(&ws).unwrap();
     assert_eq!(h.manager.recover().unwrap(), 1);
     unreadable_success(&h, "run-1");
@@ -348,7 +348,7 @@ async fn a_stored_result_that_cannot_be_read_for_a_moment_is_read_again_not_repl
 #[tokio::test]
 async fn a_stored_result_that_stays_unreadable_is_reported_uncertain_after_the_retries() {
     let h = harness();
-    let ws = workspace::create(&h.work, "run-2", "ansible", "run").unwrap();
+    let ws = workspace::create(&h.work, "run-2", "ansible", "run", true).unwrap();
     workspace::mark_running(&ws).unwrap();
     assert_eq!(h.manager.recover().unwrap(), 1);
     if !unreadable_success(&h, "run-2") {
@@ -438,8 +438,8 @@ esac
 #[tokio::test]
 async fn an_attempt_that_never_ran_does_not_claim_to_have_started() {
     let h = harness();
-    let queued = workspace::create(&h.work, "queued-1", "opentofu", "apply").unwrap();
-    let running = workspace::create(&h.work, "running-1", "opentofu", "apply").unwrap();
+    let queued = workspace::create(&h.work, "queued-1", "opentofu", "apply", true).unwrap();
+    let running = workspace::create(&h.work, "running-1", "opentofu", "apply", true).unwrap();
     workspace::mark_running(&running).unwrap();
     assert!(queued.exists());
     h.manager.recover().unwrap();
@@ -542,4 +542,187 @@ async fn forced_mutations_remain_uncertain_even_if_the_executor_returns_success(
         Outcome::Succeeded
     );
     assert!(h.manager.is_idle());
+}
+
+/// Waits until `path` exists.
+async fn wait_for(path: &std::path::Path) {
+    for _ in 0..1000 {
+        if path.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{} never appeared", path.display());
+}
+
+/// What a restart now would report for `id`: recovery into an empty outbox.
+fn recovered_now(work: &std::path::Path, id: &str) -> AttemptResult {
+    let dir = tempfile::tempdir().unwrap();
+    let outbox = Outbox::open(dir.path()).unwrap();
+    recovery::recover(work, &outbox).unwrap();
+    outbox.get(id).unwrap().unwrap().to_result().unwrap()
+}
+
+#[tokio::test]
+async fn a_restart_during_init_failed_and_one_during_the_apply_is_uncertain() {
+    use crate::executors::opentofu::archive;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gates = dir.path().join("gates");
+    std::fs::create_dir_all(&gates).unwrap();
+    let tofu = dir.path().join("tofu");
+    // `init` and `apply` say they started, then wait to be let go.
+    std::fs::write(
+        &tofu,
+        r#"#!/bin/sh
+case "$1" in
+  version) echo '{"terraform_version":"1.13.1"}' ;;
+  init|apply)
+    touch "$GATES/$1"
+    while [ ! -e "$GATES/go-$1" ]; do sleep 0.02; done
+    [ "$1" = apply ] && echo '{"version":4,"serial":5,"lineage":"l"}' > "$STATE_FILE"
+    ;;
+esac
+exit 0
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&tofu, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let exec = Arc::new(ExecutorConfig {
+        runtime: ToolRuntime::new(RuntimeKind::Local, None, tofu, None),
+        provider_cache: dir.path().join("cache"),
+        poll_interval: Duration::from_secs(60),
+        proxmox_timeout: Duration::from_secs(1),
+        retry_delay: Duration::from_millis(1),
+        server: Default::default(),
+        nix: Default::default(),
+    });
+    std::fs::create_dir_all(dir.path().join("work")).unwrap();
+    let work = dir.path().join("work").canonicalize().unwrap();
+    let manager = AttemptManager::new(
+        work.clone(),
+        Outbox::open(dir.path().join("outbox")).unwrap(),
+        exec,
+    );
+
+    let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
+    let input = serde_json::json!({
+        "root": ".",
+        "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate"), "GATES": gates },
+    });
+    let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());
+    apply.mutating = Some(true);
+    apply.files_tar_gz = archive::pack(&[("main.tf", b"".as_slice())]).unwrap();
+    apply.artifacts = vec![octopushy_proto::v1::Artifact {
+        name: "plan.tar.gz".into(),
+        sha256: crate::tls::sha256_hex(&plan),
+        content: plan,
+    }];
+    manager.accept(apply);
+
+    wait_for(&gates.join("init")).await;
+    let during_init = recovered_now(&work, "a1");
+    assert_eq!(
+        during_init.outcome(),
+        Outcome::Failed,
+        "{}",
+        during_init.error
+    );
+    assert!(
+        during_init.error.contains("nothing ran"),
+        "{}",
+        during_init.error
+    );
+
+    std::fs::write(gates.join("go-init"), b"").unwrap();
+    wait_for(&gates.join("apply")).await;
+    let during_apply = recovered_now(&work, "a1");
+    assert_eq!(
+        during_apply.outcome(),
+        Outcome::Uncertain,
+        "{}",
+        during_apply.error
+    );
+
+    std::fs::write(gates.join("go-apply"), b"").unwrap();
+    let mut c = Collector::default();
+    let done = c.result(&manager, "a1").await;
+    assert_eq!(done.outcome(), Outcome::Succeeded, "{}", done.error);
+}
+
+#[tokio::test]
+async fn an_attempt_whose_change_marker_cannot_be_written_changes_nothing() {
+    let h = harness();
+    h.manager.accept(assignment(
+        "c1",
+        "test",
+        "change",
+        r#"{"before":200,"ms":0}"#,
+    ));
+    let ws = workspace::dir(&h.work, "c1");
+    for _ in 0..100 {
+        if matches!(workspace::read(&ws), Ok(Some(m)) if m.phase == workspace::Phase::Running) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // The marker is gone before the change would start: it must not start.
+    std::fs::remove_file(ws.join(workspace::MARKER)).unwrap();
+    let mut c = Collector::default();
+    let r = c.result(&h.manager, "c1").await;
+    assert_eq!(r.outcome(), Outcome::Failed);
+    assert!(r.error.contains("not started"), "{}", r.error);
+}
+
+#[tokio::test]
+async fn the_servers_flag_decides_whether_an_attempt_is_a_change() {
+    let h = harness();
+    let mut c = Collector::default();
+    let started = |c: &Collector, id: &str| {
+        c.msgs
+            .iter()
+            .any(|m| matches!(&m.kind, Some(Kind::Started(s)) if s.attempt_id == id))
+    };
+
+    // The agent calls `test/sleep` a read; the server says it is a change.
+    let mut change = assignment("change", "test", "sleep", r#"{"ms":60000}"#);
+    change.mutating = Some(true);
+    h.manager.accept(change);
+    // The agent calls `test/mutate` a change; the server says it is a read.
+    let mut read = assignment("read", "test", "mutate", r#"{"ms":0}"#);
+    read.mutating = Some(false);
+    h.manager.accept(read);
+    // No flag, from an older server: the agent's table.
+    h.manager
+        .accept(assignment("old", "test", "mutate", r#"{"ms":0}"#));
+    let marker = |id: &str| {
+        workspace::read(&workspace::dir(&h.work, id))
+            .unwrap()
+            .unwrap()
+            .mutating
+    };
+    assert_eq!(marker("change"), Some(true));
+    assert_eq!(marker("read"), Some(false));
+    assert_eq!(marker("old"), Some(true));
+
+    for _ in 0..200 {
+        c.poll(&h.manager);
+        if started(&c, "change") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // A normal cancel never interrupts a change; Force stop does, and leaves it uncertain.
+    h.manager.cancel("change");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    c.poll(&h.manager);
+    assert!(
+        c.find("change").is_none(),
+        "a normal cancel stopped a change"
+    );
+    h.manager.cancel_requested("change", true);
+    assert_eq!(
+        c.result(&h.manager, "change").await.outcome(),
+        Outcome::Uncertain
+    );
 }

@@ -658,6 +658,8 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     tofu.version().await?;
     tofu.init(lock.is_some()).await?;
     let plan_arg = tofu.path(&plan_path)?;
+    // Everything above changes nothing outside the workspace; from here on a restart is uncertain.
+    ctx.begin_change()?;
     let watcher = tokio::spawn(state::watch(
         ctx.workspace.clone(),
         cfg.poll_interval,

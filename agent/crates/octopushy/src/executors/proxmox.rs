@@ -899,6 +899,8 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             input.vmid,
             word(input.protection)
         ));
+        // Every request above is a read; the PUT is the first and only write.
+        ctx.begin_change()?;
         write_protection(cfg, ctx, &c, &kind, &vm.node, input.vmid, input.protection).await?;
     }
     let now = match protection_of(&c, &kind, &vm.node, input.vmid).await {

@@ -77,6 +77,53 @@ public class AccessRotationTests(PostgresFixture postgres) : IClassFixture<Postg
     private static JsonNode Input(Assignment assignment) => JsonNode.Parse(assignment.InputJson)!;
 
     [Fact]
+    public async Task Each_assignment_says_whether_it_is_a_change_as_its_attempt_records_it()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        await ConfigureRunTests.SetKeysAsync(server);
+        using var http = server.CreateClient();
+        var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
+        (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync(http);
+        var seen = new List<Assignment>();
+
+        var plan = await agent.NextAsync("preview");
+        seen.Add(plan);
+        await agent.ReportAsync(plan, Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact());
+        var apply = await agent.NextAsync("apply");
+        seen.Add(apply);
+        await agent.ReportAsync(apply, Outcome.Succeeded);
+        var verifyGuest = await agent.NextAsync("verify-guest");
+        seen.Add(verifyGuest);
+        await agent.ReportAsync(verifyGuest, Outcome.Succeeded);
+        await server.TickAsync();
+        var resource = (await server.ResourceAsync(Guest)).Id;
+
+        await server.Services.GetRequiredService<Planner>().RotateAccessAsync(resource, CancellationToken.None);
+        await server.TickAsync();
+        await ConfigureRunTests.PreviewAsync(agent);
+        // A playbook that only logs in is an "ansible" "run" the server calls a read.
+        var verifyCurrent = await agent.NextAsync("run");
+        seen.Add(verifyCurrent);
+        Assert.Equal(GuestAccessPlaybooks.Verify, Input(verifyCurrent)["playbook"]!.GetValue<string>());
+        await agent.ReportAsync(verifyCurrent, Outcome.Succeeded, ConfigureRunTests.Recap());
+        var authorize = await agent.NextAsync("run");
+        seen.Add(authorize);
+        Assert.Equal(GuestAccessPlaybooks.Authorize, Input(authorize)["playbook"]!.GetValue<string>());
+
+        Assert.All(seen, a => Assert.True(a.HasMutating, $"{a.Executor}/{a.Action} carries no flag"));
+        Assert.False(plan.Mutating);
+        Assert.True(apply.Mutating);
+        Assert.False(verifyGuest.Mutating);
+        Assert.False(verifyCurrent.Mutating);
+        Assert.True(authorize.Mutating);
+        // The flag is the attempt's own, which decides whether the server holds a lost attempt uncertain.
+        var recorded = await WithDbAsync(server, db => db.Attempts.AsNoTracking().ToDictionaryAsync(a => a.Id.ToString(), a => a.Mutating));
+        Assert.All(seen, a => Assert.Equal(recorded[a.AttemptId], a.Mutating));
+    }
+
+    [Fact]
     public async Task A_guest_whose_only_ansible_work_is_a_service_rotates_its_key_as_any_other()
     {
         // Its workflow has no setup stage: its key came with its service's Ansible stage.

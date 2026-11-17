@@ -17,10 +17,41 @@ again on each new connection while an attempt runs. `Hello.capabilities` lists f
 that are not executors; a controller sends built-in OpenTofu state work only to agents
 that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 
+### Changes and reads: `Assignment.mutating`
+
+`Assignment.mutating` says whether the attempt may change infrastructure. The controller
+sets it from the attempt's own record, the same flag that decides on its side whether a
+lost or cancelled attempt is uncertain. So an `ansible` `run` that only verifies a login
+is a read, and a playbook that changes the guest is a change. The agent follows the flag
+when it is set, either way. When it is absent, from an older controller, the agent decides
+by executor and action: `opentofu` `apply`, `proxmox` `set-protection` and every
+`ansible` `run` are changes. An older agent ignores the flag and uses that table.
+
+### Restarts
+
+The agent keeps a marker per attempt in its workspace, written durably (file and directory
+entry synced) when the attempt is accepted and again when it starts. For `opentofu`
+`apply`, `ansible` `run` and `proxmox` `set-protection`, it writes it once more right before
+the first thing that changes anything: the `tofu apply` process, each `ansible-playbook`
+process, and the protection `PUT`. If that write fails, the change is not started and the
+attempt fails. What a restart reports for an attempt it lost:
+
+| Marker | Outcome |
+|---|---|
+| Accepted, not started | `failed` |
+| Started, a read | `failed` |
+| Started, a change of an action above, before its change started (an image pull, `tofu init`, a Proxmox read) | `failed`, "nothing ran" |
+| Started, a change, after its change started | `uncertain` |
+| Started, a change of any other action, or a marker from an older agent | `uncertain` |
+| Missing a field, torn or unreadable | `uncertain` |
+
+An interrupted `apply` reports the state in its workspace, whatever the outcome.
+
 ### Cancellation and operator Force stop
 
 Normal `CancelAttempt`, with `force` absent or false, cancels queued work and
-read-only attempts. It never interrupts a running mutation. Lease loss and agent
+read-only attempts. It never interrupts a running mutation, which is any attempt that
+`Assignment.mutating` calls a change, from its start. Lease loss and agent
 draining do not override that rule.
 
 An agent advertising `forced-mutation-stop-v1` accepts `CancelAttempt.force=true`
@@ -216,6 +247,7 @@ tells the controller that protection did not change. Setting one option to one v
 idempotent, so a PUT that may have reached Proxmox is sent again, up to three times in all.
 When none is answered, the agent reads the value back: it succeeds when Proxmox reports the
 value asked for, and is `uncertain` otherwise. A PUT Proxmox rejected is not sent again.
+An agent restart before the first PUT, during the reads, is `failed`; after it, `uncertain`.
 
 The controller sends it for the `unprotect` step with `protection: false`, for the
 `reprotect` step with `protection: true`, and for an attach run's `protect` step with
@@ -449,7 +481,8 @@ Output:
 Sensitive outputs are listed by name in `sensitiveOutputs` and left out of
 `outputs`. A failed apply is `failed`; OpenTofu's state records what it did, and the
 next plan shows what is left. An apply interrupted by an agent restart is reported
-as `uncertain` once the agent is back.
+as `uncertain` once the agent is back, or `failed` if the restart came before
+`tofu apply` started, as during the image pull or `tofu init` (see [Restarts](#restarts)).
 
 ## `ansible`
 
@@ -568,7 +601,9 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 | Killed, or ended any other way without a recap | `uncertain` |
 | Past `timeoutMinutes`, which is stopped with SIGTERM | `uncertain` |
 
-An attempt interrupted by an agent restart is `uncertain`, as for other mutating actions.
+An attempt interrupted by an agent restart is `uncertain` once the playbook has started, as
+for other mutating actions, and `failed` before, as during the image pull. A run the controller
+sends as a read, `mutating` false, is `failed` either way (see [Restarts](#restarts)).
 With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
 restart for attempts it lost.
 

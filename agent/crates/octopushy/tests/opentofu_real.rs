@@ -77,6 +77,8 @@ async fn run(
     };
     let workspace = dir.join(id);
     std::fs::create_dir_all(&workspace).unwrap();
+    octopushy::attempts::workspace::init(&workspace, id, "opentofu", action, true).unwrap();
+    octopushy::attempts::workspace::mark_running(&workspace).unwrap();
     let ctx = ExecContext {
         attempt_id: id.into(),
         action: action.into(),

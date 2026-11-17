@@ -210,6 +210,7 @@ impl AttemptManager {
         let cancel = CancellationToken::new();
         let snapshots = Snapshots::default();
         let safe = is_safe_id(&id);
+        let mutating = effective_mutating(&assignment);
         {
             let mut entries = self.entries.lock().unwrap();
             if let Some(existing) = entries.get_mut(&id) {
@@ -230,7 +231,7 @@ impl AttemptManager {
                     action: assignment.action.clone(),
                     state: State::Queued,
                     started: false,
-                    mutating: executors::is_mutating(&assignment.executor, &assignment.action),
+                    mutating,
                     force_stopped: false,
                     cancel: cancel.clone(),
                     logs,
@@ -264,6 +265,7 @@ impl AttemptManager {
             &id,
             &assignment.executor,
             &assignment.action,
+            mutating,
         ) {
             Ok(ws) => ws,
             Err(e) => {
@@ -663,6 +665,14 @@ fn bound_result(result: &mut AttemptResult, mutating: bool) {
     if result.encoded_len() > MAX_RESULT_BYTES {
         result.artifacts.clear();
     }
+}
+
+/// Whether an assignment may change infrastructure: the server's word when it gives one, which
+/// can make a playbook that only verifies a read, and the agent's own table for an older server.
+fn effective_mutating(assignment: &Assignment) -> bool {
+    assignment
+        .mutating
+        .unwrap_or_else(|| executors::is_mutating(&assignment.executor, &assignment.action))
 }
 
 fn result(id: &str, outcome: Outcome, error: &str) -> AttemptResult {

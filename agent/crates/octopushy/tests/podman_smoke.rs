@@ -120,6 +120,8 @@ output "secret" {
     let run = |id: &'static str, action: &'static str, artifacts| {
         let ws = dir.path().join("work").join(id);
         std::fs::create_dir_all(&ws).unwrap();
+        octopushy::attempts::workspace::init(&ws, id, "opentofu", action, true).unwrap();
+        octopushy::attempts::workspace::mark_running(&ws).unwrap();
         let (log, buffer) = logger(&[SECRET]);
         let ctx = ExecContext {
             attempt_id: id.into(),

@@ -37,7 +37,7 @@ public class ConfigureRunTests(PostgresFixture postgres) : IClassFixture<Postgre
         return (server, agent, http);
     }
 
-    private static async Task SetKeysAsync(ServerHarness server)
+    internal static async Task SetKeysAsync(ServerHarness server)
     {
         await server.SetSecretAsync("access/app/ssh-key", SshKey);
         await server.SetPlainAsync("access/app/host-key", HostKey);
