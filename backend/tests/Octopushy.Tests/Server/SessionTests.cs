@@ -14,8 +14,7 @@ using Octopushy.Server.Store;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Sessions that sign-out revokes everywhere, that end however often they are used, and the keys that sign them.</summary>
-[Collection(PostgresCollection.Name)]
-public class SessionTests(PostgresFixture postgres)
+public class SessionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Grants = "/api/auth/operator-tokens";
 
