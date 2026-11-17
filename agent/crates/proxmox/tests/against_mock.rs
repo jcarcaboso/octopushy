@@ -239,3 +239,97 @@ async fn unreachable_endpoint_is_a_transport_error() {
     assert!(err.is_transient());
     assert!(!err.to_string().contains("s3cr3t"));
 }
+
+/// A client that tries a GET three times, with waits too short to notice, and counts them.
+fn retrying(c: Client) -> (Client, std::sync::Arc<std::sync::atomic::AtomicU32>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let waits = Arc::new(AtomicU32::new(0));
+    let counted = waits.clone();
+    let c = c.with_get_retry(octopushy_proxmox::GetRetry {
+        tries: 3,
+        delay: Duration::from_millis(1),
+        wait: Arc::new(
+            move |r: &octopushy_proxmox::Retrying<'_>| -> octopushy_proxmox::WaitFuture {
+                assert!(r.error.is_transient(), "{}", r.error);
+                counted.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { true })
+            },
+        ),
+    });
+    (c, waits)
+}
+
+#[tokio::test]
+async fn a_get_that_fails_on_the_server_once_is_tried_again() {
+    let mock = start_mock().await;
+    let (c, waits) = retrying(client(&mock, &mock.token(), Tls::Insecure));
+    let config = "/nodes/korriban/qemu/210/config";
+    mock.fail("GET", config, 502, 1);
+
+    let vm = c.vm_config("korriban", 210).await.unwrap();
+
+    assert!(vm.protection);
+    assert_eq!(mock.requests("GET", config), 2);
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // Three tries in all, then the last error.
+    mock.fail("GET", config, 500, 3);
+    let e = c.vm_config("korriban", 210).await.unwrap_err();
+    assert!(matches!(e, Error::Status { status: 500, .. }), "{e:?}");
+    assert_eq!(mock.requests("GET", config), 5);
+}
+
+#[tokio::test]
+async fn a_get_is_tried_once_without_a_retry_or_when_proxmox_answered() {
+    let mock = start_mock().await;
+    let plain = client(&mock, &mock.token(), Tls::Insecure);
+    mock.fail("GET", "/version", 503, 1);
+    assert!(plain.version().await.is_err());
+    assert_eq!(mock.requests("GET", "/version"), 1);
+
+    // A missing VM is Proxmox's answer, not a failure: it is not asked again.
+    let (c, waits) = retrying(plain);
+    assert!(matches!(
+        c.vm_config("korriban", 999).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(mock.requests("GET", "/nodes/korriban/qemu/999/config"), 1);
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_put_or_post_that_fails_on_the_server_is_never_sent_again() {
+    let mock = start_mock().await;
+    let (c, waits) = retrying(client(&mock, &mock.token(), Tls::Insecure));
+    let config = "/nodes/korriban/qemu/210/config";
+    mock.fail("PUT", config, 500, 1);
+    let e = c
+        .set_vm_protection("korriban", 210, false)
+        .await
+        .unwrap_err();
+    assert!(e.is_transient(), "{e:?}");
+    assert_eq!(mock.requests("PUT", config), 1);
+    assert!(mock.vm(210).unwrap().protection);
+
+    let ct = "/nodes/moraband/lxc/220/config";
+    mock.fail("PUT", ct, 500, 1);
+    assert!(c.set_ct_protection("moraband", 220, true).await.is_err());
+    assert_eq!(mock.requests("PUT", ct), 1);
+
+    let exec = "/nodes/korriban/qemu/210/agent/exec";
+    mock.fail("POST", exec, 500, 1);
+    assert!(
+        c.guest_exec("korriban", 210, &["true".into()], None)
+            .await
+            .is_err()
+    );
+    assert_eq!(mock.requests("POST", exec), 1);
+
+    // The guest agent forgets an exited process once it reports it, so its status is read once.
+    let status = "/nodes/korriban/qemu/210/agent/exec-status";
+    mock.fail("GET", status, 500, 1);
+    assert!(c.guest_exec_status("korriban", 210, 1).await.is_err());
+    assert_eq!(mock.requests("GET", status), 1);
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

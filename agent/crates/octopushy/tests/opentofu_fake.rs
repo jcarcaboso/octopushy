@@ -37,6 +37,14 @@ case "$1" in
   version)
     echo '{"terraform_version":"1.13.1","platform":"linux_amd64","provider_selections":{}}' ;;
   init)
+    if [ -n "${FAKE_INIT_FAILS:-}" ]; then
+      n=$(cat "$REC/init-fails" 2>/dev/null || echo 0)
+      if [ "$n" -lt "$FAKE_INIT_FAILS" ]; then
+        echo $((n + 1)) > "$REC/init-fails"
+        echo "Error: Failed to query available provider packages: 502 Bad Gateway" >&2
+        exit 1
+      fi
+    fi
     [ -f octopushy_backend.tf.json ] || { echo "no backend file" >&2; exit 1; }
     cp octopushy_backend.tf.json "$REC/backend.json"
     cp octopushy.auto.tfvars.json "$REC/tfvars.json"
@@ -127,6 +135,7 @@ impl Fixture {
             provider_cache: dir.path().join("cache"),
             poll_interval: Duration::from_millis(10),
             proxmox_timeout: Duration::from_secs(1),
+            retry_delay: Duration::from_millis(1),
             server: Default::default(),
             nix: Default::default(),
         };
@@ -1338,4 +1347,75 @@ async fn normal_cancel_leaves_apply_running_but_force_stops_and_saves_state() {
     assert!(String::from_utf8_lossy(&state.content).contains("\"serial\":10"));
     assert!(fx.rec.join("stopped").exists());
     assert!(manager.is_idle());
+}
+
+fn count(fx: &Fixture, step: &str) -> usize {
+    fx.read("args.log")
+        .lines()
+        .filter(|l| l.split(' ').next() == Some(step))
+        .count()
+}
+
+#[tokio::test]
+async fn a_failed_init_is_tried_again_and_the_log_says_why() {
+    let fx = Fixture::new();
+    let r = run(
+        &fx,
+        "p-init",
+        "preview",
+        &input(false, json!({ "FAKE_INIT_FAILS": "1" })),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(r.result.is_ok(), "{:?}", r.result);
+    assert_eq!(count(&fx, "init"), 2);
+    assert_eq!(count(&fx, "plan"), 1);
+    assert!(
+        r.lines.iter().any(|(_, l)| l.contains("tofu init failed")
+            && l.contains("502 Bad Gateway")
+            && l.contains("try 2 of 3")),
+        "{:#?}",
+        r.lines
+    );
+
+    // Three tries, then the preview fails on init, naming it.
+    fx.reset();
+    let r = run(
+        &fx,
+        "p-init-3",
+        "preview",
+        &input(false, json!({ "FAKE_INIT_FAILS": "3" })),
+        repo_tar(None),
+        vec![],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&r.result, Err(Failure::Failed { message, .. }) if message.starts_with("tofu init failed")),
+        "{:?}",
+        r.result
+    );
+    assert_eq!(count(&fx, "init"), 3);
+    assert_eq!(count(&fx, "plan"), 0);
+}
+
+#[tokio::test]
+async fn an_apply_is_never_tried_again_though_its_init_is() {
+    let fx = Fixture::new();
+    let result = failed_apply(
+        &fx,
+        json!({ "FAKE_INIT_FAILS": "1", "FAKE_APPLY_EXIT": "1" }),
+    )
+    .await;
+
+    assert!(
+        matches!(&result, Err(Failure::Failed { message, .. }) if message.starts_with("tofu apply failed")),
+        "{result:?}"
+    );
+    // One init for the preview, two for the apply; one apply.
+    assert_eq!(count(&fx, "init"), 3);
+    assert_eq!(count(&fx, "apply"), 1);
 }

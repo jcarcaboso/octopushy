@@ -31,7 +31,7 @@ use octopushy_proto::v1::Artifact;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::{ExecContext, ExecResult, ExecutorConfig, Failure, Success};
+use super::{ExecContext, ExecResult, ExecutorConfig, Failure, SAFE_TRIES, Success};
 use crate::images::{self, ImageDigest};
 use crate::tls::sha256_hex;
 use crate::tools::{Invocation, Tool, ToolOutput};
@@ -478,8 +478,23 @@ impl Tofu<'_> {
         if readonly_lock {
             args.push("-lockfile=readonly".into());
         }
-        self.run_ok("init", args, false).await?;
-        Ok(())
+        // Init only fetches providers and modules into the root and readies the local backend,
+        // so a registry or network failure is tried again. A stop or a timeout is not.
+        let mut tried = 1;
+        loop {
+            let out = self.run("init", args.clone(), false).await?;
+            if out.code == Some(0) {
+                return Ok(());
+            }
+            let failure = step_failed("init", &out);
+            if tried >= SAFE_TRIES {
+                return Err(failure);
+            }
+            tried += 1;
+            self.ctx
+                .before_retry(self.cfg, "tofu init", failure.message(), tried)
+                .await?;
+        }
     }
 }
 
@@ -508,6 +523,7 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
         ctx,
         prep: &prep,
     };
+    super::pull_image(cfg, ctx, &prep.input.image, prep.deadline).await?;
     let tool_version = tofu.version().await?;
     tofu.init(false).await?;
 
@@ -638,6 +654,7 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             .agent("restored .terraform.lock.hcl from the preview");
     }
 
+    super::pull_image(cfg, ctx, &prep.input.image, prep.deadline).await?;
     tofu.version().await?;
     tofu.init(lock.is_some()).await?;
     let plan_arg = tofu.path(&plan_path)?;

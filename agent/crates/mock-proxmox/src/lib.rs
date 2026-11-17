@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-pub use fixture::{Fixture, FixtureCluster, FixtureNode, FixtureTask, FixtureVm};
+pub use fixture::{Fault, Fixture, FixtureCluster, FixtureNode, FixtureTask, FixtureVm};
 
 /// How to serve the mock.
 #[derive(Debug, Clone)]
@@ -91,6 +91,29 @@ impl RunningMock {
     /// Changes the fixture in place.
     pub fn update(&self, change: impl FnOnce(&mut Fixture)) {
         change(&mut self.state.lock().unwrap());
+    }
+
+    /// Answers the next `times` requests of `method` to `path` (below `/api2/json`) with `status`.
+    pub fn fail(&self, method: &str, path: &str, status: u16, times: usize) {
+        self.state.lock().unwrap().faults.push(Fault {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            status,
+            message: "proxy loop detected".to_owned(),
+            times,
+        });
+    }
+
+    /// How many API requests of `method` to `path` (below `/api2/json`) were answered.
+    pub fn requests(&self, method: &str, path: &str) -> usize {
+        let wanted = format!("{method} {path}");
+        self.state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|r| **r == wanted)
+            .count()
     }
 
     /// Waits until the server task ends (it normally runs forever).

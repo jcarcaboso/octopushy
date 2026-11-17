@@ -13,6 +13,7 @@ fn prober(kind: RuntimeKind) -> Prober {
         provider_cache: PathBuf::from("/nonexistent"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
+        retry_delay: Duration::from_millis(1),
         server: Default::default(),
         nix: Default::default(),
     }))
@@ -494,6 +495,7 @@ async fn a_stuck_relay_is_killed_on_timeout_and_on_cancel() {
         provider_cache: PathBuf::from("/nonexistent"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
+        retry_delay: Duration::from_millis(1),
         server: Default::default(),
         nix: Default::default(),
     }));
@@ -545,6 +547,7 @@ async fn a_runtime_that_does_not_answer_before_the_relay_starts_holds_no_probe()
         provider_cache: PathBuf::from("/nonexistent"),
         poll_interval: Duration::from_secs(1),
         proxmox_timeout: Duration::from_secs(5),
+        retry_delay: Duration::from_millis(1),
         server: Default::default(),
         nix: Default::default(),
     }));

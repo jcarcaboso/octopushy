@@ -79,6 +79,7 @@ impl Fixture {
             provider_cache: dir.path().join("cache"),
             poll_interval: Duration::from_millis(10),
             proxmox_timeout: Duration::from_secs(1),
+            retry_delay: Duration::from_millis(1),
             server: Default::default(),
             nix: Default::default(),
         };

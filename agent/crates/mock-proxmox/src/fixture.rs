@@ -54,6 +54,23 @@ pub struct Fixture {
     /// What `GET /nodes/{node}/time` says it is, in Unix seconds; the mock's clock by default.
     #[serde(default)]
     pub time: Option<u64>,
+    /// Failures to answer with, before the API looks at a request.
+    #[serde(skip)]
+    pub faults: Vec<Fault>,
+    /// Every API request answered, as `METHOD /path` below `/api2/json`, in order.
+    #[serde(skip)]
+    pub requests: Vec<String>,
+}
+
+/// An error the API answers `times` requests with, for requests of `method` to `path` (below
+/// `/api2/json`, such as `/nodes/n1/qemu/210/config`), as a server that fails for a while does.
+#[derive(Debug, Clone)]
+pub struct Fault {
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+    pub message: String,
+    pub times: usize,
 }
 
 /// One task in a node's history.

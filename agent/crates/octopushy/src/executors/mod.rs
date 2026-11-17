@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::attempts::logs::AttemptLogger;
 use crate::images::ServerLink;
-use crate::tools::ToolRuntime;
+use crate::tools::{self, ToolRuntime};
 
 /// Executors this binary provides, as announced in `Hello`.
 pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "ansible", "nix"];
@@ -42,10 +42,24 @@ pub struct ExecutorConfig {
     pub poll_interval: Duration,
     /// Timeout of each Proxmox API request.
     pub proxmox_timeout: Duration,
+    /// The wait before a step that is safe to repeat is tried again, doubled for each later try.
+    pub retry_delay: Duration,
     /// Where images go to and come from.
     pub server: ServerLink,
     /// The `nix` executor's store and its limit.
     pub nix: nix::NixSettings,
+}
+
+/// How many times a step that is safe to repeat is tried: `tofu init`, an image pull, a Proxmox
+/// GET and the protection PUT. Nothing that changes infrastructure is ever tried again.
+pub const SAFE_TRIES: u32 = 3;
+
+impl ExecutorConfig {
+    /// The wait before try `next` (from 2) of a step that is safe to repeat.
+    pub fn retry_wait(&self, next: u32) -> Duration {
+        self.retry_delay
+            .saturating_mul(1 << next.saturating_sub(2).min(16))
+    }
 }
 
 /// The secrets of one attempt, by name. `Debug` shows only the names.
@@ -104,12 +118,63 @@ impl ExecContext {
         }
     }
 
+    /// Logs why `what` failed and that it is tried again, then waits before try `next` of
+    /// [`SAFE_TRIES`]. Only for steps that change nothing. Fails as [`ExecContext::sleep`] does.
+    pub async fn before_retry(
+        &self,
+        cfg: &ExecutorConfig,
+        what: &str,
+        why: &str,
+        next: u32,
+    ) -> Result<(), Failure> {
+        let delay = cfg.retry_wait(next);
+        self.log.agent(format!(
+            "{what} failed: {why}; trying again in {:.1}s (try {next} of {SAFE_TRIES})",
+            delay.as_secs_f64()
+        ));
+        self.sleep(delay).await
+    }
+
     pub fn check_cancelled(&self) -> Result<(), Failure> {
         if self.cancel.is_cancelled() {
             Err(Failure::Cancelled)
         } else {
             Ok(())
         }
+    }
+}
+
+/// The tool's image, pulled in a step of its own before the tool first runs, so a registry
+/// failure is named as one and tried again. Only for a container runtime. The pull gives up at
+/// `deadline`.
+pub async fn pull_image(
+    cfg: &ExecutorConfig,
+    ctx: &ExecContext,
+    image: &str,
+    deadline: tokio::time::Instant,
+) -> Result<(), Failure> {
+    if !cfg.runtime.is_container() || image.trim().is_empty() {
+        return Ok(());
+    }
+    let mut tried = 1;
+    loop {
+        let pulled =
+            tokio::time::timeout_at(deadline, cfg.runtime.pull(image, &ctx.log, &ctx.cancel))
+                .await
+                .map_err(|_| Failure::msg(format!("pulling the image {image} timed out")))?;
+        let why = match pulled? {
+            tools::Pull::Done => return Ok(()),
+            tools::Pull::Cancelled => return Err(Failure::Cancelled),
+            tools::Pull::Failed(why) => why,
+        };
+        if tried >= SAFE_TRIES {
+            return Err(Failure::msg(format!(
+                "pulling the image {image} failed {SAFE_TRIES} times: {why}"
+            )));
+        }
+        tried += 1;
+        ctx.before_retry(cfg, &format!("pulling the image {image}"), &why, tried)
+            .await?;
     }
 }
 
