@@ -228,10 +228,6 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_expires_at");
 
-                    b.Property<long>("LogLines")
-                        .HasColumnType("bigint")
-                        .HasColumnName("log_lines");
-
                     b.Property<bool>("Mutating")
                         .HasColumnType("boolean")
                         .HasColumnName("mutating");

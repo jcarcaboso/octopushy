@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -28,6 +29,29 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     // One gate per attempt, for as long as anything holds it: a writer, a close or a delete. An entry goes only when its last
     // user leaves and nothing is registered to mask with, so a second gate never runs beside a writer that still holds the first.
     private readonly Dictionary<Guid, LogGate> _gates = new();
+
+    /// <summary>Lines between two entries of a log's index.</summary>
+    internal const int Stride = 1000;
+
+    /// <summary>
+    /// How many logs' indexes are kept, least recently used first to go. A log of 64 MiB, the default limit, holds at most
+    /// 1.4 million lines of 49 bytes, the shortest a line can be: 1,370 entries of 8 bytes, about 11 KiB, or 22 KiB with what
+    /// a list keeps spare. 1,024 of them take at most 22 MiB.
+    /// </summary>
+    internal const int IndexedAttempts = 1024;
+
+    // Kept apart from the gates, which go when nothing holds them: a log is read through once, not once per batch or per view.
+    private readonly Dictionary<Guid, LogIndex> _indexes = new();
+    private long _uses;
+
+    /// <summary>How many times a log was read through to index it.</summary>
+    internal long Scans;
+
+    /// <summary>The bytes reads of lines took from log files.</summary>
+    internal long BytesRead;
+
+    /// <summary>The lines reads parsed.</summary>
+    internal long LinesParsed;
     private readonly ConcurrentDictionary<Guid, Registration> _secrets = new();
 
     /// <summary>What a diagnostic becomes when an attempt's secrets could not all be recovered to mask it.</summary>
@@ -120,89 +144,148 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     /// </summary>
     public Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken,
         Func<Task<bool>>? stillKept = null) =>
-        UnderGateAsync(attemptId, async gate =>
+        UnderGateAsync(attemptId, async _ =>
         {
-            var path = PathFor(attemptId);
             if (stillKept is not null && !await stillKept())
-                return gate.Next ?? CountLines(path);
-            if (gate.Next is null)
-                Measure(path, gate);
-            var next = gate.Next!.Value;
-            if (gate.Full)
-                return next;
+                return IndexUnderGate(attemptId).Lines;
+            var index = IndexUnderGate(attemptId);
+            if (index.Full || firstSequence + lines.Count <= index.Lines)
+                return index.Lines;
             Directory.CreateDirectory(_directory);
-            await using (var writer = new StreamWriter(path, append: true))
+            await using var file = new FileStream(PathFor(attemptId), FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            if (file.Length < index.Bytes)
             {
-                for (var i = 0; i < lines.Count; i++)
-                {
-                    var sequence = firstSequence + i;
-                    if (sequence < next)
-                    {
-                        continue;
-                    }
-
-                    // Masked under the gate: a close waits for this write, so its values are not forgotten halfway through it.
-                    var (unixMs, stream, text) = lines[i];
-                    var record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, MaskDiagnostic(attemptId, text)), Json);
-                    var bytes = Encoding.UTF8.GetByteCount(record) + 1;
-                    if (gate.Bytes + bytes > _maxBytes)
-                    {
-                        record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, ServerStream,
-                            $"Octopushy dropped the rest of this log: it reached {_maxBytes} bytes, the limit Octopushy:AgentChannel:MaxLogBytesPerAttempt. The attempt itself carries on."), Json);
-                        bytes = Encoding.UTF8.GetByteCount(record) + 1;
-                        gate.Full = true;
-                    }
-
-                    await writer.WriteLineAsync(record);
-                    gate.Bytes += bytes;
-                    next++;
-                    if (gate.Full)
-                        break;
-                }
+                // Cut or replaced behind the store's back: what the file holds now is the log.
+                Forget(attemptId);
+                index = IndexUnderGate(attemptId);
+                if (index.Full)
+                    return index.Lines;
             }
 
-            gate.Next = next;
+            // Bytes past the last whole line are a line torn by a crash or a failed write. The next line starts where it began.
+            if (file.Length > index.Bytes)
+                file.SetLength(index.Bytes);
+            file.Seek(index.Bytes, SeekOrigin.Begin);
+
+            var (next, bytes, full) = (index.Lines, index.Bytes, false);
+            var written = new ArrayBufferWriter<byte>();
+            var sizes = new List<long>();
+            for (var i = 0; i < lines.Count && !full; i++)
+            {
+                if (firstSequence + i < next)
+                    continue;
+
+                // Masked under the gate: a close waits for this write, so its values are not forgotten halfway through it.
+                var (unixMs, stream, text) = lines[i];
+                var record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, MaskDiagnostic(attemptId, text)), Json);
+                var size = Encoding.UTF8.GetByteCount(record) + 1;
+                if (bytes + size > _maxBytes)
+                {
+                    record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, ServerStream,
+                        $"Octopushy dropped the rest of this log: it reached {_maxBytes} bytes, the limit Octopushy:AgentChannel:MaxLogBytesPerAttempt. The attempt itself carries on."), Json);
+                    size = Encoding.UTF8.GetByteCount(record) + 1;
+                    full = true;
+                }
+
+                Encoding.UTF8.GetBytes(record, written);
+                written.Write("\n"u8);
+                sizes.Add(size);
+                bytes += size;
+                next++;
+            }
+
+            try
+            {
+                await file.WriteAsync(written.WrittenMemory, cancellationToken);
+                await file.FlushAsync(cancellationToken);
+            }
+            catch
+            {
+                // How much of it reached the file is unknown: the file says, the next time it is needed.
+                Forget(attemptId);
+                throw;
+            }
+
+            // Readers see the lines once they are whole in the file, never before.
+            index.Append(sizes, full);
             return next;
         }, cancellationToken);
 
-    /// <summary>Reads what the gate keeps of a log from its file: its lines, its bytes, and whether its last line says it is full.</summary>
-    private static void Measure(string path, LogGate gate)
-    {
-        var (count, last) = (0L, (string?)null);
-        if (File.Exists(path))
-        {
-            foreach (var line in File.ReadLines(path))
-            {
-                count++;
-                last = line;
-            }
-        }
-
-        gate.Next = count;
-        gate.Bytes = File.Exists(path) ? new FileInfo(path).Length : 0;
-        gate.Full = last is not null && JsonSerializer.Deserialize<LogLineRecord>(last, Json)?.Stream == ServerStream;
-    }
-
+    /// <summary>
+    /// Up to <paramref name="limit"/> lines after the line numbered <paramref name="after"/>, in order: -1 for the first ones. It
+    /// starts reading at the index entry before the first line wanted, so a line far into a long log costs no more than one
+    /// near its start, and stops at the last line written whole when it started.
+    /// </summary>
     public async Task<List<LogLineRecord>> ReadAsync(Guid attemptId, long after, int limit, CancellationToken cancellationToken)
     {
-        var path = PathFor(attemptId);
-        var result = new List<LogLineRecord>();
-        if (!File.Exists(path))
+        // Each line's sequence is its number in the file: the store numbers them as it writes them.
+        var first = after < 0 ? 0 : after == long.MaxValue ? after : after + 1;
+        for (var tries = 0; ; tries++)
         {
-            return result;
+            var index = await IndexAsync(attemptId, cancellationToken);
+            var (start, end, skip) = (0L, 0L, 0L);
+            lock (index)
+            {
+                if (first < index.Lines)
+                    (start, end, skip) = (index.Starts[(int)(first / Stride)], index.Bytes, first % Stride);
+            }
+
+            var result = end > start && limit > 0
+                ? await ReadLinesAsync(PathFor(attemptId), start, end, new LineCollector(skip, after, limit), cancellationToken)
+                : [];
+            // Deleted, or its index let go, while it was read: the file read may already be a new log. Read again.
+            if (!index.Retired)
+                return result;
+            if (tries == 2)
+                return [];
+        }
+    }
+
+    /// <summary>How many lines the attempt's log holds, the marker of a full log included.</summary>
+    public async Task<long> LineCountAsync(Guid attemptId, CancellationToken cancellationToken)
+    {
+        var index = await IndexAsync(attemptId, cancellationToken);
+        lock (index)
+            return index.Lines;
+    }
+
+    private async Task<List<LogLineRecord>> ReadLinesAsync(string path, long start, long end, LineCollector lines, CancellationToken cancellationToken)
+    {
+        FileStream file;
+        try
+        {
+            file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return lines.Result;
         }
 
-        using var reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
-        while (await reader.ReadLineAsync(cancellationToken) is { } line && result.Count < limit)
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
         {
-            var record = JsonSerializer.Deserialize<LogLineRecord>(line, Json);
-            if (record is not null && record.Sequence > after)
+            await using (file)
             {
-                result.Add(record);
+                file.Seek(start, SeekOrigin.Begin);
+                for (var remaining = end - start; remaining > 0;)
+                {
+                    var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken);
+                    // Shorter than its index says: cut behind the store's back.
+                    if (read == 0)
+                        break;
+                    Interlocked.Add(ref BytesRead, read);
+                    remaining -= read;
+                    if (!lines.Feed(buffer.AsSpan(0, read), ref LinesParsed))
+                        break;
+                }
             }
         }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
 
-        return result;
+        return lines.Result;
     }
 
     /// <summary>
@@ -229,11 +312,126 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
             {
                 // An attempt that never logged anything has no log directory yet.
             }
-            gate.Next = 0;
-            gate.Bytes = 0;
-            gate.Full = false;
+            Forget(attemptId);
             return Task.FromResult(0L);
         }, cancellationToken);
+
+    /// <summary>The attempt's index: the one kept, or one made from its file under its gate, so no line is written meanwhile.</summary>
+    private async Task<LogIndex> IndexAsync(Guid attemptId, CancellationToken cancellationToken)
+    {
+        lock (_indexes)
+        {
+            if (_indexes.TryGetValue(attemptId, out var known))
+            {
+                known.Used = ++_uses;
+                return known;
+            }
+        }
+
+        return await UnderGateAsync(attemptId, _ => Task.FromResult(IndexUnderGate(attemptId)), cancellationToken);
+    }
+
+    /// <summary>The attempt's index, made from its file when none is kept. Only under the attempt's gate.</summary>
+    private LogIndex IndexUnderGate(Guid attemptId)
+    {
+        lock (_indexes)
+        {
+            if (_indexes.TryGetValue(attemptId, out var known))
+            {
+                known.Used = ++_uses;
+                return known;
+            }
+        }
+
+        var index = Scan(PathFor(attemptId));
+        lock (_indexes)
+        {
+            index.Used = ++_uses;
+            _indexes[attemptId] = index;
+            if (_indexes.Count > IndexedAttempts)
+            {
+                var oldest = _indexes.MinBy(e => e.Value.Used);
+                _indexes.Remove(oldest.Key);
+                oldest.Value.Retire();
+            }
+        }
+
+        return index;
+    }
+
+    /// <summary>Lets the attempt's index go; the next use reads the file again. Only under the attempt's gate.</summary>
+    private void Forget(Guid attemptId)
+    {
+        LogIndex? index;
+        lock (_indexes)
+            _indexes.Remove(attemptId, out index);
+        index?.Retire();
+    }
+
+    /// <summary>Reads a log once, without parsing it: where every <see cref="Stride"/>th line starts, how many lines it holds, and whether it is full.</summary>
+    private LogIndex Scan(string path)
+    {
+        Interlocked.Increment(ref Scans);
+        var index = new LogIndex();
+        FileStream file;
+        try
+        {
+            file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return index;
+        }
+
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            using (file)
+            {
+                var (position, lineStart, last) = (0L, 0L, -1L);
+                for (int read; (read = file.Read(buffer, 0, buffer.Length)) > 0; position += read)
+                {
+                    for (var at = 0; buffer.AsSpan(at, read - at).IndexOf((byte)'\n') is var found and >= 0; at += found + 1)
+                    {
+                        if (index.Lines % Stride == 0)
+                            index.Starts.Add(lineStart);
+                        index.Lines++;
+                        last = lineStart;
+                        lineStart = position + at + found + 1;
+                    }
+                }
+
+                // A torn last line is not part of the log: the next write starts where it began.
+                index.Bytes = lineStart;
+                if (last >= 0)
+                {
+                    var tail = new byte[lineStart - last - 1];
+                    file.Seek(last, SeekOrigin.Begin);
+                    file.ReadExactly(tail);
+                    index.Full = Parse(tail)?.Stream == ServerStream;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        return index;
+    }
+
+    private static LogLineRecord? Parse(ReadOnlySpan<byte> line)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<LogLineRecord>(line, Json);
+        }
+        catch (JsonException)
+        {
+            // A line torn by a crash, followed by whole ones before torn lines were cut: it is skipped, and keeps its number.
+            return null;
+        }
+    }
 
     internal IEnumerable<Guid> StoredAttempts() => Directory.Exists(_directory)
         ? Directory.EnumerateFiles(_directory, "*.jsonl").Select(Path.GetFileNameWithoutExtension)
@@ -258,7 +456,7 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
             if (--gate.Users > 0)
                 return;
             // The last user: what was registered only for those who held it goes, and the gate with it unless an attempt
-            // that can still write is registered. A line after its close counts again from the file.
+            // that can still write is registered. The log's index is kept apart, and outlives the gate.
             if (_secrets.TryGetValue(attemptId, out var registration) && registration.Scoped)
                 _secrets.TryRemove(attemptId, out _);
             if (!_secrets.ContainsKey(attemptId))
@@ -267,7 +465,7 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     }
 
     /// <summary>Runs <paramref name="action"/> holding the attempt's one gate. It never waits for anything but that gate.</summary>
-    private async Task<long> UnderGateAsync(Guid attemptId, Func<LogGate, Task<long>> action, CancellationToken cancellationToken)
+    private async Task<T> UnderGateAsync<T>(Guid attemptId, Func<LogGate, Task<T>> action, CancellationToken cancellationToken)
     {
         var gate = Enter(attemptId);
         try
@@ -307,20 +505,105 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
         /// <summary>Who holds or waits for the gate.</summary>
         public int Users;
+    }
 
-        /// <summary>The next line's sequence, once read from the file.</summary>
-        public long? Next;
+    /// <summary>
+    /// Where a log's lines start, one entry every <see cref="Stride"/> lines, with its line count, its bytes and whether it is
+    /// full. Changed only under the attempt's gate, after the lines are whole in the file; read under its own lock.
+    /// </summary>
+    private sealed class LogIndex
+    {
+        /// <summary>The byte offset of line k × <see cref="Stride"/>, at k.</summary>
+        public readonly List<long> Starts = [];
 
-        /// <summary>The bytes the file holds, once <see cref="Next"/> is read.</summary>
+        public long Lines;
+
+        /// <summary>The bytes the whole lines take, where the next line starts.</summary>
         public long Bytes;
 
         /// <summary>Whether the log reached its limit, and says so in its last line.</summary>
         public bool Full;
+
+        /// <summary>Last use, against the store's clock: the least recently used index goes first.</summary>
+        public long Used;
+
+        private bool _retired;
+
+        /// <summary>Whether the log was deleted or the index let go: what a read made from it may belong to a newer log.</summary>
+        public bool Retired
+        {
+            get
+            {
+                lock (this)
+                    return _retired;
+            }
+        }
+
+        public void Retire()
+        {
+            lock (this)
+                _retired = true;
+        }
+
+        public void Append(List<long> sizes, bool full)
+        {
+            lock (this)
+            {
+                foreach (var size in sizes)
+                {
+                    if (Lines % Stride == 0)
+                        Starts.Add(Bytes);
+                    Bytes += size;
+                    Lines++;
+                }
+
+                Full |= full;
+            }
+        }
+    }
+
+    /// <summary>Collects lines from chunks of a log: skips the first ones unparsed, then parses up to the limit.</summary>
+    private sealed class LineCollector(long skip, long after, int limit)
+    {
+        private readonly ArrayBufferWriter<byte> _partial = new();
+
+        public List<LogLineRecord> Result { get; } = [];
+
+        /// <summary>Takes the next chunk; false once the limit is reached.</summary>
+        public bool Feed(ReadOnlySpan<byte> chunk, ref long parsed)
+        {
+            for (var found = chunk.IndexOf((byte)'\n'); found >= 0; found = chunk.IndexOf((byte)'\n'))
+            {
+                if (skip > 0)
+                    skip--;
+                else
+                {
+                    var line = chunk[..found];
+                    if (_partial.WrittenCount > 0)
+                    {
+                        _partial.Write(line);
+                        line = _partial.WrittenSpan;
+                    }
+
+                    Interlocked.Increment(ref parsed);
+                    if (Parse(line) is { } record && record.Sequence > after)
+                        Result.Add(record);
+                    if (Result.Count >= limit)
+                        return false;
+                }
+
+                _partial.ResetWrittenCount();
+                chunk = chunk[(found + 1)..];
+            }
+
+            // The start of a line that ends in the next chunk; one skipped is not kept.
+            if (skip == 0)
+                _partial.Write(chunk);
+            return true;
+        }
     }
 
     private string PathFor(Guid attemptId) => Path.Combine(_directory, $"{attemptId}.jsonl");
-
-    private static long CountLines(string path) => File.Exists(path) ? File.ReadLines(path).LongCount() : 0;
 }
 
 /// <summary>

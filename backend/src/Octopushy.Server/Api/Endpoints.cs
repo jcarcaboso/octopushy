@@ -345,7 +345,7 @@ public static partial class Endpoints
         })
         .WithName("listRuns");
 
-        group.MapGet("/{id:guid}", async Task<Results<Ok<RunDetailDto>, NotFound>> (Guid id, OctopushyDb db, CancellationToken ct) =>
+        group.MapGet("/{id:guid}", async Task<Results<Ok<RunDetailDto>, NotFound>> (Guid id, OctopushyDb db, AttemptLogStore logs, CancellationToken ct) =>
         {
             var run = await db.Runs.AsNoTracking().Include(r => r.Steps).ThenInclude(s => s.Attempts).AsSplitQuery()
                 .FirstOrDefaultAsync(r => r.Id == id, ct);
@@ -361,6 +361,10 @@ public static partial class Endpoints
             var access = new Dictionary<Guid, string?>();
             foreach (var step in run.Steps)
                 access[step.Id] = await NetworkRequirements.CoverageAsync(db, step, context, ct);
+            // Counted by the log store, which keeps each log's count as it writes it: live while the attempt runs.
+            var logLines = new Dictionary<Guid, long>();
+            foreach (var attempt in run.Steps.SelectMany(s => s.Attempts))
+                logLines[attempt.Id] = await logs.LineCountAsync(attempt.Id, ct);
             var steps = run.Steps.OrderBy(s => s.Ordinal).Select(s => new StepDto(
                 s.Id,
                 s.Ordinal,
@@ -379,7 +383,7 @@ public static partial class Endpoints
                 s.Attempts.OrderBy(a => a.Number).Select(a => new AttemptDto(
                     a.Id, a.Number, a.Executor, a.Action, a.Status, a.WaitingReason, a.AgentId,
                     a.AgentId is { } agent ? agents.GetValueOrDefault(agent) : null,
-                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, a.LogLines, a.Mutating)).ToList(),
+                    a.CreatedAt, a.AssignedAt, a.StartedAt, a.FinishedAt, a.Error, a.LateResult, logLines[a.Id], a.Mutating)).ToList(),
                 Views.ConfigurePreview(s, context.PreviousPrepared),
                 s.Stage,
                 access[s.Id]))

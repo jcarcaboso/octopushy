@@ -128,7 +128,7 @@ public class RecoveryTests(PostgresFixture postgres) : IDisposable, IClassFixtur
                     new Step
                     {
                         Id = Guid.NewGuid(), Ordinal = 2, Name = StepNames.Apply, Kind = StepKinds.Agent, Status = StepStatuses.Uncertain,
-                        Attempts = [new Attempt { Id = applyId, RunId = runId, Number = 1, Executor = "opentofu", Action = "apply", Mutating = true, Status = AttemptStatuses.Uncertain, AgentId = agent.Id, LogLines = 1 }],
+                        Attempts = [new Attempt { Id = applyId, RunId = runId, Number = 1, Executor = "opentofu", Action = "apply", Mutating = true, Status = AttemptStatuses.Uncertain, AgentId = agent.Id }],
                     },
                 ],
             });
