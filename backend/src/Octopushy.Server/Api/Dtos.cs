@@ -771,8 +771,8 @@ public sealed record UptimePercentagesDto(double? Day, double? Week, double? Mon
 public sealed record NotificationsDto(IReadOnlyList<NotificationDto> Items);
 
 /// <summary>
-/// One thing an operator is told. <c>Kind</c> is <c>check-down</c>, <c>check-up</c>, <c>run-failed</c> or <c>run-uncertain</c>.
+/// One thing an operator is told. <c>Kind</c> is one of <see cref="Data.NotificationKinds"/>.
 /// <c>Id</c> ascends in the order they were added. <c>ResourceKind</c> is null once the resource is gone.
 /// </summary>
 public sealed record NotificationDto(long Id, string Kind, string Title, string? Body, Guid? ResourceId, string? ResourceKind, Guid? RunId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt, Guid? AgentId);

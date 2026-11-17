@@ -9,7 +9,7 @@ import { mockApi } from "../test/utils";
 import { Notifications } from "./Notifications";
 
 const told = (id: number, title: string, extra: Partial<NotificationItem> = {}): NotificationItem => ({
-  id, kind: "check-down", title, body: null, resourceId: null, resourceKind: null, runId: null, createdAt: "2026-11-16T09:00:00Z", ...extra,
+  id, kind: "check-down", title, body: null, resourceId: null, resourceKind: null, runId: null, agentId: null, createdAt: "2026-11-16T09:00:00Z", ...extra,
 });
 
 describe("notifications", () => {

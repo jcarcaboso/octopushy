@@ -38,9 +38,14 @@ builder.Services.AddScoped<RunTransitionLog>();
 builder.Services.AddDbContext<OctopushyDb>((services, options) => options
     .UseNpgsql(builder.Configuration.GetConnectionString("Octopushy") ?? throw new InvalidOperationException("Set ConnectionStrings:Octopushy."))
     .UseSnakeCaseNamingConvention()
-    .AddInterceptors(services.GetRequiredService<RunTransitionLog>(), new Octopushy.Server.Notifications.NotificationHub(services.GetRequiredService<TimeProvider>()),
-        services.GetRequiredService<SavedWrites>()));
+    .AddInterceptors(services.GetRequiredService<RunTransitionLog>(), new Octopushy.Server.Notifications.NotificationHub(services.GetRequiredService<TimeProvider>(),
+        services.GetRequiredService<Octopushy.Server.Notifications.WebhookSignal>()), services.GetRequiredService<SavedWrites>()));
 builder.Services.AddSingleton<SavedWrites>();
+builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookSignal>();
+builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookSettingsGate>();
+builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookTransport>(_ => new Octopushy.Server.Notifications.WebhookTransport());
+builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookDelivery>();
+builder.Services.AddSingleton<AgentPresence>();
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<KeyEncryptionKey>();
@@ -87,6 +92,9 @@ if (!generatingDocument && settings.RunBackgroundServices)
     builder.Services.AddHostedService(services => services.GetRequiredService<RunHistoryRetention>());
     builder.Services.AddHostedService<ReachabilityRefresher>();
     builder.Services.AddHostedService<Octopushy.Server.Uptime.UptimeRunner>();
+    // Only in the process that owns the database: ServerOwnership is acquired before any hosted service starts, and
+    // neither the migrate command nor the OpenAPI build starts them.
+    builder.Services.AddHostedService(services => services.GetRequiredService<Octopushy.Server.Notifications.WebhookDelivery>());
 }
 
 builder.Services.AddScoped<Views>();
@@ -145,6 +153,9 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy(AccountEndpoints.LoginRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+    // One operator, so one partition: six test events a minute.
+    options.AddPolicy(Octopushy.Server.Notifications.WebhookEndpoints.TestRateLimit, _ => RateLimitPartition.GetFixedWindowLimiter(
+        "webhook-test", _ => new FixedWindowRateLimiterOptions { PermitLimit = 6, Window = TimeSpan.FromMinutes(1) }));
 });
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict);

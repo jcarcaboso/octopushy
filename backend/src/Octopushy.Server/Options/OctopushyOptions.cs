@@ -61,6 +61,24 @@ public sealed class OctopushyOptions
 
     /// <summary>At least this many newest finished runs per resource are kept regardless of age.</summary>
     public int RunRetentionKeep { get; set; } = 50;
+
+    /// <summary>
+    /// The address people open the web app at, such as <c>https://octopushy.example.org</c>: the base of the links a webhook
+    /// sends. Unset, a webhook's events carry no link. Never taken from a request's headers.
+    /// </summary>
+    public string? PublicUrl { get; set; }
+
+    public NotificationOptions Notifications { get; set; } = new();
+}
+
+/// <summary>Notifications sent out of the app. See docs/notifications.md.</summary>
+public sealed class NotificationOptions
+{
+    /// <summary>
+    /// Accept an <c>http://</c> webhook URL, for a receiver on the local network without TLS. Off by default: the events and
+    /// their signature then cross the network in the clear.
+    /// </summary>
+    public bool AllowHttpWebhook { get; set; }
 }
 
 /// <summary>The icons the Services page may show by file name. Octopushy ships none. See docs/service-icons.md.</summary>

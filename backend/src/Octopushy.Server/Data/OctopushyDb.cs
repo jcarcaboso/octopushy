@@ -72,6 +72,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<Notification> Notifications => Set<Notification>();
 
+    public DbSet<WebhookState> Webhooks => Set<WebhookState>();
+
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<RepositorySettings>(e =>
@@ -316,6 +318,14 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.Property(x => x.Id).UseIdentityAlwaysColumn();
             e.Property(x => x.Kind).HasMaxLength(32);
             e.HasIndex(x => x.CreatedAt);
+        });
+
+        model.Entity<WebhookState>(e =>
+        {
+            e.ToTable("webhook");
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.Host).HasMaxLength(255);
+            e.Property(x => x.LastResult).HasMaxLength(300);
         });
     }
 }

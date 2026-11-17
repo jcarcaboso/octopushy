@@ -41,6 +41,7 @@ public static partial class Endpoints
         api.MapDeploy();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
         Notifications.NotificationHub.MapNotifications(api);
+        Notifications.WebhookEndpoints.MapWebhook(api);
     }
 
     private static void MapOverview(RouteGroupBuilder api)

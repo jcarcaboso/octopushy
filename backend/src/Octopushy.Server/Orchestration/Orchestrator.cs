@@ -3,7 +3,8 @@ using Octopushy.Server.Inventory;
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>The loop that advances runs and assigns work, woken by events and every few seconds.</summary>
-public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.AgentUpdates updates, OrchestratorSignal signal, TimeProvider clock, ILogger<Orchestrator> logger)
+public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.AgentUpdates updates, Agents.AgentPresence presence, OrchestratorSignal signal,
+    TimeProvider clock, ILogger<Orchestrator> logger)
     : BackgroundService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(5);
@@ -51,6 +52,7 @@ public sealed class Orchestrator(RunEngine engine, Planner planner, Agents.Agent
             await PhaseAsync("observations", () => planner.ScheduleObservesAsync(cancellationToken), cancellationToken);
             await PhaseAsync("cron", () => planner.FireSchedulesAsync(clock.GetUtcNow(), cancellationToken), cancellationToken);
             await PhaseAsync("scheduled expiry", () => planner.ExpireScheduledAsync(clock.GetUtcNow(), cancellationToken), cancellationToken);
+            await PhaseAsync("agent presence", () => presence.CheckAsync(cancellationToken), cancellationToken);
         }
     }
 

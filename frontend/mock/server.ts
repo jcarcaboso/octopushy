@@ -100,6 +100,36 @@ on("GET", "/api/notifications", () => ({ items: data.notifications.slice(0, 50) 
 on("POST", "/api/mock/notifications", ({ query }) => {
   for (let i = 0; i < (Number(query.get("count")) || 1); i++) data.notify();
 });
+// The webhook: the URL is never kept, only its host, as on the server; a test event "fails" for a host with "down" in it.
+on("GET", "/api/notifications/webhook", () => data.webhook);
+on("PUT", "/api/notifications/webhook", ({ body }) => {
+  const url = typeof body.url === "string" ? body.url.trim() : null;
+  let host: string | null = null;
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") return problem(400, "A webhook URL starts with https://.");
+      if (parsed.username || parsed.password) return problem(400, "A webhook URL carries no user name or password.");
+      host = parsed.hostname;
+    } catch {
+      return problem(400, "The webhook URL is not an absolute URL.");
+    }
+  } else if (!data.webhook.configured) return problem(400, "Set the webhook's URL first.");
+  if (Array.isArray(body.kinds)) data.webhook.kinds = body.kinds as string[];
+  if (host) Object.assign(data.webhook, { configured: true, enabled: true, host, stoppedAt: null });
+  return { webhook: data.webhook, secret: host ? `whsec_${hex(`${host}-${Date.now()}`, 43)}` : null };
+});
+on("DELETE", "/api/notifications/webhook", () => {
+  Object.assign(data.webhook, { configured: false, enabled: false, host: null, lastAttemptAt: null, lastDelivered: null, lastStatus: null,
+    lastResult: null, lastDeliveredAt: null, nextAttemptAt: null, dropped: 0, stoppedAt: null });
+  return new Reply(204);
+});
+on("POST", "/api/notifications/webhook/test", () => {
+  if (!data.webhook.configured) return problem(400, "Set the webhook's URL first.");
+  return data.webhook.host?.includes("down")
+    ? { delivered: false, status: null, result: "Could not connect." }
+    : { delivered: true, status: 204, result: "Delivered: HTTP 204." };
+});
 on("GET", "/api/guests/{id}", ({ params }) => data.guestDetail(params.id) ?? notFound("guest"));
 on("GET", "/api/services/{id}", ({ params }) => data.serviceDetail(params.id) ?? notFound("service"));
 on("GET", "/api/installations/{id}", ({ params }) => data.installationDetail(params.id) ?? notFound("installation"));

@@ -301,11 +301,15 @@ public sealed class AgentUpdates(
         agent.UpdatePaused = false;
     }
 
-    /// <summary>Fails the update in flight with <paramref name="why"/>, lifts its pause and empties the queue.</summary>
-    private static async Task FailAsync(OctopushyDb db, AgentRecord agent, string why, CancellationToken ct)
+    /// <summary>
+    /// Fails the update in flight with <paramref name="why"/>, lifts its pause and empties the queue. The caller's save also adds
+    /// the notification that tells it.
+    /// </summary>
+    private async Task FailAsync(OctopushyDb db, AgentRecord agent, string why, CancellationToken ct)
     {
         agent.UpdateState = AgentUpdateStates.Failed;
         agent.UpdateDetail = why;
+        Notifications.NotificationHub.AgentUpdateFailed(db, agent, clock.GetUtcNow());
         Unpause(agent);
         foreach (var queued in await db.Agents.Where(a => a.UpdateState == AgentUpdateStates.Queued).ToListAsync(ct))
             Clear(queued);

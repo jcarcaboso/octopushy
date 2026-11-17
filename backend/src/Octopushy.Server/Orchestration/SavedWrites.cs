@@ -11,7 +11,7 @@ namespace Octopushy.Server.Orchestration;
 /// does. See <see cref="RunEngine.TickAsync"/>.
 /// <para>
 /// A save is counted once it is done, so a tick that read the count before reading the database never takes old rows
-/// for new. A save of only notifications or uptime checks is not counted: those come every minute and no run reads them.
+/// for new. A save of only notifications, uptime checks or the webhook's state is not counted: no run reads them.
 /// Bulk updates and deletes are not seen here; a run they affect is advanced on the engine's next full pass.
 /// </para>
 /// </summary>
@@ -60,7 +60,7 @@ public sealed class SavedWrites : SaveChangesInterceptor
     private void Note(DbContext? context)
     {
         if (context is not null && context.ChangeTracker.Entries().Any(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted
-                && e.Entity is not (Notification or UptimeCheck)))
+                && e.Entity is not (Notification or UptimeCheck or WebhookState)))
             _saving.AddOrUpdate(context, Pending);
     }
 

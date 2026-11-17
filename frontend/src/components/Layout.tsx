@@ -1,4 +1,4 @@
-import { Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, Globe, KeyRound, LayoutDashboard, LogOut, Rocket, Server, User } from "lucide-react";
+import { Bell, Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, Globe, KeyRound, LayoutDashboard, LogOut, Rocket, Server, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useAuthState, useLogout, useRepository } from "../api/queries";
@@ -24,6 +24,7 @@ const groups = [
       { to: "/variables", label: "Variables", icon: KeyRound },
       { to: "/repository", label: "Repository", icon: GitBranch },
       { to: "/editor", label: "Editor", icon: FilePen },
+      { to: "/notifications", label: "Notifications", icon: Bell },
     ],
   },
   {

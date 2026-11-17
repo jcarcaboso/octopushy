@@ -17,12 +17,13 @@ namespace Octopushy.Server.Notifications;
 /// A run that succeeds is not told. It writes no run, step or attempt.
 /// </para>
 /// </summary>
-public sealed class NotificationHub(TimeProvider clock) : SaveChangesInterceptor
+public sealed class NotificationHub(TimeProvider clock, WebhookSignal? published = null) : SaveChangesInterceptor
 {
     /// <summary>How many of the latest notifications the API lists.</summary>
     public const int Listed = 50;
 
-    private static void Publish(OctopushyDb db, string kind, string title, string? body, Guid? resourceId, Guid? runId, DateTimeOffset at) =>
+    private static void Publish(OctopushyDb db, string kind, string title, string? body, Guid? resourceId, Guid? runId, DateTimeOffset at,
+        Guid? agentId = null) =>
         db.Notifications.Add(new Notification
         {
             Kind = kind,
@@ -30,8 +31,24 @@ public sealed class NotificationHub(TimeProvider clock) : SaveChangesInterceptor
             Body = string.IsNullOrEmpty(body) ? null : ChangeComposer.Truncate(body, 500),
             ResourceId = resourceId,
             RunId = runId,
+            AgentId = agentId,
             CreatedAt = at,
         });
+
+    /// <summary>
+    /// An agent turned offline or online, as <see cref="Agents.AgentPresence"/> decides. The caller saves, together with the
+    /// agent's <see cref="AgentRecord.OfflineNotifiedAt"/>.
+    /// </summary>
+    public static void AgentTurned(OctopushyDb db, AgentRecord agent, bool online, DateTimeOffset at) =>
+        Publish(db, online ? NotificationKinds.AgentOnline : NotificationKinds.AgentOffline,
+            online ? $"Agent {agent.Name} is connected again" : $"Agent {agent.Name} is offline", null, null, null, at, agent.Id);
+
+    /// <summary>
+    /// An agent's update failed. The caller saves, together with the failed state. Why it failed is on the Agents page, not
+    /// here: it may quote a change's detail.
+    /// </summary>
+    public static void AgentUpdateFailed(OctopushyDb db, AgentRecord agent, DateTimeOffset at) =>
+        Publish(db, NotificationKinds.AgentUpdateFailed, $"Update of agent {agent.Name} failed", null, null, null, at, agent.Id);
 
     /// <summary>An uptime check that answered up now answers down, or the other way round. The caller saves.</summary>
     public static async Task CheckTurnedAsync(OctopushyDb db, UptimeTarget target, bool up, string? detail, DateTimeOffset at, CancellationToken ct)
@@ -75,17 +92,61 @@ public sealed class NotificationHub(TimeProvider clock) : SaveChangesInterceptor
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         if (eventData.Context is OctopushyDb db)
+        {
             foreach (var run in Turned(db))
                 Publish(db, run, db.Resources.Find(run.ResourceId));
+            NoteAdding(db);
+        }
+
         return result;
+    }
+
+    /// <summary>The contexts whose save under way adds a notification.</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, object> _adding = [];
+
+    private void NoteAdding(OctopushyDb db)
+    {
+        if (published is not null && db.ChangeTracker.Entries<Notification>().Any(e => e.State == EntityState.Added))
+            _adding.AddOrUpdate(db, published);
+    }
+
+    // A save that added a notification wakes the webhook's sender once it is committed.
+    private void Saved(DbContext? context)
+    {
+        if (context is not null && _adding.Remove(context))
+            published?.Wake();
+    }
+
+    public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
+    {
+        Saved(eventData.Context);
+        return result;
+    }
+
+    public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
+    {
+        Saved(eventData.Context);
+        return ValueTask.FromResult(result);
+    }
+
+    public override void SaveChangesFailed(DbContextErrorEventData eventData) => _adding.Remove(eventData.Context!);
+
+    public override Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
+    {
+        _adding.Remove(eventData.Context!);
+        return Task.CompletedTask;
     }
 
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result,
         CancellationToken cancellationToken = default)
     {
         if (eventData.Context is OctopushyDb db)
+        {
             foreach (var run in Turned(db))
                 Publish(db, run, await db.Resources.FindAsync([run.ResourceId], cancellationToken));
+            NoteAdding(db);
+        }
+
         return result;
     }
 
@@ -94,7 +155,7 @@ public sealed class NotificationHub(TimeProvider clock) : SaveChangesInterceptor
         api.MapGet("/notifications", async Task<Ok<NotificationsDto>> (OctopushyDb db, CancellationToken ct) =>
             TypedResults.Ok(new NotificationsDto(await db.Notifications.AsNoTracking().OrderByDescending(n => n.Id).Take(Listed)
                 .Select(n => new NotificationDto(n.Id, n.Kind, n.Title, n.Body, n.ResourceId,
-                    db.Resources.Where(r => r.Id == n.ResourceId).Select(r => r.Kind).FirstOrDefault(), n.RunId, n.CreatedAt))
+                    db.Resources.Where(r => r.Id == n.ResourceId).Select(r => r.Kind).FirstOrDefault(), n.RunId, n.CreatedAt, n.AgentId))
                 .ToListAsync(ct))))
             .WithTags("Notifications")
             .WithName("listNotifications");

@@ -3,7 +3,7 @@
 // a run moves its guest on everywhere.
 import type {
   Agent, Change, ChangeForm, DeployTargets, DraftDetail, DraftSummary, EnrollmentToken, GuestConfiguration, GuestDetail,
-  GuestSummary, InstallationDetail, InstallationSummary, Inventory, ManagedAccess, NotificationItem, ObservedGuest, ObservedHost, Overview, ReachabilityEntry,
+  GuestSummary, InstallationDetail, InstallationSummary, Inventory, ManagedAccess, NotificationItem, Webhook, ObservedGuest, ObservedHost, Overview, ReachabilityEntry,
   Repository, Revision, RunDetail, RunSummary, ServiceDetail, ServiceSummary, Variable, VariableVersion, Variables,
   WorkflowCatalog, WorkflowVersion,
 } from "../src/api/types.ts";
@@ -933,10 +933,12 @@ export function changeDraft(id: string, edits: { path: string; content: string |
 export const guestIds = guests.map((g) => g.id);
 
 // Notifications, newest first: what the mock's uptime and runs already show, as if told when it happened.
-const told = (id: number, at: string, kind: string, title: string, body: string | null, to: Pick<NotificationItem, "resourceId" | "resourceKind" | "runId">): NotificationItem =>
-  ({ id, kind, title, body, createdAt: at, ...to });
+const told = (id: number, at: string, kind: string, title: string, body: string | null,
+  to: Pick<NotificationItem, "resourceId" | "resourceKind" | "runId"> & { agentId?: string }): NotificationItem =>
+  ({ id, kind, title, body, createdAt: at, agentId: null, ...to });
 const jellyfin = { resourceId: "svc-jellyfin", resourceKind: "service", runId: null };
 export const notifications: NotificationItem[] = [
+  told(7, ago(5), "agent-offline", "Agent laptop is offline", null, { resourceId: null, resourceKind: null, runId: null, agentId: "agent-laptop" }),
   told(6, ago(12), "run-approval", "Provision run awaits approval", "home/pve01/bb", { resourceId: "bb", resourceKind: "guest", runId: "provision-approval" }),
   told(5, ago(40), "check-down", "home/pve01/media/jellyfin is down", "https://jellyfin.home.example.org/ · HTTP 502", jellyfin),
   told(4, ago(300, 151), "run-failed", "Provision run failed", "home/pve01/media", { resourceId: "media", resourceKind: "guest", runId: "failed" }),
@@ -944,6 +946,26 @@ export const notifications: NotificationItem[] = [
   told(2, ago(1412), "check-down", "home/pve01/web/app is down", "https://app.home.example.org/ · HTTP 503", { resourceId: "web-app", resourceKind: "service", runId: null }),
   told(1, ago(2880), "check-down", "home/korriban/nas is down", "ssh://10.15.60.30:22 · no route to host", { resourceId: "nas", resourceKind: "guest", runId: null }),
 ];
+
+// The webhook: set, with its last delivery failed and tried again in a minute. The mock keeps no URL, as the server shows none.
+export const webhook: Webhook = {
+  configured: true,
+  host: "hooks.example.org",
+  enabled: true,
+  kinds: ["run-approval", "run-failed", "run-uncertain", "agent-offline", "agent-online", "agent-update-failed"],
+  defaultKinds: ["run-approval", "run-failed", "run-uncertain", "agent-offline", "agent-online", "agent-update-failed"],
+  availableKinds: ["check-down", "check-up", "run-failed", "run-uncertain", "run-approval", "agent-offline", "agent-online", "agent-update-failed"],
+  httpAllowed: false,
+  linksIncluded: true,
+  lastAttemptAt: ago(1),
+  lastDelivered: false,
+  lastStatus: 503,
+  lastResult: "HTTP 503: the receiver had an error.",
+  lastDeliveredAt: ago(12),
+  nextAttemptAt: ago(-1),
+  dropped: 0,
+  stoppedAt: null,
+};
 
 /** Adds one more, alternating jellyfin's first link going up and down. */
 export function notify() {

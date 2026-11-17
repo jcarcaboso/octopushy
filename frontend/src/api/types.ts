@@ -28,6 +28,9 @@ export type Uptime = Schemas["UptimeDto"];
 export type UptimeCheck = Schemas["UptimeCheckDto"];
 /** Not `Notification`: that name is the browser's own. */
 export type NotificationItem = Schemas["NotificationDto"];
+export type Webhook = Schemas["WebhookDto"];
+export type WebhookUpdate = Schemas["WebhookUpdate"];
+export type WebhookTestResult = Schemas["WebhookTestResult"];
 export type ObserveFailure = Schemas["ObserveErrorDto"];
 export type Issue = Schemas["IssueDto"];
 export type Problem = Schemas["ProblemDetails"];
