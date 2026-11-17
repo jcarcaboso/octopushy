@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261117150929_NotificationWebhook")]
+    [Migration("20261117203100_NotificationWebhook")]
     partial class NotificationWebhook
     {
         /// <inheritdoc />
@@ -92,6 +92,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("ToolRuntime")
                         .HasColumnType("text")
                         .HasColumnName("tool_runtime");
+
+                    b.Property<string>("Unavailable")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("unavailable");
 
                     b.Property<DateTimeOffset?>("UpdateAppliedAt")
                         .HasColumnType("timestamp with time zone")
