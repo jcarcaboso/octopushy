@@ -78,11 +78,12 @@ public sealed class AttemptLogIndexTests : IDisposable
     public async Task Reads_around_the_index_entries_are_those_of_a_full_scan()
     {
         var attempt = Guid.CreateVersion7();
-        await FillAsync(Store(attempt), attempt, 3_500, batch: 333);
+        var writer = Store(attempt);
+        await FillAsync(writer, attempt, 3_500, batch: 333);
         long[] afters = [long.MinValue, -5, -1, 0, 998, 999, 1000, 1001, 1998, 1999, 2000, 2001, 3_498, 3_499, 3_500, 1_000_000, long.MaxValue];
-        int[] limits = [1, 2, 999, 1000, 1001, 2000, 10_000];
-        // A store that wrote the log and one that indexes it from its file, as after a restart.
-        foreach (var store in new[] { Store(attempt), Store(attempt) })
+        int[] limits = [-1, 0, 1, 2, 999, 1000, 1001, 2000, 10_000];
+        // The store that wrote the log, with the index its appends kept, and one that indexes it from its file, as after a restart.
+        foreach (var store in new[] { writer, Store(attempt) })
         {
             foreach (var after in afters)
             foreach (var limit in limits)
