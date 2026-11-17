@@ -24,12 +24,39 @@ use crate::tools::{self, ToolRuntime};
 pub const EXECUTORS: &[&str] = &["opentofu", "proxmox", "ansible", "nix"];
 
 /// Actions that change infrastructure. They are never cancelled, and an
-/// interruption by a restart makes their outcome uncertain.
+/// interruption by a restart makes their outcome uncertain. Only for an assignment
+/// whose `mutating` is absent, from an older server: the server's flag decides otherwise.
 pub fn is_mutating(executor: &str, action: &str) -> bool {
     matches!(
         (executor, action),
         ("opentofu", "apply") | ("proxmox", "set-protection") | ("ansible", "run")
-    ) || cfg!(test) && (executor, action) == ("test", "mutate")
+    ) || cfg!(test) && matches!((executor, action), ("test", "mutate") | ("test", "change"))
+}
+
+/// Actions that are a change whatever the server says: nothing makes `tofu apply` or the
+/// protection PUT a read. A playbook is not listed, since one that only verifies is a read.
+pub fn always_changes(executor: &str, action: &str) -> bool {
+    matches!(
+        (executor, action),
+        ("opentofu", "apply") | ("proxmox", "set-protection")
+    )
+}
+
+/// Actions whose every path calls [`ExecContext::begin_change`] before the first thing that
+/// changes anything: `tofu apply`, each playbook run, the protection PUT. Only for these does a
+/// restart before that call mean nothing changed. An action that is not listed, or whose marker
+/// predates this list, stays uncertain when a restart interrupts it.
+pub const MARKS_CHANGE: &[(&str, &str)] = &[
+    ("opentofu", "apply"),
+    ("ansible", "run"),
+    ("proxmox", "set-protection"),
+    #[cfg(test)]
+    ("test", "change"),
+];
+
+/// Whether `executor`/`action` is in [`MARKS_CHANGE`].
+pub fn marks_change(executor: &str, action: &str) -> bool {
+    MARKS_CHANGE.contains(&(executor, action))
 }
 
 /// Settings shared by all attempts.
@@ -99,6 +126,8 @@ pub struct ExecContext {
     pub workspace: PathBuf,
     pub log: AttemptLogger,
     pub cancel: CancellationToken,
+    /// Whether the attempt is a change, as the agent decided when it accepted it.
+    pub mutating: bool,
     /// Where a running apply leaves its state for the connection to send.
     pub snapshots: opentofu::state::Snapshots,
 }
@@ -133,6 +162,18 @@ impl ExecContext {
             delay.as_secs_f64()
         ));
         self.sleep(delay).await
+    }
+
+    /// Records, durably, that the first change is about to start. Call right before sending or
+    /// spawning it. When this fails, the change must not start. Again later does nothing.
+    pub fn begin_change(&self) -> Result<(), Failure> {
+        crate::attempts::workspace::mark_change_started(&self.workspace, self.mutating).map_err(
+            |e| {
+                Failure::msg(format!(
+                    "could not record that the change starts, so it was not started: {e:#}"
+                ))
+            },
+        )
     }
 
     pub fn check_cancelled(&self) -> Result<(), Failure> {
@@ -263,13 +304,16 @@ pub async fn run(cfg: &ExecutorConfig, executor: &str, ctx: &ExecContext) -> Exe
 }
 
 /// An executor for unit tests: `sleep` and `mutate` wait for `input.ms`
-/// milliseconds (or a cancel), `echo` returns its input.
+/// milliseconds (or a cancel), `echo` returns its input. `change` waits for
+/// `input.before` milliseconds, records the start of its change, then waits for `input.ms`.
 #[cfg(test)]
 async fn test_executor(ctx: &ExecContext) -> ExecResult {
     #[derive(serde::Deserialize)]
     struct Input {
         #[serde(default)]
         ms: u64,
+        #[serde(default)]
+        before: u64,
     }
     let input: Input = ctx.input()?;
     match ctx.action.as_str() {
@@ -287,6 +331,21 @@ async fn test_executor(ctx: &ExecContext) -> ExecResult {
             // Ignores cancellation, like an apply.
             tokio::time::sleep(Duration::from_millis(input.ms)).await;
             Ok(Success::outputs(serde_json::json!({ "mutated": true })))
+        }
+        "change" => {
+            tokio::time::sleep(Duration::from_millis(input.before)).await;
+            ctx.begin_change()?;
+            tokio::time::sleep(Duration::from_millis(input.ms)).await;
+            Ok(Success::outputs(serde_json::json!({ "changed": true })))
+        }
+        "stopped" => {
+            // Says it cannot tell when it is stopped, like a playbook.
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(input.ms)) => {
+                    Ok(Success::outputs(serde_json::json!({ "ran": true })))
+                }
+                _ = ctx.cancel.cancelled() => Err(Failure::Uncertain("stopped midway".into())),
+            }
         }
         "fail" => Err(Failure::msg(format!(
             "failed with secret {}",

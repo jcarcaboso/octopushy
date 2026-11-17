@@ -888,6 +888,8 @@ struct Play<'a> {
 
 impl Play<'_> {
     async fn run(&self, step: &str, stdin: Vec<u8>) -> Result<ToolOutput, Failure> {
+        // Every playbook run reaches the guest, so each one is a change from the first.
+        self.tool.ctx.begin_change()?;
         let stop = self.tool.ctx.cancel.child_token();
         let timer = {
             let stop = stop.clone();

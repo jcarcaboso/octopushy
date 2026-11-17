@@ -210,6 +210,7 @@ impl AttemptManager {
         let cancel = CancellationToken::new();
         let snapshots = Snapshots::default();
         let safe = is_safe_id(&id);
+        let mutating = effective_mutating(&assignment);
         {
             let mut entries = self.entries.lock().unwrap();
             if let Some(existing) = entries.get_mut(&id) {
@@ -230,7 +231,7 @@ impl AttemptManager {
                     action: assignment.action.clone(),
                     state: State::Queued,
                     started: false,
-                    mutating: executors::is_mutating(&assignment.executor, &assignment.action),
+                    mutating,
                     force_stopped: false,
                     cancel: cancel.clone(),
                     logs,
@@ -264,6 +265,7 @@ impl AttemptManager {
             &id,
             &assignment.executor,
             &assignment.action,
+            mutating,
         ) {
             Ok(ws) => ws,
             Err(e) => {
@@ -332,6 +334,7 @@ impl AttemptManager {
             workspace: ws,
             log: log.clone(),
             cancel: cancel.clone(),
+            mutating,
             snapshots,
         };
         let started = Instant::now();
@@ -345,6 +348,10 @@ impl AttemptManager {
                 error: String::new(),
                 artifacts: success.artifacts,
             },
+            // A read the server cancelled changed nothing, whatever its tool could tell when stopped.
+            Ok(Err(Failure::Uncertain(_))) if cancel.is_cancelled() && !mutating => {
+                result(&id, Outcome::Cancelled, "cancelled by the server")
+            }
             Ok(Err(Failure::Uncertain(message))) => result(&id, Outcome::Uncertain, &message),
             Ok(Err(Failure::Cancelled)) => {
                 result(&id, Outcome::Cancelled, "cancelled by the server")
@@ -480,12 +487,14 @@ impl AttemptManager {
         if !on_disk {
             return;
         }
-        // The marker goes first: a workspace without a marker is discarded at
-        // startup, while a marker without an outbox entry would be reported as
-        // an interrupted attempt.
+        // The marker and the record of a started change go first: a workspace
+        // without them is discarded at startup, while either without an outbox
+        // entry would be reported as an interrupted attempt. If they cannot be
+        // removed the result stays, and is acknowledged again after a restart.
         let ws = workspace::dir(&self.work_dir, id);
-        if let Err(e) = crate::fsutil::remove_durably(&ws.join(workspace::MARKER)) {
-            tracing::error!(attempt = %id, "{e:#}");
+        if let Err(e) = workspace::forget(&ws) {
+            tracing::error!(attempt = %id, "{e:#}; keeping the acknowledged result");
+            return;
         }
         if let Err(e) = self.outbox.remove(id) {
             tracing::error!(attempt = %id, "{e:#}");
@@ -663,6 +672,17 @@ fn bound_result(result: &mut AttemptResult, mutating: bool) {
     if result.encoded_len() > MAX_RESULT_BYTES {
         result.artifacts.clear();
     }
+}
+
+/// Whether an assignment may change infrastructure: the server's word when it gives one, which
+/// can make a playbook that only verifies a read, and the agent's own table for an older server.
+/// The server cannot make a read of an action that always changes.
+fn effective_mutating(assignment: &Assignment) -> bool {
+    let (executor, action) = (&assignment.executor, &assignment.action);
+    assignment
+        .mutating
+        .unwrap_or_else(|| executors::is_mutating(executor, action))
+        || executors::always_changes(executor, action)
 }
 
 fn result(id: &str, outcome: Outcome, error: &str) -> AttemptResult {

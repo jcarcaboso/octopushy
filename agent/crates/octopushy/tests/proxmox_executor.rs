@@ -49,6 +49,18 @@ async fn exec_with(
     retry_delay: Duration,
     cancel: CancellationToken,
 ) -> (Result<Success, Failure>, Vec<String>) {
+    let (result, lines, _) = exec_marked(action, input, token, retry_delay, cancel).await;
+    (result, lines)
+}
+
+/// Also says whether the attempt marker records that the change started.
+async fn exec_marked(
+    action: &str,
+    input: Value,
+    token: &str,
+    retry_delay: Duration,
+    cancel: CancellationToken,
+) -> (Result<Success, Failure>, Vec<String>, bool) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = ExecutorConfig {
         runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
@@ -62,6 +74,8 @@ async fn exec_with(
     let secrets = HashMap::from([("proxmox.token".to_owned(), token.to_owned())]);
     let buffer = Arc::new(LogBuffer::default());
     let masker = Arc::new(Masker::new(secrets.values().map(String::as_str)));
+    octopushy::attempts::workspace::init(dir.path(), "t", "proxmox", action, true).unwrap();
+    octopushy::attempts::workspace::mark_running(dir.path()).unwrap();
     let ctx = ExecContext {
         attempt_id: "t".into(),
         action: action.into(),
@@ -72,6 +86,7 @@ async fn exec_with(
         workspace: dir.path().to_path_buf(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel,
+        mutating: true,
         snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "proxmox", &ctx).await;
@@ -79,7 +94,12 @@ async fn exec_with(
         .batch_from(0, usize::MAX)
         .map(|(_, l)| l.into_iter().map(|x| x.text).collect())
         .unwrap_or_default();
-    (result, lines)
+    let changed = octopushy::attempts::workspace::read(dir.path())
+        .unwrap()
+        .unwrap()
+        .change_started_at_ms
+        .is_some();
+    (result, lines, changed)
 }
 
 fn failed(r: Result<Success, Failure>) -> (String, Option<Value>) {
@@ -383,6 +403,41 @@ async fn verify_absent_and_privileges() {
     )
     .await;
     assert!(failed(r).0.contains("lacks VM.Audit"));
+}
+
+#[tokio::test]
+async fn only_the_protection_put_marks_the_change_as_started() {
+    let m = mock(Fixture::example()).await;
+    let t = m.token();
+    let input = |vmid: u32, node: &str, p: bool| json!({ "connection": connection(&m), "node": node, "vmid": vmid, "protection": p });
+    let run = |input| {
+        exec_marked(
+            "set-protection",
+            input,
+            &t,
+            Duration::from_millis(1),
+            CancellationToken::new(),
+        )
+    };
+
+    // Already at the value, absent, or on another node: only reads, so a restart failed.
+    for (vmid, node) in [(210, "korriban"), (404, "korriban"), (310, "korriban")] {
+        let (_, _, changed) = run(input(vmid, node, vmid == 210)).await;
+        assert!(!changed, "{vmid} on {node}");
+    }
+    let (r, _, changed) = run(input(210, "korriban", false)).await;
+    r.unwrap();
+    assert!(changed, "the PUT was sent");
+    // A read changes nothing.
+    let (_, _, changed) = exec_marked(
+        "verify-guest",
+        json!({ "connection": connection(&m), "node": "korriban", "vmid": 210 }),
+        &t,
+        Duration::from_millis(1),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(!changed);
 }
 
 #[tokio::test]

@@ -34,6 +34,7 @@ public sealed partial class AssignmentBuilder
             AttemptId = attempt.Id.ToString(),
             Executor = TemplateImages.Executor,
             Action = TemplateImages.Action,
+            Mutating = attempt.Mutating,
             InputJson = input.ToJsonString(),
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(build.RevisionCommit, build.WorkflowRepository,

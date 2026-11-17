@@ -205,6 +205,11 @@ message Assignment {
   // Outputs of earlier steps, such as a saved plan.
   repeated Artifact artifacts = 7;
   uint32 lease_seconds = 8;
+  // Whether the attempt may change infrastructure, as the server records it. A change is never
+  // interrupted by a normal cancel and is uncertain when the agent loses it; anything else is
+  // stopped by a cancel and fails when lost. The agent follows this when it is set. Absent, from
+  // an older server, the agent decides by executor and action, as it did before.
+  optional bool mutating = 9;
 }
 
 message CancelAttempt {

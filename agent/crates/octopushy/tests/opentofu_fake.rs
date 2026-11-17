@@ -209,6 +209,8 @@ async fn run(
     let masker = Arc::new(Masker::new(secrets.values().map(String::as_str)));
     let workspace = fx.dir.path().join("work").join(id);
     std::fs::create_dir_all(&workspace).unwrap();
+    octopushy::attempts::workspace::init(&workspace, id, "opentofu", action, true).unwrap();
+    octopushy::attempts::workspace::mark_running(&workspace).unwrap();
     let ctx = ExecContext {
         attempt_id: id.into(),
         action: action.into(),
@@ -219,6 +221,7 @@ async fn run(
         workspace: workspace.clone(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel,
+        mutating: true,
         snapshots: Default::default(),
     };
     let result = executors::run(&fx.cfg, "opentofu", &ctx).await;

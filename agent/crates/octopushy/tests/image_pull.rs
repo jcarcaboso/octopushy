@@ -82,6 +82,8 @@ impl Fake {
         let masker = Arc::new(Masker::new(secrets.values().map(String::as_str)));
         let workspace = self.dir.path().join("work");
         std::fs::create_dir_all(&workspace).unwrap();
+        octopushy::attempts::workspace::init(&workspace, "a", "opentofu", action, true).unwrap();
+        octopushy::attempts::workspace::mark_running(&workspace).unwrap();
         let files = archive::pack(&[(
             "modules/opentofu/vm/main.tf",
             b"resource \"terraform_data\" \"a\" {}\n",
@@ -99,6 +101,7 @@ impl Fake {
                 workspace,
                 log: AttemptLogger::new(buffer, masker, Arc::new(Notify::new())),
                 cancel,
+                mutating: true,
                 snapshots: Default::default(),
             },
         }

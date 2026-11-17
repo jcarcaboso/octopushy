@@ -162,6 +162,8 @@ async fn exec(
         .join("work")
         .join(fastrand::u32(..).to_string());
     std::fs::create_dir_all(&workspace).unwrap();
+    octopushy::attempts::workspace::init(&workspace, "attempt", "ansible", action, true).unwrap();
+    octopushy::attempts::workspace::mark_running(&workspace).unwrap();
     let buffer = Arc::new(LogBuffer::default());
     let log = AttemptLogger::new(
         buffer.clone(),
@@ -182,6 +184,7 @@ async fn exec(
         workspace: workspace.clone(),
         log,
         cancel: CancellationToken::new(),
+        mutating: true,
         snapshots: Snapshots::default(),
     };
     let result = executors::run(&fx.cfg, "ansible", &ctx).await;
@@ -438,6 +441,24 @@ async fn a_changed_preview_is_refused() {
     let done = exec(&fx, "run", input(), secrets(), vec![artifact]).await;
     assert!(message(&done.result).contains("corrupt"));
     assert!(fx.read("args.log").is_empty(), "nothing ran");
+    assert!(!change_started(&done), "nothing reached the guest");
+}
+
+fn change_started(done: &Finished) -> bool {
+    octopushy::attempts::workspace::read(&done.workspace)
+        .unwrap()
+        .unwrap()
+        .change_started_at_ms
+        .is_some()
+}
+
+#[tokio::test]
+async fn the_playbook_marks_the_change_as_started() {
+    let fx = Fixture::new();
+    fx.set("recap.json", &recap(true).to_string());
+    let done = run(&fx).await;
+    assert!(done.result.is_ok(), "{:?}", done.result);
+    assert!(change_started(&done));
 }
 
 #[tokio::test]
