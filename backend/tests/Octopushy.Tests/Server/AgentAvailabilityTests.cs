@@ -90,6 +90,21 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         }
     }
 
+    /// <summary>Fails the next read of an agent's attempts, which a Hello makes before its connection is registered.</summary>
+    private sealed class HelloFails : DbCommandInterceptor
+    {
+        public bool Armed { get; set; }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (!Armed || !command.CommandText.Contains("FROM attempts"))
+                return ValueTask.FromResult(result);
+            Armed = false;
+            throw new InvalidOperationException("The Hello could not be handled.");
+        }
+    }
+
     /// <summary>Connects <paramref name="agent"/> again over a stream, as a real agent does, with its Hello.</summary>
     private static async Task<(AgentStream Stream, AgentSession Session)> StreamAsync(ServerHarness server, FakeAgent agent, Hello hello)
     {
@@ -483,6 +498,32 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Same(current, connections.Get(agent.Id));
         Assert.Equal("the newer connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
         Assert.Equal(["opentofu", "proxmox"], await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => a.Executors).SingleAsync()));
+        oldStream.Complete();
+    }
+
+    [Fact]
+    public async Task A_connection_that_fails_before_it_is_registered_stores_no_offer()
+    {
+        var failing = new HelloFails();
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: s => s.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(failing)));
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        var (oldStream, old) = await StreamAsync(server, agent, new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+
+        // A second connection says something else in its Hello, and fails before it becomes the agent's.
+        failing.Armed = true;
+        var stream = new AgentStream();
+        stream.Send(new AgentMessage { Hello = new Hello { AgentVersion = "test", Executors = { "proxmox" }, Unavailable = { ["opentofu"] = "never registered" } } });
+        var service = ActivatorUtilities.CreateInstance<AgentChannelService>(server.Services);
+        var call = await AgentStream.CallAsAsync(server, agent);
+        await Record.ExceptionAsync(() => service.Connect(stream, stream, call));
+        Assert.False(failing.Armed);
+
+        Assert.Same(old, connections.Get(agent.Id));
+        var stored = await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => new { a.Executors, a.Unavailable }).SingleAsync());
+        Assert.Equal(["ansible", "opentofu", "proxmox"], stored.Executors);
+        Assert.Empty(AgentAvailability.Deserialize(stored.Unavailable));
         oldStream.Complete();
     }
 

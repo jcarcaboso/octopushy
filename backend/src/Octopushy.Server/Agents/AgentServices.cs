@@ -110,11 +110,10 @@ public sealed class AgentChannelService(
         var hello = requestStream.Current.Hello;
         var executors = AgentAvailability.Executors(hello.Executors);
         var unavailable = AgentAvailability.Unavailable(hello.Unavailable);
+        // What it offers is not stored here: only a connection that becomes the agent's stores it, as it is registered.
         await UpdateAgentAsync(agent.Id, a =>
         {
             a.Version = hello.AgentVersion;
-            a.Executors = executors.ToArray();
-            a.Unavailable = AgentAvailability.Serialize(unavailable);
             a.ToolRuntime = hello.ToolRuntime;
             a.ConnectedAt = a.LastSeenAt = clock.GetUtcNow();
             if (a.CertificateSerial == serial)
