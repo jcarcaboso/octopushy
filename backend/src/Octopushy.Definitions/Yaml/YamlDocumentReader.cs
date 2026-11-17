@@ -265,8 +265,10 @@ public static partial class YamlDocumentReader
         // One entry per open mapping or sequence: whether a mapping's next node is a key, or null in a sequence.
         private readonly Stack<bool?> _open = new();
 
-        // The anchors that name a mapping or a sequence, so an alias to one is known as a key.
-        private readonly HashSet<string> _collections = new(StringComparer.Ordinal);
+        // The anchors defined so far in this document, and whether each names a mapping or a sequence. An alias must
+        // follow its anchor, as YAML requires: the library resolves one that comes first later, and recurses without
+        // end when it is a key.
+        private readonly Dictionary<string, bool> _anchors = new(StringComparer.Ordinal);
 
         public ParsingEvent? Current => inner.Current;
 
@@ -275,10 +277,23 @@ public static partial class YamlDocumentReader
             if (!inner.MoveNext())
                 return false;
             var current = inner.Current;
+            if (current is DocumentStart)
+            {
+                _anchors.Clear();
+            }
+
             var collection = current is MappingStart or SequenceStart;
+            if (current is AnchorAlias alias)
+            {
+                if (!_anchors.TryGetValue(alias.Value.Value, out collection))
+                {
+                    throw new YamlReadException($"The alias '*{alias.Value.Value}' comes before its anchor.", LineOf(current.Start));
+                }
+            }
+
             if (current is NodeEvent or AnchorAlias && _open.TryPeek(out var key) && key is { } isKey)
             {
-                if (isKey && (collection || current is AnchorAlias alias && _collections.Contains(alias.Value.Value)))
+                if (isKey && collection)
                 {
                     throw new YamlReadException("Mapping keys must be plain strings.", LineOf(current.Start));
                 }
@@ -299,10 +314,7 @@ public static partial class YamlDocumentReader
 
                 if (!node.Anchor.IsEmpty)
                 {
-                    if (collection)
-                        _collections.Add(node.Anchor.Value);
-                    else
-                        _collections.Remove(node.Anchor.Value);
+                    _anchors[node.Anchor.Value] = collection;
                 }
             }
 

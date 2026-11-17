@@ -128,6 +128,26 @@ public class YamlDocumentReaderTests
         Assert.Equal("Mapping keys must be plain strings.", error.Message);
     }
 
+    [Theory]
+    // As a key, the library looks an alias up before it knows what it names, and never returns.
+    [InlineData("? *x\n: 1\nx: &x [2]\n")]
+    [InlineData("? *x\n: 1\nx: &x text\n")]
+    [InlineData("a: *x\nx: &x 1\n")]
+    [InlineData("a: *nowhere\n")]
+    public void Refuses_an_alias_that_comes_before_its_anchor(string text)
+    {
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text));
+        Assert.Contains("comes before its anchor", error.Message);
+    }
+
+    [Fact]
+    public void An_anchor_named_again_is_what_it_was_last_set_to()
+    {
+        var root = (JsonObject)YamlDocumentReader.Read("a: &x [1]\nb: &x web\n? *x\n: 2\n").Root!;
+        Assert.Equal(2, root["web"]!.GetValue<long>());
+        Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read("a: &x web\nb: &x [1]\n? *x\n: 2\n"));
+    }
+
     [Fact]
     public void An_alias_to_text_is_still_a_key()
     {
