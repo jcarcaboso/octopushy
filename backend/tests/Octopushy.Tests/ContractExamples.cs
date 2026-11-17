@@ -25,6 +25,18 @@ public static class ContractExamples
 
     public static JsonObject Output(string executor, string action, string? variant = null) => Load(PathOf(executor, action, "output", variant));
 
+    /// <summary>
+    /// Every shape the action's outputs come in: its output example with each variant's merged in, such as a playbook's
+    /// declared outcome or an observation that cannot show every VM. For <see cref="ShapeProblems"/>.
+    /// </summary>
+    public static JsonObject OutputShape(string executor, string action)
+    {
+        JsonNode shape = Output(executor, action);
+        foreach (var variant in System.IO.Directory.EnumerateFiles(Path.Combine(Directory, executor), $"{action}.output.*.json").Order(StringComparer.Ordinal))
+            shape = Merge(shape, Load(variant))!;
+        return shape.AsObject();
+    }
+
     private static JsonObject Load(string path) => JsonNode.Parse(File.ReadAllText(path))!.AsObject();
 
     /// <summary>

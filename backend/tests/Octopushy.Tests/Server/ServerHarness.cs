@@ -618,17 +618,7 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         var (executor, action) = (assignment.Executor, assignment.Action);
         if (!ContractExamples.Exists(executor, action))
             return;
-        var example = ContractExamples.Output(executor, action);
-        // Each variant adds what only it has, such as a playbook's declared outcome.
-        foreach (var variant in Directory.EnumerateFiles(Path.Combine(ContractExamples.Directory, executor), $"{action}.output.*.json"))
-        {
-            foreach (var (key, value) in JsonNode.Parse(File.ReadAllText(variant))!.AsObject())
-            {
-                if (example[key] is null)
-                    example[key] = value?.DeepClone();
-            }
-        }
-
+        var example = ContractExamples.OutputShape(executor, action);
         var free = UserKeys.Concat(NotYetInAnExample.GetValueOrDefault((executor, action), [])).ToList();
         var reported = outputs.DeepClone().AsObject();
         reported.Remove(NoMachine);

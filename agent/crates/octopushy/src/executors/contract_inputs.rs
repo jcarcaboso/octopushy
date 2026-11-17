@@ -63,6 +63,20 @@ fn changed(value: &Value) -> Value {
 /// Checks that `T` reads every value of the example of `executor`/`action`, except under the top-level keys in `unused`,
 /// which the controller sends to every action of the executor and this one does not read.
 fn check<T: DeserializeOwned + Debug>(executor: &str, action: &str, unused: &[&str]) {
+    let unread = unread::<T>(executor, action, unused);
+    assert!(
+        unread.is_empty(),
+        "{executor}/{action}: the executor does not read {unread:?} of its example; the field may have been renamed on one side"
+    );
+}
+
+/// The paths of the example of `executor`/`action` that `T` does not read, outside `unused`. Fails at once when the example
+/// does not parse, when `T` reads a field listed as unused, or when the example has no field the list names.
+fn unread<T: DeserializeOwned + Debug>(
+    executor: &str,
+    action: &str,
+    unused: &[&str],
+) -> Vec<String> {
     let input = example(executor, action);
     let baseline = parse::<T>(&input)
         .unwrap_or_else(|e| panic!("{executor}/{action}: the example does not parse: {e}"));
@@ -89,10 +103,7 @@ fn check<T: DeserializeOwned + Debug>(executor: &str, action: &str, unused: &[&s
             "{executor}/{action}: {key} is listed as unused but the example has no such field"
         );
     }
-    assert!(
-        unread.is_empty(),
-        "{executor}/{action}: the executor does not read {unread:?} of its example; the field may have been renamed on one side"
-    );
+    unread
 }
 
 /// What the controller sends to every `proxmox` action.
@@ -160,16 +171,46 @@ fn nix_inputs() {
     check::<super::nix::Input>("nix", "build", &[]);
 }
 
+/// The OpenTofu input, as the executor reads it, field by field.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct OpenTofuMirror {
+    stack: String,
+    root: String,
+    image: String,
+    timeout_minutes: Option<u64>,
+    variables: serde_json::Map<String, Value>,
+    env: std::collections::BTreeMap<String, String>,
+    secret_env: std::collections::BTreeMap<String, String>,
+    destroy: bool,
+}
+
+/// The same, with `timeoutMinutes` read under another name, defaulted as an optional field is: it still parses.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct OpenTofuRenamed {
+    stack: String,
+    root: String,
+    image: String,
+    #[serde(default)]
+    timeout: Option<u64>,
+    variables: serde_json::Map<String, Value>,
+    env: std::collections::BTreeMap<String, String>,
+    secret_env: std::collections::BTreeMap<String, String>,
+    destroy: bool,
+}
+
 #[test]
-fn a_renamed_field_is_caught() {
-    // What the check is for: a field the executor reads under another name parses, defaulted, and is caught.
-    #[derive(Debug, serde::Deserialize)]
-    #[allow(dead_code)]
-    struct Renamed {
-        #[serde(default)]
-        timeout: Option<u64>,
-        root: String,
-    }
-    let result = std::panic::catch_unwind(|| check::<Renamed>("opentofu", "preview", &[]));
-    assert!(result.is_err());
+fn a_renamed_field_is_caught_and_named() {
+    // What the check is for: a type that reads every field leaves nothing unread, and renaming one leaves exactly it.
+    assert_eq!(
+        unread::<OpenTofuMirror>("opentofu", "preview", &[]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unread::<OpenTofuRenamed>("opentofu", "preview", &[]),
+        ["/timeoutMinutes"]
+    );
 }

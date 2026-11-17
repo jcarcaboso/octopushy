@@ -45,7 +45,7 @@ public class ContractExampleTests(PostgresFixture postgres) : IClassFixture<Post
     }
 
     /// <summary>The agent's assignments, kept until a test asks for each, so none is dropped while waiting for another.</summary>
-    private sealed class Inbox(ServerHarness server, FakeAgent agent)
+    internal sealed class Inbox(ServerHarness server, FakeAgent agent)
     {
         private readonly List<Assignment> _waiting = [];
 

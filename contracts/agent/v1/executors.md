@@ -133,7 +133,7 @@ concluding that a VM is absent the executor checks that the token has `VM.Audit`
 
 ### `observe`
 
-Examples: [input](examples/proxmox/observe.input.json), [output](examples/proxmox/observe.output.json).
+Examples: [input](examples/proxmox/observe.input.json), [output](examples/proxmox/observe.output.json), [that cannot show every VM](examples/proxmox/observe.output.incomplete-visibility.json).
 
 Input: `{ "connection": { … } }`
 

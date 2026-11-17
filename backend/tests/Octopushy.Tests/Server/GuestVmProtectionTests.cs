@@ -164,6 +164,37 @@ public class GuestVmProtectionTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Contains("VM 310 no longer exists", run.Detail);
     }
 
+    /// <summary>
+    /// previous and absent, as the set-protection example in contracts/agent/v1/examples has them: a lift that found protection
+    /// on is restored after a failed apply, and a restore that found no VM says so.
+    /// </summary>
+    [Fact]
+    public async Task The_restore_reads_previous_and_absent_from_the_set_protection_example()
+    {
+        await using var server = await StartAsync();
+        var agent = await server.ConnectAgentAsync("home");
+        await FailFirstApplyAsync(server, agent);
+        await PlanAgainAsync(server);
+        await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, VmPlan(Replace, Tainted), artifacts: FakeAgent.PlanArtifact());
+        var lift = ContractExamples.Output("proxmox", "set-protection");
+        Assert.True(lift["previous"]!.GetValue<bool>());
+        await agent.ReportAsync(await agent.NextAsync("set-protection"), Outcome.Succeeded, lift);
+        await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Failed, error: BridgeMissing);
+
+        // previous: protection was on, so it is put back.
+        var restore = await agent.NextAsync("set-protection");
+        Assert.True(JsonNode.Parse(restore.InputJson)!["protection"]!.GetValue<bool>());
+        // absent: the example's fields, with the values of a restore that found the VM gone.
+        var gone = ContractExamples.Output("proxmox", "set-protection");
+        (gone["absent"], gone["previous"], gone["protection"]) = (true, null, null);
+        await agent.ReportAsync(restore, Outcome.Succeeded, gone);
+        await server.TickAsync();
+
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Failed, run.Status);
+        Assert.Contains("VM 310 no longer exists", run.Detail);
+    }
+
     [Fact]
     public async Task A_restore_that_fails_says_so_and_a_rerun_still_works()
     {

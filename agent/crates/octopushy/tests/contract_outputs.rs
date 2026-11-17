@@ -262,9 +262,8 @@ async fn ansible_outputs_are_the_examples() {
     }
 }
 
-#[tokio::test]
-async fn proxmox_outputs_are_the_examples() {
-    // mock-proxmox's home, where VMID 310 is the example guest, made and verified by Octopushy, still protected.
+/// mock-proxmox's home, where VMID 310 is the example guest, made and verified by Octopushy, still protected.
+fn example_home() -> Fixture {
     let mut fixture = Fixture::example();
     fixture.vms.retain(|vm| vm.vmid != 310);
     fixture.vms.push(FixtureVm {
@@ -282,7 +281,11 @@ async fn proxmox_outputs_are_the_examples() {
         max_memory_bytes: 4 * 1024 * 1024 * 1024,
         uptime_seconds: 3600,
     });
-    let mock = mock_proxmox::start(
+    fixture
+}
+
+async fn start_mock(fixture: Fixture) -> mock_proxmox::RunningMock {
+    mock_proxmox::start(
         fixture,
         Options {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -290,7 +293,47 @@ async fn proxmox_outputs_are_the_examples() {
         },
     )
     .await
-    .unwrap();
+    .unwrap()
+}
+
+/// The same home, observed with a token whose VM.Audit on /vms does not propagate: Proxmox would leave VMs out, and the
+/// executor says so (`proxmox/observe.output.incomplete-visibility.json`).
+#[tokio::test]
+async fn an_observation_that_cannot_show_every_vm_is_its_example() {
+    let mut fixture = example_home();
+    fixture.privileges_propagate = false;
+    let mock = start_mock(fixture).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(
+        dir.path(),
+        ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
+    );
+    let mut input = input("proxmox", "observe");
+    input["connection"] = json!({ "endpoint": mock.endpoint(), "verifyTls": false, "caCertificatePem": mock.ca_pem() });
+    let secrets = HashMap::from([("proxmox.token".to_owned(), mock.token())]);
+    let done = exec(
+        &cfg,
+        dir.path(),
+        "proxmox",
+        "observe",
+        &input,
+        secrets,
+        vec![],
+        vec![],
+    )
+    .await;
+    check_output(
+        "proxmox",
+        "observe",
+        Some("incomplete-visibility"),
+        &done.outputs,
+        &[],
+    );
+}
+
+#[tokio::test]
+async fn proxmox_outputs_are_the_examples() {
+    let mock = start_mock(example_home()).await;
     let dir = tempfile::tempdir().unwrap();
     let cfg = config(
         dir.path(),

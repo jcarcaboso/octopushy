@@ -3,15 +3,15 @@
 One input and one output per executor action of [executors.md](../executors.md), as JSON:
 `<executor>/<action>.input.json` and `<executor>/<action>.output.json`. A file named
 `<action>.output.<variant>.json` is another shape the same action reports, such as a playbook's
-declared outcome. The backend and the agent are both tested against these files, so a field
-renamed on one side fails a test.
+declared outcome or an observation that cannot show every VM. The backend and the agent are both
+tested against these files, so a field renamed on one side fails a test.
 
 Each side writes what it produces and reads what the other produces:
 
 | | Written and compared by | Read by |
 |---|---|---|
 | Inputs | `ContractExampleTests` (backend): the example lab's guest `home/korriban/krb-app-01` through provision, configure and retire, and a built template's build, each input from `AssignmentBuilder` | `executors::contract_inputs` (agent): each input parsed into the executor's own input type, and every value of it changed in turn, which must change what the executor parsed |
-| Outputs | `contract_outputs.rs` and `nix_build.rs` (agent): each executor run on its input example, with tools that print what the real ones printed (`agent/crates/octopushy/tests/fixtures/contract`) and mock-proxmox | `ContractOutputReadTests` and `ContractExampleTests` (backend), whose readers must come out with each example's values, and `FakeAgent`, which reports the examples when a test gives no outputs and refuses outputs a test made up in another shape |
+| Outputs | `contract_outputs.rs` and `nix_build.rs` (agent): each executor run on its input example, with tools that print what the real ones printed (`agent/crates/octopushy/tests/fixtures/contract`) and mock-proxmox | `ContractOutputReadTests`, `ContractObservationReadTests` and `ContractExampleTests` (backend), and one test each in `GuestVmProtectionTests` (set-protection) and `ManagedAccessTests` (a run's recap), whose readers must come out with each example's values, and `FakeAgent`, which reports the examples when a test gives no outputs and refuses outputs a test made up in another shape |
 
 Comparisons are of keys at every level, array lengths, the kind of each value, and the values,
 except where a value depends on the run: the commits and run ids of inputs, the build key, and a
@@ -39,3 +39,6 @@ These fields of executors.md have no example, so nothing checks them across the 
   `hostKeysError` of a container.
 - `ansible/run`: the input's `approvedVars`, `prepared` and `expectRefused`, and the output `refusedKeys`.
 - Outputs of failed attempts.
+
+The deploy wizard reads an observed host's `status` before its `online`; no agent reports a
+host's `status`, so only the fallback to `online` is checked.
