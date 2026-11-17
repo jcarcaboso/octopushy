@@ -216,10 +216,12 @@ public sealed class ServerHarness : IAsyncDisposable
     public string DataDirectory => _dataDirectory;
 
     /// <param name="services">Replaces or adds services, such as an interceptor that fails a save on purpose.</param>
+    /// <param name="dataDirectory">Fills the data directory before the server first starts, as an earlier release left it.</param>
     public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null, TimeProvider? clock = null,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null, Action<string>? dataDirectory = null)
     {
         var harness = new ServerHarness(await postgres.NewMigratedDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock, services);
+        dataDirectory?.Invoke(harness._dataDirectory);
         _ = harness._factory.Server;
         harness.Commit("Initial definitions");
         await harness.WithDbAsync(async db =>

@@ -1368,6 +1368,12 @@ public sealed class User
     public required string PasswordHash { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>
+    /// Every session cookie carries the stamp it was issued with, and one with another stamp is refused. Sign-out
+    /// replaces it, and so must anything that changes the password.
+    /// </summary>
+    public Guid SessionStamp { get; set; }
 }
 
 /// <summary>A separately revocable operator grant. Only its SHA-256 hash is retained.</summary>

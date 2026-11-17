@@ -136,18 +136,18 @@ public static class AccountEndpoints
                 return TypedResults.Problem(title: problem, statusCode: StatusCodes.Status400BadRequest);
             }
 
-            var user = new User { Username = request.Username.Trim(), PasswordHash = "", CreatedAt = clock.GetUtcNow() };
+            var user = new User { Username = request.Username.Trim(), PasswordHash = "", CreatedAt = clock.GetUtcNow(), SessionStamp = Guid.NewGuid() };
             user.PasswordHash = Hasher.HashPassword(user, request.Password);
             db.Users.Add(user);
             await db.SaveChangesAsync(ct);
             setup.Remove();
-            await SignInAsync(http, user);
+            await SignInAsync(http, user, clock);
             return TypedResults.Ok(new AuthState(false, true, user.Username));
         })
         .WithName("setupAccount")
         .RequireRateLimiting(LoginRateLimit);
 
-        group.MapPost("/login", async Task<Results<Ok<AuthState>, ProblemHttpResult>> (LoginRequest request, HttpContext http, OctopushyDb db, AccountLoginLimiter limiter, CancellationToken ct) =>
+        group.MapPost("/login", async Task<Results<Ok<AuthState>, ProblemHttpResult>> (LoginRequest request, HttpContext http, OctopushyDb db, AccountLoginLimiter limiter, TimeProvider clock, CancellationToken ct) =>
         {
             var username = request.Username.Trim();
             using var lease = limiter.AttemptLimiter.AttemptAcquire(AccountLoginLimiter.Bucket(username, SignedInBefore(http, username)));
@@ -178,18 +178,28 @@ public static class AccountEndpoints
                 await db.SaveChangesAsync(ct);
             }
 
-            await SignInAsync(http, user!);
+            await SignInAsync(http, user!, clock);
             return TypedResults.Ok(new AuthState(false, true, user!.Username));
         })
         .WithName("login")
         .RequireRateLimiting(LoginRateLimit);
 
-        group.MapPost("/logout", async (HttpContext http) =>
+        group.MapPost("/logout", async (HttpContext http, OctopushyDb db, CancellationToken ct) =>
         {
+            // A new stamp ends every session of the user. An operator grant is its own credential and is not signed out.
+            var session = http.User.Identities.FirstOrDefault(identity =>
+                identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+            if (int.TryParse(session?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId))
+            {
+                var stamp = Guid.NewGuid();
+                await db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s.SetProperty(u => u.SessionStamp, stamp), ct);
+            }
+
             await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             return TypedResults.NoContent();
         })
-        .WithName("logout");
+        .WithName("logout")
+        .WithDescription("Signs the account out of every browser, not only this one. Operator CLI grants keep working.");
     }
 
     private static string? PasswordProblem(string username, string password)
@@ -222,7 +232,7 @@ public static class AccountEndpoints
         }
     }
 
-    private static Task SignInAsync(HttpContext http, User user)
+    private static Task SignInAsync(HttpContext http, User user, TimeProvider clock)
     {
         http.Response.Cookies.Append(KnownBrowserCookie, KnownBrowsers(http).Protect(user.Username), new CookieOptions
         {
@@ -232,9 +242,6 @@ public static class AccountEndpoints
             Path = "/api/auth",
             MaxAge = TimeSpan.FromDays(365),
         });
-        var identity = new ClaimsIdentity(
-            [new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())],
-            CookieAuthenticationDefaults.AuthenticationScheme);
-        return http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        return http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, Sessions.Principal(user, clock.GetUtcNow()));
     }
 }

@@ -74,6 +74,7 @@ function Account() {
         <button
           type="button"
           className="account__item"
+          title="Signs this account out of every browser"
           onClick={() => logout.mutate(undefined, { onSettled: () => navigate("/login", { replace: true }) })}
           disabled={logout.isPending}
         >

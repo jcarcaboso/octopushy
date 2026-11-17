@@ -210,6 +210,7 @@
         "tags": [
           "Account"
         ],
+        "description": "Signs the account out of every browser, not only this one. Operator CLI grants keep working.",
         "operationId": "logout",
         "responses": {
           "400": {

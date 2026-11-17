@@ -61,6 +61,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Signs the account out of every browser, not only this one. Operator CLI grants keep working. */
         post: operations["logout"];
         delete?: never;
         options?: never;

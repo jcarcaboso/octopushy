@@ -35,6 +35,8 @@ public sealed class OctopushyOptions
 
     public StoreOptions Store { get; set; } = new();
 
+    public SessionOptions Sessions { get; set; } = new();
+
     public ToolOptions Tools { get; set; } = new();
 
     public SchedulingOptions Scheduling { get; set; } = new();
@@ -175,6 +177,13 @@ public sealed class StoreOptions
 {
     /// <summary>The key-encryption key: 32 random bytes, created on first start when missing.</summary>
     public string? KeyFile { get; set; }
+}
+
+/// <summary>Web sessions. One expires after 12 hours unused, and ends at its absolute lifetime even while in use.</summary>
+public sealed class SessionOptions
+{
+    /// <summary>How long after signing in a session ends, however often it is used.</summary>
+    public int AbsoluteLifetimeDays { get; set; } = 7;
 }
 
 public sealed class ToolOptions
