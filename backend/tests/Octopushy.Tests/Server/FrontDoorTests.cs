@@ -30,7 +30,8 @@ public class FrontDoorTests(PostgresFixture postgres)
     public async Task A_user_name_gets_a_limited_number_of_attempts_from_any_address()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false, services: WithPeerHeader);
-        await server.SignedInClientAsync();
+        var operatorBrowser = await server.SignedInClientAsync();
+        (await operatorBrowser.PostAsync("/api/auth/logout", null)).EnsureSuccessStatusCode();
         using var client = server.CreateClient();
 
         // Each attempt comes from its own address, so the limit per address never applies; padding still names the user.
@@ -43,6 +44,10 @@ public class FrontDoorTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.TooManyRequests,
             (await LoginAsync(client, "10.3.1.1", "fixture-trust", "synthetic trust password")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await LoginAsync(client, "10.3.1.2", "someone-else", "a wrong password")).StatusCode);
+
+        // The browser the operator signed in from before is counted apart, so the attack does not keep it out.
+        Assert.Equal(HttpStatusCode.OK,
+            (await LoginAsync(operatorBrowser, "10.3.1.3", "fixture-trust", "synthetic trust password")).StatusCode);
     }
 
     [Fact]

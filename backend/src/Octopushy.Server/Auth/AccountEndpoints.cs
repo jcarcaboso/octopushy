@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -63,9 +64,9 @@ public sealed record SetupRequest(string SetupCode, string Username, string Pass
 public sealed record LoginRequest(string Username, string Password);
 
 /// <summary>
-/// Sign-in attempts per user name, from any address, next to the limit per address. Someone who sends wrong passwords
-/// for a real user name holds that user's sign-in off until they stop and a window passes; sessions and operator
-/// tokens keep working meanwhile.
+/// Sign-in attempts per user name, from any address, next to the limit per address. A browser that signed in as the
+/// user before counts apart from everyone else, so someone who sends wrong passwords for a real user name cannot keep
+/// the operator's own browser out. A browser new to the user waits until they stop and a window passes.
 /// </summary>
 public sealed class AccountLoginLimiter : IDisposable
 {
@@ -78,9 +79,12 @@ public sealed class AccountLoginLimiter : IDisposable
     public PartitionedRateLimiter<int> AttemptLimiter { get; } = PartitionedRateLimiter.Create<int, int>(bucket =>
         RateLimitPartition.GetFixedWindowLimiter(bucket, _ => new FixedWindowRateLimiterOptions { PermitLimit = PermitLimit, Window = Window }));
 
-    /// <summary>The bucket of a user name as login looks it up: trimmed, and compared exactly.</summary>
-    public static int Bucket(string username) =>
-        (int)(BitConverter.ToUInt32(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(username))) % Buckets);
+    /// <summary>
+    /// The bucket of a user name as login looks it up: trimmed, and compared exactly. Browsers the user signed in from
+    /// before share a second bucket.
+    /// </summary>
+    public static int Bucket(string username, bool knownBrowser) =>
+        (int)(BitConverter.ToUInt32(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(username))) % Buckets) + (knownBrowser ? Buckets : 0);
 
     public void Dispose() => AttemptLimiter.Dispose();
 }
@@ -88,6 +92,9 @@ public sealed class AccountLoginLimiter : IDisposable
 public static class AccountEndpoints
 {
     public const string LoginRateLimit = "login";
+
+    /// <summary>Set at sign-in and kept through sign-out: the user name, sealed, so the server knows the browser again.</summary>
+    public const string KnownBrowserCookie = "octopushy_known";
 
     private static readonly PasswordHasher<User> Hasher = new();
 
@@ -143,7 +150,7 @@ public static class AccountEndpoints
         group.MapPost("/login", async Task<Results<Ok<AuthState>, ProblemHttpResult>> (LoginRequest request, HttpContext http, OctopushyDb db, AccountLoginLimiter limiter, CancellationToken ct) =>
         {
             var username = request.Username.Trim();
-            using var lease = limiter.AttemptLimiter.AttemptAcquire(AccountLoginLimiter.Bucket(username));
+            using var lease = limiter.AttemptLimiter.AttemptAcquire(AccountLoginLimiter.Bucket(username, SignedInBefore(http, username)));
             if (!lease.IsAcquired)
             {
                 return TypedResults.Problem(title: "Too many sign-in attempts for this user name. Try again later.", statusCode: StatusCodes.Status429TooManyRequests);
@@ -195,8 +202,36 @@ public static class AccountEndpoints
         return password.Length < 12 ? "Use a password of at least 12 characters." : null;
     }
 
+    private static IDataProtector KnownBrowsers(HttpContext http) =>
+        http.RequestServices.GetRequiredService<IDataProtectionProvider>().CreateProtector("octopushy.known-browser");
+
+    private static bool SignedInBefore(HttpContext http, string username)
+    {
+        if (!http.Request.Cookies.TryGetValue(KnownBrowserCookie, out var value) || value.Length > 1024)
+        {
+            return false;
+        }
+
+        try
+        {
+            return KnownBrowsers(http).Unprotect(value) == username;
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+    }
+
     private static Task SignInAsync(HttpContext http, User user)
     {
+        http.Response.Cookies.Append(KnownBrowserCookie, KnownBrowsers(http).Protect(user.Username), new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            Secure = http.Request.IsHttps,
+            Path = "/api/auth",
+            MaxAge = TimeSpan.FromDays(365),
+        });
         var identity = new ClaimsIdentity(
             [new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())],
             CookieAuthenticationDefaults.AuthenticationScheme);
