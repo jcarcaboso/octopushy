@@ -453,6 +453,40 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
     }
 
     [Fact]
+    public async Task A_connection_is_registered_with_its_offer_or_not_at_all()
+    {
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres, clock: clock);
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        var (oldStream, old) = await StreamAsync(server, agent, new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } });
+        Task<string?> StoredAsync() => server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => a.Unavailable).SingleAsync());
+        AgentSession Newer(string reason) => new(agent.Id, "home", ["opentofu", "proxmox"], unavailable: new SortedDictionary<string, string> { ["ansible"] = reason });
+
+        // The older connection stores its own offer after the newer one's Hello would have stored the newer one's.
+        Assert.True(old.SetExecutors(["proxmox"], new SortedDictionary<string, string> { ["opentofu"] = "the older connection's" }));
+        old.OfferUnsaved = true;
+        clock.Now += RunEngine.OfferEffectsEvery;
+        await server.Engine.FlushOfferAsync(old, CancellationToken.None);
+        Assert.Equal("the older connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
+
+        // A registration that is cancelled registers nothing and stores nothing: the older connection is still the agent's.
+        var cancelled = Newer("never registered");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            server.Engine.RegisterAsync(cancelled, () => connections.Add(cancelled), new CancellationToken(canceled: true)));
+        Assert.Same(old, connections.Get(agent.Id));
+        Assert.Equal("the older connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
+
+        // One that completes leaves the record the newer connection's, whatever was stored before.
+        var current = Newer("the newer connection's");
+        await server.Engine.RegisterAsync(current, () => connections.Add(current), CancellationToken.None);
+        Assert.Same(current, connections.Get(agent.Id));
+        Assert.Equal("the newer connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
+        Assert.Equal(["opentofu", "proxmox"], await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => a.Executors).SingleAsync()));
+        oldStream.Complete();
+    }
+
+    [Fact]
     public async Task An_offer_whose_write_failed_is_stored_by_a_later_heartbeat()
     {
         var clock = new TestClock { Now = Start };

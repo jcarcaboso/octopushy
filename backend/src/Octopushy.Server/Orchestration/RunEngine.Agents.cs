@@ -501,14 +501,17 @@ public sealed partial class RunEngine
         WithDbAsync(db => ApplyOfferEffectsAsync(db, session, cancellationToken), cancellationToken);
 
     /// <summary>
-    /// Stores what a connection that has just replaced an older one of its agent offers. Its Hello stored the same before the
-    /// older connection was replaced, and a change of that one still queued then may have stored over it since.
+    /// Makes <paramref name="session"/> its agent's connection and stores what it offers, as one step under the engine's gate:
+    /// the offer first, then <paramref name="register"/>, with nothing in between that can be cancelled. An older connection
+    /// of the agent may have stored its own offer since this one's Hello did; after this the record is this connection's, and
+    /// the older one stores nothing more (see <see cref="ApplyOfferEffectsAsync"/>). If the write fails or is cancelled, the
+    /// connection is not registered.
     /// </summary>
-    public Task StoreOfferAsync(AgentSession session, CancellationToken cancellationToken) =>
+    public Task RegisterAsync(AgentSession session, Action register, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
-            if (connections.Get(session.AgentId) == session)
-                await WriteOfferAsync(db, session, cancellationToken);
+            await WriteOfferAsync(db, session, cancellationToken);
+            register();
         }, cancellationToken);
 
     private static Task WriteOfferAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
