@@ -2171,6 +2171,13 @@ export interface components {
             canRunAgain: boolean;
             /** @default false */
             canForceStop: boolean;
+            images?: null | components["schemas"]["RunImageDto"][];
+            baselineCommit?: null | string;
+        };
+        RunImageDto: {
+            service: string;
+            before: null | string;
+            after: null | string;
         };
         RunPolicyDto: {
             approval: string;

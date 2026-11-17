@@ -4,7 +4,7 @@ import { emphasize, type Row, type Tile } from "../../lib/changes";
 const markClass: Record<Row["mark"], string> = { "+": "add", "−": "remove", "±": "remove", "~": "", "": "" };
 
 /** "32 → 64 GiB" with the old side quiet; "+agents −old" with each sign in its colour. */
-function TileValue({ value }: { value: string }) {
+export function TileValue({ value }: { value: string }) {
   const [before, after] = value.split(" → ");
   if (after !== undefined) {
     const unit = /^(\S+) ([A-Za-z]+)$/.exec(after);
@@ -52,10 +52,21 @@ function RowLine({ row, unchanged = false }: { row: Row; unchanged?: boolean }) 
   );
 }
 
-function Detail({ tile, id }: { tile: Tile; id: string }) {
+/** The "+ N unchanged" toggle under a list of changes. */
+export function UnchangedToggle({ count, shown, onToggle }: { count: number; shown: boolean; onToggle: () => void }) {
+  if (count === 0) return null;
+  return (
+    <button type="button" className="overview__more" aria-expanded={shown} onClick={onToggle}>
+      {shown ? "− hide unchanged" : `+ ${count} unchanged`}
+    </button>
+  );
+}
+
+/** A tile's rows as a table, with its unchanged rows behind a toggle. */
+export function ChangeRows({ tile }: { tile: Tile }) {
   const [showUnchanged, setShowUnchanged] = useState(false);
   return (
-    <div id={id} className="overview__panel" role="region" aria-label={tile.label}>
+    <>
       {tile.heading ? <div className="overview__heading mono">{tile.heading}</div> : null}
       {tile.rows.length > 0 || showUnchanged ? (
         <table className="overview__rows">
@@ -67,11 +78,15 @@ function Detail({ tile, id }: { tile: Tile; id: string }) {
       ) : (
         <p className="muted small">Nothing changes here.</p>
       )}
-      {tile.unchanged.length > 0 ? (
-        <button type="button" className="overview__more" aria-expanded={showUnchanged} onClick={() => setShowUnchanged((on) => !on)}>
-          {showUnchanged ? "− hide unchanged" : `+ ${tile.unchanged.length} unchanged`}
-        </button>
-      ) : null}
+      <UnchangedToggle count={tile.unchanged.length} shown={showUnchanged} onToggle={() => setShowUnchanged((on) => !on)} />
+    </>
+  );
+}
+
+function Detail({ tile, id }: { tile: Tile; id: string }) {
+  return (
+    <div id={id} className="overview__panel" role="region" aria-label={tile.label}>
+      <ChangeRows tile={tile} />
     </div>
   );
 }

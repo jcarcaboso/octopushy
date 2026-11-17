@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runDetail, sha } from "../test/runs";
+import type { RunDetail } from "../api/types";
+import { created, runDetail, sha } from "../test/runs";
 import { mockApi, problem, renderAt } from "../test/utils";
 import { RunPage } from "./RunPage";
 
@@ -81,6 +82,7 @@ it("names the workflow a run executed, its version and the commit its files came
   mockApi({ "GET /api/runs/run-1": () => detail });
   renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
   expect(await screen.findByText("fedora-vm@2.3")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "All details" }));
   expect(screen.getByText("c0ffee1234")).toBeInTheDocument();
   expect(screen.getByText("git@github.com:jcarcaboso/octopushy-lab.git")).toBeInTheDocument();
 });
@@ -132,7 +134,8 @@ it("shows what a configure run will do, and approves that preview", async () => 
     "POST /api/runs/run-1/steps/step-approval/approve": () => undefined,
   });
   renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  expect(await screen.findByText("ops@10.15.60.10:22")).toBeTruthy();
+  await userEvent.click(await screen.findByRole("button", { name: /Preview/ }));
+  expect(screen.getByText("ops@10.15.60.10:22")).toBeTruthy();
   expect(screen.getByText("ssh-ed25519 SHA256:abcdef")).toBeTruthy();
   expect(screen.getByText("access/pve01-ai/ssh-key v2")).toBeTruthy();
   expect(screen.getByText("M modules/ansible/ai-server/site.yml")).toBeTruthy();
@@ -145,7 +148,7 @@ it("shows what a configure run will do, and approves that preview", async () => 
   expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/steps/step-approval/approve");
 });
 
-it("opens an approval with tiles of what changes, one detail at a time", async () => {
+it("lists what an approval will change, one line per kind, opening in place", async () => {
   const detail = runDetail({ operation: "provision" });
   detail.steps[0].plan!.changes[0] = {
     ...detail.steps[0].plan!.changes[0],
@@ -157,25 +160,33 @@ it("opens an approval with tiles of what changes, one detail at a time", async (
   };
   mockApi({ "GET /api/runs/run-1": () => detail });
   renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
-  const tiles = within(await screen.findByRole("group", { name: "What changes" }));
-  const disk = tiles.getByRole("button", { name: /Disk/ });
-  const resources = tiles.getByRole("button", { name: /Resources/ });
-  expect(tiles.getByRole("button", { name: /Memory/ })).toHaveAttribute("aria-expanded", "false");
+  const section = within(await screen.findByRole("region", { name: "What will change" }));
+  const disk = section.getByRole("button", { name: /Disk/ });
+  const memory = section.getByRole("button", { name: /Memory/ });
+  const resources = section.getByRole("button", { name: /Resources/ });
   expect(screen.getByText("What this run will apply, not read from the guest.")).toBeInTheDocument();
-  expect(screen.queryByRole("region", { name: "Disk" })).toBeNull();
 
-  await userEvent.click(disk);
+  // The first line is open, the others are not.
   expect(disk).toHaveAttribute("aria-expanded", "true");
-  const panel = screen.getByRole("region", { name: "Disk" });
+  expect(memory).toHaveAttribute("aria-expanded", "false");
+  const panel = section.getByRole("region", { name: "Disk" });
   expect(within(panel).getByText("scsi0 size")).toBeInTheDocument();
   expect(within(panel).getByText("32 GiB")).toBeInTheDocument();
+  expect(section.queryByRole("region", { name: "Memory" })).toBeNull();
 
   await userEvent.click(resources);
-  expect(disk).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByRole("region", { name: "Resources" })).toHaveTextContent("terraform_data.marker");
+  expect(resources).toHaveAttribute("aria-expanded", "true");
+  expect(section.getByRole("region", { name: "Resources" })).toHaveTextContent("terraform_data.marker");
+  expect(disk).toHaveAttribute("aria-expanded", "true");
 
-  await userEvent.keyboard("{Escape}");
-  expect(resources).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(disk);
+  expect(disk).toHaveAttribute("aria-expanded", "false");
+  expect(section.queryByRole("region", { name: "Disk" })).toBeNull();
+
+  // With no image data, the headline is the most telling before and after of the plan.
+  const summary = within(screen.getByRole("region", { name: "Summary" }));
+  expect(summary.getByText("Disk · scsi0 · grow")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Versions/ })).toBeNull();
 });
 
 describe("RunPage", () => {
@@ -190,10 +201,15 @@ describe("RunPage", () => {
 
     renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
 
-    expect(await screen.findByRole("heading", { name: /Run #12/ })).toBeInTheDocument();
-    expect(screen.getByText("proxmox_virtual_environment_vm.this")).toBeInTheDocument();
-    expect(screen.getAllByText("Replace").length).toBeGreaterThan(0);
-    expect(screen.getByText("OpenTofu 1.10.6")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: /krb-app-01/ })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent("Runs / Run #12");
+    await waitFor(() => expect(document.title).toBe("Run #12 · Octopushy"));
+    expect(within(screen.getByRole("region", { name: "Resources" })).getByText("proxmox_virtual_environment_vm.this")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Plan/ }));
+    const plan = within(screen.getByRole("region", { name: "Plan" }));
+    expect(plan.getByText("proxmox_virtual_environment_vm.this")).toBeInTheDocument();
+    expect(plan.getAllByText("Replace").length).toBeGreaterThan(0);
+    expect(plan.getByText("OpenTofu 1.10.6")).toBeInTheDocument();
     for (const link of screen.getAllByRole("link", { name: "home/proxmox/korriban/guests/krb-app-01" })) {
       expect(link).toHaveAttribute("href", "/guests/guest-1");
     }
@@ -257,6 +273,7 @@ describe("RunPage", () => {
 
     renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
     expect(await screen.findByText("Store value changed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "All details" }));
     expect(screen.getByText(/shared\/git-ssh-key v2 to v3/)).toBeInTheDocument();
   });
 
@@ -274,3 +291,161 @@ describe("RunPage", () => {
   });
 });
 
+
+/** A finished pipeline of a service: preview, approval, playbook. */
+function serviceRun(status: string, images: RunDetail["images"]) {
+  const detail = runDetail({
+    operation: "pipeline", status, currentStep: null, resourceKind: "service", resourceId: "svc-fleet",
+    address: "home/pve01/dev/fleet", detail: null, finishedAt: "2026-10-20T08:05:00Z",
+  });
+  const [plan, approval] = detail.steps;
+  detail.steps = [
+    { ...plan, id: "step-preview", name: "preview", stage: "deploy", plan: null },
+    { ...approval, status: "succeeded", stage: null, approval: { ...approval.approval!, decision: "approved", decidedBy: "ops", decidedAt: created } },
+    {
+      ...plan, id: "step-playbook", ordinal: 2, name: "playbook", stage: "deploy", plan: null, status,
+      detail: status === "failed" ? "The playbook failed at Wait for the container." : null,
+      attempts: [{ ...plan.attempts[0], id: "attempt-play", executor: "ansible", action: "run", status, mutating: true,
+        error: status === "failed" ? "fatal: [web]: FAILED! container exited with code 1" : null }],
+    },
+  ];
+  detail.images = images;
+  detail.baselineCommit = "a41c09e1234567890";
+  detail.canCancel = false;
+  return detail;
+}
+
+const fleetImages = [
+  { service: "server", before: "docker.io/skorcius/fleet-manager:0.12.4", after: "docker.io/skorcius/fleet-manager:0.13.0" },
+  { service: "dashboard", before: "docker.io/skorcius/fleet-dashboard:dashboard-0.12.4", after: "docker.io/skorcius/fleet-dashboard:dashboard-0.13.0" },
+  { service: "db", before: "docker.io/library/postgres:17.2-alpine", after: "docker.io/library/postgres:17.2-alpine" },
+];
+
+describe("RunPage for a service", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("leads with the main image's version bump and lists every image under Versions", async () => {
+    mockApi({ "GET /api/runs/run-1": () => serviceRun("succeeded", fleetImages) });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+    const summary = within(await screen.findByRole("region", { name: "Summary" }));
+    expect(summary.getByText("Deployed")).toBeInTheDocument();
+    expect(summary.getByText("0.12.4")).toBeInTheDocument();
+    expect(summary.getByText("Minor")).toBeInTheDocument();
+    expect(summary.getByText("fleet-manager")).toBeInTheDocument();
+    expect(summary.getByText(/and 1 other image/)).toBeInTheDocument();
+    expect(summary.getByText(/approved by ops/)).toBeInTheDocument();
+
+    const versions = screen.getByRole("button", { name: /Versions/ });
+    expect(versions).toHaveAttribute("aria-expanded", "true");
+    expect(versions).toHaveTextContent("2 bumped · 1 unchanged");
+    const panel = within(screen.getByRole("region", { name: "Versions" }));
+    expect(panel.getByText("dashboard")).toBeInTheDocument();
+    expect(panel.getByText("docker.io/skorcius/fleet-dashboard")).toBeInTheDocument();
+    expect(panel.getAllByText("Minor")).toHaveLength(2);
+    // Only the part of the tag that changed is bold.
+    expect(panel.getAllByText("13").every((el) => el.tagName === "B")).toBe(true);
+    expect(panel.queryByText("db")).toBeNull();
+
+    await userEvent.click(panel.getByRole("button", { name: "+ 1 unchanged" }));
+    expect(panel.getByText("db")).toBeInTheDocument();
+    expect(panel.getByText("a41c09e")).toBeInTheDocument();
+  });
+
+  it("names a new image and keeps quiet when no image changed", async () => {
+    const images = [{ service: "db", before: "postgres:17", after: "postgres:17" }];
+    mockApi({ "GET /api/runs/run-1": () => serviceRun("succeeded", images) });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    expect(await screen.findByRole("button", { name: /Versions/ })).toHaveTextContent("1 unchanged");
+    expect(within(screen.getByRole("region", { name: "Summary" })).queryByText(/→/)).toBeNull();
+  });
+
+  it("opens a failed step with its log, and names it with its error at the top", async () => {
+    mockApi({
+      "GET /api/runs/run-1": () => serviceRun("failed", fleetImages),
+      "GET /api/attempts/attempt-play/log": () => ({
+        lines: [{ sequence: 1, unixMs: Date.parse(created), stream: "stderr", text: "jellyfin exited with code 1" }],
+        next: 1,
+        finished: true,
+      }),
+    });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+    const summary = within(await screen.findByRole("region", { name: "Summary" }));
+    expect(summary.getByText("Failed")).toBeInTheDocument();
+    expect(summary.getByText("deploy · Run the playbook")).toBeInTheDocument();
+    expect(summary.getByText("fatal: [web]: FAILED! container exited with code 1")).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: /Run the playbook/ })).toHaveAttribute("aria-expanded", "true");
+    const step = within(screen.getByRole("region", { name: "deploy · Run the playbook" }));
+    expect(await step.findByText("jellyfin exited with code 1")).toBeInTheDocument();
+    expect(step.getByRole("log", { name: "Attempt log" })).toBeInTheDocument();
+    // A step that succeeded stays closed.
+    expect(screen.getByRole("button", { name: /Preview/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens a step that succeeded on click, and keeps a closed step closed when the run refreshes", async () => {
+    const detail = serviceRun("running", null);
+    const { fetchMock } = mockApi({ "GET /api/runs/run-1": () => detail, "GET /api/services/svc-fleet": () => problem(404, "Gone") });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+    const preview = await screen.findByRole("button", { name: /Preview/ });
+    expect(preview).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "deploy · Preview" })).toBeNull();
+    await userEvent.click(preview);
+    expect(preview).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("region", { name: "deploy · Preview" })).toHaveTextContent("Attempt 1");
+
+    const playbook = screen.getByRole("button", { name: /Run the playbook/ });
+    expect(playbook).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(playbook);
+    expect(playbook).toHaveAttribute("aria-expanded", "false");
+
+    const calls = fetchMock.mock.calls.length;
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls), { timeout: 4000 });
+    expect(playbook).toHaveAttribute("aria-expanded", "false");
+    expect(preview).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("How it is going")).toBeInTheDocument();
+  }, 8000);
+
+  it("closes a running step nobody touched once it is done", async () => {
+    let status = "running";
+    const { fetchMock } = mockApi({ "GET /api/runs/run-1": () => serviceRun(status, null), "GET /api/services/svc-fleet": () => problem(404, "Gone") });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+    const playbook = await screen.findByRole("button", { name: /Run the playbook/ });
+    expect(playbook).toHaveAttribute("aria-expanded", "true");
+    status = "succeeded";
+    const calls = fetchMock.mock.calls.length;
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls), { timeout: 4000 });
+    await waitFor(() => expect(playbook).toHaveAttribute("aria-expanded", "false"));
+  }, 8000);
+
+  it("keeps a step that awaits approval closed, with the approval in the summary", async () => {
+    const detail = runDetail({ operation: "pipeline", status: "awaiting-approval", currentStep: "approval" });
+    mockApi({ "GET /api/runs/run-1": () => detail });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+    const summary = within(await screen.findByRole("region", { name: "Summary" }));
+    expect(summary.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approval.*waits for you/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the run's facts, policy and agent labels under All details", async () => {
+    mockApi({ "GET /api/runs/run-1": () => serviceRun("succeeded", fleetImages) });
+    renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+    const toggle = await screen.findByRole("button", { name: "All details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "All details" })).toBeNull();
+
+    await userEvent.click(toggle);
+    const details = within(screen.getByRole("region", { name: "All details" }));
+    expect(details.getByText("Compared with")).toBeInTheDocument();
+    expect(details.getByText("Destructive")).toBeInTheDocument();
+    expect(details.getByText("site-a")).toBeInTheDocument();
+    expect(details.getByText("set by home/lab.yaml")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide details" }));
+    expect(screen.queryByRole("region", { name: "All details" })).toBeNull();
+  });
+});

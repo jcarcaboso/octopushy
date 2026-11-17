@@ -122,6 +122,14 @@ public sealed record RunContext
     /// </summary>
     public JsonNode? PreviousPrepared { get; init; }
 
+    /// <summary>
+    /// The images a service's compose file names at this run's commit and at the commit last applied for the service,
+    /// as they were when this run was made. Shown only, like <see cref="PreviousPrepared"/>: it is never sent to an agent,
+    /// and no manifest, approval document or hash names it. Null for anything but a service with a readable compose file,
+    /// and in a run made before it was kept.
+    /// </summary>
+    public ComposeImagesContext? ComposeImages { get; init; }
+
     /// <summary>A role as a pipeline run records it.</summary>
     public static string StageRole(string stage, string role) => $"{stage}/{role}";
 
@@ -179,6 +187,15 @@ public sealed record WorkflowContext(string Id, string Version, string Reference
         ["repository"] = Repository,
     };
 }
+
+/// <summary>
+/// See <see cref="RunContext.ComposeImages"/>. <paramref name="BaselineCommit"/> is the commit the <c>Before</c> side was
+/// read at, null when nothing was applied before.
+/// </summary>
+public sealed record ComposeImagesContext(string? BaselineCommit, IReadOnlyList<ComposeImageChange> Images);
+
+/// <summary>One compose service's image as written, at the commit last applied and at the run's; null where it had none.</summary>
+public sealed record ComposeImageChange(string Service, string? Before, string? After);
 
 /// <summary>One stage of a pipeline run, as it was built: exactly one of the two tools. <c>Workflow</c> is the workflow at its version.</summary>
 public sealed record StageContext(string Name, string Workflow, OpenTofuContext? OpenTofu, AnsibleContext? Ansible);

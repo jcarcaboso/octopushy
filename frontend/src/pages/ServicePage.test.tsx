@@ -93,7 +93,7 @@ describe("ServicePage", () => {
     });
     renderAt(<ServicePage />, route);
     const panel = await screen.findByRole("region", { name: "Pipeline #12 waits for your approval" });
-    expect(await within(panel).findByText(/Approving covers every stage above/)).toBeInTheDocument();
+    expect(await within(panel).findByText(/Approving covers every stage, as planned/)).toBeInTheDocument();
     expect(within(panel).getByText("Pipeline document SHA-256")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });

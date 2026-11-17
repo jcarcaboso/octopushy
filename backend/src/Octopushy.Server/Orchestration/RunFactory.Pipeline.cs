@@ -11,8 +11,10 @@ public sealed partial class RunFactory
     /// A service's run: a plan or preview of every stage, one approval, then every stage applied in
     /// order. An Ansible stage runs its playbook on the guest's connection. An
     /// OpenTofu stage has its inputs and a state of its own, and no credentials of any kind.
+    /// <paramref name="images"/> is kept in the context to be shown and nothing else; see <see cref="RunContext.ComposeImages"/>.
     /// </summary>
-    public Run Pipeline(LabRepository repository, ServiceDefinition service, Resource resource, Resource guestResource, DefinitionRevision revision, string reason)
+    public Run Pipeline(LabRepository repository, ServiceDefinition service, Resource resource, Resource guestResource, DefinitionRevision revision, string reason,
+        ComposeImagesContext? images = null)
     {
         Managed(repository, repository.Guest(service.GuestAddress)?.InstallationAddress ?? string.Join('/', service.GuestAddress.Split('/').Take(2)));
         var inputs = PipelineInputs.Build(repository, service);
@@ -105,6 +107,7 @@ public sealed partial class RunFactory
             GuestResourceId = guestResource.Id,
             // A stage logs in to the guest its service is on, so it pins that guest's host key, Octopushy's when the guest names none.
             ManagedHostKey = stages.Any(s => s.Ansible is not null) && PinsManagedHostKey(repository, guest),
+            ComposeImages = images,
         });
         run.InputsHash = inputs.Hash;
 

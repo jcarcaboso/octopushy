@@ -37,10 +37,12 @@ default.
 
 | Run | What it shows |
 |---|---|
+| [/runs/deployed](http://127.0.0.1:5176/runs/deployed) | #52, fleet deployed: three images bumped (fleet-manager 0.12.4→0.13.0), postgres unchanged |
+| [/runs/pipeline-failed](http://127.0.0.1:5176/runs/pipeline-failed) | #51, jellyfin 10.10.7→10.11.0: the `dns` stage applied, the `deploy` playbook failed with an error and a log; offers Retry this stage |
 | [/runs/provision-approval](http://127.0.0.1:5176/runs/provision-approval) | #49, bb (VM 112) waiting for approval: disk scsi0 32→64 GiB, memory 4→8 GiB, tags +agents, a sensitive bridge, a new firewall rule |
 | [/runs/configure-approval](http://127.0.0.1:5176/runs/configure-approval) | #48, pve01-ai waiting for approval: prepared values against the last run (codex, claude-code, +fzf, −neofetch, release 2.1.0), 2 changed files, 1 secret |
 | [/runs/outcome-approval](http://127.0.0.1:5176/runs/outcome-approval) | #46, dev at "Decide on the outcome": the playbook reported `deferred`; approving adds `machine_tools_allow_busy` |
-| [/runs/pipeline-approval](http://127.0.0.1:5176/runs/pipeline-approval) | #47, the app's pipeline: one approval for the `infra` plan and the `deploy` preview |
+| [/runs/pipeline-approval](http://127.0.0.1:5176/runs/pipeline-approval) | #47, the app's pipeline: one approval for the `infra` plan and the `deploy` preview; app 1.8.2→2.0.0 (major), a new nginx image |
 | [/runs/running](http://127.0.0.1:5176/runs/running) | #50, the dns container being created, with a live log |
 | [/runs/succeeded](http://127.0.0.1:5176/runs/succeeded) | #45, pbs set up |
 | [/runs/failed](http://127.0.0.1:5176/runs/failed) | #44, media's disk resize that ran out of space; offers Run again |

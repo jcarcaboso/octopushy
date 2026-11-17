@@ -215,7 +215,23 @@ public sealed record RunDetailDto(
     bool CanClose,
     RunWorkflowDto? Workflow = null,
     bool CanRunAgain = false,
-    bool CanForceStop = false);
+    bool CanForceStop = false,
+    /// <summary>
+    /// The container images the service's compose file names, as the run was made: at the run's commit and at the
+    /// commit last applied. Null for a run of anything but a service with a compose file, and for a run made before
+    /// this was kept. Shown only: no agent, manifest or approval names it.
+    /// </summary>
+    IReadOnlyList<RunImageDto>? Images = null,
+    /// <summary>The commit the <c>Before</c> side of <see cref="Images"/> was read at. Null when nothing was applied before.</summary>
+    string? BaselineCommit = null);
+
+/// <summary>
+/// One service of a compose file and the image it names, as written in the file, such as
+/// <c>docker.io/library/postgres:17.2-alpine</c>. <paramref name="Before"/> is null when the service was not in the
+/// file at the commit last applied, or nothing was applied before; <paramref name="After"/> is null when the run's
+/// commit no longer has it.
+/// </summary>
+public sealed record RunImageDto(string Service, string? Before, string? After);
 
 /// <summary>The workflow a run executed: which one, at which version, and the commit its files came from.</summary>
 public sealed record RunWorkflowDto(string Id, string Version, string Reference, string Commit, string? Repository);

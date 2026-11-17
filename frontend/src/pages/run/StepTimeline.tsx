@@ -7,7 +7,6 @@ import { JsonBlock } from "../../components/CodeBlock";
 import { RelativeTime } from "../../components/RelativeTime";
 import { useNow } from "../../components/useNow";
 import { statusStyle } from "../../components/status";
-import { humanize } from "../../lib/format";
 import { summarizePlan } from "../../lib/plan";
 import { elapsed, formatDuration } from "../../lib/time";
 import { ApprovalPanel } from "./ApprovalPanel";
@@ -15,63 +14,24 @@ import { approvalProps } from "./approval";
 import { AttemptList } from "./AttemptList";
 import { ConfigurePreviewView } from "./ConfigurePreview";
 import { PlanChanges } from "./PlanChanges";
+import { describe, stepName } from "./steps";
 
-const stepNames: Record<string, string> = {
-  plan: "Plan",
-  approval: "Approval",
-  unprotect: "Remove protection",
-  apply: "Apply",
-  reprotect: "Restore protection",
-  verify: "Verify",
-  "verify-absent": "Verify absent",
-  preview: "Preview",
-  playbook: "Run the playbook",
-  "outcome-approval": "Decide on the outcome",
-  "playbook-approved": "Run the playbook again",
-};
-
-function describe(step: Step, operation: string): string | null {
-  switch (step.name) {
-    case "plan":
-      return operation === "retire"
-        ? "OpenTofu plans destroying the machine; the saved plan is what gets applied."
-        : "OpenTofu plans the change; the saved plan is what gets applied.";
-    case "approval":
-      return operation === "pipeline"
-        ? "One approval, by policy or by you, of every stage's plan and preview at once."
-        : operation === "configure"
-        ? "The preview is approved by policy or by you."
-        : "The saved plan is approved by policy or by you.";
-    case "preview":
-      return "Checks the playbook and lists its tasks, with no secrets and no contact with the guest. It shows what will run, not what will change.";
-    case "playbook":
-      return "Runs the playbook on the guest over SSH, against the pinned host key, with exactly what the preview listed.";
-    case "outcome-approval":
-      return "The playbook reported something that needs your decision. It ran once; this would run it once more.";
-    case "playbook-approved":
-      return "Runs the same commit and preview once more, with what the workflow says approving adds.";
-    case "unprotect":
-      return "Removes the machine's protection so it can be deleted, or so a container's disks can change.";
-    case "apply":
-      return "OpenTofu applies exactly the approved plan.";
-    case "reprotect":
-      return "Puts the machine's protection back, after a change in place or a plan that was not applied in full.";
-    case "verify":
-      return "Checks the VM or container through the Proxmox API.";
-    case "verify-absent":
-      return "Checks through the Proxmox API that the machine is gone.";
-    default:
-      return null;
-  }
-}
-
-function StepBody({ step, detail }: { step: Step; detail: RunDetail }) {
+/**
+ * What a step prints under its title: plan, preview, outputs, attempts with their logs, and Retry this stage.
+ * `approvalAbove` says the page shows the open approval elsewhere, so it is not shown twice.
+ */
+export function StepBody({ step, detail, approvalAbove = false }: { step: Step; detail: RunDetail; approvalAbove?: boolean }) {
   const retryStage = useRetryStage();
   const lostChange = detail.steps.some((s) => s.attempts.some((a) => a.status === "uncertain" && a.mutating));
   const canRetryStage = detail.run.operation === "pipeline" && detail.run.status === "failed" && step.status === "failed"
     && Boolean(step.stage) && ["apply", "playbook"].includes(step.name) && !lostChange;
   const plan = step.plan ? summarizePlan(step.plan) : null;
-  if (step.kind === "approval") return <ApprovalPanel {...approvalProps(detail, step)} />;
+  if (step.kind === "approval") {
+    if (approvalAbove && step.status === "awaiting-approval" && !step.approval?.decision) {
+      return <p className="small">Approve or reject it in the summary at the top of the page.</p>;
+    }
+    return <ApprovalPanel {...approvalProps(detail, step)} />;
+  }
   return (
     <>
       {plan ? <PlanChanges plan={plan} /> : null}
@@ -110,7 +70,7 @@ function StepItem({ step, detail }: { step: Step; detail: RunDetail }) {
         <div className="timeline__header">
           <h3 className="timeline__title">
             {step.stage ? <span className="mono timeline__stage">{step.stage}</span> : null}
-            {stepNames[step.name] ?? humanize(step.name)}
+            {stepName(step)}
           </h3>
           <StatusBadge status={step.status} />
           <span className="muted small timeline__times">

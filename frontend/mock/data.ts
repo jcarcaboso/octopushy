@@ -261,8 +261,9 @@ function serviceSummary(): ServiceSummary {
 }
 
 function otherSummary(s: (typeof otherServices)[number]): ServiceSummary {
-  return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: "in-sync", statusDetail: null, valid: true,
-    activeRun: null, lastRun: null, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [], icon: iconOf(s.id, s.name) };
+  const { activeRun, lastRun, status: state, statusDetail } = status(s.id);
+  return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: state, statusDetail, valid: true,
+    activeRun, lastRun, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [], icon: iconOf(s.id, s.name) };
 }
 
 function servicesOf(guestId: string): ServiceSummary[] {
@@ -280,7 +281,7 @@ export function serviceDetail(id: string): ServiceDetail | null {
       definitionText: `schemaVersion: 1\nworkflow: ${other.workflow}\n${other.links.length ? `links:\n${other.links.map((l) => `  - ${l}\n`).join("")}` : ""}`,
       issues: [], policy: { approval: "automatic", approvalSetBy: "octopushy.yaml", destructive: "manual", destructiveSetBy: "octopushy.yaml" },
       agentLabels: ["home"], agentLabelsSetBy: "labs/home/lab.yaml", stages: [{ name: "deploy", executor: "ansible" }],
-      appliedCommit: hex("revision-7", 40), appliedAt: ago(9000), missingSince: null, retiredAt: null, runs: [],
+      appliedCommit: hex("revision-7", 40), appliedAt: ago(9000), missingSince: null, retiredAt: null, runs: runsOf(other.id),
     };
   }
   if (id !== resources.app.id) return null;
