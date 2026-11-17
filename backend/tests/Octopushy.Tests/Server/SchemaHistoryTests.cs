@@ -4,8 +4,7 @@ using Octopushy.Server.Data;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class SchemaHistoryTests(PostgresFixture postgres)
+public class SchemaHistoryTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private async Task<OctopushyDb> NewDbAsync() => new(new DbContextOptionsBuilder<OctopushyDb>()
         .UseNpgsql(await postgres.NewDatabaseAsync()).UseSnakeCaseNamingConvention().Options);

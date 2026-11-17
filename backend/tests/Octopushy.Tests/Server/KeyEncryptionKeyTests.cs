@@ -7,8 +7,7 @@ using Octopushy.Server.Store;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class KeyEncryptionKeyTests(PostgresFixture postgres)
+public class KeyEncryptionKeyTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task Key_initialization_checks_orphaned_artifacts_even_when_the_database_is_empty()

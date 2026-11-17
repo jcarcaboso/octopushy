@@ -8,8 +8,7 @@ using Octopushy.Server.Auth;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Login, the OpenAPI document and the proxy trust on the API port.</summary>
-[Collection(PostgresCollection.Name)]
-public class FrontDoorTests(PostgresFixture postgres)
+public class FrontDoorTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Peer = "X-Test-Peer";
 

@@ -13,8 +13,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Tests.Server;
 
 /// <summary>What an attempt reports is masked as it reads once decoded, and its log lines are written by one writer at a time.</summary>
-[Collection(PostgresCollection.Name)]
-public class AttemptMaskingTests(PostgresFixture postgres)
+public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     public static TheoryData<string> Secrets => new()
     {

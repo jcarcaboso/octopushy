@@ -6,8 +6,7 @@ using Octopushy.Server.Data;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class HeartbeatTests(PostgresFixture postgres)
+public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task Renewal_does_not_wait_for_the_engine_lock_and_only_renews_owned_active_attempts()

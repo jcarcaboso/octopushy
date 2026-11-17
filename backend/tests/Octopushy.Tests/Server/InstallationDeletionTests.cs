@@ -9,8 +9,7 @@ using Octopushy.Server.Uptime;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class InstallationDeletionTests(PostgresFixture postgres)
+public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Address = "home/korriban";
     private const string Folder = "labs/home/proxmox/korriban";

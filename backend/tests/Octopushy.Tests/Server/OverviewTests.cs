@@ -8,8 +8,7 @@ using static Octopushy.Tests.Server.SafetyBoundaryFixtures;
 namespace Octopushy.Tests.Server;
 
 /// <summary>What the overview lists as failed now, and how many runs the last week made.</summary>
-[Collection(PostgresCollection.Name)]
-public class OverviewTests(PostgresFixture postgres)
+public class OverviewTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 12, 12, 0, 0, TimeSpan.Zero);
     private const string Service = Guest + "/web";

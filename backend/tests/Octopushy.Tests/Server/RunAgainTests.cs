@@ -10,8 +10,7 @@ using Repository = Octopushy.Tests.Definitions.GuestConfigurationTests;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class RunAgainTests(PostgresFixture postgres)
+public class RunAgainTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
 

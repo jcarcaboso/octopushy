@@ -8,8 +8,7 @@ using Octopushy.Server.Git;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class WorkflowSourceTrustTests(PostgresFixture postgres)
+public class WorkflowSourceTrustTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Path = "/api/repository/workflows/trust";
     private static Dictionary<string, string> LocalSources => new() { ["Octopushy:AllowLocalWorkflowSources"] = "true" };

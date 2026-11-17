@@ -16,8 +16,7 @@ using Octopushy.Tests.Definitions;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A change made in a form is one commit to the lab repository, synced at once and followed to the end.</summary>
-[Collection(PostgresCollection.Name)]
-public class ChangeTests(PostgresFixture postgres)
+public class ChangeTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = SafetyBoundaryFixtures.Guest;
     private const string GuestFile = SafetyBoundaryFixtures.GuestFile;

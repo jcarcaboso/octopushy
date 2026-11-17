@@ -5,8 +5,7 @@ using System.Text.Json.Nodes;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class RequestOriginTests(PostgresFixture postgres)
+public class RequestOriginTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Theory]
     [InlineData("same-origin", null, true)]

@@ -20,8 +20,7 @@ namespace Octopushy.Tests.Server;
 /// Built templates on the server: a build per key, queued by sync and handed to an agent with <c>nix</c>, its image uploaded
 /// and kept, and the provision runs that waited for it. See docs/built-templates.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class BuiltTemplateTests(PostgresFixture postgres)
+public class BuiltTemplateTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private static readonly byte[] ImageBytes = RandomNumberGenerator.GetBytes(ImageStore.ChunkBytes + 1000);

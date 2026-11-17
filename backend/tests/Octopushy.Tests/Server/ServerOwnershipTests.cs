@@ -7,8 +7,7 @@ using Npgsql;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class ServerOwnershipTests(PostgresFixture postgres)
+public class ServerOwnershipTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task A_second_server_is_refused_and_the_first_keeps_working()

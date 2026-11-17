@@ -19,8 +19,7 @@ using Octopushy.Server.Store;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class BuiltInStateTests(PostgresFixture postgres)
+public class BuiltInStateTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Secret = "a-password-inside-the-state";

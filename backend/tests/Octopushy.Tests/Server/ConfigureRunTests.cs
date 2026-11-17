@@ -14,8 +14,7 @@ using Repository = Octopushy.Tests.Definitions.GuestConfigurationTests;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class ConfigureRunTests(PostgresFixture postgres)
+public class ConfigureRunTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     internal const string SshKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\n";

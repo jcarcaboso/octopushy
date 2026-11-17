@@ -18,8 +18,7 @@ namespace Octopushy.Tests.Server;
 /// Automatic routing by reachability: agents report what they reach when the controller asks, and the controller sends a
 /// step only to an agent with fresh evidence of every connection the step makes. See docs/worker-routing.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class WorkerRoutingTests(PostgresFixture postgres)
+public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
 

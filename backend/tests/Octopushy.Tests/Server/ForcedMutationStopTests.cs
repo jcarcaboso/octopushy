@@ -8,8 +8,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class ForcedMutationStopTests(PostgresFixture postgres)
+public class ForcedMutationStopTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task A_force_stop_that_cannot_be_saved_does_not_interrupt_the_tool()

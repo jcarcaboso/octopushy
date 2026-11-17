@@ -6,8 +6,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class RunHistoryRetentionTests(PostgresFixture postgres)
+public class RunHistoryRetentionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Theory]
     [InlineData(-1, 50)]

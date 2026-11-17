@@ -4,8 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class ApiTests(PostgresFixture postgres)
+public class ApiTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task The_account_is_created_with_the_setup_code_and_guards_the_api()

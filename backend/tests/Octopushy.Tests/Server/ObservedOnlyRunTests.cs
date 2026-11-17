@@ -15,8 +15,7 @@ using static Octopushy.Tests.Server.SafetyBoundaryFixtures;
 namespace Octopushy.Tests.Server;
 
 /// <summary><c>manage: false</c>: no run is ever made for the installation, and its token goes to observations alone. See docs/safety-boundary.md.</summary>
-[Collection(PostgresCollection.Name)]
-public class ObservedOnlyRunTests(PostgresFixture postgres)
+public class ObservedOnlyRunTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string ZiostToken = "ziost-root-token";
     private const string ZiostFile = "labs/home/proxmox/ziost/installation.yaml";

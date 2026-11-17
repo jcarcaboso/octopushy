@@ -15,8 +15,7 @@ namespace Octopushy.Tests.Server;
 /// The workflow wizard's deploys: a new guest's or service's folder as one commit, the values it generates, and the plan it
 /// may approve in the same click. See docs/changes-from-the-ui.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class DeployTests(PostgresFixture postgres)
+public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Installation = "home/korriban";
     private const string Existing = "home/korriban/krb-app-01";

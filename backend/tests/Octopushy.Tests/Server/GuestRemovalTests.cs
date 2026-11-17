@@ -9,8 +9,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Deleting a guest's folder removes the guest.</summary>
-[Collection(PostgresCollection.Name)]
-public class GuestRemovalTests(PostgresFixture postgres)
+public class GuestRemovalTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Folder = "labs/home/proxmox/korriban/guests/krb-app-01";

@@ -14,8 +14,7 @@ using Octopushy.Server.Store;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class RecoveryTests(PostgresFixture postgres) : IDisposable
+public class RecoveryTests(PostgresFixture postgres) : IDisposable, IClassFixture<PostgresFixture>
 {
     private const string Token = "fixture/recovery-token";
     private readonly string _directory = Directory.CreateTempSubdirectory("octopushy-recovery-").FullName;

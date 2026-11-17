@@ -6,8 +6,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A guest's machine moves between the hosts of its cluster: migrated by a plan of its own, never replaced on the way.</summary>
-[Collection(PostgresCollection.Name)]
-public class GuestMoveTests(PostgresFixture postgres)
+public class GuestMoveTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";

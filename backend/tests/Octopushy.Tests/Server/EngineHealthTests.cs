@@ -9,8 +9,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class EngineHealthTests(PostgresFixture postgres)
+public class EngineHealthTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task Health_requires_a_fresh_completed_tick_and_a_database()
@@ -41,6 +40,9 @@ public class EngineHealthTests(PostgresFixture postgres)
         // This fixture owns a disposable database. Never issue this against a retained installation.
         Assert.Matches("^t[0-9a-f]{32}$", database);
         connection.Database = "postgres";
+        // Dropping the database also ends the ownership connection, and its watchdog then stops the server
+        // (ServerOwnershipTests covers that). Stop the watchdog first, or under load it wins the race with the request below.
+        await server.Services.GetRequiredService<ServerOwnership>().StopAsync(CancellationToken.None);
         await using (var admin = new NpgsqlConnection(connection.ConnectionString))
         {
             await admin.OpenAsync();

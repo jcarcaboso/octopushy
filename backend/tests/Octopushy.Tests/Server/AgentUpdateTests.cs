@@ -20,8 +20,7 @@ namespace Octopushy.Tests.Server;
 /// An agent is updated through the guest it runs on: a change that sets the guest's agent version to the server's, approved
 /// at once, rolled out by the guest's setup run on another agent, with the agent paused until it is back.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class AgentUpdateTests(PostgresFixture postgres)
+public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
