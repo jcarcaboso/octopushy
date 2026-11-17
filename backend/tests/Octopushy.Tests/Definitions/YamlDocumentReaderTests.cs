@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Octopushy.Definitions.Yaml;
 
@@ -61,5 +62,65 @@ public class YamlDocumentReaderTests
         var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read("a: 1\nb: c: d\n"));
         Assert.Equal(2, error.Line);
         Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read("a: [1, 2\nb: 3\n"));
+    }
+
+    [Fact]
+    public void Refuses_aliases_that_expand_past_the_node_limit()
+    {
+        // Six levels of ten aliases: a few hundred bytes that would expand to over a million values.
+        var text = new StringBuilder("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for (var i = 1; i <= 6; i++)
+            text.Append($"a{i}: &a{i} [{string.Join(", ", Enumerable.Repeat($"*a{i - 1}", 10))}]\n");
+
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text.ToString()));
+        Assert.Contains($"more than {YamlDocumentReader.MaxNodes} values", error.Message);
+    }
+
+    [Fact]
+    public void Aliases_within_the_node_limit_still_expand()
+    {
+        var root = (JsonObject)YamlDocumentReader.Read("base: &base {cores: 2}\nvm: *base\n").Root!;
+        Assert.Equal(2, root["vm"]!["cores"]!.GetValue<long>());
+    }
+
+    [Theory]
+    [InlineData(65)]
+    [InlineData(5_000)]
+    [InlineData(500_000)]
+    public void Refuses_nesting_past_the_depth_limit(int depth)
+    {
+        var text = new string('[', depth) + new string(']', depth);
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text));
+        Assert.Contains($"deeper than {YamlDocumentReader.MaxDepth} levels", error.Message);
+    }
+
+    [Fact]
+    public void Refuses_an_alias_that_nests_past_the_depth_limit()
+    {
+        // Each part is within the limit as written; the alias puts one inside the other.
+        var deep = new string('[', YamlDocumentReader.MaxDepth - 1) + new string(']', YamlDocumentReader.MaxDepth - 1);
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read($"a: &a {deep}\nb: [[*a]]\n"));
+        Assert.Contains($"deeper than {YamlDocumentReader.MaxDepth} levels", error.Message);
+    }
+
+    [Fact]
+    public void Reads_nesting_at_the_depth_limit()
+    {
+        var depth = YamlDocumentReader.MaxDepth;
+        Assert.NotNull(YamlDocumentReader.Read(new string('[', depth) + new string(']', depth)).Root);
+    }
+
+    [Fact]
+    public void Refuses_a_file_past_the_size_limit()
+    {
+        var text = "a: \"" + new string('x', YamlDocumentReader.MaxCharacters) + "\"\n";
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text));
+        Assert.Contains($"the limit on the size of a YAML file is {YamlDocumentReader.MaxCharacters}", error.Message);
+    }
+
+    [Fact]
+    public void Refuses_a_self_referencing_alias()
+    {
+        Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read("a: &a [1, *a]\n"));
     }
 }

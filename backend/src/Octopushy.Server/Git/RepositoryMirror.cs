@@ -29,21 +29,23 @@ public sealed partial class RepositoryMirror
     private readonly string _directory;
     private readonly string _mirror;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SnapshotLimits _limits;
 
     public RepositoryMirror(GitCli git, IOptions<OctopushyOptions> options)
-        : this(git, Path.Combine(options.Value.DataDirectory, "git"), 0)
+        : this(git, Path.Combine(options.Value.DataDirectory, "git"), options.Value.Snapshots.Limits)
     {
     }
 
-    private RepositoryMirror(GitCli git, string directory, int _)
+    private RepositoryMirror(GitCli git, string directory, SnapshotLimits limits)
     {
         _git = git;
         _directory = directory;
         _mirror = Path.Combine(_directory, "mirror.git");
+        _limits = limits;
     }
 
     /// <summary>A mirror kept in <paramref name="directory"/>, such as a workflows repository's.</summary>
-    public static RepositoryMirror At(GitCli git, string directory) => new(git, directory, 0);
+    public static RepositoryMirror At(GitCli git, string directory, SnapshotLimits limits) => new(git, directory, limits);
 
     // v3 also invalidates pre-publication v2 caches that honored checkout conversions.
     private string SnapshotsDirectory => Path.Combine(_directory, "snapshots-literal-v3");
@@ -235,15 +237,39 @@ public sealed partial class RepositoryMirror
             await File.WriteAllTextAsync(attributes,
                 SnapshotArchive.LiteralAttributes,
                 cancellationToken);
-            var archive = new MemoryStream();
-            var error = await _git.RunToStreamAsync(["-C", _mirror, "archive", "--format=tar", commit], archive, cancellationToken: cancellationToken);
-            if (error is not null)
+            // Written to disk as Git writes it, never held in memory, and cut off past what the limits allow: Git is stopped.
+            var archivePath = staging + ".tar";
+            try
             {
-                throw new GitException(error);
+                await using (var archive = new CappedStream(File.Create(archivePath), _limits.MaxArchiveBytes))
+                {
+                    var error = await _git.RunToStreamAsync(["-C", _mirror, "archive", "--format=tar", commit], archive, cancellationToken: cancellationToken);
+                    if (error is not null)
+                    {
+                        throw new GitException(error);
+                    }
+                }
+
+                await using (var archive = File.OpenRead(archivePath))
+                {
+                    ExtractSafely(archive, staging, _limits);
+                }
+            }
+            catch (SnapshotLimitException e)
+            {
+                Directory.Delete(staging, recursive: true);
+                throw new GitException($"Commit {commit} was not read: {e.Message} Raise Octopushy:Snapshots:{e.Limit} to read it.");
+            }
+            catch (GitException)
+            {
+                Directory.Delete(staging, recursive: true);
+                throw;
+            }
+            finally
+            {
+                File.Delete(archivePath);
             }
 
-            archive.Position = 0;
-            ExtractSafely(archive, staging);
             Directory.Move(staging, target);
             return target;
         }
@@ -356,15 +382,70 @@ public sealed partial class RepositoryMirror
         }
     }
 
-    internal static void ExtractSafely(Stream tarStream, string destination)
+    internal static void ExtractSafely(Stream tarStream, string destination, SnapshotLimits? limits = null)
     {
         try
         {
-            SnapshotArchive.Extract(tarStream, destination);
+            SnapshotArchive.Extract(tarStream, destination, limits);
         }
         catch (InvalidDataException e)
         {
             throw new GitException(e.Message);
+        }
+    }
+
+    /// <summary>Writes through to a file, and refuses the write that would take it past <paramref name="max"/> bytes.</summary>
+    private sealed class CappedStream(Stream inner, long max) : Stream
+    {
+        private long _written;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _written;
+        public override long Position { get => _written; set => throw new NotSupportedException(); }
+
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            Count(buffer.Length);
+            inner.Write(buffer);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Count(buffer.Length);
+            return inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            await base.DisposeAsync();
+        }
+
+        private void Count(int bytes)
+        {
+            _written += bytes;
+            if (_written > max)
+                throw SnapshotLimitException.Archive(max);
         }
     }
 

@@ -15,23 +15,39 @@ public sealed partial class RunEngine
     private readonly Dictionary<Guid, int> _resultFailures = [];
 
     /// <summary>
-    /// Keeps a log batch of the agent's own attempt. Not under the engine's gate, so a batch never holds back the agent's
-    /// heartbeats or other messages. The attempt is looked up again under its log's own gate, which deletion takes after its
-    /// rows are gone: a batch either lands before the log is removed or finds the attempt gone.
+    /// Keeps a log batch of the agent's own attempt, while it takes logs (<see cref="TakesLogsAsync"/>). Not under the engine's
+    /// gate, so a batch never holds back the agent's heartbeats or other messages. The attempt is looked up again under its
+    /// log's own gate, which deletion takes after its rows are gone: a batch either lands before the log is removed or finds
+    /// the attempt gone. A batch refused is dropped: logs are never acknowledged, so the agent does not send it again.
     /// </summary>
     public async Task OnLogAsync(Guid agentId, Guid attemptId, long firstSequence,
         IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken ct)
     {
-        if (!await OwnsAsync())
-            return;
-        using (await masks.EnsureAsync(attemptId, ct))
-            await logs.AppendAsync(attemptId, firstSequence, lines, ct, OwnsAsync);
-
-        async Task<bool> OwnsAsync()
+        if (!await TakesLogsAsync(agentId, attemptId, ct))
         {
-            await using var scope = scopes.CreateAsyncScope();
-            return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId, ct);
+            logger.LogInformation("Dropped {Count} log line(s) from agent {Agent} for attempt {Attempt}: it is not the agent's, or no longer takes logs.",
+                lines.Count, agentId, attemptId);
+            return;
         }
+
+        using (await masks.EnsureAsync(attemptId, ct))
+            await logs.AppendAsync(attemptId, firstSequence, lines, ct, () => TakesLogsAsync(agentId, attemptId, ct));
+    }
+
+    /// <summary>
+    /// Whether an attempt of <paramref name="agentId"/> takes log lines: while it is assigned or running; while it is uncertain
+    /// and still takes a late result, whose log comes before it; and for a lease after it was cancelled, while the agent stops
+    /// it. An agent sends an attempt's lines before its result, and they are handled before it, so a finished attempt has
+    /// them all.
+    /// </summary>
+    private async Task<bool> TakesLogsAsync(Guid agentId, Guid attemptId, CancellationToken ct)
+    {
+        var cancelledSince = clock.GetUtcNow().AddSeconds(-options.Value.AgentChannel.LeaseSeconds);
+        await using var scope = scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId
+            && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
+                || (a.Status == AttemptStatuses.Uncertain && !a.LateResult && !a.OutputsWithheld)
+                || (a.Status == AttemptStatuses.Cancelled && a.FinishedAt >= cancelledSince)), ct);
     }
 
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>

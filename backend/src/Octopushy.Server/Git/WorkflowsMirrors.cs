@@ -18,7 +18,7 @@ public sealed class WorkflowsMirrors(GitCli git, IOptions<OctopushyOptions> opti
     private readonly ConcurrentDictionary<string, RepositoryMirror> _mirrors = new(StringComparer.Ordinal);
 
     public RepositoryMirror For(string repository) =>
-        _mirrors.GetOrAdd(repository, url => RepositoryMirror.At(git, Path.Combine(options.Value.DataDirectory, "git", "workflows", Id(url))));
+        _mirrors.GetOrAdd(repository, url => RepositoryMirror.At(git, Path.Combine(options.Value.DataDirectory, "git", "workflows", Id(url)), options.Value.Snapshots.Limits));
 
     public static string Id(string repository) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(repository)))[..16];
 }

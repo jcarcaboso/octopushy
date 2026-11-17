@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
 using YamlDotNet.RepresentationModel;
 
 namespace Octopushy.Definitions.Yaml;
@@ -52,14 +53,34 @@ public sealed class YamlReadException(string message, int? line) : Exception(mes
 /// <c>0400</c> is the number 400. Anchors and aliases resolve; duplicate keys and several
 /// documents in one file are errors.
 /// </summary>
+/// <remarks>
+/// Repository content is hostile, so what one file may expand to is bounded: its length, the values it holds once its
+/// aliases are expanded, and how deep they nest. Going over one is a <see cref="YamlReadException"/> like any other.
+/// </remarks>
 public static partial class YamlDocumentReader
 {
+    /// <summary>The most characters a YAML file read here may hold.</summary>
+    public const int MaxCharacters = 1024 * 1024;
+
+    /// <summary>The most values a YAML file may hold, with each alias counted as often as it is used.</summary>
+    public const int MaxNodes = 100_000;
+
+    /// <summary>How deep its mappings and sequences may nest. The document's own value is depth 1.</summary>
+    public const int MaxDepth = 64;
+
     public static YamlDocument Read(string text)
     {
+        if (text.Length > MaxCharacters)
+        {
+            throw new YamlReadException(
+                $"The file holds {text.Length} characters; the limit on the size of a YAML file is {MaxCharacters}.", null);
+        }
+
         var stream = new YamlStream();
         try
         {
-            stream.Load(new StringReader(text));
+            // YamlDotNet builds nodes recursively, so depth is checked as the parser reads, before it can exhaust the stack.
+            stream.Load(new DepthLimitedParser(new Parser(new StringReader(text))));
         }
         catch (YamlException e)
         {
@@ -82,15 +103,28 @@ public static partial class YamlDocumentReader
             return new YamlDocument(null, lines);
         }
 
-        var root = Convert(stream.Documents[0].RootNode, "", lines);
+        var nodes = 0;
+        var root = Convert(stream.Documents[0].RootNode, "", lines, 1, ref nodes);
 
         // Round-tripping through text makes every value JSON-backed, so a number reads as int,
         // long, or double alike, the same as JSON parsed anywhere else.
         return new YamlDocument(root is null ? null : JsonNode.Parse(root.ToJsonString()), lines);
     }
 
-    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines)
+    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines, int depth, ref int nodes)
     {
+        // Counted as they are expanded: an alias used ten times is ten values, so a few nested aliases cannot become millions.
+        if (++nodes > MaxNodes)
+        {
+            throw new YamlReadException(
+                $"The file holds more than {MaxNodes} values once its aliases are expanded, the limit on values in a YAML file.", LineOf(node.Start));
+        }
+
+        if (depth > MaxDepth && node is YamlMappingNode or YamlSequenceNode)
+        {
+            throw TooDeep(node.Start);
+        }
+
         lines[pointer] = LineOf(node.Start) ?? 1;
         switch (node)
         {
@@ -110,7 +144,7 @@ public static partial class YamlDocumentReader
                     }
 
                     var childPointer = pointer + "/" + EscapePointer(key);
-                    result[key] = Convert(valueNode, childPointer, lines);
+                    result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes);
                 }
 
                 return result;
@@ -121,7 +155,7 @@ public static partial class YamlDocumentReader
                 var index = 0;
                 foreach (var item in sequence.Children)
                 {
-                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines));
+                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes));
                     index++;
                 }
 
@@ -195,6 +229,32 @@ public static partial class YamlDocumentReader
         }
 
         return JsonValue.Create(value);
+    }
+
+    private static YamlReadException TooDeep(Mark mark) =>
+        new($"The file nests deeper than {MaxDepth} levels, the limit on depth in a YAML file.", LineOf(mark));
+
+    private sealed class DepthLimitedParser(IParser inner) : IParser
+    {
+        private int _depth;
+
+        public ParsingEvent? Current => inner.Current;
+
+        public bool MoveNext()
+        {
+            if (!inner.MoveNext())
+                return false;
+            switch (inner.Current)
+            {
+                case MappingStart or SequenceStart when ++_depth > MaxDepth:
+                    throw TooDeep(inner.Current.Start);
+                case MappingEnd or SequenceEnd:
+                    _depth--;
+                    break;
+            }
+
+            return true;
+        }
     }
 
     internal static string EscapePointer(string segment) => segment.Replace("~", "~0").Replace("/", "~1");

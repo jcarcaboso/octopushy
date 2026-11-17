@@ -74,7 +74,14 @@ public sealed class WorkflowsRepository : IDisposable
             var directory = Path.Combine(_scratch.FullName, "trees", commit);
             Directory.CreateDirectory(directory);
             using var archive = new MemoryStream(Git(["-C", _bare, "archive", "--format=tar", commit]));
-            SnapshotArchive.Extract(archive, directory);
+            try
+            {
+                SnapshotArchive.Extract(archive, directory);
+            }
+            catch (Exception e) when (e is InvalidDataException or SnapshotLimitException)
+            {
+                throw new WorkflowsRepositoryException($"Commit {commit} of {Url} was not read: {e.Message}");
+            }
             trees[commit] = directory;
         }
 
