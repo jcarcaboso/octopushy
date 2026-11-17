@@ -34,50 +34,40 @@ public sealed partial class AssignmentBuilder(
 {
     public const string PlanArtifact = "plan.tar.gz";
 
-    public static StepAction ActionFor(string stepName) => stepName switch
-    {
-        StepNames.Plan => new StepAction("opentofu", "preview", false),
-        StepNames.Apply => new StepAction("opentofu", "apply", true),
-        StepNames.Unprotect or StepNames.Reprotect or StepNames.Protect => new StepAction("proxmox", "set-protection", true),
-        StepNames.Verify => new StepAction("proxmox", "verify-guest", false),
-        StepNames.VerifyAbsent => new StepAction("proxmox", "verify-absent", false),
-        StepNames.Observe => new StepAction("proxmox", "observe", false),
-        StepNames.Preview => new StepAction("ansible", "preview", false),
-        StepNames.Playbook or StepNames.PlaybookApproved or StepNames.AuthorizeKey or StepNames.RemoveKey => new StepAction("ansible", "run", true),
-        StepNames.VerifyCurrent or StepNames.VerifyKey or StepNames.VerifyRemoval or StepNames.ConfirmRefused => new StepAction("ansible", "run", false),
-        _ => throw new InvalidOperationException($"The step '{stepName}' does not run on an agent."),
-    };
+    public static StepAction ActionFor(string stepName) => AgentStep(stepName).Action!;
 
-    /// <summary>The secret names a step's assignment carries.</summary>
-    public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
-    {
-        var action = ActionFor(stepName);
-        if (action.Executor == "ansible")
-            return AnsibleSecretsFor(stepName, context);
-        var token = TokenFor(stepName, context);
-        return action.Executor == "opentofu"
-            ? context.OpenTofu!.SecretEnv.Values
-                .Select(n => n == SecretNames.ProxmoxToken ? token : n)
-                .Where(n => ReleasedTo(n, stepName))
-                .Concat(stepName == StepNames.Apply && context.Snippets is not null ? [SecretNames.SnippetsHostKey] : [])
-                .Distinct(StringComparer.Ordinal).ToList()
-            : new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList();
-    }
+    /// <summary>A step that runs on an agent, from the registry.</summary>
+    private static StepType AgentStep(string stepName) =>
+        StepTypes.Find(stepName) is { Action: not null } type ? type : throw new InvalidOperationException($"The step '{stepName}' does not run on an agent.");
 
     /// <summary>
-    /// The guest's private host key goes to the plan, which writes it into the snippet and keeps it in the saved plan,
-    /// and the upload key to the apply, which is the only step that uploads.
+    /// The secret names a step's assignment carries. An Ansible preview gets only the pin, which is public: it runs repository
+    /// code that nobody has approved. The rest goes to the steps after approval. The guest's private host key goes to the plan,
+    /// which writes it into the snippet and keeps it in the saved plan, and the upload key to the apply, which is the only step
+    /// that uploads.
     /// </summary>
-    private static bool ReleasedTo(string name, string stepName) => name switch
+    public static IReadOnlyList<string> SecretsFor(string stepName, RunContext context)
     {
-        SecretNames.GuestHostKey => stepName == StepNames.Plan,
-        SecretNames.SnippetsKey => stepName == StepNames.Apply,
-        _ => true,
-    };
+        var type = AgentStep(stepName);
+        if (type.Secrets == StepSecrets.Ansible)
+            return context.Secrets.Keys.ToList();
+        if (type.Secrets == StepSecrets.AnsiblePin)
+            return context.ManagedHostKey ? [] : [SecretNames.AnsibleHostKey];
+        var token = TokenFor(stepName, context);
+        var snippetRoles = type.SnippetRoles ?? [];
+        return type.Secrets switch
+        {
+            StepSecrets.OpenTofu => context.OpenTofu!.SecretEnv.Values
+                .Select(n => n == SecretNames.ProxmoxToken ? token : n)
+                .Where(n => !StepTypes.HeldSnippetRoles.Contains(n) || snippetRoles.Contains(n))
+                .Concat(snippetRoles.Contains(SecretNames.SnippetsHostKey) && context.Snippets is not null ? [SecretNames.SnippetsHostKey] : [])
+                .Distinct(StringComparer.Ordinal).ToList(),
+            StepSecrets.Proxmox => new[] { token, SecretNames.ProxmoxCa }.Where(n => n == token || context.Secrets.ContainsKey(n)).ToList(),
+            _ => throw new InvalidOperationException($"The step '{stepName}' carries no secrets."),
+        };
+    }
 
-    public static string TokenFor(string stepName) => stepName is
-        StepNames.Apply or StepNames.Unprotect or StepNames.Reprotect or StepNames.Protect
-        ? SecretNames.ProxmoxPrivilegedToken : SecretNames.ProxmoxReadOnlyToken;
+    public static string TokenFor(string stepName) => StepTypes.Find(stepName)?.Token ?? SecretNames.ProxmoxReadOnlyToken;
 
     private static string TokenFor(string stepName, RunContext context) =>
         context.Secrets.ContainsKey(SecretNames.ProxmoxSharedToken) ? SecretNames.ProxmoxSharedToken : TokenFor(stepName);

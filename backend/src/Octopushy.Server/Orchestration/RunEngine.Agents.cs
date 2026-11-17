@@ -160,7 +160,7 @@ public sealed partial class RunEngine
 
                         if (run is not null && attempt.Mutating && await ChangeHeldAsync(db, run, context, dispatching: true, cancellationToken) is { } held)
                         {
-                            if (context.Stages is not null)
+                            if (context.Kind == RunKinds.Pipeline)
                                 TakeBack(attempt, step!, run, held);
                             else
                                 attempt.WaitingReason = held;

@@ -16,14 +16,6 @@ public sealed partial class AssignmentBuilder
     public const string GuestHostKeyNotDelivered = "Blocked credentials: this guest's host key is Octopushy's, and no provision run has "
         + "delivered it yet. Provision the guest first.";
 
-    /// <summary>
-    /// A preview gets only the pin, which is public: it runs repository code that nobody has
-    /// approved. The rest goes to the steps after approval.
-    /// </summary>
-    private static List<string> AnsibleSecretsFor(string stepName, RunContext context) =>
-        stepName != StepNames.Preview ? context.Secrets.Keys.ToList()
-        : context.ManagedHostKey ? [] : [SecretNames.AnsibleHostKey];
-
     /// <summary>Builds a configure run's attempt, after the checks every assignment goes through.</summary>
     private async Task<Assignment> BuildAnsibleAsync(Attempt attempt, Step step, Run run, RunContext context, Guid agentId, CancellationToken cancellationToken)
     {

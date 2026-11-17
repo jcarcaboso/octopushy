@@ -392,8 +392,8 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (context.Stages is not null ? await DecidePipelineApprovalAsync(db, run, step, context, cancellationToken)
-                        : context.Ansible is not null ? await DecideConfigureApprovalAsync(db, run, step, context, cancellationToken)
+                    if (context.Kind == RunKinds.Pipeline ? await DecidePipelineApprovalAsync(db, run, step, context, cancellationToken)
+                        : context.Kind == RunKinds.Configure ? await DecideConfigureApprovalAsync(db, run, step, context, cancellationToken)
                         : await DecideApprovalAsync(db, run, step, context, cancellationToken))
                     {
                         continue;
@@ -467,7 +467,7 @@ public sealed partial class RunEngine(
             return;
         }
 
-        if (context.Stages is not null)
+        if (context.Kind == RunKinds.Pipeline)
         {
             await FinishPipelineAsync(db, run, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
@@ -482,7 +482,7 @@ public sealed partial class RunEngine(
         }
 
         var noChanges = run.Steps.Any(s => s.Name == StepNames.Apply && s.Status == StepStatuses.Skipped);
-        Finish(run, RunStatuses.Succeeded, context.Ansible is not null ? await ConfiguredDetailAsync(db, run, cancellationToken)
+        Finish(run, RunStatuses.Succeeded, context.Kind == RunKinds.Configure ? await ConfiguredDetailAsync(db, run, cancellationToken)
             : noChanges ? "The plan has no changes." : null);
         await db.SaveChangesAsync(cancellationToken);
     }
