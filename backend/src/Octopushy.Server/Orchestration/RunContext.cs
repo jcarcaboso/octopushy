@@ -17,6 +17,13 @@ public sealed record RunContext
 
     public required string Address { get; init; }
 
+    /// <summary>
+    /// Which kind of run this is, one of <see cref="RunKinds"/>, set by <see cref="RunFactory"/>. Never null once
+    /// <see cref="Parse"/> has read it: a run made before the kind was stored gets it inferred there. Null in an observation's
+    /// context as it is built, which is no run.
+    /// </summary>
+    public string? Kind { get; init; }
+
     /// <summary>The lab repository's commit the run was built from.</summary>
     public string? Commit { get; init; }
 
@@ -161,8 +168,35 @@ public sealed record RunContext
 
     public string Serialize() => JsonSerializer.Serialize(this, Json);
 
-    public static RunContext Parse(string json) =>
-        JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
+    /// <summary>Reads a stored context. One stored before its run's kind was gives it the kind <see cref="InferKind"/> finds.</summary>
+    public static RunContext Parse(string json)
+    {
+        var context = JsonSerializer.Deserialize<RunContext>(json, Json) ?? throw new InvalidOperationException("The run has no context.");
+        return context.Kind is null ? context with { Kind = InferKind(context) } : context;
+    }
+
+    /// <summary>
+    /// The kind of a run stored before <see cref="Kind"/> was, from the tools its context names, as the engine told them apart
+    /// then: stages make a pipeline, Ansible a configure run, and anything else a provision run. The only place it is inferred.
+    /// </summary>
+    private static string InferKind(RunContext context) =>
+        context.Stages is not null ? RunKinds.Pipeline : context.Ansible is not null ? RunKinds.Configure : RunKinds.Provision;
+}
+
+/// <summary>
+/// What a run's context is, which decides how the engine approves and finishes it. Not <see cref="Data.Operations"/>: a retire
+/// and an attach run are provision runs, and a rotation of a guest's key is a configure run.
+/// </summary>
+public static class RunKinds
+{
+    /// <summary>OpenTofu or the Proxmox API on the guest's machine: provision, retire and attach runs.</summary>
+    public const string Provision = "provision";
+
+    /// <summary>One Ansible action on the guest: configure and rotate-access runs.</summary>
+    public const string Configure = "configure";
+
+    /// <summary>A service's stages.</summary>
+    public const string Pipeline = "pipeline";
 }
 
 /// <summary>

@@ -93,6 +93,7 @@ public sealed partial class RunFactory
         var run = NewRun(resource, Operations.Pipeline, revision, reason, new RunContext
         {
             Address = service.Address,
+            Kind = RunKinds.Pipeline,
             Commit = revision.Commit,
             Workflow = WorkflowContext.Of(inputs.Workflow, service.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,

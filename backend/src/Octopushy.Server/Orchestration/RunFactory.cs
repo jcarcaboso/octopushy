@@ -88,6 +88,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var context = new RunContext
         {
             Address = guest.Address,
+            Kind = RunKinds.Provision,
             Commit = revision.Commit,
             Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
@@ -183,6 +184,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var context = new RunContext
         {
             Address = guest.Address,
+            Kind = RunKinds.Configure,
             Commit = revision.Commit,
             Workflow = WorkflowContext.Of(inputs.Workflow, guest.WorkflowReference, revision.Commit),
             AgentLabels = labels.Value,
@@ -257,6 +259,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var context = new RunContext
         {
             Address = guest.Address,
+            Kind = RunKinds.Configure,
             Commit = revision.Commit,
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
@@ -425,6 +428,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         var context = new RunContext
         {
             Address = guest.Address,
+            Kind = RunKinds.Provision,
             Commit = revision.Commit,
             AgentLabels = labels.Value,
             AgentLabelsSetBy = labels.SetBy,
