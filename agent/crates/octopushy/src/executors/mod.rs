@@ -126,6 +126,8 @@ pub struct ExecContext {
     pub workspace: PathBuf,
     pub log: AttemptLogger,
     pub cancel: CancellationToken,
+    /// Whether the attempt is a change, as the agent decided when it accepted it.
+    pub mutating: bool,
     /// Where a running apply leaves its state for the connection to send.
     pub snapshots: opentofu::state::Snapshots,
 }
@@ -165,11 +167,13 @@ impl ExecContext {
     /// Records, durably, that the first change is about to start. Call right before sending or
     /// spawning it. When this fails, the change must not start. Again later does nothing.
     pub fn begin_change(&self) -> Result<(), Failure> {
-        crate::attempts::workspace::mark_change_started(&self.workspace).map_err(|e| {
-            Failure::msg(format!(
-                "could not record that the change starts, so it was not started: {e:#}"
-            ))
-        })
+        crate::attempts::workspace::mark_change_started(&self.workspace, self.mutating).map_err(
+            |e| {
+                Failure::msg(format!(
+                    "could not record that the change starts, so it was not started: {e:#}"
+                ))
+            },
+        )
     }
 
     pub fn check_cancelled(&self) -> Result<(), Failure> {
@@ -333,6 +337,15 @@ async fn test_executor(ctx: &ExecContext) -> ExecResult {
             ctx.begin_change()?;
             tokio::time::sleep(Duration::from_millis(input.ms)).await;
             Ok(Success::outputs(serde_json::json!({ "changed": true })))
+        }
+        "stopped" => {
+            // Says it cannot tell when it is stopped, like a playbook.
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(input.ms)) => {
+                    Ok(Success::outputs(serde_json::json!({ "ran": true })))
+                }
+                _ = ctx.cancel.cancelled() => Err(Failure::Uncertain("stopped midway".into())),
+            }
         }
         "fail" => Err(Failure::msg(format!(
             "failed with secret {}",

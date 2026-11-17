@@ -35,7 +35,10 @@ entry synced) when the attempt is accepted and again when it starts. For `opento
 `apply`, `ansible` `run` and `proxmox` `set-protection`, it writes it once more right before
 the first thing that changes anything: the `tofu apply` process, each `ansible-playbook`
 process, and the protection `PUT`. If that write fails, the change is not started and the
-attempt fails. What a restart reports for an attempt it lost:
+attempt fails. A tool has the workspace mounted and could rewrite the marker, so for a change
+the agent first records that it started beside the workspace, where no tool reaches. Once that
+record exists a restart reports `uncertain`, whatever the marker says or whether it is still
+there. What a restart reports for an attempt it lost:
 
 | Marker | Outcome |
 |---|---|

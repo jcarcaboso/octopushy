@@ -8,6 +8,10 @@
 //!
 //! Every write is atomic and durable, directory entry included, before the call
 //! returns.
+//!
+//! A tool has the workspace mounted and can write the marker. So that a change
+//! started is also recorded beside the workspace, where no tool reaches: that
+//! record, not the marker, is what a restart believes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -67,10 +71,8 @@ pub fn create(
     mutating: bool,
 ) -> Result<PathBuf> {
     let ws = dir(work_dir, attempt_id);
-    if ws.exists() {
-        // Left over from an earlier, unreported try of the same attempt.
-        remove(&ws);
-    }
+    // Whatever an earlier, unreported try of the same attempt left over.
+    remove(&ws);
     fsutil::ensure_private_dir(&ws)?;
     init(&ws, attempt_id, executor, action, mutating)?;
     Ok(ws)
@@ -111,12 +113,34 @@ pub fn mark_running(ws: &Path) -> Result<()> {
     write(ws, &marker)
 }
 
+/// Where it is recorded that the attempt's change started: beside the workspace, not in it.
+fn change_record(ws: &Path) -> Result<PathBuf> {
+    let name = ws
+        .file_name()
+        .context("the workspace has no name")?
+        .to_string_lossy();
+    Ok(ws.with_file_name(format!("{name}.change-started")))
+}
+
+/// Whether a change of this attempt started, or that cannot be ruled out.
+pub fn change_started(ws: &Path) -> bool {
+    match change_record(ws).map(fs::symlink_metadata) {
+        Ok(Err(e)) => e.kind() != std::io::ErrorKind::NotFound,
+        _ => true,
+    }
+}
+
 /// Records that the executor is about to make its first change. Durable when it returns; on an
-/// error the change must not start. Keeps the time of the first call.
-pub fn mark_change_started(ws: &Path) -> Result<()> {
+/// error the change must not start. Keeps the time of the first call. For a change (`mutating`,
+/// as the agent holds it in memory, not as the marker says) it is first recorded beside the
+/// workspace.
+pub fn mark_change_started(ws: &Path, mutating: bool) -> Result<()> {
     let mut marker = read(ws)?.context("the attempt marker is missing")?;
     if marker.phase != Phase::Running {
         anyhow::bail!("the attempt marker does not say the attempt is running");
+    }
+    if mutating {
+        fsutil::write_atomic(&change_record(ws)?, b"", 0o600)?;
     }
     if marker.change_started_at_ms.is_some() {
         return Ok(());
@@ -138,8 +162,11 @@ pub fn read(ws: &Path) -> Result<Option<Marker>> {
     }
 }
 
-/// Deletes a workspace, logging instead of failing.
+/// Deletes a workspace and the record beside it, logging instead of failing.
 pub fn remove(ws: &Path) {
+    if let Ok(record) = change_record(ws) {
+        let _ = fs::remove_file(record);
+    }
     if let Err(e) = fs::remove_dir_all(ws)
         && e.kind() != std::io::ErrorKind::NotFound
     {

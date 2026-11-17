@@ -288,6 +288,33 @@ async fn drain_cancels_and_refuses_new_work() {
 }
 
 #[tokio::test]
+async fn a_read_stopped_by_a_drain_is_cancelled_even_if_its_tool_cannot_tell() {
+    let h = harness();
+    h.manager.set_concurrency(4);
+    // A playbook that only verifies: the server calls it a read, and a stopped playbook says
+    // it cannot tell how far it got.
+    let mut verify = assignment("verify", "test", "stopped", r#"{"ms":60000}"#);
+    verify.mutating = Some(false);
+    h.manager.accept(verify);
+    // The same tool as a change is not stopped by a drain at all.
+    let mut change = assignment("change", "test", "stopped", r#"{"ms":200}"#);
+    change.mutating = Some(true);
+    h.manager.accept(change);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    h.manager.drain();
+
+    let mut c = Collector::default();
+    assert_eq!(
+        c.result(&h.manager, "verify").await.outcome(),
+        Outcome::Cancelled
+    );
+    assert_eq!(
+        c.result(&h.manager, "change").await.outcome(),
+        Outcome::Succeeded
+    );
+}
+
+#[tokio::test]
 async fn a_lost_stored_result_of_a_recovered_attempt_is_uncertain_not_failed() {
     let h = harness();
     let ws = workspace::create(&h.work, "apply-1", "opentofu", "apply", true).unwrap();

@@ -10,6 +10,9 @@
 //!   and it failed. Whether it is a change is the server's word, kept in the
 //!   marker; a marker of an older agent falls back to the agent's own table.
 //! - A workspace without a marker never got past setup and is removed.
+//! - A record beside the workspace that a change started settles it: uncertain,
+//!   whatever the marker says or whether it is still there. A tool can write the
+//!   marker, and cannot reach the record.
 //! - A marker that exists but cannot be read says nothing about what the
 //!   attempt was doing: uncertain, never failed.
 //!
@@ -28,9 +31,17 @@ use crate::identity::now_ms;
 use crate::outbox::{Outbox, OutboxRecord};
 use crate::paths::is_safe_id;
 
-/// The outcome and message to report for an attempt the agent lost.
-pub fn classify(marker: &Marker) -> (Outcome, String) {
+/// The outcome and message to report for an attempt the agent lost. `change_started` is
+/// [`workspace::change_started`], the agent's own record.
+pub fn classify(marker: &Marker, change_started: bool) -> (Outcome, String) {
     match marker.phase {
+        _ if change_started => (
+            Outcome::Uncertain,
+            format!(
+                "the agent restarted during {}/{}; it cannot tell whether the change was made",
+                marker.executor, marker.action
+            ),
+        ),
         Phase::Queued => (
             Outcome::Failed,
             "the agent restarted before the attempt started".to_owned(),
@@ -95,13 +106,15 @@ pub fn recover(work_dir: &Path, outbox: &Outbox) -> Result<Vec<String>> {
             }
             ansible::remove_secret_dir(&id);
             let mut applying = false;
+            let change_started = workspace::change_started(&ws);
             let (outcome, error) = match workspace::read(&ws) {
                 Ok(Some(marker)) => {
                     applying = marker.phase == Phase::Running
                         && (marker.executor.as_str(), marker.action.as_str())
                             == ("opentofu", "apply");
-                    classify(&marker)
+                    classify(&marker, change_started)
                 }
+                Ok(None) if change_started => unreadable_marker(),
                 Ok(None) => {
                     tracing::info!("removing incomplete workspace {}", ws.display());
                     workspace::remove(&ws);
@@ -180,10 +193,14 @@ mod tests {
             ("", "", Phase::Running, Failed),
         ];
         for (e, a, p, expected) in cases {
-            assert_eq!(classify(&marker(e, a, p)).0, expected, "{e}/{a} {p:?}");
+            assert_eq!(
+                classify(&marker(e, a, p), false).0,
+                expected,
+                "{e}/{a} {p:?}"
+            );
         }
         assert_eq!(
-            classify(&marker("proxmox", "observe", Phase::Running)).1,
+            classify(&marker("proxmox", "observe", Phase::Running), false).1,
             "agent restarted during the attempt"
         );
     }
@@ -196,11 +213,11 @@ mod tests {
             ("ansible", "run"),
             ("proxmox", "set-protection"),
         ] {
-            let (outcome, error) = classify(&running(e, a, true, false));
+            let (outcome, error) = classify(&running(e, a, true, false), false);
             assert_eq!(outcome, Failed, "{e}/{a} before its change");
             assert!(error.contains("nothing ran"), "{error}");
             assert_eq!(
-                classify(&running(e, a, true, true)).0,
+                classify(&running(e, a, true, true), false).0,
                 Uncertain,
                 "{e}/{a} after its change started"
             );
@@ -219,7 +236,7 @@ mod tests {
         ] {
             assert!(!executors::marks_change(e, a));
             assert_eq!(
-                classify(&running(e, a, true, false)).0,
+                classify(&running(e, a, true, false), false).0,
                 Outcome::Uncertain,
                 "{e}/{a}"
             );
@@ -227,23 +244,79 @@ mod tests {
         // Nor does a marker that does not say its executor marks the start, whatever the action.
         let mut old = marker("opentofu", "apply", Phase::Running);
         old.mutating = Some(true);
-        assert_eq!(classify(&old).0, Outcome::Uncertain);
+        assert_eq!(classify(&old, false).0, Outcome::Uncertain);
     }
 
     #[test]
     fn a_playbook_the_server_calls_a_read_is_never_uncertain() {
         for changed in [false, true] {
             assert_eq!(
-                classify(&running("ansible", "run", false, changed)).0,
+                classify(&running("ansible", "run", false, changed), false).0,
                 Outcome::Failed,
                 "changed={changed}"
             );
         }
         // The server's word also makes a change of what the agent would call a read.
         assert_eq!(
-            classify(&running("proxmox", "verify-guest", true, false)).0,
+            classify(&running("proxmox", "verify-guest", true, false), false).0,
             Outcome::Uncertain
         );
+    }
+
+    #[test]
+    fn a_marker_the_tool_rewrote_does_not_hide_a_change_that_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        let outbox = Outbox::open(dir.path().join("outbox")).unwrap();
+        let running = |id: &str| {
+            let ws = workspace::create(&work, id, "opentofu", "apply", true).unwrap();
+            workspace::mark_running(&ws).unwrap();
+            ws
+        };
+
+        // The tool, which has the workspace mounted, puts back the marker from before the change.
+        let restored = running("restored-1");
+        let before = fs::read(restored.join(workspace::MARKER)).unwrap();
+        workspace::mark_change_started(&restored, true).unwrap();
+        fs::write(restored.join(workspace::MARKER), before).unwrap();
+        // It rewrites the marker to call the attempt a read.
+        let read = running("read-1");
+        workspace::mark_change_started(&read, true).unwrap();
+        fs::write(
+            read.join(workspace::MARKER),
+            br#"{"attemptId":"read-1","executor":"opentofu","action":"preview","phase":"running","acceptedAtMs":1,"startedAtMs":2,"mutating":false}"#,
+        )
+        .unwrap();
+        // It deletes the marker.
+        let deleted = running("deleted-1");
+        workspace::mark_change_started(&deleted, true).unwrap();
+        fs::remove_file(deleted.join(workspace::MARKER)).unwrap();
+        // Nothing the tool writes in its workspace makes a change look started either way: a
+        // read records none, and removing a workspace removes its record.
+        let verify = workspace::create(&work, "verify-1", "ansible", "run", false).unwrap();
+        workspace::mark_running(&verify).unwrap();
+        workspace::mark_change_started(&verify, false).unwrap();
+        assert!(!workspace::change_started(&verify));
+        assert!(workspace::change_started(&restored));
+        let gone = running("gone-1");
+        workspace::mark_change_started(&gone, true).unwrap();
+        workspace::remove(&gone);
+        assert!(!workspace::change_started(&gone));
+
+        recover(&work, &outbox).unwrap();
+        let outcome = |id: &str| {
+            outbox
+                .get(id)
+                .unwrap()
+                .unwrap()
+                .to_result()
+                .unwrap()
+                .outcome()
+        };
+        assert_eq!(outcome("restored-1"), Outcome::Uncertain);
+        assert_eq!(outcome("read-1"), Outcome::Uncertain);
+        assert_eq!(outcome("deleted-1"), Outcome::Uncertain);
+        assert_eq!(outcome("verify-1"), Outcome::Failed);
     }
 
     #[test]
@@ -254,7 +327,7 @@ mod tests {
 
         let apply = workspace::create(&work, "apply-1", "opentofu", "apply", true).unwrap();
         workspace::mark_running(&apply).unwrap();
-        workspace::mark_change_started(&apply).unwrap();
+        workspace::mark_change_started(&apply, true).unwrap();
         // Restarted during `tofu init`: the apply had not started.
         let init = workspace::create(&work, "init-1", "opentofu", "apply", true).unwrap();
         workspace::mark_running(&init).unwrap();
@@ -263,7 +336,7 @@ mod tests {
         // A playbook that only verifies, restarted after it reached the guest.
         let verify = workspace::create(&work, "verify-1", "ansible", "run", false).unwrap();
         workspace::mark_running(&verify).unwrap();
-        workspace::mark_change_started(&verify).unwrap();
+        workspace::mark_change_started(&verify, false).unwrap();
         // Written by an agent before the change marker, during an apply.
         let old = workspace::create(&work, "old-1", "opentofu", "apply", true).unwrap();
         fs::write(

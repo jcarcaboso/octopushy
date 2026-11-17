@@ -86,6 +86,7 @@ async fn exec_marked(
         workspace: dir.path().to_path_buf(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel,
+        mutating: true,
         snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "proxmox", &ctx).await;

@@ -334,6 +334,7 @@ impl AttemptManager {
             workspace: ws,
             log: log.clone(),
             cancel: cancel.clone(),
+            mutating,
             snapshots,
         };
         let started = Instant::now();
@@ -347,6 +348,10 @@ impl AttemptManager {
                 error: String::new(),
                 artifacts: success.artifacts,
             },
+            // A read the server cancelled changed nothing, whatever its tool could tell when stopped.
+            Ok(Err(Failure::Uncertain(_))) if cancel.is_cancelled() && !mutating => {
+                result(&id, Outcome::Cancelled, "cancelled by the server")
+            }
             Ok(Err(Failure::Uncertain(message))) => result(&id, Outcome::Uncertain, &message),
             Ok(Err(Failure::Cancelled)) => {
                 result(&id, Outcome::Cancelled, "cancelled by the server")

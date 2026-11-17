@@ -221,6 +221,7 @@ async fn run(
         workspace: workspace.clone(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel,
+        mutating: true,
         snapshots: Default::default(),
     };
     let result = executors::run(&fx.cfg, "opentofu", &ctx).await;

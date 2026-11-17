@@ -93,6 +93,7 @@ async fn run(
             Arc::new(Notify::new()),
         ),
         cancel: CancellationToken::new(),
+        mutating: true,
         snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "opentofu", &ctx).await;

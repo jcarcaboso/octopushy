@@ -101,6 +101,7 @@ impl Fake {
                 workspace,
                 log: AttemptLogger::new(buffer, masker, Arc::new(Notify::new())),
                 cancel,
+                mutating: true,
                 snapshots: Default::default(),
             },
         }

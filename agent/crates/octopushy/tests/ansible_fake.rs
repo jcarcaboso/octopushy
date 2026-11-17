@@ -184,6 +184,7 @@ async fn exec(
         workspace: workspace.clone(),
         log,
         cancel: CancellationToken::new(),
+        mutating: true,
         snapshots: Snapshots::default(),
     };
     let result = executors::run(&fx.cfg, "ansible", &ctx).await;

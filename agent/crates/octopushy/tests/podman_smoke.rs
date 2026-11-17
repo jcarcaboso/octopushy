@@ -133,6 +133,7 @@ output "secret" {
             workspace: ws,
             log,
             cancel: CancellationToken::new(),
+            mutating: true,
             snapshots: Default::default(),
         };
         let cfg = &cfg;
