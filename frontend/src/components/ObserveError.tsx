@@ -1,14 +1,14 @@
 import { Link } from "react-router";
 import type { InstallationSummary } from "../api/types";
 import { Callout } from "./Callout";
-import { isCredentialBlock } from "../lib/observe";
+import { observeBlockReasons } from "../lib/observe";
 import { RelativeTime } from "./RelativeTime";
 
 /** Why the installation's latest background observation did not succeed. */
 export function ObserveError({ installation }: { installation: InstallationSummary }) {
-  const { observeError: error, observeErrorAt: at } = installation;
+  const { observeError: error, observeErrorAt: at, observeBlockReason } = installation;
   if (!error) return null;
-  const blocked = isCredentialBlock(error);
+  const blocked = observeBlockReason === observeBlockReasons.credentials;
   return (
     <Callout
       kind={blocked ? "warning" : "danger"}

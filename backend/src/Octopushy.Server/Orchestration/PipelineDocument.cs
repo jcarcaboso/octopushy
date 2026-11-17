@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 
@@ -37,7 +38,7 @@ public sealed record PipelineDocument(string Text, string Sha256, IReadOnlyList<
                 hasChanges = true;
                 if (ansible.Destructive)
                     destructive.Add($"{stage.Name} (the workflow declares {ansible.Action} destructive)");
-                entry["kind"] = "ansible";
+                entry["kind"] = Executors.Ansible;
                 entry["action"] = ansible.Action;
                 entry["destructive"] = ansible.Destructive;
             }
@@ -51,7 +52,7 @@ public sealed record PipelineDocument(string Text, string Sha256, IReadOnlyList<
                 var removed = (counts?["delete"]?.GetValue<int>() ?? 0) + (counts?["replace"]?.GetValue<int>() ?? 0);
                 if (removed > 0)
                     destructive.Add($"{stage.Name} (the plan deletes or replaces {removed} resource(s))");
-                entry["kind"] = "opentofu";
+                entry["kind"] = Executors.OpenTofu;
                 entry["root"] = stage.OpenTofu!.Root;
                 entry["image"] = stage.OpenTofu.Image;
                 entry["variables"] = stage.OpenTofu.Variables.DeepClone();

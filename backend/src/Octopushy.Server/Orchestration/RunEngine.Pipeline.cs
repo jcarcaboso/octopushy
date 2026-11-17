@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 
@@ -92,13 +93,13 @@ public sealed partial class RunEngine
         step.Document = document.Text;
         step.PlanSha256 = document.Sha256;
         var policy = context.Policy!;
-        var manual = policy.Approval == "manual" && document.HasChanges;
-        var destructiveManual = document.Destructive.Count > 0 && policy.Destructive == "manual";
+        var manual = policy.Approval == PolicyResolver.Manual && document.HasChanges;
+        var destructiveManual = document.Destructive.Count > 0 && policy.Destructive == PolicyResolver.Manual;
         step.ApprovalRequired = manual || destructiveManual;
         if (!step.ApprovalRequired)
         {
-            step.Decision = "approved";
-            step.DecidedBy = "policy";
+            step.Decision = StepDecisions.Approved;
+            step.DecidedBy = StepDecisions.ByPolicy;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = !document.HasChanges
                 ? "No stage has anything to change, so this needs no approval."
@@ -238,7 +239,7 @@ public sealed partial class RunEngine
             if (failed.Name == StepNames.Apply && await StateMovedAsync(db, run, failed, cancellationToken))
                 throw new RunException("The failed apply changed this stage's state, so OpenTofu will not use the saved plan. Deploy again to plan what is left.");
 
-            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal && s.Detail != "The plan has no changes."))
+            foreach (var step in run.Steps.Where(s => s.Ordinal >= failed.Ordinal && !PlannedNoChanges(run, s)))
             {
                 step.Status = StepStatuses.Pending;
                 step.Detail = null;
@@ -250,9 +251,16 @@ public sealed partial class RunEngine
             run.Status = RunStatuses.Running;
             run.FinishedAt = null;
             run.Detail = null;
+            run.EndReason = null;
             await db.SaveChangesAsync(cancellationToken);
             signal.Wake();
         }, cancellationToken);
+
+    /// <summary>An apply skipped because its stage's plan has nothing to apply: repeating an earlier stage does not change that.</summary>
+    internal static bool PlannedNoChanges(Run run, Step step) =>
+        step is { Name: StepNames.Apply, Status: StepStatuses.Skipped }
+        && run.Steps.SingleOrDefault(s => s.Stage == step.Stage && s.Name == StepNames.Plan)?.Outputs is { } outputs
+        && JsonNode.Parse(outputs)?["hasChanges"]?.GetValue<bool>() == false;
 
     private static async Task<bool> StateMovedAsync(OctopushyDb db, Run run, Step apply, CancellationToken cancellationToken)
     {

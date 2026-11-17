@@ -3,6 +3,7 @@ using Google.Protobuf;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -18,7 +19,11 @@ public sealed class AssignmentException(string message) : Exception(message);
 
 public sealed class CredentialUnavailableException(string message) : Exception(message);
 
-public sealed class ExecutionUntrustedException(string message) : Exception(message);
+/// <param name="blockReason">The <see cref="RunBlockReasons"/> value, if any, a run waiting for it takes.</param>
+public sealed class ExecutionUntrustedException(string message, string? blockReason = null) : Exception(message)
+{
+    public string? BlockReason { get; } = blockReason;
+}
 
 /// <summary>Builds the assignment an agent receives for an attempt.</summary>
 public sealed partial class AssignmentBuilder(
@@ -95,11 +100,11 @@ public sealed partial class AssignmentBuilder(
                 context, cancellationToken) is { } observation)
             throw new AssignmentException(observation);
         var blocked = run is null
-            ? await RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
-            : await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken);
-        if (blocked is { } reason)
+            ? await RepositoryTrust.BlockAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+            : await RepositoryTrust.BlockAsync(db, run, cancellationToken);
+        if (blocked is { } block)
         {
-            throw new ExecutionUntrustedException(reason);
+            throw new ExecutionUntrustedException(block.Detail, block.Reason);
         }
         if (step is null || run is null
                 ? step is not null || run is not null || attempt.StepId is not null || attempt.RunId is not null || attempt.ResourceId is null
@@ -114,7 +119,7 @@ public sealed partial class AssignmentBuilder(
         var action = ActionFor(stepName);
         if (step?.Stage is not null)
             return await BuildStageAsync(attempt, step, run!, context, agentId, cancellationToken);
-        if (action.Executor == "ansible")
+        if (action.Executor == Executors.Ansible)
             return await BuildAnsibleAsync(attempt, step!, run!, context, agentId, cancellationToken);
         // Observations are runtime data, so what was valid when the run was made is asked again here.
         if (run is { Operation: Operations.Provision or Operations.Retire } && stepName == StepNames.Plan && context.Proxmox.Vmid is { } vmid
@@ -138,7 +143,7 @@ public sealed partial class AssignmentBuilder(
             await SpendHostKeyAsync(run, context, cancellationToken);
 
         // State leaves the controller under the gates above, like any other credential.
-        var state = action.Executor == "opentofu"
+        var state = action.Executor == Executors.OpenTofu
             ? await states.CheckOutAsync(attempt, run!, context, stepName == StepNames.Apply, cancellationToken)
             : null;
         // Only these server-owned keys may leave system/ here, and the general resolver keeps refusing them.
@@ -172,7 +177,7 @@ public sealed partial class AssignmentBuilder(
                 audit.State = EntityState.Detached;
             throw new CredentialUnavailableException($"Blocked credentials: {string.Join(", ", missing)}");
         }
-        if (action.Executor == "opentofu" && run is { Operation: Operations.Provision or Operations.Retire })
+        if (action.Executor == Executors.OpenTofu && run is { Operation: Operations.Provision or Operations.Retire })
             await AddHostKeyMasksAsync(attempt, run, values, agentId, cancellationToken);
         if (own.Count > 0 || values.Keys.Any(k => k.StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal)))
             await db.SaveChangesAsync(cancellationToken);
@@ -190,7 +195,7 @@ public sealed partial class AssignmentBuilder(
         };
 
         JsonObject input;
-        if (action.Executor == "opentofu")
+        if (action.Executor == Executors.OpenTofu)
         {
             ArgumentNullException.ThrowIfNull(run);
             var tofu = context.OpenTofu!;
@@ -403,7 +408,7 @@ public sealed partial class AssignmentBuilder(
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
         var verify = steps.SingleOrDefault(s => s.Name == StepNames.Verify);
-        if (stepName != StepNames.Protect || approval is not { Status: StepStatuses.Succeeded, Decision: "approved" } || approval.DecidedBy is null or "policy"
+        if (stepName != StepNames.Protect || approval is not { Status: StepStatuses.Succeeded, Decision: StepDecisions.Approved } || approval.DecidedBy is null or StepDecisions.ByPolicy
             || verify?.Status != StepStatuses.Succeeded)
             throw new AssignmentException("Attaching a machine requires a person's decision and a successful verify of it in this run.");
         var context = RunContext.Parse(run.Context);
@@ -422,7 +427,7 @@ public sealed partial class AssignmentBuilder(
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var plan = steps.SingleOrDefault(s => s.Name == StepNames.Plan);
         var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
-        if (plan?.Status != StepStatuses.Succeeded || approval?.Status != StepStatuses.Succeeded || approval.Decision != "approved")
+        if (plan?.Status != StepStatuses.Succeeded || approval?.Status != StepStatuses.Succeeded || approval.Decision != StepDecisions.Approved)
         {
             throw new AssignmentException("Privileged work requires a successful plan and approval for this run. Inspect and replan.");
         }

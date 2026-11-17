@@ -139,6 +139,21 @@ public class LabRepositoryLoaderTests
     }
 
     [Fact]
+    public void A_workflow_schemas_error_is_marked_as_one_and_the_definitions_own_are_not()
+    {
+        using var test = TestRepository.Minimal();
+        test.Write("workflows/test-vm/inputs.schema.json", """
+            { "type": "object", "properties": { "hardware": { "type": "object", "required": ["disks"] } } }
+            """);
+        test.Write("workflows/test-vm/workflow.yaml", "schemaVersion: 1\nversion: \"1.0\"\nmanages: vm\ninputs: inputs.schema.json\nstages:\n  - { name: machine, executor: opentofu, root: ../../modules/opentofu/test-vm }\n");
+        test.Write("modules/opentofu/test-vm/backend.tf", "terraform {\n  backend \"local\" {}\n}\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var schema = Assert.Single(repository.Issues, i => i.Message.Contains("disks"));
+        Assert.Equal(IssueSources.WorkflowSchema, schema.Source);
+        Assert.Equal(IssueSources.Definition, Assert.Single(repository.Issues, i => i.Message.Contains("must not declare a backend")).Source);
+    }
+
+    [Fact]
     public void A_standalone_installation_has_one_host()
     {
         using var test = TestRepository.Minimal();

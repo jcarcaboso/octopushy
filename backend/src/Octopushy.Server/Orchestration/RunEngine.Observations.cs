@@ -50,6 +50,7 @@ public sealed partial class RunEngine
                 installation.ObserveError = error;
                 installation.ObserveErrorAt = now;
             }
+            installation.ObserveBlockReason = ObserveBlockReasons.Credentials;
             installation.ObserveRequestedAt = null;
         }
         else
@@ -76,7 +77,9 @@ public sealed partial class RunEngine
     }
 
     /// <summary>Records a finished observation attempt on its installation; the caller saves.</summary>
-    private async Task FinishObservationAsync(OctopushyDb db, Attempt attempt, JsonNode? outputs, CancellationToken cancellationToken)
+    /// <param name="blockReason">For an attempt that was never sent, one of <see cref="ObserveBlockReasons"/>: why.</param>
+    private async Task FinishObservationAsync(OctopushyDb db, Attempt attempt, JsonNode? outputs, CancellationToken cancellationToken,
+        string? blockReason = null)
     {
         var installation = await db.Resources.FirstOrDefaultAsync(r => r.Id == attempt.ResourceId, cancellationToken);
         // A late result of an observation that a newer one replaced says nothing current.
@@ -113,6 +116,7 @@ public sealed partial class RunEngine
             case AttemptStatuses.Succeeded:
                 installation.ObserveError = null;
                 installation.ObserveErrorAt = null;
+                installation.ObserveBlockReason = null;
                 db.Observations.Add(new Observation
                 {
                     Id = Guid.CreateVersion7(),
@@ -134,6 +138,7 @@ public sealed partial class RunEngine
             default:
                 installation.ObserveError = attempt.Error ?? "The observation failed.";
                 installation.ObserveErrorAt = now;
+                installation.ObserveBlockReason = blockReason;
                 break;
         }
 

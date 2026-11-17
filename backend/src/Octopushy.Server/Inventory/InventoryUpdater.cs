@@ -279,7 +279,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             // Only promote a real replacement already proposed by discovery. Metadata
             // or policy-only revisions leave the older pinned plan/approval intact.
             if (activeRuns.Any(r => r.ResourceId == resource.Id && r.RevisionId == revision.Id))
-                await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+                await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken,
+                    endReason: RunEndReasons.Superseded);
             resource.ProvisionWaiting = null;
             return null;
         }
@@ -293,14 +294,15 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             resource.DesiredInputsHash = desired;
             resource.DesiredRevisionId = revision.Id;
             resource.ProvisionWaiting = waiting;
-            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken,
+                endReason: RunEndReasons.Superseded);
             return null;
         }
 
         Run proposed;
         try
         {
-            proposed = factory.Guest(repository, guest, resource, revision, "revision", keyIssued, hostKeyIssued, image);
+            proposed = factory.Guest(repository, guest, resource, revision, RunReasons.Revision, keyIssued, hostKeyIssued, image);
         }
         catch (RunException error)
         {
@@ -317,7 +319,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         // The same work proposed again, when it was recorded without its run, keeps its occurrence; new work gets a new one.
         GuestRemoval.Record(resource, desired, revision.Id, proposed, sameWork);
         resource.ProvisionWaiting = null;
-        await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+        await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken,
+            endReason: RunEndReasons.Superseded);
         return proposed;
     }
 
@@ -415,7 +418,8 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.Operation == Operations.Configure
                 && r.RevisionId != revision.Id && RunEngine.CanSupersede(r)).ToList())
             {
-                await engine.CancelInternalAsync(db, run.Id, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+                await engine.CancelInternalAsync(db, run.Id, $"Superseded by {Short(revision.Commit)}.", cancellationToken,
+                    endReason: RunEndReasons.Superseded);
                 activeRuns.Remove(run);
             }
         }
@@ -490,7 +494,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             .FirstOrDefaultAsync(cancellationToken);
 
     private async Task SupersedeAsync(OctopushyDb db, List<Run> activeRuns, DefinitionRevision revision, Resource resource, string reason,
-        CancellationToken cancellationToken, bool keepRemoval = false)
+        CancellationToken cancellationToken, bool keepRemoval = false, string? endReason = null)
     {
         foreach (var run in activeRuns.Where(r => r.ResourceId == resource.Id && r.RevisionId != revision.Id).ToList())
         {
@@ -499,7 +503,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
                 continue;
             if (RunEngine.CanSupersede(run))
             {
-                await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken);
+                await engine.CancelInternalAsync(db, run.Id, reason, cancellationToken, endReason);
                 activeRuns.Remove(run);
                 // It never ran, so the inputs it was made for are still to be configured.
                 if (run.Operation is Operations.Configure or Operations.Pipeline

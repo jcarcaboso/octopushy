@@ -8,8 +8,20 @@ public enum IssueSeverity
     Warning,
 }
 
+/// <summary>What found an issue, where something depends on it.</summary>
+public static class IssueSources
+{
+    /// <summary>The definitions' own checks. An issue stored before sources were recorded, without one, is one of these.</summary>
+    public const string Definition = "definition";
+
+    /// <summary>A guest's or service's workflow schema: its definition does not satisfy the schema of the workflow it resolved to.</summary>
+    public const string WorkflowSchema = "workflow-schema";
+}
+
 /// <summary>A problem found in the lab repository, located by file and line.</summary>
-public sealed record DefinitionIssue(IssueSeverity Severity, string File, int? Line, string Message, string? Address = null);
+/// <param name="Source">What found it: one of <see cref="IssueSources"/>.</param>
+public sealed record DefinitionIssue(IssueSeverity Severity, string File, int? Line, string Message, string? Address = null,
+    string Source = IssueSources.Definition);
 
 public enum ResourceKind
 {

@@ -200,7 +200,7 @@ public static class ChangeTracker
             .OrderBy(r => r.CreatedAt).ToListAsync(ct);
         // What the revision proposed for it: its own runs, or for a deleted folder the removal planned from the definition it
         // was last applied from. A run someone starts by hand at the same revision is theirs, not the change's.
-        var runs = candidates.Where(r => r.Reason == "revision" && r.RevisionId == revision.Id
+        var runs = candidates.Where(r => r.Reason == RunReasons.Revision && r.RevisionId == revision.Id
             || r.Operation == Operations.Retire && RunContext.Parse(r.Context).DefinitionRemovedIn == revision.Commit
             // Runs it already follows, such as those of an unapplied revision whose work an applied successor keeps.
             || change.RunIds.Contains(r.Id)).ToList();
@@ -219,7 +219,7 @@ public static class ChangeTracker
 
         // A run given up for a later revision: the change moves on with it while that revision still carries it.
         if (runs.Count > 0 && runs.All(r => RunStatuses.IsTerminal(r.Status))
-            && runs.FirstOrDefault(r => r.Status == RunStatuses.Cancelled && r.Detail?.StartsWith("Superseded by ", StringComparison.Ordinal) == true) is not null
+            && runs.FirstOrDefault(r => r.Status == RunStatuses.Cancelled && r.EndReason == RunEndReasons.Superseded) is not null
             && await NewerHeadAsync(db, mirror, change, revision, ct) is { } newer)
         {
             if (await LostAsync(revisions, change, newer, ct) is { } lost)
@@ -266,7 +266,7 @@ public static class ChangeTracker
                 return (ChangeStatuses.WaitingForApproval, $"{label} waits for approval.");
             if (active.Status == RunStatuses.Uncertain)
                 return (ChangeStatuses.Applying, $"{label} is uncertain: someone has to look at it and close it.");
-            var approved = active.Steps.Any(s => s.Kind == StepKinds.Approval && s.Decision == "approved");
+            var approved = active.Steps.Any(s => s.Kind == StepKinds.Approval && s.Decision == StepDecisions.Approved);
             var waiting = Views.Waiting(active) ?? active.Detail;
             return approved
                 ? (ChangeStatuses.Applying, waiting is null ? $"{label} is applying." : $"{label}: {waiting}")

@@ -1367,6 +1367,37 @@ public class ChangeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         Assert.Equal([replacement.Id], after.Runs.Select(r => r.Id));
     }
 
+    [Theory]
+    [InlineData(true, "Replaced by a newer commit, in other words.")]
+    [InlineData(false, null)]
+    public async Task A_change_moves_on_with_a_run_ended_as_superseded_whatever_its_words_say(bool superseded, string? words)
+    {
+        await using var setup = await StartAsync();
+        var change = await CommitAsync(setup, new ChangeRequest((await setup.FormAsync()).ResourceId, setup.RemoteHead, Hardware: Hardware(2, 4096)));
+        var first = Assert.Single(change.Runs);
+        // A later commit keeps the edit and changes the address: new work, which supersedes the change's run.
+        setup.PushElsewhere(GuestFile, setup.RemoteFile(GuestFile).Replace("address: 10.1.0.31/24", "address: 10.1.0.32/24").TrimEnd('\n'));
+        await setup.Server.SyncAsync();
+        var cancelled = await setup.Server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == first.Id));
+        Assert.Equal((RunStatuses.Cancelled, RunEndReasons.Superseded), (cancelled.Status, cancelled.EndReason));
+        Assert.StartsWith("Superseded by ", cancelled.Detail);
+        // Other words with the end reason, or the old words without it.
+        await setup.Server.WithDbAsync(async db =>
+        {
+            var run = await db.Runs.SingleAsync(r => r.Id == first.Id);
+            run.Detail = words ?? run.Detail;
+            run.EndReason = superseded ? RunEndReasons.Superseded : null;
+            await db.SaveChangesAsync();
+        });
+
+        var after = await setup.GetAsync(change.Id);
+        var newer = await setup.Server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.NotEqual(first.Id, newer.Id);
+        Assert.Equal(superseded ? [newer.Id] : [first.Id], after.Runs.Select(r => r.Id));
+        Assert.Equal(superseded ? setup.RemoteHead : change.Commit, (await setup.Server.QueryAsync(db => db.Revisions.AsNoTracking()
+            .SingleAsync(r => r.Id == db.Changes.Single(c => c.Id == change.Id).RevisionId))).Commit);
+    }
+
     [Fact]
     public async Task A_later_revisions_error_is_not_the_earlier_changes_failure()
     {

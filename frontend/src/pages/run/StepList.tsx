@@ -80,7 +80,7 @@ function StepRow({ step, detail, open, onToggle }: { step: Step; detail: RunDeta
           {step.detail && !(step.kind === "approval" && step.status === "awaiting-approval") ? (
             <p className={strong ? "step-row__detail step-row__detail--strong" : "step-row__detail"}>
               {step.detail}
-              {step.status === "blocked" && /missing secret/i.test(step.detail) ? (
+              {step.status === "blocked" ? (
                 <>
                   {" "}
                   <Link to="/variables">Open Variables</Link>

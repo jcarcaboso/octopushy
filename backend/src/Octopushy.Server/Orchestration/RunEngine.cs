@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
@@ -119,6 +120,7 @@ public sealed partial class RunEngine(
                         if (run is not null)
                         {
                             run.Detail = $"Advancing this run failed: {error}";
+                            run.BlockReason = null;
                             await db.SaveChangesAsync(cancellationToken);
                         }
                     }, cancellationToken);
@@ -146,10 +148,11 @@ public sealed partial class RunEngine(
             // Refused, not held: a run in an installation Octopushy only observes never waits to go.
             if (await SafetyBoundary.ObservedOnlyRefusalAsync(db, run, RunContext.Parse(run.Context), cancellationToken, observedOnly) is { } refused)
                 Finish(run, RunStatuses.Failed, refused);
-            else if (await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } reason)
+            else if (await RepositoryTrust.BlockAsync(db, run, cancellationToken) is { } block)
             {
                 run.Status = RunStatuses.Blocked;
-                run.Detail = reason;
+                run.Detail = block.Detail;
+                run.BlockReason = block.Reason;
             }
             db.Runs.Add(run);
         }
@@ -167,7 +170,7 @@ public sealed partial class RunEngine(
                 throw new RunException("The plan changed since it was shown; review the current plan.");
             }
 
-            step.Decision = "approved";
+            step.Decision = StepDecisions.Approved;
             step.DecidedBy = user;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = note;
@@ -183,7 +186,7 @@ public sealed partial class RunEngine(
         WithDbAsync(async db =>
         {
             var step = await AwaitingApprovalAsync(db, runId, stepId, cancellationToken);
-            step.Decision = "rejected";
+            step.Decision = StepDecisions.Rejected;
             step.DecidedBy = user;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = note;
@@ -268,7 +271,10 @@ public sealed partial class RunEngine(
         && run.Status != RunStatuses.Uncertain
         && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && !NeverSent(run, a));
 
-    internal async Task CancelInternalAsync(OctopushyDb db, Guid runId, string reason, CancellationToken cancellationToken)
+    /// <param name="endReason">
+    /// One of <see cref="RunEndReasons"/>, kept as the run's own while it restores a protection it lifted, and after it ends.
+    /// </param>
+    internal async Task CancelInternalAsync(OctopushyDb db, Guid runId, string reason, CancellationToken cancellationToken, string? endReason = null)
     {
         var run = await LoadRunAsync(db, runId, cancellationToken);
         if (RunStatuses.IsTerminal(run.Status))
@@ -297,6 +303,7 @@ public sealed partial class RunEngine(
             attempt.LeaseExpiresAt = null;
         }
 
+        run.EndReason = endReason;
         // A run that lifted protection must not leave the VM unprotected, whether it has applied yet or not.
         var context = RunContext.Parse(run.Context);
         if (run.Steps.All(s => s.Name != StepNames.Reprotect) && LiftedProtection(run))
@@ -343,12 +350,13 @@ public sealed partial class RunEngine(
             return;
         }
 
-        if (!inFlight && !reconcilingOutcome && await RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken) is { } trustReason)
+        if (!inFlight && !reconcilingOutcome && await RepositoryTrust.BlockAsync(db, run, cancellationToken) is { } block)
         {
             run.Status = RunStatuses.Blocked;
-            run.Detail = trustReason;
+            run.Detail = block.Detail;
+            run.BlockReason = block.Reason;
             foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
-                attempt.WaitingReason = trustReason;
+                attempt.WaitingReason = block.Detail;
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
@@ -379,6 +387,7 @@ public sealed partial class RunEngine(
         {
             run.Status = RunStatuses.Blocked;
             run.Detail = $"Blocked credentials: {string.Join(", ", invalid)}.";
+            run.BlockReason = null;
             foreach (var attempt in run.Steps.SelectMany(s => s.Attempts).Where(a => a.Status == AttemptStatuses.Queued))
                 attempt.WaitingReason = run.Detail;
             await db.SaveChangesAsync(cancellationToken);
@@ -416,6 +425,7 @@ public sealed partial class RunEngine(
                         step.Detail = $"Blocked credentials: {string.Join(", ", missing)}. Review Variables.";
                         run.Status = RunStatuses.Blocked;
                         run.Detail = step.Detail;
+                        run.BlockReason = null;
                         break;
                     }
 
@@ -442,6 +452,7 @@ public sealed partial class RunEngine(
                     var unavailable = await CredentialBindings.CheckAsync(db, run, context, cancellationToken, AssignmentBuilder.SecretsFor(step, context));
                     run.Status = unavailable.Count == 0 ? RunStatuses.Running : RunStatuses.Blocked;
                     run.Detail = unavailable.Count == 0 ? null : $"Blocked credentials: {string.Join(", ", unavailable)}.";
+                    run.BlockReason = null;
                     break;
                 case StepStatuses.Running:
                     run.Status = RunStatuses.Running;
@@ -519,9 +530,9 @@ public sealed partial class RunEngine(
             Finish(run, RunStatuses.Failed, step.Detail);
             return false;
         }
-        var manual = policy.Approval == "manual" && (resourceChanges > 0
+        var manual = policy.Approval == PolicyResolver.Manual && (resourceChanges > 0
             || outputs?["hasChanges"]?.GetValue<bool>() == true || privilegedRemains);
-        var destructiveManual = deletes > 0 && policy.Destructive == "manual";
+        var destructiveManual = deletes > 0 && policy.Destructive == PolicyResolver.Manual;
         // Lifting protection is what lets a provision plan destroy a VM, so a VM that may hold data
         // goes only with a person's approval, or where destructive was set to automatic on purpose.
         // A VM that never finished its first apply holds nothing yet, and rerunning recreates it.
@@ -551,7 +562,7 @@ public sealed partial class RunEngine(
             return false;
         }
 
-        var vmHeld = removesVm && !recoversVm && !(policy.Destructive == "automatic" && policy.DestructiveExplicit);
+        var vmHeld = removesVm && !recoversVm && !(policy.Destructive == PolicyResolver.Automatic && policy.DestructiveExplicit);
         // A guest bound to its machine had it created and verified once. A plan that creates it again found it gone: deleted
         // outside Octopushy, or waiting to be restored from a backup. An empty machine at its VMID would stand in the way of
         // that restore, so it waits for a person whatever the policy says.
@@ -568,8 +579,8 @@ public sealed partial class RunEngine(
         step.ApprovalRequired = manual || destructiveManual || vmHeld || recreatesLost || movesFrom is not null;
         if (!step.ApprovalRequired)
         {
-            step.Decision = "approved";
-            step.DecidedBy = "policy";
+            step.Decision = StepDecisions.Approved;
+            step.DecidedBy = StepDecisions.ByPolicy;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = resourceChanges == 0 && !privilegedRemains
                 ? "The plan changes no resources, so it needs no approval."
@@ -909,6 +920,7 @@ public sealed partial class RunEngine(
         if (run.Detail != detail)
         {
             run.Detail = detail;
+            run.BlockReason = null;
         }
     }
 

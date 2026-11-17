@@ -292,7 +292,7 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 null),
         };
 
-        var run = NewRun(resource, Operations.RotateAccess, revision, "manual", context);
+        var run = NewRun(resource, Operations.RotateAccess, revision, RunReasons.Manual, context);
         // What the rotation reaches the guest by; its playbooks are the server's own.
         run.InputsHash = Canonical.Hash(new JsonObject
         {
@@ -441,13 +441,13 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
             Secrets = secrets,
             RequestedSecretVersions = requestedVersions,
         };
-        var run = NewRun(resource, Operations.Attach, revision, "manual", context);
+        var run = NewRun(resource, Operations.Attach, revision, RunReasons.Manual, context);
         AddSteps(run, [StepNames.Approval, StepNames.Verify, StepNames.Protect]);
         var approval = run.Steps.Single(s => s.Name == StepNames.Approval);
         var now = clock.GetUtcNow();
         approval.Status = StepStatuses.Succeeded;
         approval.ApprovalRequired = true;
-        approval.Decision = "approved";
+        approval.Decision = StepDecisions.Approved;
         approval.DecidedBy = actor;
         approval.DecidedAt = now;
         approval.DecisionNote = $"{actor} chose to attach {guest.Address} to the {(guest.Type == GuestTypes.Container ? "container" : "VM")} at VMID {guest.Vmid} on {guest.Host}.";

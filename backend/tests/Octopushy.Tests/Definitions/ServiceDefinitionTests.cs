@@ -136,6 +136,16 @@ public class ServiceDefinitionTests
     }
 
     [Fact]
+    public void A_services_inputs_outside_its_workflows_schema_are_marked_as_the_schemas_error()
+    {
+        using var test = Repository(Service.Replace("port: 9000", "port: nine"));
+        var repository = LabRepositoryLoader.Load(test.Root);
+        var issue = Assert.Single(repository.Issues, i => i.Address == Address && i.Severity == IssueSeverity.Error);
+        Assert.Equal(IssueSources.WorkflowSchema, issue.Source);
+        Assert.Contains("(workflow web@1.0)", issue.Message);
+    }
+
+    [Fact]
     public void A_pipeline_yaml_is_the_earlier_format_and_says_where_the_new_one_is()
     {
         using var test = Repository();

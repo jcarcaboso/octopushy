@@ -35,7 +35,8 @@ public sealed partial class InventoryUpdater
                 continue;
             state.DesiredHash = hash;
             state.DesiredRevisionId = revision.Id;
-            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken);
+            await SupersedeAsync(db, activeRuns, revision, resource, $"Superseded by {Short(revision.Commit)}.", cancellationToken,
+                endReason: RunEndReasons.Superseded);
         }
     }
 

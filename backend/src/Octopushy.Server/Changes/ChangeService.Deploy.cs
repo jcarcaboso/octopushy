@@ -143,8 +143,8 @@ public sealed partial class ChangeService
             var head = await mirror.WriteDraftAsync(id, request.BaseCommit, composed.Changes, composed.Message, ct);
             var diff = await mirror.DiffAsync(request.BaseCommit, head, ct);
             var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
-            var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, request.BaseCommit, head, ct);
-            var fieldIssues = await FieldIssuesAsync(composed, head, validation.NewIssues, releases, ct);
+            var (validation, newIssues) = await RepositoryEditor.ValidateWithIssuesAsync(mirror, revisions, releases, request.BaseCommit, head, ct);
+            var fieldIssues = await FieldIssuesAsync(composed, head, newIssues, releases, ct);
             string? refused = null;
             int? next = null;
             if (target.Settings.HeadCommit is { } synced && synced != request.BaseCommit

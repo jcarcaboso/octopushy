@@ -1874,6 +1874,7 @@ export interface components {
             observeError: null | string;
             /** Format: date-time */
             observeErrorAt: null | string;
+            observeBlockReason: null | string;
             observing: boolean;
             observeWaiting: null | string;
             proxmoxVersion: null | string;
@@ -2023,6 +2024,7 @@ export interface components {
             error: string;
             /** Format: date-time */
             at: null | string;
+            blockReason: null | string;
         };
         ObservedGuestDto: {
             /** Format: int32 */

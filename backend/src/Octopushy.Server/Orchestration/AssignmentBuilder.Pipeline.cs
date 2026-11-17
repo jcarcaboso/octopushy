@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Google.Protobuf;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 
@@ -38,8 +39,8 @@ public sealed partial class AssignmentBuilder
         var assignment = new Assignment
         {
             AttemptId = attempt.Id.ToString(),
-            Executor = "opentofu",
-            Action = apply ? "apply" : "preview",
+            Executor = Executors.OpenTofu,
+            Action = apply ? ExecutorActions.Apply : ExecutorActions.Preview,
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             FilesTarGz = ByteString.CopyFrom(await bundles.ForAsync(run, stage, cancellationToken)),
             InputJson = new JsonObject
@@ -68,7 +69,7 @@ public sealed partial class AssignmentBuilder
     {
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
-        if (approval?.Status != StepStatuses.Succeeded || approval.Decision != "approved" || approval.Document is not { } document)
+        if (approval?.Status != StepStatuses.Succeeded || approval.Decision != StepDecisions.Approved || approval.Document is not { } document)
             throw new AssignmentException("A stage requires the pipeline's approval. Run it again.");
         if (run.Status == RunStatuses.Uncertain || step.Status == StepStatuses.Uncertain)
             throw new AssignmentException("An uncertain stage cannot be replayed; inspect the guest first.");

@@ -547,10 +547,16 @@ public sealed class Resource
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
 
-    /// <summary>Why the installation's latest observation did not succeed; cleared when one does.</summary>
+    /// <summary>Why the installation's latest observation did not succeed; cleared when one does. Read by people: see <see cref="ObserveBlockReason"/>.</summary>
     public string? ObserveError { get; set; }
 
     public DateTimeOffset? ObserveErrorAt { get; set; }
+
+    /// <summary>
+    /// Why the latest observation was not sent, rather than failed, where something depends on it: one of
+    /// <see cref="ObserveBlockReasons"/>, or null. Set and cleared with <see cref="ObserveError"/>.
+    /// </summary>
+    public string? ObserveBlockReason { get; set; }
 
     /// <summary>
     /// An installation that said <c>manage: false</c> in its last definition that could be read. It stays
@@ -773,6 +779,12 @@ public static class Operations
 /// <summary>Why a run was started, where something depends on it.</summary>
 public static class RunReasons
 {
+    /// <summary>A revision of the lab repository proposed it.</summary>
+    public const string Revision = "revision";
+
+    /// <summary>A person started it.</summary>
+    public const string Manual = "manual";
+
     public const string Schedule = "schedule";
 
     /// <summary>A store value the guest's setup names changed its active version.</summary>
@@ -791,6 +803,27 @@ public static class RunStatuses
     public const string Cancelled = "cancelled";
 
     public static bool IsTerminal(string status) => status is Succeeded or Failed or Cancelled;
+}
+
+/// <summary>Why a run was ended, where something depends on it. See <see cref="Run.EndReason"/>.</summary>
+public static class RunEndReasons
+{
+    /// <summary>Cancelled before it changed anything, because a later revision proposes the resource's work again.</summary>
+    public const string Superseded = "superseded";
+}
+
+/// <summary>Why an installation's observation was not sent, rather than failed. See <see cref="Resource.ObserveBlockReason"/>.</summary>
+public static class ObserveBlockReasons
+{
+    /// <summary>A credential it needs is unavailable: nothing was sent, and the fix is in Variables.</summary>
+    public const string Credentials = "credentials";
+}
+
+/// <summary>Why a run is blocked, where something depends on it. See <see cref="Run.BlockReason"/>.</summary>
+public static class RunBlockReasons
+{
+    /// <summary>Its installation, or the endpoint it would send credentials to, waits for an operator's trust.</summary>
+    public const string InstallationTrust = "installation-trust";
 }
 
 /// <summary>One requested execution of an operation against one resource at a fixed revision.</summary>
@@ -816,7 +849,18 @@ public sealed class Run
 
     public string Status { get; set; } = RunStatuses.Queued;
 
+    /// <summary>What happened, for a person to read. Nothing decides on it: see <see cref="EndReason"/> and <see cref="BlockReason"/>.</summary>
     public string? Detail { get; set; }
+
+    /// <summary>Why the run was ended, where something depends on it: one of <see cref="RunEndReasons"/>, or null.</summary>
+    public string? EndReason { get; set; }
+
+    /// <summary>
+    /// Why the run is blocked, where something depends on it: one of <see cref="RunBlockReasons"/>, or null. It holds only
+    /// while the status is <see cref="RunStatuses.Blocked"/>: each way into that status sets it, and a detail written while it
+    /// stays blocked clears it.
+    /// </summary>
+    public string? BlockReason { get; set; }
 
     public string? InputsHash { get; set; }
 
@@ -833,6 +877,16 @@ public sealed class Run
     public DateTimeOffset? FinishedAt { get; set; }
 
     public List<Step> Steps { get; set; } = [];
+}
+
+/// <summary>What an approval step's <see cref="Step.Decision"/> is, and who made it when no person did.</summary>
+public static class StepDecisions
+{
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+
+    /// <summary>The <see cref="Step.DecidedBy"/> of a decision the policy made on its own.</summary>
+    public const string ByPolicy = "policy";
 }
 
 public static class StepKinds

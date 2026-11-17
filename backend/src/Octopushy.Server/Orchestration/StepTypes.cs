@@ -1,3 +1,5 @@
+using Octopushy.Definitions;
+
 namespace Octopushy.Server.Orchestration;
 
 /// <summary>Which secrets a step's assignment carries, as <see cref="AssignmentBuilder.SecretsFor(string, RunContext)"/> picks them.</summary>
@@ -32,14 +34,28 @@ public enum StepSecrets
 /// </param>
 public sealed record StepType(string Name, StepAction? Action, string Token, StepSecrets Secrets, IReadOnlyList<string>? SnippetRoles = null);
 
+/// <summary>The actions executors run, as contracts/agent/v1/executors.md names them, and attempts record.</summary>
+public static class ExecutorActions
+{
+    /// <summary>OpenTofu's plan, or Ansible's check of what a playbook would change.</summary>
+    public const string Preview = "preview";
+    public const string Apply = "apply";
+    /// <summary>An Ansible playbook.</summary>
+    public const string Run = "run";
+    public const string SetProtection = "set-protection";
+    public const string VerifyGuest = "verify-guest";
+    public const string VerifyAbsent = "verify-absent";
+    public const string Observe = "observe";
+}
+
 /// <summary>Every step name, and what it runs as. One entry per name in <see cref="StepNames"/>.</summary>
 public static class StepTypes
 {
-    private static readonly StepAction OpenTofuPreview = new("opentofu", "preview", false);
-    private static readonly StepAction OpenTofuApply = new("opentofu", "apply", true);
-    private static readonly StepAction SetProtection = new("proxmox", "set-protection", true);
-    private static readonly StepAction AnsibleChange = new("ansible", "run", true);
-    private static readonly StepAction AnsibleCheck = new("ansible", "run", false);
+    private static readonly StepAction OpenTofuPreview = new(Executors.OpenTofu, ExecutorActions.Preview, false);
+    private static readonly StepAction OpenTofuApply = new(Executors.OpenTofu, ExecutorActions.Apply, true);
+    private static readonly StepAction SetProtection = new(Executors.Proxmox, ExecutorActions.SetProtection, true);
+    private static readonly StepAction AnsibleChange = new(Executors.Ansible, ExecutorActions.Run, true);
+    private static readonly StepAction AnsibleCheck = new(Executors.Ansible, ExecutorActions.Run, false);
 
     private const string ReadOnly = SecretNames.ProxmoxReadOnlyToken;
     private const string Privileged = SecretNames.ProxmoxPrivilegedToken;
@@ -55,10 +71,10 @@ public static class StepTypes
         new(StepNames.Apply, OpenTofuApply, Privileged, StepSecrets.OpenTofu, [SecretNames.SnippetsKey, SecretNames.SnippetsHostKey]),
         new(StepNames.Reprotect, SetProtection, Privileged, StepSecrets.Proxmox),
         new(StepNames.Protect, SetProtection, Privileged, StepSecrets.Proxmox),
-        new(StepNames.Verify, new("proxmox", "verify-guest", false), ReadOnly, StepSecrets.Proxmox),
-        new(StepNames.VerifyAbsent, new("proxmox", "verify-absent", false), ReadOnly, StepSecrets.Proxmox),
-        new(StepNames.Observe, new("proxmox", "observe", false), ReadOnly, StepSecrets.Proxmox),
-        new(StepNames.Preview, new("ansible", "preview", false), ReadOnly, StepSecrets.AnsiblePin),
+        new(StepNames.Verify, new(Executors.Proxmox, ExecutorActions.VerifyGuest, false), ReadOnly, StepSecrets.Proxmox),
+        new(StepNames.VerifyAbsent, new(Executors.Proxmox, ExecutorActions.VerifyAbsent, false), ReadOnly, StepSecrets.Proxmox),
+        new(StepNames.Observe, new(Executors.Proxmox, ExecutorActions.Observe, false), ReadOnly, StepSecrets.Proxmox),
+        new(StepNames.Preview, new(Executors.Ansible, ExecutorActions.Preview, false), ReadOnly, StepSecrets.AnsiblePin),
         new(StepNames.Playbook, AnsibleChange, ReadOnly, StepSecrets.Ansible),
         new(StepNames.OutcomeApproval, null, ReadOnly, StepSecrets.None),
         new(StepNames.PlaybookApproved, AnsibleChange, ReadOnly, StepSecrets.Ansible),

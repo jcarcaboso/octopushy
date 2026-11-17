@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -138,14 +139,15 @@ public sealed partial class RunEngine
                         }
 
                         if (await (run is null
-                                ? RepositoryTrust.BlockedReasonAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
-                                : RepositoryTrust.BlockedReasonAsync(db, run, cancellationToken)) is { } trustReason)
+                                ? RepositoryTrust.BlockAsync(db, attempt.RevisionId, context.Commit, context, cancellationToken)
+                                : RepositoryTrust.BlockAsync(db, run, cancellationToken)) is { } block)
                         {
-                            attempt.WaitingReason = trustReason;
+                            attempt.WaitingReason = block.Detail;
                             if (run is not null)
                             {
                                 run.Status = RunStatuses.Blocked;
-                                run.Detail = trustReason;
+                                run.Detail = block.Detail;
+                                run.BlockReason = block.Reason;
                             }
                             return;
                         }
@@ -168,7 +170,7 @@ public sealed partial class RunEngine
                         }
 
                         var resourceId = run?.ResourceId ?? attempt.ResourceId;
-                        var needsBuiltInState = attempt.Executor == "opentofu";
+                        var needsBuiltInState = attempt.Executor == Executors.OpenTofu;
                         var candidates = agents
                             .Where(a => connections.Get(a.Id) is { } s && s.Executors.Contains(attempt.Executor)
                                         && attempt.RequiredLabels.All(a.Labels.Contains)
@@ -235,6 +237,7 @@ public sealed partial class RunEngine
                             attempt.WaitingReason = e.Message;
                             run.Status = RunStatuses.Blocked;
                             run.Detail = e.Message;
+                            run.BlockReason = (e as ExecutionUntrustedException)?.BlockReason;
                             return;
                         }
                         catch (Exception e) when (e is ExecutionUntrustedException or StateBusyException)
@@ -251,7 +254,8 @@ public sealed partial class RunEngine
                             attempt.FinishedAt = clock.GetUtcNow();
                             if (step is null)
                             {
-                                await FinishObservationAsync(db, attempt, null, cancellationToken);
+                                await FinishObservationAsync(db, attempt, null, cancellationToken,
+                                    e is CredentialUnavailableException ? ObserveBlockReasons.Credentials : null);
                             }
                             else
                             {
@@ -712,7 +716,7 @@ public sealed partial class RunEngine
             attempt.FinishedAt = clock.GetUtcNow();
             attempt.LeaseExpiresAt = null;
 
-            if (attempt.Step?.Run is { } tofuRun && attempt.Action == "apply" && attempt.Executor == "opentofu"
+            if (attempt.Step?.Run is { } tofuRun && attempt.Action == ExecutorActions.Apply && attempt.Executor == Executors.OpenTofu
                 && RunContext.Parse(tofuRun.Context).ForStep(attempt.Step).OpenTofu is not null
                 && await services.GetRequiredService<TofuStateStore>().SettleAsync(attempt, tofuRun.ResourceId, state?.Content.ToByteArray(), cancellationToken, attempt.Step.Stage ?? "") is { } refused)
             {
@@ -800,7 +804,7 @@ public sealed partial class RunEngine
         {
             var attempt = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
                 .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
-            if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || attempt.Action != "apply" || attempt.Executor != "opentofu"
+            if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || attempt.Action != ExecutorActions.Apply || attempt.Executor != Executors.OpenTofu
                 || RunContext.Parse(run.Context).ForStep(attempt.Step).OpenTofu is null)
             {
                 logger.LogWarning("Agent {Agent} sent state for attempt {Attempt}, which may not write any.", agentId, attemptId);

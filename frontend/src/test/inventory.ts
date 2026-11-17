@@ -20,7 +20,7 @@ export const inventoryOf = (guests: GuestSummary[]): Inventory => ({
     id: "lab", address: "home", name: "Home", valid: true, issues: [],
     installations: [{
       id: "installation-pve01", address: "home/pve01", name: "pve01", type: "standalone", endpoint: "https://10.0.0.2:8006/", valid: true,
-      managed: true, issueCount: 0, observedAt: null, observeError: null, observeErrorAt: null, observing: false, observeWaiting: null,
+      managed: true, issueCount: 0, observedAt: null, observeError: null, observeErrorAt: null, observeBlockReason: null, observing: false, observeWaiting: null,
       proxmoxVersion: "8.4.1", hosts: [], guests, unmanagedCount: 0, unmanagedGuests: [],
       trust: { endpoints: [], untrusted: [], trustedAt: null, trustedBy: null, managementChanged: false },
     }],

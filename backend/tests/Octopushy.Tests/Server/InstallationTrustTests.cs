@@ -130,6 +130,34 @@ public class InstallationTrustTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Contains("10.1.0.99", (await agent.NextAsync("preview")).InputJson);
     }
 
+    [Theory]
+    [InlineData(true, "Held until someone trusts the installation, in other words.")]
+    [InlineData(false, null)]
+    public async Task Trust_releases_the_runs_blocked_for_it_whatever_their_words_say(bool forTrust, string? words)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        await server.SyncAsync();
+        var blocked = await server.LatestRunAsync(Guest);
+        Assert.Equal((RunStatuses.Blocked, RunBlockReasons.InstallationTrust), (blocked.Status, blocked.BlockReason));
+        Assert.StartsWith(RepositoryTrust.WaitingForInstallation, blocked.Detail);
+        // Other words with the block reason, or the old words without it.
+        await server.WithDbAsync(async db =>
+        {
+            var run = await db.Runs.SingleAsync(r => r.Id == blocked.Id);
+            run.Detail = words ?? run.Detail;
+            run.BlockReason = forTrust ? RunBlockReasons.InstallationTrust : null;
+            await db.SaveChangesAsync();
+        });
+
+        using var client = await AuthenticateAsync(server);
+        (await TrustAsync(client, await InstallationAsync(client))).EnsureSuccessStatusCode();
+
+        var after = await server.QueryAsync(db => db.Runs.AsNoTracking().SingleAsync(r => r.Id == blocked.Id));
+        Assert.Equal(forTrust ? RunStatuses.Queued : RunStatuses.Blocked, after.Status);
+        Assert.Equal(forTrust ? null : blocked.Detail, after.Detail);
+        Assert.Null(after.BlockReason);
+    }
+
     [Fact]
     public async Task Trust_requires_authentication_a_valid_definition_and_the_endpoints_shown()
     {

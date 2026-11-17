@@ -11,9 +11,9 @@ public sealed record ResolvedSetting<T>(T Value, string SetBy);
 /// </summary>
 public sealed record EffectivePolicy(ResolvedSetting<string> Approval, ResolvedSetting<string> Destructive, bool DestructiveExplicit)
 {
-    public bool ApprovalRequired => Approval.Value == "manual";
+    public bool ApprovalRequired => Approval.Value == PolicyResolver.Manual;
 
-    public bool DestructiveApprovalRequired => Destructive.Value == "manual";
+    public bool DestructiveApprovalRequired => Destructive.Value == PolicyResolver.Manual;
 }
 
 /// <summary>

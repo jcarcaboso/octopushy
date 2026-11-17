@@ -477,6 +477,40 @@ public class ProvisioningTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
+    public async Task An_observation_held_for_credentials_is_recorded_as_blocked_and_a_failed_one_is_not()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);
+        await server.SyncAndTrustAsync();
+        var held = await server.ResourceAsync(Installation);
+        Assert.Equal(ObserveBlockReasons.Credentials, held.ObserveBlockReason);
+
+        // Once one succeeds, neither stays.
+        await server.SetSecretAsync("proxmox/korriban/read-only-token", "reader");
+        var agent = await server.ConnectAgentAsync("home");
+        await server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Succeeded, new JsonObject { ["hosts"] = new JsonArray(), ["guests"] = new JsonArray() });
+        var observed = await server.ResourceAsync(Installation);
+        Assert.Null(observed.ObserveError);
+        Assert.Null(observed.ObserveBlockReason);
+
+        // Sent, then failed on the agent: a failure, whatever the words.
+        await server.Services.GetRequiredService<Planner>().ObserveAsync(observed.Id, CancellationToken.None);
+        await agent.ReportAsync(await agent.NextAsync("observe"), Outcome.Failed, error: "Blocked credentials, says the API.");
+        var failed = await server.ResourceAsync(Installation);
+        Assert.Equal("Blocked credentials, says the API.", failed.ObserveError);
+        Assert.Null(failed.ObserveBlockReason);
+
+        // Queued while the secret existed, and not sent once it is gone.
+        await server.Services.GetRequiredService<Planner>().ObserveAsync(failed.Id, CancellationToken.None);
+        await server.WithDbAsync(db => db.StoreEntries.Where(e => e.Key == "proxmox/korriban/read-only-token").ExecuteDeleteAsync());
+        await server.Engine.DispatchAsync(CancellationToken.None);
+        Assert.Empty(agent.TakeAssignments());
+        var unsent = await server.ResourceAsync(Installation);
+        Assert.StartsWith("Blocked credentials:", unsent.ObserveError);
+        Assert.Equal(ObserveBlockReasons.Credentials, unsent.ObserveBlockReason);
+    }
+
+    [Fact]
     public async Task A_missing_secret_is_the_observation_error_and_sends_nothing()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);

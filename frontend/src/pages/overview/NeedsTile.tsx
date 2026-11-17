@@ -8,7 +8,7 @@ import { RelativeTime } from "../../components/RelativeTime";
 import { EmptyState } from "../../components/States";
 import { WaitingNote } from "../../components/WaitingNote";
 import { operationLabel } from "../../lib/format";
-import { isCredentialBlock } from "../../lib/observe";
+import { observeBlockReasons } from "../../lib/observe";
 import { runTarget } from "../../lib/runs";
 import { Tile } from "./Tile";
 
@@ -82,7 +82,7 @@ export function NeedsTile({ overview }: { overview: Overview }) {
           {observeErrors.map((failure) => (
             <Item
               key={failure.installationId}
-              status={isCredentialBlock(failure.error) ? "blocked" : "failed"}
+              status={failure.blockReason === observeBlockReasons.credentials ? "blocked" : "failed"}
               title={`Observing ${failure.name} failed`}
               to={`/installations/${failure.installationId}`}
               action="Open the installation"

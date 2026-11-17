@@ -385,12 +385,19 @@ public static partial class RepositoryEditor
     /// well-formedness.
     /// </summary>
     internal static async Task<DraftValidationDto> ValidateAsync(RepositoryMirror mirror, RevisionCache revisions,
-        Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, string baseCommit, string candidate, CancellationToken ct)
+        Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, string baseCommit, string candidate, CancellationToken ct) =>
+        (await ValidateWithIssuesAsync(mirror, revisions, releases, baseCommit, candidate, ct)).Validation;
+
+    /// <summary>As <see cref="ValidateAsync"/>, with the new definition issues as the loader reported them, their sources included.</summary>
+    internal static async Task<(DraftValidationDto Validation, IReadOnlyList<DefinitionIssue> NewIssues)> ValidateWithIssuesAsync(RepositoryMirror mirror,
+        RevisionCache revisions, Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, string baseCommit, string candidate,
+        CancellationToken ct)
     {
         var before = (await revisions.ResolveAsync(baseCommit, releases, ct)).Repository;
         var after = (await revisions.ResolveAsync(candidate, releases, ct)).Repository;
         var known = before.Issues.Select(i => (i.Severity, i.File, i.Message, i.Address)).ToHashSet();
-        var newIssues = after.Issues.Where(i => !known.Contains((i.Severity, i.File, i.Message, i.Address)))
+        var added = after.Issues.Where(i => !known.Contains((i.Severity, i.File, i.Message, i.Address))).ToList();
+        var newIssues = added
             .Select(i => new IssueDto(i.Severity == IssueSeverity.Error ? "error" : "warning", i.File, i.Line, i.Message, i.Address))
             .ToList();
         var reported = after.Issues.Select(i => i.File).ToHashSet(StringComparer.Ordinal);
@@ -405,7 +412,7 @@ public static partial class RepositoryEditor
         }
         var valid = (after.RepositoryValid || !before.RepositoryValid)
             && !newIssues.Concat(formatIssues).Any(i => i.Severity == "error");
-        return new(baseCommit, valid, newIssues, formatIssues);
+        return (new(baseCommit, valid, newIssues, formatIssues), added);
     }
 
     private static IssueDto? FormatIssue(string path, string extension, string text)

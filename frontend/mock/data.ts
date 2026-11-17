@@ -329,7 +329,7 @@ const unmanaged: ObservedGuest[] = [
 function installationSummary(): InstallationSummary {
   return {
     id: "pve01", address: "home/pve01", name: "pve01", type: "standalone", endpoint, valid: true, managed: true, issueCount: 0,
-    observedAt: ago(0.5), observeError: null, observeErrorAt: null, observing: false, observeWaiting: null, proxmoxVersion: "9.0.11",
+    observedAt: ago(0.5), observeError: null, observeErrorAt: null, observeBlockReason: null, observing: false, observeWaiting: null, proxmoxVersion: "9.0.11",
     hosts: [host], guests: guests.map(guestSummary), unmanagedCount: unmanaged.filter((u) => !u.template).length,
     trust: { endpoints: [endpoint], untrusted: [], trustedAt: ago(30000), trustedBy: "ops", managementChanged: false },
     unmanagedGuests: unmanaged,
@@ -340,6 +340,7 @@ function korribanSummary(): InstallationSummary {
   return {
     id: "korriban", address: "home/korriban", name: "korriban", type: "standalone", endpoint: korribanEndpoint, valid: true, managed: true,
     issueCount: 0, observedAt: ago(2900), observeError: "Cannot reach https://10.15.60.3:8006/: no route to host", observeErrorAt: ago(1),
+    observeBlockReason: null,
     observing: false, observeWaiting: null, proxmoxVersion: "8.4.1", hosts: [korribanHost], guests: otherGuests.map(guestSummary),
     unmanagedCount: 0,
     trust: { endpoints: [korribanEndpoint], untrusted: [], trustedAt: ago(40000), trustedBy: "ops", managementChanged: false },

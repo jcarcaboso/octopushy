@@ -112,8 +112,8 @@ public sealed partial class ChangeService(
             var head = await mirror.WriteDraftAsync(id, request.BaseCommit, composed.Changes, composed.Message, ct);
             var diff = await mirror.DiffAsync(request.BaseCommit, head, ct);
             var releases = WorkflowReleaseBook.Of(db, workflowMirrors);
-            var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, request.BaseCommit, head, ct);
-            var fieldIssues = await FieldIssuesAsync(composed, head, validation.NewIssues, releases, ct);
+            var (validation, newIssues) = await RepositoryEditor.ValidateWithIssuesAsync(mirror, revisions, releases, request.BaseCommit, head, ct);
+            var fieldIssues = await FieldIssuesAsync(composed, head, newIssues, releases, ct);
             string? refused = null;
             if (target.Settings.HeadCommit is { } synced && synced != request.BaseCommit
                 && (await mirror.ChangesAsync(request.BaseCommit, synced, ct)).FirstOrDefault(c => composed.Touches(c.Path)) is { } moved)
@@ -309,13 +309,13 @@ public sealed partial class ChangeService(
                             throw new ChangeRefusal(ChangeRefusal.Reasons.ObservedOnly, observed);
                         if (check is not null)
                             await check(db, candidate);
-                        var validation = await RepositoryEditor.ValidateAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
+                        var (validation, newIssues) = await RepositoryEditor.ValidateWithIssuesAsync(mirror, revisions, releases, candidate.Remote, candidate.Commit!, ct);
                         if (!validation.Valid)
                         {
                             var issues = validation.NewIssues.Concat(validation.FormatIssues).ToList();
                             var first = issues.Where(i => i.Severity == "error").Take(3).Select(i => i.Message);
                             throw new ChangeRefusal(ChangeRefusal.Reasons.Invalid, $"The change does not validate: {string.Join("; ", first)}",
-                                issues, await FieldIssuesAsync(composed, candidate.Commit!, validation.NewIssues, releases, ct));
+                                issues, await FieldIssuesAsync(composed, candidate.Commit!, newIssues, releases, ct));
                         }
 
                         // Recorded before this attempt's push: whatever happens next, the branch reaching it is how it is found.
@@ -602,7 +602,7 @@ public sealed partial class ChangeService(
     /// The candidate's problems placed on form fields: the resolved workflow's schema errors, at their pointers, and every
     /// other new issue in the edited file at the field on its line.
     /// </summary>
-    private async Task<IReadOnlyList<FieldIssueDto>> FieldIssuesAsync(ComposedChange composed, string candidate, IReadOnlyList<IssueDto> newIssues,
+    private async Task<IReadOnlyList<FieldIssueDto>> FieldIssuesAsync(ComposedChange composed, string candidate, IReadOnlyList<DefinitionIssue> newIssues,
         Func<string, CancellationToken, Task<IReadOnlyList<WorkflowRelease>>> releases, CancellationToken ct)
     {
         if (composed.NewText is null || composed.Desired is null)
@@ -623,7 +623,7 @@ public sealed partial class ChangeService(
         }
 
         // The schema's own errors are placed above, precisely; the loader reports them again by line.
-        foreach (var issue in newIssues.Where(i => i.File == composed.DefinitionFile && !i.Message.Contains("(workflow ", StringComparison.Ordinal)))
+        foreach (var issue in newIssues.Where(i => PlacedByLine(i, composed.DefinitionFile)))
         {
             var at = issue.Line is { } line ? lines.Where(l => l.Value == line).Select(l => l.Key).ToList() : [];
             issues.Add(new FieldIssueDto(CommonPrefix(at), issue.Message));
@@ -631,6 +631,13 @@ public sealed partial class ChangeService(
 
         return issues.Distinct().ToList();
     }
+
+    /// <summary>
+    /// Whether a new issue is placed on the field its line holds: one in the edited file, unless it is the workflow schema's
+    /// own error, which is placed at its pointer already.
+    /// </summary>
+    internal static bool PlacedByLine(DefinitionIssue issue, string? definitionFile) =>
+        issue.File == definitionFile && issue.Source != IssueSources.WorkflowSchema;
 
     /// <summary>The deepest pointer every pointer in <paramref name="pointers"/> is under: the field a line of YAML holds.</summary>
     private static string CommonPrefix(IReadOnlyList<string> pointers)
