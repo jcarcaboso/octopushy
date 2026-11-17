@@ -764,3 +764,13 @@ public sealed record UptimeCheckDto(
 
 /// <summary>The percentage of answers that said up over the last day, 7 days and 30 days; null without answers.</summary>
 public sealed record UptimePercentagesDto(double? Day, double? Week, double? Month);
+
+/// <summary>The latest notifications, newest first. See docs/notifications.md.</summary>
+public sealed record NotificationsDto(IReadOnlyList<NotificationDto> Items);
+
+/// <summary>
+/// One thing an operator is told. <c>Kind</c> is <c>check-down</c>, <c>check-up</c>, <c>run-failed</c> or <c>run-uncertain</c>.
+/// <c>Id</c> ascends in the order they were added. <c>ResourceKind</c> is null once the resource is gone.
+/// </summary>
+public sealed record NotificationDto(long Id, string Kind, string Title, string? Body, Guid? ResourceId, string? ResourceKind, Guid? RunId,
+    DateTimeOffset CreatedAt);

@@ -532,6 +532,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/repository": {
         parameters: {
             query?: never;
@@ -1923,6 +1939,23 @@ export interface components {
             /** Format: int32 */
             from: number;
             problem?: null | string;
+        };
+        NotificationDto: {
+            /** Format: int64 */
+            id: number;
+            kind: string;
+            title: string;
+            body: null | string;
+            /** Format: uuid */
+            resourceId: null | string;
+            resourceKind: null | string;
+            /** Format: uuid */
+            runId: null | string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotificationsDto: {
+            items: components["schemas"]["NotificationDto"][];
         };
         ObserveErrorDto: {
             /** Format: uuid */
@@ -4393,6 +4426,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowCatalogDto"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsDto"];
                 };
             };
             /** @description Bad Request */

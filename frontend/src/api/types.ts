@@ -26,6 +26,8 @@ export type ObservedHost = Schemas["ObservedHostDto"];
 export type ObservedGuest = Schemas["ObservedGuestDto"];
 export type Uptime = Schemas["UptimeDto"];
 export type UptimeCheck = Schemas["UptimeCheckDto"];
+/** Not `Notification`: that name is the browser's own. */
+export type NotificationItem = Schemas["NotificationDto"];
 export type ObserveFailure = Schemas["ObserveErrorDto"];
 export type Issue = Schemas["IssueDto"];
 export type Problem = Schemas["ProblemDetails"];

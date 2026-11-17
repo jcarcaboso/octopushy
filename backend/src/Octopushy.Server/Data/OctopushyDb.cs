@@ -70,6 +70,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
 
     public DbSet<ServiceIcon> ServiceIcons => Set<ServiceIcon>();
 
+    public DbSet<Notification> Notifications => Set<Notification>();
+
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<RepositorySettings>(e =>
@@ -303,6 +305,14 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasOne<Resource>().WithOne().HasForeignKey<ServiceIcon>(x => x.ResourceId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.Name).HasMaxLength(128);
             e.Property(x => x.ContentType).HasMaxLength(32);
+        });
+
+        model.Entity<Notification>(e =>
+        {
+            e.ToTable("notifications");
+            e.Property(x => x.Id).UseIdentityAlwaysColumn();
+            e.Property(x => x.Kind).HasMaxLength(32);
+            e.HasIndex(x => x.CreatedAt);
         });
     }
 }

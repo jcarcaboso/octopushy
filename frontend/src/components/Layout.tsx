@@ -2,6 +2,7 @@ import { Bot, ChevronsUpDown, CirclePlay, FilePen, GitBranch, Globe, KeyRound, L
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useAuthState, useLogout, useRepository } from "../api/queries";
+import { Notifications } from "./Notifications";
 
 const groups = [
   {
@@ -95,9 +96,12 @@ export function Layout() {
         Skip to content
       </a>
       <aside className="sidebar">
-        <div className="brand">
-          <img src="/favicon.svg" alt="" width={26} height={26} />
-          <span>octopushy</span>
+        <div className="sidebar__top">
+          <div className="brand">
+            <img src="/favicon.svg" alt="" width={26} height={26} />
+            <span>octopushy</span>
+          </div>
+          <Notifications />
         </div>
         <nav aria-label="Main" className="nav-groups">
           {groups.map((group) => (

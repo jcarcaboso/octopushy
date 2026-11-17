@@ -37,7 +37,7 @@ builder.Services.AddScoped<RunTransitionLog>();
 builder.Services.AddDbContext<OctopushyDb>((services, options) => options
     .UseNpgsql(builder.Configuration.GetConnectionString("Octopushy") ?? throw new InvalidOperationException("Set ConnectionStrings:Octopushy."))
     .UseSnakeCaseNamingConvention()
-    .AddInterceptors(services.GetRequiredService<RunTransitionLog>()));
+    .AddInterceptors(services.GetRequiredService<RunTransitionLog>(), new Octopushy.Server.Notifications.NotificationHub(services.GetRequiredService<TimeProvider>())));
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<KeyEncryptionKey>();

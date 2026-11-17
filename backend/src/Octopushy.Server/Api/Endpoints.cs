@@ -40,6 +40,7 @@ public static partial class Endpoints
         api.MapChanges();
         api.MapDeploy();
         MapVariables(api.MapGroup("/variables").WithTags("Variables"));
+        Notifications.NotificationHub.MapNotifications(api);
     }
 
     private static void MapOverview(RouteGroupBuilder api)
