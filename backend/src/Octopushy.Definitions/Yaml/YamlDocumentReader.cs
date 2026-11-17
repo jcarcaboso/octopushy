@@ -68,7 +68,10 @@ public static partial class YamlDocumentReader
     /// <summary>How deep its mappings and sequences may nest. The document's own value is depth 1.</summary>
     public const int MaxDepth = 64;
 
-    /// <summary>The most characters the file's keys and values may hold together once its aliases are expanded.</summary>
+    /// <summary>
+    /// The most characters the file's keys and values, and the pointers kept to them, may hold together once its aliases
+    /// are expanded.
+    /// </summary>
     public const int MaxExpandedCharacters = 8 * MaxCharacters;
 
     public static YamlDocument Read(string text)
@@ -128,6 +131,8 @@ public static partial class YamlDocumentReader
             throw TooDeep(node.Start);
         }
 
+        // A pointer repeats every key above its value, so one long key over many values is long many times.
+        Count(pointer, node, ref characters);
         lines[pointer] = LineOf(node.Start) ?? 1;
         switch (node)
         {
@@ -180,7 +185,7 @@ public static partial class YamlDocumentReader
         if (characters > MaxExpandedCharacters)
         {
             throw new YamlReadException(
-                $"The file's keys and values hold more than {MaxExpandedCharacters} characters once its aliases are expanded, the limit on text in a YAML file.",
+                $"The file's keys, values and the paths to them hold more than {MaxExpandedCharacters} characters once its aliases are expanded, the limit on text in a YAML file.",
                 LineOf(node.Start));
         }
     }

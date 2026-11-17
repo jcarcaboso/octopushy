@@ -89,6 +89,18 @@ public class YamlDocumentReaderTests
     }
 
     [Fact]
+    public void Refuses_one_long_key_above_many_values()
+    {
+        // No alias: each of the 10,000 values has a pointer that repeats the 900,000-character key above it. Written as an
+        // explicit key, since YAML refuses a plain one of more than 1,024 characters.
+        var text = new StringBuilder("? ").Append('k', 900_000).Append("\n: [").AppendJoin(", ", Enumerable.Repeat("0", 10_000)).Append("]\n");
+        Assert.True(text.Length <= YamlDocumentReader.MaxCharacters);
+
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text.ToString()));
+        Assert.Contains($"more than {YamlDocumentReader.MaxExpandedCharacters} characters", error.Message);
+    }
+
+    [Fact]
     public void Aliases_within_the_node_limit_still_expand()
     {
         var root = (JsonObject)YamlDocumentReader.Read("base: &base {cores: 2}\nvm: *base\n").Root!;
