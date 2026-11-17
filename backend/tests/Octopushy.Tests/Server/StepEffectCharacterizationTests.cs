@@ -159,6 +159,36 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
     }
 
     [Fact]
+    public async Task A_second_delivery_leaves_the_times_the_first_one_set()
+    {
+        // The pins above keep times as set or not set. Here the clock moves between the deliveries, so an effect that ran
+        // again would move them.
+        var clock = new TestClock { Now = new DateTimeOffset(2026, 11, 17, 9, 0, 0, TimeSpan.Zero) };
+        var repository = Repository.Repository();
+        repository.Write(GuestFile, File.ReadAllText(Path.Combine(repository.Root, GuestFile)).Replace("  sshKey: { store: access/app/ssh-key }\n", ""));
+        var server = await ServerHarness.StartAsync(postgres, repository, clock: clock);
+        await using var _ = server;
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var __ = http;
+        var playbook = await PlaybookAsync(server, agent);
+        var guest = (await server.ResourceAsync(Guest)).Id;
+        Task<(DateTimeOffset? Applied, DateTimeOffset? Used)> TimesAsync() => server.QueryAsync(async db => (
+            (await db.GuestConfigurations.AsNoTracking().SingleAsync(c => c.ResourceId == guest)).AppliedAt,
+            (await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == guest).OrderBy(k => k.Version).FirstAsync()).LastUsedAt));
+
+        Assert.True(await agent.ReportAsync(playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
+        await server.TickAsync();
+        var first = await TimesAsync();
+        Assert.Equal(clock.Now, first.Applied);
+        Assert.Equal(clock.Now, first.Used);
+
+        clock.Now += TimeSpan.FromMinutes(5);
+        await agent.ReportAsync(playbook, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await server.TickAsync();
+        Assert.Equal(first, await TimesAsync());
+    }
+
+    [Fact]
     public async Task A_result_after_an_uncertain_one_is_taken_once()
     {
         var (server, agent, http) = await ProvisionedAsync(postgres, Repository.Repository());
