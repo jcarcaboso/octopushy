@@ -92,7 +92,8 @@ the synthetic tests is not permission to perform these actions.
   Keep the configured external key path, access permissions and custody explicit.
   A new random key cannot recover old encrypted material.
 - Keep artifacts, logs, repository mirror/snapshots and the web-session key ring
-  protected. The session key ring is sensitive independently of the KEK.
+  protected. The session key ring is encrypted under the KEK; restored without the
+  original KEK it is replaced, and everyone signs in again.
 - Built-in OpenTofu state is in the database, so the dump covers it, but it is
   encrypted: **restoring it needs the same KEK**, like stored secrets. Without that key
   the guests' state is unrecoverable, and Octopushy would have nothing to plan from.

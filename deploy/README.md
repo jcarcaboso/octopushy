@@ -49,8 +49,10 @@ podman compose up -d                      # or: docker compose up -d
   of the `data` volume. Anyone holding the key plus the database can decrypt every stored
   secret and the agent CA key, and sign certificates that agents accept.
 - The `data` volume holds the setup code, the Git mirror, artifacts, logs, and the
-  session-signing key ring (`data-protection/`, unencrypted: whoever has it can forge a
-  web session). Treat a copy of it as sensitive. The compose file keeps the key
+  session-signing key ring (`data-protection/`). Its secrets are encrypted with a key
+  derived from `secrets/kek`, so the volume alone cannot forge a web session; with the
+  KEK as well it can. A key the current KEK cannot open is logged as an error at start,
+  left on disk, and replaced, which signs everyone out. The compose file keeps the key
   outside it with `Octopushy__Store__KeyFile`. Without that setting the server puts the key
   at `keys/kek` inside the data directory and logs a warning at every start; do not run a
   retained environment that way.

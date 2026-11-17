@@ -72,6 +72,14 @@ refused. The saved origin cannot be overridden per request. Redirects and
 automatic HTTP retries are disabled on both schemes, so an `https://` login never
 falls back to plain HTTP.
 
+## Console sessions
+
+A console session expires after 12 hours unused, and ends 7 days after signing in
+however often it is used (`Octopushy:Sessions:AbsoluteLifetimeDays`). Signing out
+ends the account's session in every browser, not only the current one. Operator
+grants are separate credentials: signing out and the session lifetime do not
+affect them.
+
 ## Use the existing API
 
 Cookie-authenticated POST, PUT, PATCH and DELETE requests must send

@@ -2154,6 +2154,12 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("password_hash");
 
+                    b.Property<Guid>("SessionStamp")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_stamp")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
                     b.Property<string>("Username")
                         .IsRequired()
                         .HasColumnType("text")

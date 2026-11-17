@@ -273,6 +273,8 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<User>(e =>
         {
             e.HasIndex(x => x.Username).IsUnique();
+            // Users from before session stamps get one, which no existing cookie carries.
+            e.Property(x => x.SessionStamp).HasDefaultValueSql("gen_random_uuid()");
         });
         model.Entity<OperatorToken>(e =>
         {

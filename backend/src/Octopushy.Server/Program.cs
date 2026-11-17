@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
@@ -101,10 +102,13 @@ builder.Services.AddGrpc(options =>
     .AddServiceOptions<EnrollmentService>(options => options.MaxReceiveMessageSize = 64 * 1024);
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("octopushy");
+var keyRing = Path.Combine(settings.DataDirectory, "data-protection");
 if (!generatingDocument)
 {
-    // Keeps sessions valid across restarts.
-    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(settings.DataDirectory, "data-protection")));
+    // Keeps sessions valid across restarts, with each key's secret encrypted under a key derived from the KEK.
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keyRing));
+    builder.Services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(services =>
+        new ConfigureOptions<KeyManagementOptions>(options => options.XmlEncryptor = new KeyRingEncryptor(services)));
 }
 builder.Services.AddAuthentication("operator-or-console")
     .AddPolicyScheme("operator-or-console", null, options =>
@@ -119,6 +123,8 @@ builder.Services.AddAuthentication("operator-or-console")
         options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
         options.ExpireTimeSpan = TimeSpan.FromHours(12);
         options.SlidingExpiration = true;
+        // Revoked by sign-out, and ended by Octopushy:Sessions:AbsoluteLifetimeDays however often it is used.
+        options.Events.OnValidatePrincipal = Sessions.ValidateAsync;
         options.Events.OnRedirectToLogin = context =>
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -234,6 +240,7 @@ if (!generatingDocument)
             }
 
             await KeyEncryptionKey.InitializeAsync(db, settings, app.Logger, CancellationToken.None);
+            KeyRingCipher.EncryptExisting(keyRing, app.Services.GetRequiredService<KeyEncryptionKey>(), app.Logger);
             await app.Services.GetRequiredService<AgentCertificateAuthority>().InitializeAsync(CancellationToken.None);
             await app.Services.GetRequiredService<SetupCode>().EnsureAsync(db, CancellationToken.None);
         }
