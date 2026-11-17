@@ -389,9 +389,7 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
         Assert.Equal(3, state.Attempts);
         Assert.False(state.LastDelivered);
         Assert.Equal(503, state.LastStatus);
-        Assert.StartsWith("HTTP 503: down[31m for maintenance", state.LastResult);
-        Assert.True(state.LastResult!.Length <= 120);
-        Assert.DoesNotContain('\u001b', state.LastResult);
+        Assert.Equal("HTTP 503: the receiver had an error.", state.LastResult);
 
         setup.Receiver.Answer = () => HttpStatusCode.OK;
         setup.Clock.Now += TimeSpan.FromSeconds(40);
@@ -544,10 +542,16 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
         var saved = await setup.ConfigureAsync();
         Assert.DoesNotContain("T0KEN", saved.ToJsonString());
         Assert.Equal("hooks.example.test", saved["webhook"]!["host"]!.GetValue<string>());
+        // A receiver, or a proxy before it, that echoes the path and query it was asked for.
         setup.Receiver.Answer = () => HttpStatusCode.InternalServerError;
+        setup.Receiver.AnswerBody = "Unknown endpoint /T0KEN-path/abc?key=q5ecret";
         await setup.NotifyAsync();
         await setup.SendAsync();
-        (await http.PostAsync("/api/notifications/webhook/test", null)).EnsureSuccessStatusCode();
+        var tested = await http.PostAsync("/api/notifications/webhook/test", null);
+        tested.EnsureSuccessStatusCode();
+        var testedText = await tested.Content.ReadAsStringAsync();
+        Assert.Contains("the receiver had an error", testedText);
+        var stored = System.Text.Json.JsonSerializer.Serialize(await setup.StateAsync());
         // Kinds alone change; the URL and the secret stay.
         (await http.PutAsJsonAsync("/api/notifications/webhook", new { kinds = new[] { NotificationKinds.RunFailed } })).EnsureSuccessStatusCode();
 
@@ -556,11 +560,14 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
             await http.GetStringAsync("/api/notifications/webhook"),
             await http.GetStringAsync("/api/variables"),
             await http.GetStringAsync("/api/notifications"),
+            testedText,
+            stored,
         };
         foreach (var text in answers.Concat(setup.Logs.Lines))
         {
             Assert.DoesNotContain("T0KEN", text);
             Assert.DoesNotContain("q5ecret", text);
+            Assert.DoesNotContain("Unknown endpoint", text);
             Assert.DoesNotContain(setup.Secret, text);
         }
 
@@ -608,7 +615,7 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
         setup.Receiver.AnswerBody = "no\r\nway";
         result = (await (await http.PostAsync("/api/notifications/webhook/test", null)).Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.False(result["delivered"]!.GetValue<bool>());
-        Assert.Equal("HTTP 403: noway", result["result"]!.GetValue<string>());
+        Assert.Equal("HTTP 403: the receiver refused the event.", result["result"]!.GetValue<string>());
         // Nothing is queued or recorded for it.
         var state = await setup.StateAsync();
         Assert.Null(state.LastAttemptAt);
@@ -641,5 +648,94 @@ public class WebhookTests(PostgresFixture postgres) : IClassFixture<PostgresFixt
         var shown = (await http.GetFromJsonAsync<JsonObject>("/api/notifications/webhook"))!;
         Assert.False(shown["configured"]!.GetValue<bool>());
         Assert.Equal([NotificationKinds.CheckDown, NotificationKinds.RunFailed], shown["kinds"]!.AsArray().Select(k => k!.GetValue<string>()).Order());
+    }
+
+    [Fact]
+    public async Task A_notification_whose_save_commits_after_a_later_one_is_still_delivered_first_and_once()
+    {
+        await using var setup = await StartAsync();
+        await setup.ConfigureAsync();
+        var connectionString = await setup.Server.QueryAsync(db => Task.FromResult(db.Database.GetConnectionString()!));
+
+        // A takes the lower id and stays open, as a save outside the engine's lock may while a run's save commits.
+        await using var open = new Npgsql.NpgsqlConnection(connectionString);
+        await open.OpenAsync();
+        await using var pending = await open.BeginTransactionAsync();
+        await using var insert = new Npgsql.NpgsqlCommand(
+            "INSERT INTO notifications (kind, title, created_at) VALUES ('run-approval', 'Provision run awaits approval', @at) RETURNING id", open, pending);
+        insert.Parameters.AddWithValue("at", Start);
+        var a = (long)(await insert.ExecuteScalarAsync())!;
+        var b = await setup.NotifyAsync();
+        Assert.True(a < b);
+        var before = await setup.StateAsync();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var wait = await setup.Delivery.SendNextAsync(CancellationToken.None);
+        watch.Stop();
+        Assert.Equal(WebhookDelivery.Busy, wait);
+        Assert.InRange(watch.Elapsed, TimeSpan.FromSeconds(WebhookDelivery.LockTimeoutSeconds * 0.8), TimeSpan.FromSeconds(WebhookDelivery.LockTimeoutSeconds + 2));
+        Assert.Empty(setup.Receiver.Received);
+        var after = await setup.StateAsync();
+        Assert.Equal((before.Position, before.Attempts, before.Dropped, before.LastAttemptAt), (after.Position, after.Attempts, after.Dropped, after.LastAttemptAt));
+
+        await pending.CommitAsync();
+        await setup.SendAsync();
+        Assert.Equal([$"{a}", $"{b}"], setup.Receiver.Events.Select(e => e["id"]!.GetValue<string>()));
+        Assert.Equal(b, (await setup.StateAsync()).Position);
+    }
+
+    [Fact]
+    public async Task Only_refusals_count_toward_giving_an_event_up_and_timeouts_or_server_errors_do_not()
+    {
+        await using var setup = await StartAsync();
+        await setup.ConfigureAsync();
+        var answers = new Queue<HttpStatusCode>([
+            .. Enumerable.Repeat(HttpStatusCode.ServiceUnavailable, 4),
+            .. Enumerable.Repeat(HttpStatusCode.BadRequest, WebhookDelivery.RefusedAttempts - 1),
+            HttpStatusCode.Forbidden,
+        ]);
+        setup.Receiver.Answer = () => answers.Count > 0 ? answers.Dequeue() : HttpStatusCode.NoContent;
+        var refused = await setup.NotifyAsync();
+
+        for (var i = 0; i < 4 + WebhookDelivery.RefusedAttempts - 1; i++)
+            setup.Clock.Now += await setup.SendAsync();
+        var state = await setup.StateAsync();
+        Assert.Equal(0, state.Dropped);
+        Assert.True(state.Position < refused);
+        Assert.Equal(WebhookDelivery.RefusedAttempts - 1, state.Refusals);
+
+        await setup.SendAsync();
+        state = await setup.StateAsync();
+        Assert.Equal(1, state.Dropped);
+        Assert.Equal(refused, state.Position);
+        Assert.Equal((0, 0), (state.Attempts, state.Refusals));
+        var shown = (await (await setup.Server.SignedInClientAsync()).GetFromJsonAsync<JsonObject>("/api/notifications/webhook"))!;
+        Assert.Equal(1, shown["dropped"]!.GetValue<long>());
+        Assert.Equal(4 + WebhookDelivery.RefusedAttempts, setup.Receiver.Received.Count);
+    }
+
+    [Fact]
+    public async Task Two_first_saves_at_once_both_succeed_and_the_secret_kept_is_one_that_was_returned()
+    {
+        await using var setup = await StartAsync();
+        var http = await setup.Server.SignedInClientAsync();
+        var responses = await Task.WhenAll(
+            http.PutAsJsonAsync("/api/notifications/webhook", new { url = Url }),
+            http.PutAsJsonAsync("/api/notifications/webhook", new { url = Url + "&second=1" }));
+        Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        var secrets = new List<string>();
+        foreach (var response in responses)
+            secrets.Add((await response.Content.ReadFromJsonAsync<JsonObject>())!["secret"]!.GetValue<string>());
+
+        await using var scope = setup.Server.Services.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>();
+        var current = (await store.GetAsync(Webhook.SecretKey, CancellationToken.None))!.Value;
+        Assert.Equal(2, current.Version);
+        var first = await store.GetVersionInternalAsync(Webhook.SecretKey, 1, CancellationToken.None);
+        // Each request's secret was kept in turn; the one in use is the last saved, and it was returned to its request.
+        Assert.Equal(secrets.Order(), new[] { first!, current.Value }.Order());
+        Assert.NotEqual(first, current.Value);
+        Assert.Equal(1, await setup.Server.QueryAsync(db => db.Webhooks.CountAsync()));
+        Assert.Equal(2, (await setup.StateAsync()).Generation);
     }
 }

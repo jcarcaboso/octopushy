@@ -40,6 +40,52 @@ public sealed class WebhookDelivery(
     private static readonly TimeSpan FirstRetry = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MaxRetry = TimeSpan.FromMinutes(10);
 
+    /// <summary>How long the sender waits for notifications being added to commit before it gives up a round.</summary>
+    public const int LockTimeoutSeconds = 1;
+
+    private const string SetLockTimeout = "SET LOCAL lock_timeout = '1s'";
+
+    /// <summary>The wait after a round given up because notifications were being added: they wake the sender once committed.</summary>
+    public static readonly TimeSpan Busy = TimeSpan.FromSeconds(10);
+
+    private sealed record Bounded(Notification? Next, (long Last, int Count)? Backlog);
+
+    /// <summary>
+    /// The next notification to send and, when the oldest waiting is older than <paramref name="backlogBefore"/>, the waiting
+    /// ones past <see cref="MaxBacklog"/>, read behind a gapless boundary. An id is taken by the INSERT that adds its row, after
+    /// that statement holds ROW EXCLUSIVE on <c>notifications</c>, and its sequence hands out one value at a time. SHARE
+    /// conflicts with ROW EXCLUSIVE, so once it is held every transaction that took an id has committed or rolled back, and any
+    /// id taken later is higher than every id read here: a notification committed after a higher one is never passed over.
+    /// <para>
+    /// The lock is held only for these reads, in a transaction of its own that takes no row lock and holds no other lock while it
+    /// waits, so it cannot deadlock with the engine. A waiting SHARE request queues new inserts behind it, so it waits at most
+    /// <see cref="LockTimeoutSeconds"/>: null when it gave up, having read and changed nothing.
+    /// </para>
+    /// </summary>
+    private static async Task<Bounded?> BoundedAsync(OctopushyDb db, IQueryable<Notification> waiting, DateTimeOffset? backlogBefore, CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await db.Database.ExecuteSqlRawAsync(SetLockTimeout, ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync("LOCK TABLE notifications IN SHARE MODE", ct);
+        }
+        catch (Npgsql.PostgresException e) when (e.SqlState == Npgsql.PostgresErrorCodes.LockNotAvailable)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return null;
+        }
+
+        // Read committed: each read below sees every row committed before the lock was granted.
+        var next = await waiting.OrderBy(n => n.Id).FirstOrDefaultAsync(ct);
+        (long, int)? backlog = null;
+        if (next is not null && backlogBefore is { } before && next.CreatedAt < before
+            && await waiting.OrderByDescending(n => n.Id).Skip(MaxBacklog).Select(n => (long?)n.Id).FirstOrDefaultAsync(ct) is { } last)
+            backlog = (last, await waiting.CountAsync(n => n.Id <= last, ct));
+        await transaction.CommitAsync(ct);
+        return new Bounded(next, backlog);
+    }
+
     /// <summary>The wait after the <paramref name="attempts"/>th failure: 10 seconds, doubled each time, at most 10 minutes.</summary>
     public static TimeSpan Backoff(int attempts) =>
         TimeSpan.FromTicks(Math.Min(MaxRetry.Ticks, FirstRetry.Ticks << Math.Clamp(attempts - 1, 0, 16)));
@@ -89,24 +135,32 @@ public sealed class WebhookDelivery(
             return due - now < Idle ? due - now : Idle;
         var kinds = state.Kinds;
         var waiting = db.Notifications.AsNoTracking().Where(n => n.Id > state.Position && kinds.Contains(n.Kind));
-        var next = await waiting.OrderBy(n => n.Id).FirstOrDefaultAsync(ct);
-        if (next is null)
+        // Without a lock first: nothing to send is the common case, and costs one read. A notification committed later wakes
+        // this sender.
+        if (!await waiting.AnyAsync(ct))
+            return Idle;
+        if (await BoundedAsync(db, waiting, state.Attempts == 0 ? now - Idle : null, ct) is not { } read)
+        {
+            logger.LogInformation("The webhook waited {Seconds} second for notifications being added; it tries again later.", LockTimeoutSeconds);
+            return Busy;
+        }
+
+        if (read.Next is not { } next)
             return Idle;
 
         // Settled for this webhook, as it was when read: a change of settings meanwhile makes this record nothing.
         var mine = db.Webhooks.Where(w => w.Id == 1 && w.Generation == state.Generation && w.Position == state.Position);
-        if (state.Attempts == 0 && now - next.CreatedAt > Idle
-            && await waiting.OrderByDescending(n => n.Id).Skip(MaxBacklog).Select(n => (long?)n.Id).FirstOrDefaultAsync(ct) is { } last)
+        if (read.Backlog is { } backlog)
         {
-            var dropped = await waiting.CountAsync(n => n.Id <= last, ct);
-            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, last).SetProperty(w => w.Dropped, w => w.Dropped + dropped), ct);
-            logger.LogWarning("The webhook dropped {Count} waiting events, keeping the latest {Kept}.", dropped, MaxBacklog);
+            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, backlog.Last).SetProperty(w => w.Dropped, w => w.Dropped + backlog.Count)
+                .SetProperty(w => w.Attempts, 0).SetProperty(w => w.Refusals, 0), ct);
+            logger.LogWarning("The webhook dropped {Count} waiting events, keeping the latest {Kept}.", backlog.Count, MaxBacklog);
             return TimeSpan.Zero;
         }
 
         if (now - next.CreatedAt > MaxAge)
         {
-            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0)
+            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0).SetProperty(w => w.Refusals, 0)
                 .SetProperty(w => w.NextAttemptAt, (DateTimeOffset?)null).SetProperty(w => w.Dropped, w => w.Dropped + 1), ct);
             logger.LogWarning("The webhook dropped event {Event}: older than {Hours} hours.", next.Id, (int)MaxAge.TotalHours);
             return TimeSpan.Zero;
@@ -119,9 +173,10 @@ public sealed class WebhookDelivery(
             body, now.ToUnixTimeSeconds(), ct);
         var at = clock.GetUtcNow();
         var attempts = state.Attempts + 1;
+        var refusals = state.Refusals + (answer.Refused ? 1 : 0);
         if (answer.Delivered)
         {
-            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0)
+            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0).SetProperty(w => w.Refusals, 0)
                 .SetProperty(w => w.NextAttemptAt, (DateTimeOffset?)null).SetProperty(w => w.LastAttemptAt, at)
                 .SetProperty(w => w.LastEventId, next.Id).SetProperty(w => w.LastDelivered, true).SetProperty(w => w.LastStatus, answer.Status)
                 .SetProperty(w => w.LastResult, answer.Result).SetProperty(w => w.LastDeliveredAt, at), ct);
@@ -131,25 +186,25 @@ public sealed class WebhookDelivery(
         if (answer.Gone)
         {
             await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Enabled, false).SetProperty(w => w.StoppedAt, at)
-                .SetProperty(w => w.Attempts, 0).SetProperty(w => w.NextAttemptAt, (DateTimeOffset?)null).SetProperty(w => w.LastAttemptAt, at)
+                .SetProperty(w => w.Attempts, 0).SetProperty(w => w.Refusals, 0).SetProperty(w => w.NextAttemptAt, (DateTimeOffset?)null).SetProperty(w => w.LastAttemptAt, at)
                 .SetProperty(w => w.LastEventId, next.Id).SetProperty(w => w.LastDelivered, false).SetProperty(w => w.LastStatus, answer.Status)
                 .SetProperty(w => w.LastResult, answer.Result), ct);
             logger.LogWarning("The webhook's receiver answered 410 Gone; sending stopped until the URL is set again.");
             return Idle;
         }
 
-        if (answer.Refused && attempts >= RefusedAttempts)
+        if (refusals >= RefusedAttempts)
         {
-            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0)
+            await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Position, next.Id).SetProperty(w => w.Attempts, 0).SetProperty(w => w.Refusals, 0)
                 .SetProperty(w => w.NextAttemptAt, (DateTimeOffset?)null).SetProperty(w => w.Dropped, w => w.Dropped + 1)
                 .SetProperty(w => w.LastAttemptAt, at).SetProperty(w => w.LastEventId, next.Id).SetProperty(w => w.LastDelivered, false)
                 .SetProperty(w => w.LastStatus, answer.Status).SetProperty(w => w.LastResult, answer.Result), ct);
-            logger.LogWarning("The webhook dropped event {Event}: the receiver refused it {Attempts} times ({Status}).", next.Id, attempts, answer.Status);
+            logger.LogWarning("The webhook dropped event {Event}: the receiver refused it {Refusals} times ({Status}).", next.Id, refusals, answer.Status);
             return TimeSpan.Zero;
         }
 
         var retry = Backoff(attempts);
-        await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Attempts, attempts).SetProperty(w => w.NextAttemptAt, at + retry)
+        await mine.ExecuteUpdateAsync(u => u.SetProperty(w => w.Attempts, attempts).SetProperty(w => w.Refusals, refusals).SetProperty(w => w.NextAttemptAt, at + retry)
             .SetProperty(w => w.LastAttemptAt, at).SetProperty(w => w.LastEventId, next.Id).SetProperty(w => w.LastDelivered, false)
             .SetProperty(w => w.LastStatus, answer.Status).SetProperty(w => w.LastResult, answer.Result), ct);
         logger.LogInformation("Sending webhook event {Event} failed ({Result}); it is tried again in {Seconds} seconds.", next.Id, answer.Result, (int)retry.TotalSeconds);

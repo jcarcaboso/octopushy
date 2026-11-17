@@ -42,6 +42,7 @@ builder.Services.AddDbContext<OctopushyDb>((services, options) => options
         services.GetRequiredService<Octopushy.Server.Notifications.WebhookSignal>()), services.GetRequiredService<SavedWrites>()));
 builder.Services.AddSingleton<SavedWrites>();
 builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookSignal>();
+builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookSettingsGate>();
 builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookTransport>(_ => new Octopushy.Server.Notifications.WebhookTransport());
 builder.Services.AddSingleton<Octopushy.Server.Notifications.WebhookDelivery>();
 builder.Services.AddSingleton<AgentPresence>();

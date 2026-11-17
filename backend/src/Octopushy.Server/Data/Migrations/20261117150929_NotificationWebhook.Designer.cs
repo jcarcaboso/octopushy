@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261117160000_NotificationWebhook")]
+    [Migration("20261117150929_NotificationWebhook")]
     partial class NotificationWebhook
     {
         /// <inheritdoc />
@@ -2246,6 +2246,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<long>("Position")
                         .HasColumnType("bigint")
                         .HasColumnName("position");
+
+                    b.Property<int>("Refusals")
+                        .HasColumnType("integer")
+                        .HasColumnName("refusals");
 
                     b.Property<DateTimeOffset?>("StoppedAt")
                         .HasColumnType("timestamp with time zone")

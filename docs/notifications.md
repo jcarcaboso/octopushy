@@ -144,17 +144,39 @@ sends from inside a save. A save that adds a notification wakes it. Otherwise it
 - Anything else, a timeout of five seconds included, is tried again after 10 seconds, doubling each time to at most 10
   minutes. Later events wait behind it.
 - An event is given up once it is 24 hours old, or after five answers that refuse it: a 4xx other than 408, 410 and
-  429. A receiver that is down keeps its events for a day, and one that refuses a single event lets the next through
-  within a few minutes.
+  429. Refusals are counted apart from other failures, so timeouts and server errors never bring an event nearer to
+  being given up; both counts start again for the next event. A receiver that is down keeps its events for a day, and one
+  that refuses a single event lets the next through within a few minutes.
 - When more than 50 events wait, the oldest are given up, so a receiver that comes back after a day gets at most 50, one
   after another.
 - Given-up events are counted on the Notifications page.
 
-Where sending stands is one row, `webhook`: the id it last finished, the tries of the next one and when it is due, and
-how the last try went, with at most 100 characters of the answer, its control characters taken out. The loop writes that
+The receiver's answer is never read: a receiver, or a proxy before it, may echo the path and query it was asked for, token
+and all. What a try came to is its status code and one of these, written by the server:
+
+| Outcome | Shown |
+| --- | --- |
+| 2xx | `Delivered: HTTP 204.` |
+| 3xx | `HTTP 302: redirected, and redirects are not followed.` |
+| 410 | `HTTP 410: the receiver is gone; sending stopped.` |
+| 408, 429 | `HTTP 429: the receiver asked to try again later.` |
+| other 4xx | `HTTP 403: the receiver refused the event.` |
+| 5xx | `HTTP 503: the receiver had an error.` |
+| anything else | `HTTP 1xx: not a success.` |
+| no answer | `No answer within 5 seconds.` |
+| no connection | `The host name did not resolve.`, `Could not connect.`, `The TLS connection failed.`, `The proxy refused the connection.` or `The request failed.` |
+
+Where sending stands is one row, `webhook`: the id it last finished, the tries and refusals of the next one and when it is
+due, and how the last try went, in the words above. Settings are changed one save at a time. The loop writes that
 row with conditional bulk updates, so its writes never wake the engine, and a change of settings meanwhile makes it record
 nothing. Rows in `notifications` are never changed by it. A restart sends from where it stopped: an event whose try was
 under way may be sent twice, with the same `id`, and none is lost.
 
-A notification's id is taken when its save starts, so a save that commits after a later one could be passed over. Saves
-that add notifications are short, and this has not been seen; it is the cost of reading the table in id order.
+Notifications are added by several writers, outside the engine's lock as well as inside it, so one with a lower id can
+commit after one with a higher id. The loop never passes over it. Before it picks the next event, it takes, in a short
+transaction of its own, `LOCK TABLE notifications IN SHARE MODE` with a `lock_timeout` of one second. Every insert holds
+ROW EXCLUSIVE on the table from before it takes its id from the identity sequence until it commits, and SHARE waits for
+all of them, so once the lock is granted no id below those it reads can still appear. It reads, commits and lets go
+before it sends anything. When the lock is not granted within the second, it changes nothing and tries again ten
+seconds later, or as soon as a notification is saved. When nothing waits, it reads once without the lock and stops
+there.

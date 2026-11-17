@@ -18,7 +18,7 @@ const unset: Webhook = {
 
 const set: Webhook = {
   ...unset, configured: true, enabled: true, host: "hooks.example.org",
-  lastAttemptAt: "2026-11-17T09:00:00Z", lastDelivered: false, lastStatus: 503, lastResult: "HTTP 503: upstream unavailable",
+  lastAttemptAt: "2026-11-17T09:00:00Z", lastDelivered: false, lastStatus: 503, lastResult: "HTTP 503: the receiver had an error.",
 };
 
 it("sets the URL with the kinds chosen and shows the signing secret only until dismissed", async () => {
@@ -49,18 +49,18 @@ it("sets the URL with the kinds chosen and shows the signing secret only until d
 });
 
 it("sends a test event and shows what the receiver said, with the last delivery", async () => {
-  const test = vi.fn(() => ({ delivered: false, status: 500, result: "HTTP 500: broken" }));
+  const test = vi.fn(() => ({ delivered: false, status: 500, result: "HTTP 500: the receiver had an error." }));
   mockApi({
     "GET /api/notifications/webhook": () => set,
     "POST /api/notifications/webhook/test": test,
   });
   const user = userEvent.setup();
   renderAt(<NotificationsPage />, { path: "/notifications", route: "/notifications" });
-  expect(await screen.findByText("HTTP 503: upstream unavailable")).toBeVisible();
+  expect(await screen.findByText("HTTP 503: the receiver had an error.")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Send a test event" }));
   expect(test).toHaveBeenCalledOnce();
   expect(await screen.findByText("The test event was not delivered")).toBeVisible();
-  expect(screen.getByText("HTTP 500: broken")).toBeVisible();
+  expect(screen.getByText("HTTP 500: the receiver had an error.")).toBeVisible();
 });
 
 it("says when the receiver answered gone and sending stopped", async () => {

@@ -1519,8 +1519,14 @@ public sealed class WebhookState
     /// <summary>The id of the last notification delivered, dropped or passed over; the next is sent after it.</summary>
     public long Position { get; set; }
 
-    /// <summary>Failed attempts of the notification after <see cref="Position"/>.</summary>
+    /// <summary>Failed attempts of the notification after <see cref="Position"/>: they set when it is tried again.</summary>
     public int Attempts { get; set; }
+
+    /// <summary>
+    /// Of those, the answers that refused it: a 4xx other than 408, 410 and 429. Enough of them give it up; a timeout or a
+    /// server error never counts here.
+    /// </summary>
+    public int Refusals { get; set; }
 
     public DateTimeOffset? NextAttemptAt { get; set; }
 
@@ -1535,7 +1541,7 @@ public sealed class WebhookState
 
     public int? LastStatus { get; set; }
 
-    /// <summary>What the last attempt came to, for people, bounded and without control characters.</summary>
+    /// <summary>What the last attempt came to, in the server's own words: never anything of the receiver's answer.</summary>
     public string? LastResult { get; set; }
 
     public DateTimeOffset? LastDeliveredAt { get; set; }

@@ -34,6 +34,7 @@ namespace Octopushy.Server.Data.Migrations
                     generation = table.Column<int>(type: "integer", nullable: false),
                     position = table.Column<long>(type: "bigint", nullable: false),
                     attempts = table.Column<int>(type: "integer", nullable: false),
+                    refusals = table.Column<int>(type: "integer", nullable: false),
                     next_attempt_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     dropped = table.Column<long>(type: "bigint", nullable: false),
                     last_attempt_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),

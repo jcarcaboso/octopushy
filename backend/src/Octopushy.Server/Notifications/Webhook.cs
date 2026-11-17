@@ -30,7 +30,30 @@ public sealed class WebhookSignal
     public Task<bool> WaitAsync(TimeSpan timeout, CancellationToken cancellationToken) => _signal.WaitAsync(timeout, cancellationToken);
 }
 
-/// <summary>What one POST to the webhook came to. <see cref="Result"/> is for people: bounded, with no control characters.</summary>
+/// <summary>
+/// One change of the webhook's settings at a time, in this process: the server that owns the database is the only one that
+/// changes them (<see cref="ServerOwnership"/>). The sender's own writes need no gate; they are conditional on the settings'
+/// generation.
+/// </summary>
+public sealed class WebhookSettingsGate
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public async Task<T> RunAsync<T>(Func<Task<T>> change, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            return await change();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+}
+
+/// <summary>What one POST to the webhook came to. <see cref="Result"/> is for people, written by the server: see <see cref="WebhookTransport.Explain"/>.</summary>
 public sealed record WebhookAnswer(bool Delivered, int? Status, string Result)
 {
     /// <summary>The receiver said it is gone for good: sending stops until the URL is set again.</summary>
@@ -183,8 +206,8 @@ public static class Webhook
 }
 
 /// <summary>
-/// Posts events. No redirect is followed, no cookie kept, one POST takes at most <see cref="Webhook.Timeout"/>, and at most a
-/// few hundred bytes of the answer are read. It logs nothing: the URL may carry a token. Tests replace the handler.
+/// Posts events. No redirect is followed, no cookie kept, one POST takes at most <see cref="Webhook.Timeout"/>, and the answer's
+/// body is never read. It logs nothing: the URL may carry a token. Tests replace the handler.
 /// </summary>
 public sealed class WebhookTransport(HttpMessageHandler handler) : IDisposable
 {
@@ -215,13 +238,10 @@ public sealed class WebhookTransport(HttpMessageHandler handler) : IDisposable
         request.Headers.Add(Webhook.SignatureHeader, Webhook.Sign(secret, timestamp, body));
         try
         {
+            // An invoker does not buffer the body, and it is never read: a receiver or a proxy may echo the URL, token and all.
             using var response = await _client.SendAsync(request, timeout.Token);
             var status = (int)response.StatusCode;
-            if (response.IsSuccessStatusCode)
-                return new WebhookAnswer(true, status, $"HTTP {status}");
-            var excerpt = await ExcerptAsync(response, timeout.Token);
-            var redirect = status is >= 300 and < 400 ? " (redirects are not followed)" : "";
-            return new WebhookAnswer(false, status, Webhook.Clean($"HTTP {status}{redirect}{(excerpt.Length > 0 ? ": " + excerpt : "")}", 300));
+            return new WebhookAnswer(response.IsSuccessStatusCode, status, Explain(status));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -233,7 +253,7 @@ public sealed class WebhookTransport(HttpMessageHandler handler) : IDisposable
             return new WebhookAnswer(false, null, e.HttpRequestError switch
             {
                 HttpRequestError.NameResolutionError => "The host name did not resolve.",
-                HttpRequestError.ConnectionError => "The connection failed.",
+                HttpRequestError.ConnectionError => "Could not connect.",
                 HttpRequestError.SecureConnectionError => "The TLS connection failed.",
                 HttpRequestError.ProxyTunnelError => "The proxy refused the connection.",
                 _ => "The request failed.",
@@ -241,27 +261,17 @@ public sealed class WebhookTransport(HttpMessageHandler handler) : IDisposable
         }
     }
 
-    /// <summary>The start of the answer, as a person may see it.</summary>
-    private static async Task<string> ExcerptAsync(HttpResponseMessage response, CancellationToken ct)
+    /// <summary>What a status means, in the server's own words: nothing of the answer's body is ever kept.</summary>
+    public static string Explain(int status) => status switch
     {
-        try
-        {
-            await using var stream = await response.Content.ReadAsStreamAsync(ct);
-            var buffer = new byte[ReadBytes];
-            var read = 0;
-            while (read < buffer.Length && await stream.ReadAsync(buffer.AsMemory(read), ct) is var n and > 0)
-                read += n;
-            return Webhook.Clean(Encoding.UTF8.GetString(buffer, 0, read), ExcerptChars);
-        }
-        catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException && !ct.IsCancellationRequested)
-        {
-            return "";
-        }
-    }
-
-    /// <summary>How much of a receiver's answer is read, and how much of it a person is shown.</summary>
-    private const int ReadBytes = 512;
-    private const int ExcerptChars = 100;
+        >= 200 and < 300 => $"Delivered: HTTP {status}.",
+        >= 300 and < 400 => $"HTTP {status}: redirected, and redirects are not followed.",
+        410 => "HTTP 410: the receiver is gone; sending stopped.",
+        408 or 429 => $"HTTP {status}: the receiver asked to try again later.",
+        >= 400 and < 500 => $"HTTP {status}: the receiver refused the event.",
+        >= 500 and < 600 => $"HTTP {status}: the receiver had an error.",
+        _ => $"HTTP {status}: not a success.",
+    };
 
     public void Dispose() => _client.Dispose();
 }

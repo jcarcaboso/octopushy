@@ -2248,6 +2248,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("position");
 
+                    b.Property<int>("Refusals")
+                        .HasColumnType("integer")
+                        .HasColumnName("refusals");
+
                     b.Property<DateTimeOffset?>("StoppedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("stopped_at");

@@ -127,8 +127,8 @@ on("DELETE", "/api/notifications/webhook", () => {
 on("POST", "/api/notifications/webhook/test", () => {
   if (!data.webhook.configured) return problem(400, "Set the webhook's URL first.");
   return data.webhook.host?.includes("down")
-    ? { delivered: false, status: null, result: "The connection failed." }
-    : { delivered: true, status: 204, result: "HTTP 204" };
+    ? { delivered: false, status: null, result: "Could not connect." }
+    : { delivered: true, status: 204, result: "Delivered: HTTP 204." };
 });
 on("GET", "/api/guests/{id}", ({ params }) => data.guestDetail(params.id) ?? notFound("guest"));
 on("GET", "/api/services/{id}", ({ params }) => data.serviceDetail(params.id) ?? notFound("service"));

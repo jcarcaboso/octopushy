@@ -960,7 +960,7 @@ export const webhook: Webhook = {
   lastAttemptAt: ago(1),
   lastDelivered: false,
   lastStatus: 503,
-  lastResult: "HTTP 503: upstream unavailable",
+  lastResult: "HTTP 503: the receiver had an error.",
   lastDeliveredAt: ago(12),
   nextAttemptAt: ago(-1),
   dropped: 0,
