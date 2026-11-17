@@ -77,6 +77,18 @@ public class YamlDocumentReaderTests
     }
 
     [Fact]
+    public void Refuses_aliases_that_expand_one_long_text_past_the_character_limit()
+    {
+        // Under a megabyte and 10,001 values as written, and about 9 GB of text once every alias is expanded.
+        var text = new StringBuilder("big: &big \"").Append('x', 900_000).Append("\"\nall: [")
+            .AppendJoin(", ", Enumerable.Repeat("*big", 10_000)).Append("]\n");
+        Assert.True(text.Length <= YamlDocumentReader.MaxCharacters);
+
+        var error = Assert.Throws<YamlReadException>(() => YamlDocumentReader.Read(text.ToString()));
+        Assert.Contains($"more than {YamlDocumentReader.MaxExpandedCharacters} characters", error.Message);
+    }
+
+    [Fact]
     public void Aliases_within_the_node_limit_still_expand()
     {
         var root = (JsonObject)YamlDocumentReader.Read("base: &base {cores: 2}\nvm: *base\n").Root!;

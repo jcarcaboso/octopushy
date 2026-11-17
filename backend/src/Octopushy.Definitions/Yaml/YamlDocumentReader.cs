@@ -68,6 +68,9 @@ public static partial class YamlDocumentReader
     /// <summary>How deep its mappings and sequences may nest. The document's own value is depth 1.</summary>
     public const int MaxDepth = 64;
 
+    /// <summary>The most characters the file's keys and values may hold together once its aliases are expanded.</summary>
+    public const int MaxExpandedCharacters = 8 * MaxCharacters;
+
     public static YamlDocument Read(string text)
     {
         if (text.Length > MaxCharacters)
@@ -103,15 +106,15 @@ public static partial class YamlDocumentReader
             return new YamlDocument(null, lines);
         }
 
-        var nodes = 0;
-        var root = Convert(stream.Documents[0].RootNode, "", lines, 1, ref nodes);
+        var (nodes, characters) = (0, 0L);
+        var root = Convert(stream.Documents[0].RootNode, "", lines, 1, ref nodes, ref characters);
 
         // Round-tripping through text makes every value JSON-backed, so a number reads as int,
         // long, or double alike, the same as JSON parsed anywhere else.
         return new YamlDocument(root is null ? null : JsonNode.Parse(root.ToJsonString()), lines);
     }
 
-    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines, int depth, ref int nodes)
+    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines, int depth, ref int nodes, ref long characters)
     {
         // Counted as they are expanded: an alias used ten times is ten values, so a few nested aliases cannot become millions.
         if (++nodes > MaxNodes)
@@ -143,8 +146,9 @@ public static partial class YamlDocumentReader
                         throw new YamlReadException($"The key '{key}' appears twice.", LineOf(keyNode.Start));
                     }
 
+                    Count(key, keyNode, ref characters);
                     var childPointer = pointer + "/" + EscapePointer(key);
-                    result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes);
+                    result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes, ref characters);
                 }
 
                 return result;
@@ -155,16 +159,29 @@ public static partial class YamlDocumentReader
                 var index = 0;
                 foreach (var item in sequence.Children)
                 {
-                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes));
+                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes, ref characters));
                     index++;
                 }
 
                 return result;
             }
             case YamlScalarNode scalar:
+                Count(scalar.Value, scalar, ref characters);
                 return ConvertScalar(scalar);
             default:
                 throw new YamlReadException("Unsupported YAML node.", LineOf(node.Start));
+        }
+    }
+
+    /// <summary>Counted as it is expanded, like the values: one long text behind an alias used a thousand times is a thousand texts.</summary>
+    private static void Count(string? text, YamlNode node, ref long characters)
+    {
+        characters += text?.Length ?? 0;
+        if (characters > MaxExpandedCharacters)
+        {
+            throw new YamlReadException(
+                $"The file's keys and values hold more than {MaxExpandedCharacters} characters once its aliases are expanded, the limit on text in a YAML file.",
+                LineOf(node.Start));
         }
     }
 

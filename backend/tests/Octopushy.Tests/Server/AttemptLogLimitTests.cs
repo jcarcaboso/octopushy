@@ -131,21 +131,25 @@ public class AttemptLogAcceptanceTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task A_cancelled_attempt_takes_lines_for_a_lease_while_its_agent_stops_it()
+    public async Task A_cancelled_attempt_takes_lines_until_its_agent_reports_on_it()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
         await server.SyncAndTrustAsync();
         var agent = await server.ConnectAgentAsync("home");
-        var id = Guid.Parse((await agent.NextAsync("observe")).AttemptId);
+        var observation = await agent.NextAsync("observe");
+        var id = Guid.Parse(observation.AttemptId);
 
-        async Task CancelAsync(DateTimeOffset at) => await server.WithDbAsync(db => db.Attempts.Where(a => a.Id == id)
-            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Status, AttemptStatuses.Cancelled).SetProperty(a => a.FinishedAt, at)));
+        // Cancelled while the agent was away, far longer ago than a lease.
+        await server.WithDbAsync(db => db.Attempts.Where(a => a.Id == id).ExecuteUpdateAsync(u => u
+            .SetProperty(a => a.Status, AttemptStatuses.Cancelled).SetProperty(a => a.FinishedAt, DateTimeOffset.UtcNow.AddHours(-1))));
 
-        await CancelAsync(DateTimeOffset.UtcNow);
-        await LogAsync(server, agent.Id, id, 0, "cancelled by the server");
-        await CancelAsync(DateTimeOffset.UtcNow.AddHours(-1));
-        await LogAsync(server, agent.Id, id, 1, "long after");
+        // The agent comes back and sends what it kept, then its result. The server acknowledges that result, and the agent
+        // forgets the log, so this is the only time those lines can be stored.
+        await LogAsync(server, agent.Id, id, 0, "logged while stopping");
+        Assert.True(await agent.ReportAsync(observation, Outcome.Cancelled, new JsonObject()));
+        await LogAsync(server, agent.Id, id, 1, "after the report");
 
-        Assert.Equal(["cancelled by the server"], await TextAsync(server, id));
+        Assert.Equal(["logged while stopping"], await TextAsync(server, id));
+        Assert.Equal(AttemptStatuses.Cancelled, await server.QueryAsync(db => db.Attempts.Where(a => a.Id == id).Select(a => a.Status).SingleAsync()));
     }
 }

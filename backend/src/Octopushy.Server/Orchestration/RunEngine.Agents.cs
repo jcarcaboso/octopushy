@@ -36,18 +36,17 @@ public sealed partial class RunEngine
 
     /// <summary>
     /// Whether an attempt of <paramref name="agentId"/> takes log lines: while it is assigned or running; while it is uncertain
-    /// and still takes a late result, whose log comes before it; and for a lease after it was cancelled, while the agent stops
-    /// it. An agent sends an attempt's lines before its result, and they are handled before it, so a finished attempt has
-    /// them all.
+    /// and still takes a late result, whose log comes before it; and while the server cancelled it and the agent has not
+    /// reported on it yet, however long the agent is away. An agent sends an attempt's lines before its result, and they are
+    /// handled before it, so an attempt the agent has reported on has them all.
     /// </summary>
     private async Task<bool> TakesLogsAsync(Guid agentId, Guid attemptId, CancellationToken ct)
     {
-        var cancelledSince = clock.GetUtcNow().AddSeconds(-options.Value.AgentChannel.LeaseSeconds);
         await using var scope = scopes.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<OctopushyDb>().Attempts.AnyAsync(a => a.Id == attemptId && a.AgentId == agentId
             && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running
                 || (a.Status == AttemptStatuses.Uncertain && !a.LateResult && !a.OutputsWithheld)
-                || (a.Status == AttemptStatuses.Cancelled && a.FinishedAt >= cancelledSince)), ct);
+                || (a.Status == AttemptStatuses.Cancelled && a.ResultSha256 == null)), ct);
     }
 
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
@@ -558,6 +557,14 @@ public sealed partial class RunEngine
             var late = attempt.Status == AttemptStatuses.Uncertain && !attempt.LateResult && !attempt.OutputsWithheld;
             if (AttemptStatuses.IsTerminal(attempt.Status) && !late)
             {
+                // The agent's report on an attempt the server cancelled changes nothing but this: its log is complete, and
+                // no more lines are taken for it.
+                if (attempt.Status == AttemptStatuses.Cancelled && attempt.ResultSha256 is null)
+                {
+                    attempt.ResultSha256 = received;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+
                 _resultFailures.Remove(attemptId);
                 return true;
             }
