@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
@@ -43,26 +44,54 @@ public sealed class TestClock : TimeProvider
     }
 }
 
-[CollectionDefinition(Name)]
-public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
-{
-    public const string Name = "postgres";
-}
-
-/// <summary>One PostgreSQL container for all server tests; each test gets its own database.</summary>
+/// <summary>
+/// The one PostgreSQL container for all server tests, started once per test run, with every migration applied once to a
+/// template database. Each class takes it as a class fixture, so classes run in parallel; each test gets its own database.
+/// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18-alpine").Build();
-    private readonly HashSet<string> _databases = [];
+    private const string Template = "octopushy_template";
+    private static readonly Lazy<Task<PostgreSqlContainer>> Shared = new(StartAsync);
+    private readonly ConcurrentDictionary<string, bool> _databases = new();
+    private PostgreSqlContainer _container = null!;
 
-    public Task InitializeAsync() => _container.StartAsync();
+    public async Task InitializeAsync() => _container = await Shared.Value;
 
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+    // The container outlives each class; it is disposed when the test run's process exits.
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private static async Task<PostgreSqlContainer> StartAsync()
+    {
+        // Tests run side by side, each with its own pool, and a finished test's pool takes seconds to empty.
+        var container = new PostgreSqlBuilder("postgres:18-alpine").WithCommand("-c", "max_connections=500").Build();
+        await container.StartAsync();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => container.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await ExecuteAsync(container.GetConnectionString(), $"CREATE DATABASE {Template}");
+        // Unpooled, so no connection to the template outlives the migration.
+        var template = new NpgsqlConnectionStringBuilder(container.GetConnectionString()) { Database = Template, Pooling = false };
+        await using (var db = new OctopushyDb(new DbContextOptionsBuilder<OctopushyDb>()
+            .UseNpgsql(template.ConnectionString).UseSnakeCaseNamingConvention().Options))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        // CREATE DATABASE ... TEMPLATE fails while anyone is connected to the template, so nobody may connect to it now.
+        await ExecuteAsync(container.GetConnectionString(), $"ALTER DATABASE {Template} WITH ALLOW_CONNECTIONS false");
+        return container;
+    }
+
+    private static async Task ExecuteAsync(string connectionString, string sql)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     /// <summary>Native custom-format dump; accepts only databases created by this fixture.</summary>
     public async Task<byte[]> DumpAsync(string connectionString)
     {
-        Assert.True(_databases.Contains(connectionString), "Backups require a database owned by this fixture.");
+        Assert.True(_databases.ContainsKey(connectionString), "Backups require a database owned by this fixture.");
         var source = new NpgsqlConnectionStringBuilder(connectionString);
         var path = $"/tmp/recovery-{Guid.NewGuid():N}.dump";
         try
@@ -104,13 +133,16 @@ public sealed class PostgresFixture : IAsyncLifetime
         Assert.True(result.ExitCode == 0, $"{command[0]} failed: {result.Stderr}");
     }
 
-    public async Task<string> NewDatabaseAsync()
+    /// <summary>An empty database, for a test of the migrations themselves or of a restore.</summary>
+    public Task<string> NewDatabaseAsync() => CreateDatabaseAsync("");
+
+    /// <summary>A database with every migration applied, copied from the template.</summary>
+    public Task<string> NewMigratedDatabaseAsync() => CreateDatabaseAsync($" TEMPLATE {Template}");
+
+    private async Task<string> CreateDatabaseAsync(string options)
     {
         var name = "t" + Guid.NewGuid().ToString("N");
-        await using var connection = new NpgsqlConnection(_container.GetConnectionString());
-        await connection.OpenAsync();
-        await using var command = new NpgsqlCommand($"CREATE DATABASE {name}", connection);
-        await command.ExecuteNonQueryAsync();
+        await ExecuteAsync(_container.GetConnectionString(), $"CREATE DATABASE {name}{options}");
         // Each test owns a unique database, so a pool that stayed open for each one would
         // exhaust this shared disposable server as the suite grows. Pools empty themselves within
         // seconds instead: turning pooling off makes every query log in again, which is most of
@@ -122,7 +154,7 @@ public sealed class PostgresFixture : IAsyncLifetime
             ConnectionIdleLifetime = 2,
             ConnectionPruningInterval = 1,
         }.ConnectionString;
-        _databases.Add(connectionString);
+        _databases[connectionString] = true;
         return connectionString;
     }
 }
@@ -187,7 +219,7 @@ public sealed class ServerHarness : IAsyncDisposable
     public static async Task<ServerHarness> StartAsync(PostgresFixture postgres, TestRepository? repository = null, bool withSecrets = true, Dictionary<string, string>? settings = null, TimeProvider? clock = null,
         Action<IServiceCollection>? services = null)
     {
-        var harness = new ServerHarness(await postgres.NewDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock, services);
+        var harness = new ServerHarness(await postgres.NewMigratedDatabaseAsync(), repository ?? TestRepository.Minimal(), settings, clock, services);
         _ = harness._factory.Server;
         harness.Commit("Initial definitions");
         await harness.WithDbAsync(async db =>

@@ -14,8 +14,7 @@ using Repository = Octopushy.Tests.Definitions.GuestConfigurationTests;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A guest whose SSH host key is Octopushy's: generated, delivered in a snippet, pinned, and renewed for a new machine.</summary>
-[Collection(PostgresCollection.Name)]
-public class ManagedHostKeyTests(PostgresFixture postgres)
+public class ManagedHostKeyTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";

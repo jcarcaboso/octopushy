@@ -9,8 +9,7 @@ using Octopushy.Server.Orchestration;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A provision plan that removes the guest's VM has to get past Proxmox's protection flag, and nothing else may touch it.</summary>
-[Collection(PostgresCollection.Name)]
-public class GuestVmProtectionTests(PostgresFixture postgres)
+public class GuestVmProtectionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const int Vmid = 310;

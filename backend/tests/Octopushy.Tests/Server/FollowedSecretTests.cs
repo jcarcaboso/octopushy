@@ -12,8 +12,7 @@ using Repository = Octopushy.Tests.Definitions.GuestConfigurationTests;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A new active version of a store value a guest's setup names starts its onChange action once.</summary>
-[Collection(PostgresCollection.Name)]
-public class FollowedSecretTests(PostgresFixture postgres)
+public class FollowedSecretTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Shared = "app/git-key";

@@ -26,8 +26,7 @@ public class EnvelopeTests
     }
 }
 
-[Collection(PostgresCollection.Name)]
-public class VariableStoreTests(PostgresFixture postgres)
+public class VariableStoreTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task A_key_may_stand_alone_or_share_a_prefix_with_another_key()

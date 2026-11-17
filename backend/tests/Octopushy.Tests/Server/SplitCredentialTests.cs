@@ -9,8 +9,7 @@ using Octopushy.Server.Orchestration;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class SplitCredentialTests(PostgresFixture postgres)
+public class SplitCredentialTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Reader = "proxmox/korriban/read-only-token";

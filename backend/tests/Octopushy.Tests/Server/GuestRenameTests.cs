@@ -3,8 +3,7 @@ using Octopushy.Agent.V1;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class GuestRenameTests(PostgresFixture postgres)
+public class GuestRenameTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Path = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";

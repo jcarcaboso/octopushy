@@ -14,8 +14,7 @@ namespace Octopushy.Tests.Server;
 /// Notifications: an uptime check that turns and a run that fails are each told once, in the save that records them.
 /// See docs/notifications.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class NotificationTests(PostgresFixture postgres)
+public class NotificationTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Linked = """
         schemaVersion: 1

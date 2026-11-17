@@ -15,8 +15,7 @@ using Octopushy.Server.Store;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Deleting a key under Variables: refused while anything needs it, and otherwise its values go and its evidence stays.</summary>
-[Collection(PostgresCollection.Name)]
-public class VariableDeletionTests(PostgresFixture postgres)
+public class VariableDeletionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Token = "proxmox/korriban/read-only-token";
     private const string Writer = "proxmox/korriban/privileged-token";

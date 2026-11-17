@@ -10,8 +10,7 @@ using static Octopushy.Tests.Server.SafetyBoundaryFixtures;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A plan that deletes or replaces a Proxmox machine that is not its run's own is refused, whatever the policy. See docs/safety-boundary.md.</summary>
-[Collection(PostgresCollection.Name)]
-public class ForeignMachineRemovalTests(PostgresFixture postgres)
+public class ForeignMachineRemovalTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task A_provision_plan_that_removes_a_foreign_container_is_refused()

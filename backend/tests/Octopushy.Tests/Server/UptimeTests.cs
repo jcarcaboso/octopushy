@@ -13,8 +13,7 @@ namespace Octopushy.Tests.Server;
 /// Uptime: agents check the Proxmox API of each trusted installation's hosts, each guest's SSH and each service's links
 /// about once a minute, and the server keeps what they answer. See docs/uptime.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class UptimeTests(PostgresFixture postgres)
+public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Linked = """
         schemaVersion: 1

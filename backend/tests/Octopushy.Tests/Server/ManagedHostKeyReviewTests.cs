@@ -20,8 +20,7 @@ namespace Octopushy.Tests.Server;
 /// a renewal interrupted half way, a key in an apply's saved plan reaching its diagnostics, and the trust source of a
 /// guest that is not a VM of an opted-in workflow. Only behaviour is asserted, so these read the same before the fix.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class ManagedHostKeyReviewTests(PostgresFixture postgres)
+public class ManagedHostKeyReviewTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string NodeKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiijI7PL8NeaSlRIfsOf1JSG69ZMULksy817NNUwsNZ root@korriban";

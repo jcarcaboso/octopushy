@@ -13,8 +13,7 @@ namespace Octopushy.Tests.Server;
 /// A guest declared <c>machine: attached</c> names a VM Octopushy did not create. A person attaches it: verified, protected,
 /// then bound. Octopushy never plans, replaces or deletes it, and retiring it or deleting its folder detaches it.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class AttachTests(PostgresFixture postgres)
+public class AttachTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Installation = "home/korriban";

@@ -15,8 +15,7 @@ using static Octopushy.Tests.Server.SafetyBoundaryFixtures;
 namespace Octopushy.Tests.Server;
 
 /// <summary>A guest whose VMID is a VM the installation's latest observation shows, and that is not the guest's own, is blocked. See docs/safety-boundary.md.</summary>
-[Collection(PostgresCollection.Name)]
-public class VmidCollisionTests(PostgresFixture postgres)
+public class VmidCollisionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task A_guest_whose_vmid_is_an_observed_unmanaged_vm_is_invalid_and_gets_no_run()

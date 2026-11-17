@@ -16,8 +16,7 @@ namespace Octopushy.Tests.Server;
 /// The icon the Services page shows for a service: a picture uploaded for it, a file of the icons directory chosen for it, or
 /// the file named after it. See docs/service-icons.md.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class ServiceIconTests(PostgresFixture postgres)
+public class ServiceIconTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private static readonly byte[] Png = [0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R'];
 

@@ -20,8 +20,7 @@ namespace Octopushy.Tests.Server;
 /// abandoned replacement must not pin a key the machine was never given, and a restarted controller must still mask what
 /// an outstanding attempt reports.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class ReviewFollowupTests(PostgresFixture postgres)
+public class ReviewFollowupTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string NodeKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiijI7PL8NeaSlRIfsOf1JSG69ZMULksy817NNUwsNZ root@korriban";

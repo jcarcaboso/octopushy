@@ -17,8 +17,7 @@ using Octopushy.Server.Store;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class CredentialLifecycleTests(PostgresFixture postgres)
+public class CredentialLifecycleTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Token = "proxmox/korriban/read-only-token";
     private const string Writer = "proxmox/korriban/privileged-token";

@@ -6,8 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class OperatorTokenTests(PostgresFixture postgres)
+public class OperatorTokenTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Path = "/api/auth/operator-tokens";
 

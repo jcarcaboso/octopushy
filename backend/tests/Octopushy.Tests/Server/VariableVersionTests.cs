@@ -11,8 +11,7 @@ namespace Octopushy.Tests.Server;
 /// One version of a key under Variables: whether it counts as newer than the active one, revealing its value to compare it, and
 /// deleting it once nothing needs it.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class VariableVersionTests(PostgresFixture postgres)
+public class VariableVersionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Token = "proxmox/korriban/read-only-token";
 

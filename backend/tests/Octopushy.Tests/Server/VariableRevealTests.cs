@@ -5,8 +5,7 @@ using System.Text.Json.Nodes;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Revealing values under Variables: the active value of each key asked for, secret or plain, and never a system one.</summary>
-[Collection(PostgresCollection.Name)]
-public class VariableRevealTests(PostgresFixture postgres)
+public class VariableRevealTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     [Fact]
     public async Task Reveal_returns_the_active_value_of_each_key_and_none_for_a_missing_or_revoked_one()

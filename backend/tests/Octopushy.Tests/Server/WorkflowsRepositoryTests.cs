@@ -14,8 +14,7 @@ using Octopushy.Server.Store;
 namespace Octopushy.Tests.Server;
 
 /// <summary>Workflows from their own repository, released by tags: what a sync records, resolves and runs.</summary>
-[Collection(PostgresCollection.Name)]
-public class WorkflowsRepositoryTests(PostgresFixture postgres)
+public class WorkflowsRepositoryTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string Pinned = "home/korriban/krb-app-02";

@@ -15,8 +15,7 @@ using Repository = Octopushy.Tests.Definitions.GuestConfigurationTests;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class AccessRotationTests(PostgresFixture postgres)
+public class AccessRotationTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";

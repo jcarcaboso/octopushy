@@ -9,8 +9,7 @@ using Octopushy.Server.Options;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class RepositoryEditorTests(PostgresFixture postgres)
+public class RepositoryEditorTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Drafts = "/api/repository/drafts";
 

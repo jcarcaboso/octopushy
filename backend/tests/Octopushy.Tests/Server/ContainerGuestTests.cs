@@ -15,8 +15,7 @@ namespace Octopushy.Tests.Server;
 /// A Proxmox container is a guest like a VM: the same provision run, protection, ownership and safety boundary, through the
 /// <c>lxc</c> endpoints. Its host keys come from its create task, and its Ansible work is pinned to them.
 /// </summary>
-[Collection(PostgresCollection.Name)]
-public class ContainerGuestTests(PostgresFixture postgres)
+public class ContainerGuestTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
     private const string GuestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";

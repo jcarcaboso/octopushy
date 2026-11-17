@@ -12,9 +12,19 @@ using static Octopushy.Tests.Server.SafetyBoundaryFixtures;
 
 namespace Octopushy.Tests.Server;
 
+/// <summary>
+/// Alone, because these tests flip <see cref="Views.WholeRuns"/>, which every server in the process reads: no other class
+/// runs beside this one.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class WholeRunsCollection
+{
+    public const string Name = "whole runs";
+}
+
 /// <summary>The polled run lists read only what their summaries show, and still show the same.</summary>
-[Collection(PostgresCollection.Name)]
-public class RunListQueryTests(PostgresFixture postgres, ITestOutputHelper output)
+[Collection(WholeRunsCollection.Name)]
+public class RunListQueryTests(PostgresFixture postgres, ITestOutputHelper output) : IClassFixture<PostgresFixture>
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 12, 12, 0, 0, TimeSpan.Zero);
     private const string Service = Guest + "/web";

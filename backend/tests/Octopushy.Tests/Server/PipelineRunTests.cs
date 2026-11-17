@@ -18,8 +18,7 @@ using Repository = Octopushy.Tests.Definitions.ServiceDefinitionTests;
 
 namespace Octopushy.Tests.Server;
 
-[Collection(PostgresCollection.Name)]
-public class PipelineRunTests(PostgresFixture postgres)
+public class PipelineRunTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = ServiceDefinitionTests.Guest;
     private const string Service = ServiceDefinitionTests.Address;
