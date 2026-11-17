@@ -808,9 +808,6 @@ public sealed partial class RunEngine(
                 await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
                 await RetireServicesAsync(db, run, now, cancellationToken);
                 break;
-            case StepNames.Playbook or StepNames.PlaybookApproved:
-                await ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
-                break;
             case StepNames.VerifyCurrent or StepNames.AuthorizeKey or StepNames.VerifyKey or StepNames.ConfirmRefused:
                 await ApplyRotationEffectsAsync(db, run, step, outputs, now, cancellationToken);
                 break;

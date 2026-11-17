@@ -22,8 +22,22 @@ public sealed partial class RunEngine
     }
 
     /// <summary>The effect of each step name that has one. Every key is a name in <see cref="StepTypes"/>.</summary>
-    internal static readonly IReadOnlyDictionary<string, IStepEffect> StepEffects = new Dictionary<string, IStepEffect>(StringComparer.Ordinal);
+    internal static readonly IReadOnlyDictionary<string, IStepEffect> StepEffects = new Dictionary<string, IStepEffect>(StringComparer.Ordinal)
+    {
+        [StepNames.Playbook] = new PlaybookEffect(),
+        [StepNames.PlaybookApproved] = new PlaybookEffect(),
+    };
 
     /// <summary>The effect of <paramref name="name"/>, matched exactly; null for a step type without one, or a name no step has.</summary>
     internal static IStepEffect? StepEffectFor(string name) => StepEffects.GetValueOrDefault(name);
+
+    /// <summary>A configure run's playbook, and its approved rerun, finished: <see cref="ApplyConfigureEffectsAsync"/>.</summary>
+    private sealed class PlaybookEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            await engine.ApplyConfigureEffectsAsync(db, run, step, cancellationToken);
+        }
+    }
 }
