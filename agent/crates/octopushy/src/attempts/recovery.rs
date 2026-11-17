@@ -320,6 +320,23 @@ mod tests {
     }
 
     #[test]
+    fn an_acknowledged_change_is_not_reported_again_after_a_restart_before_its_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        let outbox = Outbox::open(dir.path().join("outbox")).unwrap();
+        let ws = workspace::create(&work, "acked-1", "opentofu", "apply", true).unwrap();
+        workspace::mark_running(&ws).unwrap();
+        workspace::mark_change_started(&ws, true).unwrap();
+
+        // What an acknowledgement does before it deletes the stored result; the restart comes
+        // before the workspace itself is removed.
+        workspace::forget(&ws).unwrap();
+
+        assert!(recover(&work, &outbox).unwrap().is_empty());
+        assert!(!ws.exists());
+    }
+
+    #[test]
     fn recovers_lost_attempts() {
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().join("work");

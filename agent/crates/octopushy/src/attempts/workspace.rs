@@ -162,6 +162,14 @@ pub fn read(ws: &Path) -> Result<Option<Marker>> {
     }
 }
 
+/// Durably removes what a restart reports an attempt from: its marker and the record beside the
+/// workspace. For an acknowledged attempt, before its stored result goes: a restart in between
+/// then finds a workspace that says nothing and discards it.
+pub fn forget(ws: &Path) -> Result<()> {
+    fsutil::remove_durably(&change_record(ws)?)?;
+    fsutil::remove_durably(&ws.join(MARKER))
+}
+
 /// Deletes a workspace and the record beside it, logging instead of failing.
 pub fn remove(ws: &Path) {
     if let Ok(record) = change_record(ws) {

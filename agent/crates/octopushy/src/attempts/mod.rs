@@ -487,12 +487,14 @@ impl AttemptManager {
         if !on_disk {
             return;
         }
-        // The marker goes first: a workspace without a marker is discarded at
-        // startup, while a marker without an outbox entry would be reported as
-        // an interrupted attempt.
+        // The marker and the record of a started change go first: a workspace
+        // without them is discarded at startup, while either without an outbox
+        // entry would be reported as an interrupted attempt. If they cannot be
+        // removed the result stays, and is acknowledged again after a restart.
         let ws = workspace::dir(&self.work_dir, id);
-        if let Err(e) = crate::fsutil::remove_durably(&ws.join(workspace::MARKER)) {
-            tracing::error!(attempt = %id, "{e:#}");
+        if let Err(e) = workspace::forget(&ws) {
+            tracing::error!(attempt = %id, "{e:#}; keeping the acknowledged result");
+            return;
         }
         if let Err(e) = self.outbox.remove(id) {
             tracing::error!(attempt = %id, "{e:#}");
