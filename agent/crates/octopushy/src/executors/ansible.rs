@@ -680,8 +680,19 @@ fn read_prepared(workspace: &Path, path: &Path) -> Result<Map<String, Value>, Fa
     Ok(prepared)
 }
 
+/// Pulls the image before Ansible first runs, within the run's limit. No playbook has run yet.
+async fn pull(cfg: &ExecutorConfig, ctx: &ExecContext, prep: &Prepared) -> Result<(), Failure> {
+    let minutes = prep
+        .input
+        .timeout_minutes
+        .unwrap_or(DEFAULT_TIMEOUT_MINUTES);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(minutes.saturating_mul(60));
+    super::pull_image(cfg, ctx, &prep.input.image, deadline).await
+}
+
 async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let prep = prepare(cfg, ctx)?;
+    pull(cfg, ctx, &prep).await?;
     let tool = Ansible {
         cfg,
         ctx,
@@ -947,6 +958,7 @@ impl Play<'_> {
 async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let prepared = approved_preview(ctx)?;
     let prep = prepare(cfg, ctx)?;
+    pull(cfg, ctx, &prep).await?;
     let tool = Ansible {
         cfg,
         ctx,

@@ -1,6 +1,9 @@
 //! The Proxmox API client.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, HeaderValue};
@@ -76,6 +79,39 @@ impl fmt::Debug for ClientConfig {
     }
 }
 
+/// A GET about to be tried again, as [`GetRetry::wait`] is told.
+#[derive(Debug)]
+pub struct Retrying<'a> {
+    /// The path, such as `/nodes/n1/qemu/210/config`.
+    pub path: &'a str,
+    /// Why the try before failed.
+    pub error: &'a Error,
+    /// The try about to start, from 2.
+    pub next: u32,
+    pub tries: u32,
+    /// How long to wait first.
+    pub delay: Duration,
+}
+
+/// Waits before a GET is tried again, and says whether to try: `false` ends the retries, and the
+/// GET fails with the last error.
+pub type RetryWait = Arc<dyn Fn(&Retrying<'_>) -> WaitFuture + Send + Sync>;
+
+/// What a [`RetryWait`] returns: whether to try again, once it has waited.
+pub type WaitFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
+
+/// How a [`Client`] repeats a GET that failed in a way a later try may not: a lost connection or
+/// a server error. Only GET goes through it, since a GET reads and changes nothing, and not the
+/// guest agent's exec status, which a read consumes. Nothing else the client sends is repeated.
+#[derive(Clone)]
+pub struct GetRetry {
+    /// Tries in all, the first included.
+    pub tries: u32,
+    /// The wait before the second try. Each later wait is twice the one before.
+    pub delay: Duration,
+    pub wait: RetryWait,
+}
+
 /// An async client for one Proxmox installation.
 #[derive(Clone)]
 pub struct Client {
@@ -83,6 +119,7 @@ pub struct Client {
     base: Url,
     auth: HeaderValue,
     token_id: String,
+    retry: Option<GetRetry>,
 }
 
 impl fmt::Debug for Client {
@@ -141,7 +178,15 @@ impl Client {
             base,
             auth,
             token_id: config.token.id().to_owned(),
+            retry: None,
         })
+    }
+
+    /// Repeats a GET that failed in a way a later try may not, as `retry` says. Without it each
+    /// GET is tried once.
+    pub fn with_get_retry(mut self, retry: GetRetry) -> Self {
+        self.retry = Some(retry);
+        self
     }
 
     /// The API base URL (`<endpoint>/api2/json/`).
@@ -221,7 +266,41 @@ impl Client {
         segments: &[&str],
         query: &[(&str, &str)],
     ) -> Result<T> {
-        self.request(Method::GET, segments, query, None, None).await
+        self.get_envelope(segments, query).await.map(|e| e.data)
+    }
+
+    /// The one way a request is ever sent more than once: a GET, tried again as
+    /// [`Client::with_get_retry`] says, while it fails in a way a later try may not.
+    async fn get_envelope<T: DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<Envelope<T>> {
+        let mut tried = 1;
+        loop {
+            let error = match self
+                .request_envelope(Method::GET, segments, query, None, None)
+                .await
+            {
+                Err(e) if worth_another_try(&e) => e,
+                done => return done,
+            };
+            let Some(retry) = self.retry.as_ref().filter(|r| tried < r.tries) else {
+                return Err(error);
+            };
+            let path = format!("/{}", segments.join("/"));
+            let retrying = Retrying {
+                path: &path,
+                error: &error,
+                next: tried + 1,
+                tries: retry.tries,
+                delay: retry.delay.saturating_mul(1 << (tried - 1).min(16)),
+            };
+            if !(retry.wait)(&retrying).await {
+                return Err(error);
+            }
+            tried += 1;
+        }
     }
 
     /// `GET /version`.
@@ -432,8 +511,7 @@ impl Client {
         let id = vmid.to_string();
         let (start, limit) = (start.to_string(), TASK_PAGE.to_string());
         let page: Envelope<Vec<Task>> = self
-            .request_envelope(
-                Method::GET,
+            .get_envelope(
                 &["nodes", node, "tasks"],
                 &[
                     ("vmid", &id),
@@ -441,8 +519,6 @@ impl Client {
                     ("start", &start),
                     ("limit", &limit),
                 ],
-                None,
-                None,
             )
             .await?;
         Ok((page.data, page.total))
@@ -507,13 +583,16 @@ impl Client {
         Ok(started.pid)
     }
 
+    /// A GET that is never tried again: the guest agent forgets a process that has exited once it
+    /// has reported it, so a second read could not see what a lost answer said.
     pub async fn guest_exec_status(
         &self,
         node: &str,
         vmid: u32,
         pid: u64,
     ) -> Result<GuestExecStatus> {
-        self.get(
+        self.request(
+            Method::GET,
             &[
                 "nodes",
                 node,
@@ -523,6 +602,8 @@ impl Client {
                 "exec-status",
             ],
             &[("pid", &pid.to_string())],
+            None,
+            None,
         )
         .await
     }
@@ -666,6 +747,20 @@ fn status_error(status: StatusCode, reason: Option<&str>, body: &[u8]) -> Error 
             status: status.as_u16(),
             message,
         },
+    }
+}
+
+/// Whether a failed GET may succeed if tried again: a lost connection or a server error, but not
+/// the server errors that are Proxmox's answer, which the methods above turn into
+/// [`Error::NotFound`] and [`Error::GuestAgentUnavailable`] or a stopped container.
+fn worth_another_try(error: &Error) -> bool {
+    match error {
+        Error::Status { status, message } if *status >= 500 => {
+            let lower = message.to_ascii_lowercase();
+            !(lower.contains("does not exist")
+                || GUEST_AGENT_UNAVAILABLE.iter().any(|p| lower.contains(p)))
+        }
+        other => other.is_transient(),
     }
 }
 

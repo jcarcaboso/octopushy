@@ -144,6 +144,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         provider_cache,
         poll_interval: opts.poll_interval,
         proxmox_timeout: Duration::from_secs(30),
+        retry_delay: Duration::from_secs(2),
         server: ServerLink::Enrolled(paths.clone()),
         nix: NixSettings::new(
             opts.nix_store_dir.clone(),

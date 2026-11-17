@@ -3,10 +3,12 @@
 //! `proxmox.token`.
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use octopushy_proxmox::{
-    ApiToken, Client, ClientConfig, Error as PveError, GuestKind, Tls, VmResource, ipv4_addresses,
+    ApiToken, Client, ClientConfig, Error as PveError, GetRetry, GuestKind, Retrying, Tls,
+    VmResource, WaitFuture, ipv4_addresses,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -59,12 +61,37 @@ pub(super) fn client(
             Tls::CustomCa(_) => "custom CA",
         }
     ));
+    // A GET reads, so one that failed on the way or on the server is tried again. The wait logs
+    // why, and a cancel or a Force stop ends it.
+    let (log, cancel) = (ctx.log.clone(), ctx.cancel.clone());
+    let retry = GetRetry {
+        tries: super::SAFE_TRIES,
+        delay: cfg.retry_delay,
+        wait: Arc::new(move |r: &Retrying<'_>| -> WaitFuture {
+            log.agent(format!(
+                "GET {} failed: {}; trying again in {:.1}s (try {} of {})",
+                r.path,
+                r.error,
+                r.delay.as_secs_f64(),
+                r.next,
+                r.tries
+            ));
+            let (cancel, delay) = (cancel.clone(), r.delay);
+            Box::pin(async move {
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => true,
+                    _ = cancel.cancelled() => false,
+                }
+            })
+        }),
+    };
     Ok(Client::new(ClientConfig {
         endpoint: conn.endpoint.clone(),
         token,
         tls,
         timeout: cfg.proxmox_timeout,
-    })?)
+    })?
+    .with_get_retry(retry))
 }
 
 pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
@@ -872,17 +899,7 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             input.vmid,
             word(input.protection)
         ));
-        let written = match kind {
-            GuestKind::Lxc => {
-                c.set_ct_protection(&vm.node, input.vmid, input.protection)
-                    .await
-            }
-            _ => {
-                c.set_vm_protection(&vm.node, input.vmid, input.protection)
-                    .await
-            }
-        };
-        written.map_err(|e| protection_failure(e, noun, input.vmid))?;
+        write_protection(cfg, ctx, &c, &kind, &vm.node, input.vmid, input.protection).await?;
     }
     let now = match protection_of(&c, &kind, &vm.node, input.vmid).await {
         Ok(protection) => protection,
@@ -908,6 +925,61 @@ async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     Ok(Success::outputs(
         json!({ "absent": false, "previous": previous, "protection": now }),
     ))
+}
+
+/// Sets `protection`. The PUT sets one option to one value, so sending it again does what sending
+/// it once does: one that may have reached Proxmox is sent again, up to [`super::SAFE_TRIES`] in
+/// all. When none is answered, the value is read back, and the outcome is uncertain unless
+/// Proxmox reports the value asked for.
+#[allow(clippy::too_many_arguments)]
+async fn write_protection(
+    cfg: &ExecutorConfig,
+    ctx: &ExecContext,
+    c: &Client,
+    kind: &GuestKind,
+    node: &str,
+    vmid: u32,
+    protection: bool,
+) -> Result<(), Failure> {
+    let noun = kind.noun();
+    let mut tried = 0;
+    let failure = loop {
+        tried += 1;
+        let written = match kind {
+            GuestKind::Lxc => c.set_ct_protection(node, vmid, protection).await,
+            _ => c.set_vm_protection(node, vmid, protection).await,
+        };
+        let error = match written {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        let failure = protection_failure(error, noun, vmid);
+        // A rejection of the first PUT changed nothing.
+        if tried == 1 && !matches!(failure, Failure::Uncertain(_)) {
+            return Err(failure);
+        }
+        if tried >= super::SAFE_TRIES || !matches!(failure, Failure::Uncertain(_)) {
+            break failure;
+        }
+        let why = failure.message().to_owned();
+        if ctx
+            .before_retry(cfg, "the protection PUT", &why, tried + 1)
+            .await
+            .is_err()
+        {
+            // Stopped while waiting, after a PUT that may have been applied.
+            return Err(Failure::Uncertain(why));
+        }
+    };
+    match protection_of(c, kind, node, vmid).await {
+        Ok(now) if now == protection => {
+            ctx.log.agent(format!(
+                "Proxmox reports the protection of {noun} {vmid} as asked, after {tried} PUTs that were not answered"
+            ));
+            Ok(())
+        }
+        _ => Err(Failure::Uncertain(failure.message().to_owned())),
+    }
 }
 
 /// The `protection` option of a VM's or a container's configuration.

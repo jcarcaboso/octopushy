@@ -147,6 +147,16 @@ impl std::fmt::Debug for ToolOutput {
     }
 }
 
+/// How one [`ToolRuntime::pull`] ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pull {
+    /// The runtime has the image.
+    Done,
+    /// Why the pull failed, masked.
+    Failed(String),
+    Cancelled,
+}
+
 impl ToolOutput {
     /// The last few stderr lines that are not blank, for error messages.
     pub fn stderr_summary(&self, max: usize) -> String {
@@ -358,6 +368,68 @@ impl ToolRuntime {
             cmd.args(["--network", net]);
         }
         cmd
+    }
+
+    /// Pulls `image` unless the runtime has it, once. A pull only fetches the image, so whoever
+    /// calls this may try again. The runtime's output goes to the log, masked.
+    pub async fn pull(
+        &self,
+        image: &str,
+        log: &AttemptLogger,
+        cancel: &CancellationToken,
+    ) -> Result<Pull> {
+        let present = Command::new(&self.container_binary)
+            .args(["image", "inspect", "--", image])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status();
+        let present = tokio::select! {
+            status = present => status
+                .with_context(|| format!("cannot start {}", self.container_binary.display()))?,
+            _ = cancel.cancelled() => return Ok(Pull::Cancelled),
+        };
+        if present.success() {
+            log.agent(format!("the image {image} is present"));
+            return Ok(Pull::Done);
+        }
+        log.agent(format!("$ {} pull {image}", self.kind.as_str()));
+        let pull = Command::new(&self.container_binary)
+            .args(["pull", "--", image])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::select! {
+            out = pull => out
+                .with_context(|| format!("cannot start {}", self.container_binary.display()))?,
+            _ = cancel.cancelled() => return Ok(Pull::Cancelled),
+        };
+        let stderr: Vec<String> = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .map(|l| log.stderr(l))
+            .collect();
+        if out.status.success() {
+            return Ok(Pull::Done);
+        }
+        let code = out
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "a signal".into());
+        let tail: Vec<&str> = stderr
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let tail = tail[tail.len().saturating_sub(3)..].join(" / ");
+        Ok(Pull::Failed(if tail.is_empty() {
+            format!("exit status {code}")
+        } else {
+            format!("exit status {code}: {tail}")
+        }))
     }
 
     /// The command line (without the tool's own arguments' secrets: there are

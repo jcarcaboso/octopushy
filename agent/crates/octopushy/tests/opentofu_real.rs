@@ -71,6 +71,7 @@ async fn run(
         provider_cache: dir.join("cache"),
         poll_interval: Duration::from_secs(60),
         proxmox_timeout: Duration::from_secs(1),
+        retry_delay: Duration::from_millis(1),
         server: Default::default(),
         nix: Default::default(),
     };

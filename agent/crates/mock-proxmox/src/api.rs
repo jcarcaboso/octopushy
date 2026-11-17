@@ -49,7 +49,8 @@ pub fn router(state: SharedFixture) -> Router {
         .route("/access/permissions", get(permissions))
         .route("/access/acl", get(acl))
         .fallback(|| async { pve_error(StatusCode::NOT_IMPLEMENTED, "Method not implemented") })
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .layer(middleware::from_fn_with_state(state.clone(), faults));
 
     let admin = Router::new()
         .route("/vms", get(list_vms).post(upsert_vm))
@@ -84,6 +85,30 @@ fn data(value: Value) -> Response {
 
 fn flag(b: bool) -> u8 {
     u8::from(b)
+}
+
+/// Records the request, and answers it with the first fault that matches it, if any is left.
+async fn faults(State(state): State<SharedFixture>, req: Request, next: Next) -> Response {
+    let (method, path) = (req.method().to_string(), req.uri().path().to_owned());
+    let fault = {
+        let mut fixture = state.lock().unwrap();
+        fixture.requests.push(format!("{method} {path}"));
+        fixture
+            .faults
+            .iter_mut()
+            .find(|f| f.times > 0 && f.method == method && f.path == path)
+            .map(|f| {
+                f.times -= 1;
+                (f.status, f.message.clone())
+            })
+    };
+    match fault {
+        Some((status, message)) => pve_error(
+            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &message,
+        ),
+        None => next.run(req).await,
+    }
 }
 
 async fn require_token(State(state): State<SharedFixture>, req: Request, next: Next) -> Response {

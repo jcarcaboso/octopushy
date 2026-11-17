@@ -58,6 +58,11 @@ after the run's approval gate. OpenTofu `preview` also receives read-only, while
 token, with the approval gate unchanged for privileged work.
 See [credential roles and rollout limits](../../../docs/proxmox-credentials.md).
 
+A GET that fails on the way or with a server error is tried up to three times in all, with a
+short, doubling wait, and the attempt log says each time why. A missing guest, a guest agent
+that does not answer, and the guest agent's exec status are not tried again. No other request
+is ever repeated, except the protection PUT of `set-protection` below.
+
 ```json
 { "endpoint": "https://10.1.0.10:8006/", "verifyTls": false, "caCertificatePem": null }
 ```
@@ -207,7 +212,10 @@ another kind at the VMID is refused, with nothing changed. Succeeds with
 `{ "absent": true, "previous": null, "protection": null }` when the VM does not exist,
 and fails when it is on another node than `node`. It is `uncertain` when the write may
 have reached Proxmox, or was accepted and could not be read back, because a plain failure
-tells the controller that protection did not change.
+tells the controller that protection did not change. Setting one option to one value is
+idempotent, so a PUT that may have reached Proxmox is sent again, up to three times in all.
+When none is answered, the agent reads the value back: it succeeds when Proxmox reports the
+value asked for, and is `uncertain` otherwise. A PUT Proxmox rejected is not sent again.
 
 The controller sends it for the `unprotect` step with `protection: false`, for the
 `reprotect` step with `protection: true`, and for an attach run's `protect` step with
@@ -223,6 +231,12 @@ Proxmox installer use `local`. Tools share the agent's user and are not sandboxe
 from its files. Local concurrency is capped at one attempt, even if the server
 allows more. Tool-written files must be regular files inside the workspace;
 agent reads reject links in every path component and enforce byte caps.
+
+With a container runtime, the agent first pulls `image` unless the runtime has it, as a step of
+its own, tried up to three times. A pull that keeps failing fails the attempt as a pull, before
+OpenTofu runs. The same holds for the `ansible` executor's image. `tofu init` is tried up to
+three times too, since it only fetches providers and modules and readies the local backend.
+`plan`, `apply` and every other OpenTofu command run once.
 
 Input (the same for both actions):
 
@@ -443,6 +457,7 @@ Runs a repository's playbooks against one guest over SSH. See
 [configuring a guest](../../../docs/guest-configuration.md). The container image's
 entrypoint, and the `local` runtime's `--ansible-binary`, is `octopushy-ansible`, which
 takes `ansible-playbook` arguments. It is not advertised if that program does not run.
+Its image is pulled as for `opentofu`. A playbook run is never repeated.
 
 Input (the same for both actions, except as noted):
 

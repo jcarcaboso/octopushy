@@ -32,12 +32,30 @@ fn connection(m: &RunningMock) -> Value {
 }
 
 async fn exec(action: &str, input: Value, token: &str) -> (Result<Success, Failure>, Vec<String>) {
+    exec_with(
+        action,
+        input,
+        token,
+        Duration::from_millis(1),
+        CancellationToken::new(),
+    )
+    .await
+}
+
+async fn exec_with(
+    action: &str,
+    input: Value,
+    token: &str,
+    retry_delay: Duration,
+    cancel: CancellationToken,
+) -> (Result<Success, Failure>, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = ExecutorConfig {
         runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
         provider_cache: dir.path().join("cache"),
         poll_interval: Duration::from_millis(20),
         proxmox_timeout: Duration::from_secs(5),
+        retry_delay,
         server: Default::default(),
         nix: Default::default(),
     };
@@ -53,7 +71,7 @@ async fn exec(action: &str, input: Value, token: &str) -> (Result<Success, Failu
         artifacts: vec![],
         workspace: dir.path().to_path_buf(),
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
-        cancel: CancellationToken::new(),
+        cancel,
         snapshots: Default::default(),
     };
     let result = executors::run(&cfg, "proxmox", &ctx).await;
@@ -1160,4 +1178,159 @@ async fn a_task_that_changes_nothing_starting_mid_read_only_means_reading_again(
         r.unwrap().outputs["hostKeys"],
         json!([format!("rsa {RSA}"), format!("ed25519 {ED25519}")])
     );
+}
+
+#[tokio::test]
+async fn a_get_that_fails_on_the_server_once_is_tried_again_and_the_log_says_why() {
+    let m = mock(Fixture::example()).await;
+    m.fail("GET", "/cluster/resources", 502, 1);
+
+    let (r, lines) = exec(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+    )
+    .await;
+
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(m.requests("GET", "/cluster/resources"), 2);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("GET /cluster/resources failed")
+                && l.contains("HTTP 502")
+                && l.contains("try 2 of 3")),
+        "{lines:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_ends_the_wait_before_a_get_is_tried_again() {
+    let m = mock(Fixture::example()).await;
+    m.fail("GET", "/version", 502, 1);
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.cancel();
+    });
+    let started = std::time::Instant::now();
+
+    let (r, lines) = exec_with(
+        "observe",
+        json!({ "connection": connection(&m) }),
+        &m.token(),
+        Duration::from_secs(600),
+        cancel,
+    )
+    .await;
+
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(m.requests("GET", "/version"), 1);
+    assert!(
+        lines.iter().any(|l| l.contains("trying again in 600.0s")),
+        "{lines:#?}"
+    );
+}
+
+fn unprotect_210(m: &RunningMock) -> Value {
+    json!({ "connection": connection(m), "node": "korriban", "vmid": 210, "protection": false })
+}
+
+#[tokio::test]
+async fn a_protection_put_that_fails_on_the_server_once_is_sent_again() {
+    let m = mock(Fixture::example()).await;
+    let config = "/nodes/korriban/qemu/210/config";
+    m.fail("PUT", config, 500, 1);
+
+    let (r, lines) = exec("set-protection", unprotect_210(&m), &m.token()).await;
+
+    let outputs = r.unwrap().outputs;
+    assert_eq!(outputs["protection"], json!(false));
+    assert!(!m.vm(210).unwrap().protection);
+    assert_eq!(m.requests("PUT", config), 2);
+    assert!(
+        lines.iter().any(|l| l.contains("the protection PUT failed")
+            && l.contains("HTTP 500")
+            && l.contains("try 2 of 3")),
+        "{lines:#?}"
+    );
+}
+
+#[tokio::test]
+async fn protection_puts_that_all_fail_are_uncertain_unless_proxmox_reports_the_value() {
+    let m = mock(Fixture::example()).await;
+    let config = "/nodes/korriban/qemu/210/config";
+    m.fail("PUT", config, 500, 3);
+
+    let (r, _) = exec("set-protection", unprotect_210(&m), &m.token()).await;
+
+    assert!(matches!(r, Err(Failure::Uncertain(_))), "{r:?}");
+    assert_eq!(m.requests("PUT", config), 3);
+}
+
+#[tokio::test]
+async fn protection_puts_whose_answers_were_lost_succeed_when_proxmox_reports_the_value() {
+    let server = MockServer::start().await;
+    let data = |value: Value| ResponseTemplate::new(200).set_body_json(json!({ "data": value }));
+    Mock::given(method("GET"))
+        .and(path("/api2/json/access/permissions"))
+        .respond_with(data(json!({ "/vms/210": { "VM.Audit": 1 } })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/cluster/resources"))
+        .respond_with(data(
+            json!([{ "vmid": 210, "name": "vm", "node": "n1", "type": "qemu", "status": "running" }]),
+        ))
+        .mount(&server)
+        .await;
+    // On before the change, off after it: Proxmox made it, and lost every answer to the PUT.
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(data(json!({ "protection": 1 })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(data(json!({ "protection": 0 })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api2/json/nodes/n1/qemu/210/config"))
+        .respond_with(ResponseTemplate::new(502))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let input = json!({
+        "connection": { "endpoint": server.uri(), "verifyTls": false },
+        "node": "n1", "vmid": 210, "protection": false,
+    });
+
+    let (r, lines) = exec("set-protection", input, "u@pve!t=s").await;
+
+    assert_eq!(r.unwrap().outputs["protection"], json!(false));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("reports the protection of VM 210 as asked")),
+        "{lines:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_protection_put_is_not_sent_again() {
+    let m = mock(Fixture::example()).await;
+    let config = "/nodes/korriban/qemu/210/config";
+    m.fail("PUT", config, 400, 1);
+
+    let (r, _) = exec("set-protection", unprotect_210(&m), &m.token()).await;
+
+    assert!(matches!(r, Err(Failure::Failed { .. })), "{r:?}");
+    assert_eq!(m.requests("PUT", config), 1);
+    assert!(m.vm(210).unwrap().protection);
 }
