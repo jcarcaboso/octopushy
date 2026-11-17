@@ -90,59 +90,86 @@ public static class KeyRingCipher
     /// <summary>
     /// Encrypts, in place, every key an earlier release stored in plain text, and says which keys the KEK cannot open.
     /// The keys stay the same, so the cookies they signed stay valid. Each file is replaced by a rename, so a crash
-    /// leaves either the old file or the new one. Runs at start, before the ring is first read.
+    /// leaves either the old file or the new one. Runs at start, before the ring is first read. A file that cannot be
+    /// read or replaced is reported and left as it is: the server starts as it did before, with that key as it was.
     /// </summary>
     public static void EncryptExisting(string directory, KeyEncryptionKey kek, ILogger logger)
     {
-        if (!Directory.Exists(directory))
+        string[] files;
+        try
+        {
+            files = Directory.Exists(directory) ? Directory.GetFiles(directory, "*.xml") : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            logger.LogError(e, "The session keys in {Directory} cannot be listed, so none was checked or encrypted.", directory);
+            return;
+        }
+
+        foreach (var file in files)
+        {
+            try
+            {
+                EncryptFile(file, kek, logger);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Xml.XmlException or FormatException)
+            {
+                logger.LogError(e, "The session key {File} cannot be read or replaced, so it is left as it is.", file);
+                try
+                {
+                    File.Delete(file + ".tmp");
+                }
+                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+                {
+                    // Nothing was written, or it cannot be removed either; the key file itself is untouched.
+                }
+            }
+        }
+    }
+
+    private static void EncryptFile(string file, KeyEncryptionKey kek, ILogger logger)
+    {
+        var document = XElement.Load(file);
+        foreach (var secret in document.Descendants(EncryptedSecret).SelectMany(e => e.Elements()).Where(e => e.Name == Element))
+        {
+            try
+            {
+                Open(kek, secret);
+            }
+            catch (CryptographicException)
+            {
+                logger.LogError(
+                    "The session key {File} cannot be decrypted with the current key-encryption key. Sessions it signed are refused, and a new key will be made. Restoring the original key-encryption key makes it readable again.",
+                    file);
+            }
+        }
+
+        var plain = document.Descendants().Where(e => (string?)e.Attribute(RequiresEncryption) == "true").ToList();
+        if (plain.Count == 0)
         {
             return;
         }
 
-        foreach (var file in Directory.EnumerateFiles(directory, "*.xml"))
+        foreach (var secret in plain)
         {
-            var document = XElement.Load(file);
-            foreach (var secret in document.Descendants(EncryptedSecret).SelectMany(e => e.Elements()).Where(e => e.Name == Element))
-            {
-                try
-                {
-                    Open(kek, secret);
-                }
-                catch (CryptographicException)
-                {
-                    logger.LogError(
-                        "The session key {File} cannot be decrypted with the current key-encryption key. Sessions it signed are refused, and a new key will be made. Restoring the original key-encryption key makes it readable again.",
-                        file);
-                }
-            }
-
-            var plain = document.Descendants().Where(e => (string?)e.Attribute(RequiresEncryption) == "true").ToList();
-            if (plain.Count == 0)
-            {
-                continue;
-            }
-
-            foreach (var secret in plain)
-            {
-                secret.ReplaceWith(new XElement(EncryptedSecret,
-                    new XAttribute("decryptorType", typeof(KeyRingDecryptor).AssemblyQualifiedName!),
-                    Seal(kek, secret)));
-            }
-
-            var temporary = file + ".tmp";
-            using (var stream = new FileStream(temporary, new FileStreamOptions
-            {
-                Mode = FileMode.Create,
-                Access = FileAccess.Write,
-                UnixCreateMode = OperatingSystem.IsWindows() ? null : UnixFileMode.UserRead | UnixFileMode.UserWrite,
-            }))
-            {
-                document.Save(stream);
-                stream.Flush(flushToDisk: true);
-            }
-
-            File.Move(temporary, file, overwrite: true);
-            logger.LogInformation("Encrypted the session key {File} with a key derived from the key-encryption key.", file);
+            secret.ReplaceWith(new XElement(EncryptedSecret,
+                new XAttribute("decryptorType", typeof(KeyRingDecryptor).AssemblyQualifiedName!),
+                Seal(kek, secret)));
         }
+
+        var temporary = file + ".tmp";
+        using (var stream = new FileStream(temporary, new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            UnixCreateMode = OperatingSystem.IsWindows() ? null : UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        }))
+        {
+            document.Save(stream);
+            stream.Flush(flushToDisk: true);
+        }
+
+        File.Move(temporary, file, overwrite: true);
+        logger.LogInformation("Encrypted the session key {File} with a key derived from the key-encryption key.", file);
     }
 }

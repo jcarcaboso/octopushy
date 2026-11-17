@@ -133,6 +133,43 @@ public class SessionTests(PostgresFixture postgres)
         }
     }
 
+    [Fact]
+    public void A_key_file_that_cannot_be_read_or_replaced_does_not_stop_the_others_or_the_start()
+    {
+        var data = Path.Combine(Path.GetTempPath(), "octopushy-ring-" + Guid.NewGuid().ToString("N"));
+        var ring = Path.Combine(data, "data-protection");
+        try
+        {
+            DataProtectionProvider.Create(new DirectoryInfo(ring), b => b.SetApplicationName("octopushy")).CreateProtector("test").Protect("value");
+            var key = Assert.Single(KeyFiles(data));
+            var plain = File.ReadAllText(key);
+            var broken = Path.Combine(ring, "a-broken.xml");
+            File.WriteAllText(broken, "<key><not closed");
+            var kek = new KeyEncryptionKey(RandomNumberGenerator.GetBytes(KeyEncryptionKey.Size));
+
+            // A ring the server may read and not write, as one mounted read-only: nothing is replaced, and nothing throws.
+            var logger = new ErrorLogger();
+            File.SetUnixFileMode(ring, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            KeyRingCipher.EncryptExisting(ring, kek, logger);
+            File.SetUnixFileMode(ring, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Assert.Equal(2, logger.Errors.Count);
+            Assert.Equal(plain, File.ReadAllText(key));
+
+            // Writable again: the file that is not XML is reported and kept, and the key beside it is encrypted.
+            logger = new ErrorLogger();
+            KeyRingCipher.EncryptExisting(ring, kek, logger);
+            Assert.Contains("a-broken.xml", Assert.Single(logger.Errors));
+            Assert.Equal("<key><not closed", File.ReadAllText(broken));
+            Assert.Contains("urn:octopushy:key-ring:v1", File.ReadAllText(key));
+            Assert.Equal(2, Directory.GetFiles(ring).Length);
+        }
+        finally
+        {
+            File.SetUnixFileMode(ring, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(data, recursive: true);
+        }
+    }
+
     private sealed class ErrorLogger : ILogger
     {
         public List<string> Errors { get; } = [];
