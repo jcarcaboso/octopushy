@@ -40,6 +40,13 @@ uncertain even if the tool exits zero, and an OpenTofu apply reports its complet
 saved state. A partial or missing state is not proof that nothing happened.
 Stopping a local tool cannot stop a task already accepted by Proxmox.
 
+A killed agent is the third way a change stops. The agent reports a change that was
+running when its process ended as uncertain and never retries it. With `podman` or `docker`,
+a tool container the killed process left may still be running that change. At startup,
+before it reports, the agent removes every container labelled with its own agent ID, which
+stops such a tool; the attempt is uncertain either way. Removal also deletes the container's config, which holds its
+environment, secrets included. Containers of another agent on the same runtime are kept.
+
 Neither exception waives the approved-plan hash check, machine ownership guards
 or state locking. There is no rollback or automatic retry. The operator inspects
 the target and saved state before closing an uncertain run or planning again. A

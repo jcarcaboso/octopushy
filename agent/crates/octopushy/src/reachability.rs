@@ -772,6 +772,9 @@ async fn relay(
             "the step names no usable container image to probe from",
         );
     }
+    if let Err(e) = runtime.check_image(&spec.image) {
+        return Outcome::new("unsupported", format!("{e:#}"));
+    }
     if !valid_id(id) {
         return Outcome::new("error", "the probe ID is not usable as a container name");
     }

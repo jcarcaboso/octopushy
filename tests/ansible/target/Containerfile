@@ -1,5 +1,5 @@
 # A throwaway machine to configure: sshd, sudo and Python, and nothing Octopushy put there.
-FROM docker.io/library/debian:trixie-slim
+FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends openssh-server python3 sudo \
  && useradd --create-home --shell /bin/bash ops \

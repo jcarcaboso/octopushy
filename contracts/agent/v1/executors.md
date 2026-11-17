@@ -301,16 +301,19 @@ Input (the same for both actions):
   directory inside it. The executor extracts it into the attempt's workspace and
   refuses entries that escape it: absolute paths, `..`, hard links, devices, and
   symbolic links that dangle or point outside the tree. (The server sends no links.)
-- `env` and `secretEnv` may not set what the agent or the container
-  runtime needs itself: `HOME`, `PATH`, `TMPDIR`, `USER`, `XDG_RUNTIME_DIR`, the `TF_*`
-  variables the agent sets, and names starting with `TF_CLI_ARGS`, `CONTAINERS_`,
-  `PODMAN_`, `DOCKER_`, or `BUILDAH_`.
+- `env` and `secretEnv` names must start with `PROXMOX_VE_` or `TF_VAR_` and continue
+  with letters, digits or `_`. The agent refuses any other name, so nothing the agent,
+  OpenTofu or the container runtime reads for itself (`HOME`, `PATH`, `TF_CLI_ARGS*`,
+  `DOCKER_*`, …) can be set.
+- An agent run with `--require-image-digest` refuses an `image` not named by digest
+  (`name:tag@sha256:<64 hex>`). It is off by default.
 - The executor writes `octopushy.auto.tfvars.json` (from `variables`) and
   `octopushy_backend.tf.json` (the built-in state below) into the root, so the root must
   not declare a backend of its own.
 - `env` and `secretEnv` are set for every OpenTofu command, together with
   `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, and `TF_PLUGIN_CACHE_DIR`. Secret values are
-  passed through the environment, never as command-line arguments.
+  never command-line arguments: a container runtime reads them from an in-memory env
+  file, or from its own environment for a value on more than one line.
 
 ### A built template's image
 

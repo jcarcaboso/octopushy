@@ -57,7 +57,8 @@ An existing enrollment is only replaced with `--force`.
 ```sh
 octopushy agent run [--state-dir DIR] [--tool-runtime podman|docker|local]
                     [--tofu-binary PATH] [--ansible-binary PATH] [--container-binary PATH]
-                    [--container-network NAME] [--work-dir DIR]
+                    [--container-network NAME] [--container-pids-limit N]
+                    [--container-memory SIZE] [--require-image-digest] [--work-dir DIR]
 octopushy agent status [--state-dir DIR]
 octopushy version
 ```
@@ -70,6 +71,9 @@ octopushy version
 | `--ansible-binary` | `octopushy-ansible` | the program for `--tool-runtime local` |
 | `--container-binary` | `podman`/`docker` on PATH | the container CLI |
 | `--container-network` | runtime default | `--network` for tool containers |
+| `--container-pids-limit` (`OCTOPUSHY_CONTAINER_PIDS_LIMIT`) | `4096` | `--pids-limit` for tool containers; `0` keeps the runtime's default |
+| `--container-memory` (`OCTOPUSHY_CONTAINER_MEMORY`) | no limit | `--memory` (and `--memory-swap`) for tool containers, such as `4g`; see below |
+| `--require-image-digest` (`OCTOPUSHY_REQUIRE_IMAGE_DIGEST`) | off | refuse a tool image not named `image:tag@sha256:<digest>`; see below |
 | `--work-dir` | `<state>/work` | attempt workspaces |
 
 Logs go to stderr; set the level with `OCTOPUSHY_LOG` (or `RUST_LOG`), such as
@@ -146,6 +150,16 @@ says `running` but has no result means the agent died mid-attempt: it reports
 `OUTCOME_FAILED` ("agent restarted during the attempt") otherwise. A `queued`
 marker fails with "restarted before the attempt started".
 
+**Leftover containers.** Every container the agent starts carries the label
+`io.octopushy.agent=<agent ID>` (and `io.octopushy.attempt=<attempt ID>` or
+`io.octopushy.probe=true`). A container is started with `--rm`, but one whose agent was
+killed, or whose runtime crashed, stays, and its config on disk holds its environment,
+secrets included. With `podman` or `docker`, the agent removes every container carrying
+its own agent ID at startup, before recovery, logging each with its attempt. One still
+running a change is stopped by that removal; its attempt is reported uncertain, as above,
+and never retried. Another agent's containers on the same runtime carry another ID and
+are left alone. Containers started by an agent older than this label are not removed.
+
 ## Executors
 
 **`proxmox`** (`observe`, `verify-guest`, `verify-absent`, `set-protection`) uses
@@ -208,10 +222,31 @@ caps, without following file or directory links, and must be regular files insid
 the attempt workspace.
 
 Environment: `TF_IN_AUTOMATION=1`, `TF_INPUT=0`, `TF_PLUGIN_CACHE_DIR`, and `HOME`
-(inside the workspace) are passed as `-e NAME=VALUE`; the input's `env` and
-`secretEnv` are passed as `-e NAME` only, with values set in the container CLI's own
-environment, so they never appear in `/proc/<pid>/cmdline`. Names the agent or the
-container runtime use (`HOME`, `PATH`, `TF_CLI_ARGS*`, `CONTAINERS_*`, …) are refused.
+(inside the workspace) are passed as `-e NAME=VALUE`. The input's `env` and `secretEnv`
+go in an env file the container CLI reads as `--env-file /dev/fd/N`: an in-memory file
+(`memfd`) only that process holds, so neither names nor values appear in its command
+line, its environment or any file system. A value on more than one line (a private key),
+which an env file cannot hold, is passed as `-e NAME` with the value in the CLI's own
+environment, which `/proc/<pid>/environ` shows only to the agent's user. Either way the
+runtime keeps the container's environment in its config on disk while the container
+exists, which is why leftovers are removed at startup. `env` and `secretEnv` names must
+start with `PROXMOX_VE_` or `TF_VAR_`, the only prefixes the controller sends; any other
+name is refused. With `local`, the same names and values are set on the tool's process.
+
+Limits: every container gets `--pids-limit=4096` (`--container-pids-limit`). There is no
+memory limit unless `--container-memory` sets one. A tool that reaches it is killed, and
+if that tool was running `tofu apply` or a playbook, the change is left half made and the
+attempt uncertain. Set it only with room to spare for your largest apply.
+
+Image digests: with `--require-image-digest` the agent refuses, before pulling or running
+it, a tool image (and a reachability probe from it) not named by digest, such as
+`ghcr.io/opentofu/opentofu:1.13.1@sha256:<64 hex>`. A tag can be moved to another image
+by whoever controls the registry; a digest cannot. It is recommended for anyone who pins
+their images: set `Octopushy:Tools:OpenTofuImage` and `Octopushy:Tools:AnsibleImage` on
+the server, and any `image` a workflow stage names, to `name:tag@sha256:...`. It is off
+by default because the server's default Ansible image is named by a tag made from the
+content of `agent/ansible` and published by the release workflow, so its digest is not
+known when the source is written, and the agent would refuse the server's default.
 
 OpenTofu has a 60-minute attempt timeout by default, configurable with
 `timeoutMinutes` from 1 to 1440. Stopping OpenTofu sends SIGINT to allow it to save

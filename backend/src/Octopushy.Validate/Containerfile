@@ -3,7 +3,7 @@
 #   docker build -f backend/src/Octopushy.Validate/Containerfile -t octopushy-validate:<version> .
 # Run against a checkout:
 #   docker run --rm -v "$PWD:/repo:ro" octopushy-validate:<version> /repo
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
 WORKDIR /src
 COPY contracts/ contracts/
 COPY backend/ backend/
@@ -13,7 +13,7 @@ RUN dotnet publish backend/src/Octopushy.Validate \
       --self-contained \
       --output /app
 
-FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0@sha256:9cab4d7d886226d47b5489ef9abf0544e2f109fde11a8acc190217610af26c00
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends git openssh-client ca-certificates \
  && rm -rf /var/lib/apt/lists/* \

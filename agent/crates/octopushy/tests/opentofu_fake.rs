@@ -37,9 +37,9 @@ case "$1" in
   version)
     echo '{"terraform_version":"1.13.1","platform":"linux_amd64","provider_selections":{}}' ;;
   init)
-    if [ -n "${FAKE_INIT_FAILS:-}" ]; then
+    if [ -n "${TF_VAR_FAKE_INIT_FAILS:-}" ]; then
       n=$(cat "$REC/init-fails" 2>/dev/null || echo 0)
-      if [ "$n" -lt "$FAKE_INIT_FAILS" ]; then
+      if [ "$n" -lt "$TF_VAR_FAKE_INIT_FAILS" ]; then
         echo $((n + 1)) > "$REC/init-fails"
         echo "Error: Failed to query available provider packages: 502 Bad Gateway" >&2
         exit 1
@@ -59,18 +59,18 @@ case "$1" in
     out=""; destroy=0
     for a in "$@"; do case "$a" in -out=*) out="${a#-out=}" ;; -destroy) destroy=1 ;; esac; done
     echo "PLAN destroy=$destroy" > "$out"
-    case "${FAKE_LINK:-}" in
+    case "${TF_VAR_FAKE_LINK:-}" in
       plan) rm "$out"; ln -s "$REC/args.log" "$out" ;;
       lock) rm .terraform.lock.hcl; ln -s "$REC/args.log" .terraform.lock.hcl ;;
     esac
     if [ -n "$state" ] && [ -f "$state" ]; then cp "$state" "$REC/state-at-plan.json"; fi
     if [ -e .octopushy-images ]; then ls -A .octopushy-images > "$REC/images-at-plan.txt"; fi
-    if [ -n "${FAKE_PLAN_SLEEP:-}" ]; then sleep "$FAKE_PLAN_SLEEP"; fi
+    if [ -n "${TF_VAR_FAKE_PLAN_SLEEP:-}" ]; then sleep "$TF_VAR_FAKE_PLAN_SLEEP"; fi
     echo "Plan: 2 to add, 1 to change, 1 to destroy."
     echo "debug: provider token $PROXMOX_VE_API_TOKEN" >&2
     # What a saved plan or state would let the tool print: a value nothing in the environment holds.
     if [ -f "$REC/diagnostics.txt" ]; then echo "diagnostics: $(cat "$REC/diagnostics.txt")" >&2; fi
-    exit "${FAKE_PLAN_EXIT:-2}" ;;
+    exit "${TF_VAR_FAKE_PLAN_EXIT:-2}" ;;
   show)
     if grep -q 'destroy=1' "$last"; then
       echo '{"resource_changes":[{"address":"proxmox_virtual_environment_vm.guest","type":"proxmox_virtual_environment_vm","name":"guest","change":{"actions":["delete"]}}]}'
@@ -92,20 +92,20 @@ JSON
       [ -f "$state" ] && cp "$state" "$REC/state-at-apply.json"
       echo '{"version":4,"serial":8,"lineage":"l"}' > "$state"
     fi
-    if [ "${FAKE_LINK:-}" = state ]; then rm "$state"; ln -s "$REC/args.log" "$state"; fi
-    if [ -n "${FAKE_GRACEFUL:-}" ]; then
+    if [ "${TF_VAR_FAKE_LINK:-}" = state ]; then rm "$state"; ln -s "$REC/args.log" "$state"; fi
+    if [ -n "${TF_VAR_FAKE_GRACEFUL:-}" ]; then
       trap 'echo "{\"version\":4,\"serial\":10,\"lineage\":\"l\"}" > "$state"; echo interrupted > "$REC/stopped"; exit 0' INT
     fi
     touch "$REC/apply-started"
-    if [ -n "${FAKE_APPLY_SLEEP:-}" ]; then sleep "$FAKE_APPLY_SLEEP"; fi
-    if [ -n "${FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
-    if [ -n "${FAKE_NOT_SAVED:-}" ]; then
+    if [ -n "${TF_VAR_FAKE_APPLY_SLEEP:-}" ]; then sleep "$TF_VAR_FAKE_APPLY_SLEEP"; fi
+    if [ -n "${TF_VAR_FAKE_ERRORED:-}" ]; then echo '{"version":4,"serial":9,"lineage":"l"}' > errored.tfstate; fi
+    if [ -n "${TF_VAR_FAKE_NOT_SAVED:-}" ]; then
       echo 'Error: Failed to persist state to backend' >&2
       for i in $(seq 1 30); do echo "more diagnostics $i" >&2; done
     fi
-    if [ -n "${FAKE_QUOTED:-}" ]; then echo 'Error running command: Failed to persist state to backend' >&2; fi
+    if [ -n "${TF_VAR_FAKE_QUOTED:-}" ]; then echo 'Error running command: Failed to persist state to backend' >&2; fi
     echo "Apply complete! Resources: 2 added. token=$PROXMOX_VE_API_TOKEN"
-    exit "${FAKE_APPLY_EXIT:-0}" ;;
+    exit "${TF_VAR_FAKE_APPLY_EXIT:-0}" ;;
   output)
     echo '{"vm_id":{"sensitive":false,"type":"number","value":210},"ipv4_addresses":{"sensitive":false,"type":"tuple","value":[["10.1.0.21"]]},"root_password":{"sensitive":true,"type":"string","value":"hunter2"}}' ;;
   *) echo "unknown command $1" >&2; exit 1 ;;
@@ -179,7 +179,7 @@ fn input(destroy: bool, extra_env: Value) -> Value {
         "image": "ghcr.io/opentofu/opentofu:1.13.1",
         "variables": { "octopushy": { "stack": "home.korriban.krb-crt-01" }, "guest": { "vmid": 210 } },
         "env": env,
-        "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "EXTRA_SECRET": "extra.secret" },
+        "secretEnv": { "PROXMOX_VE_API_TOKEN": "proxmox.token", "TF_VAR_extra_secret": "extra.secret" },
         "destroy": destroy,
         "someFutureField": true
     })
@@ -418,7 +418,7 @@ async fn built_in_state_lives_in_the_workspace_as_a_local_backend() {
         &fx,
         "a1",
         "apply",
-        &input(false, json!({ "FAKE_APPLY_SLEEP": "0.2" })),
+        &input(false, json!({ "TF_VAR_FAKE_APPLY_SLEEP": "0.2" })),
         repo_tar(None),
         vec![plan, state.clone()],
         CancellationToken::new(),
@@ -453,7 +453,7 @@ async fn an_apply_that_could_not_write_its_backend_reports_the_emergency_state()
         "apply",
         &input(
             false,
-            json!({ "FAKE_ERRORED": "1", "FAKE_APPLY_EXIT": "1" }),
+            json!({ "TF_VAR_FAKE_ERRORED": "1", "TF_VAR_FAKE_APPLY_EXIT": "1" }),
         ),
         repo_tar(None),
         vec![plan],
@@ -495,7 +495,7 @@ async fn an_apply_that_saved_its_state_nowhere_is_uncertain_however_much_follows
     let fx = Fixture::new();
     let result = failed_apply(
         &fx,
-        json!({ "FAKE_NOT_SAVED": "1", "FAKE_APPLY_EXIT": "1" }),
+        json!({ "TF_VAR_FAKE_NOT_SAVED": "1", "TF_VAR_FAKE_APPLY_EXIT": "1" }),
     )
     .await;
     assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
@@ -504,14 +504,18 @@ async fn an_apply_that_saved_its_state_nowhere_is_uncertain_however_much_follows
 #[tokio::test]
 async fn an_apply_that_was_killed_is_uncertain() {
     let fx = Fixture::new();
-    let result = failed_apply(&fx, json!({ "FAKE_APPLY_EXIT": "137" })).await;
+    let result = failed_apply(&fx, json!({ "TF_VAR_FAKE_APPLY_EXIT": "137" })).await;
     assert!(matches!(&result, Err(Failure::Uncertain(_))), "{result:?}");
 }
 
 #[tokio::test]
 async fn output_that_quotes_the_failure_is_an_ordinary_failure() {
     let fx = Fixture::new();
-    let result = failed_apply(&fx, json!({ "FAKE_QUOTED": "1", "FAKE_APPLY_EXIT": "1" })).await;
+    let result = failed_apply(
+        &fx,
+        json!({ "TF_VAR_FAKE_QUOTED": "1", "TF_VAR_FAKE_APPLY_EXIT": "1" }),
+    )
+    .await;
     assert!(matches!(&result, Err(Failure::Failed { .. })), "{result:?}");
 }
 
@@ -608,7 +612,7 @@ async fn preview_with_changes_then_apply() {
     // Environment: secrets and settings arrive in the environment.
     let env = env_of(&fx, "plan");
     assert_eq!(env["PROXMOX_VE_API_TOKEN"], PVE_TOKEN);
-    assert_eq!(env["EXTRA_SECRET"], EXTRA_SECRET);
+    assert_eq!(env["TF_VAR_extra_secret"], EXTRA_SECRET);
     assert_eq!(env["PROXMOX_VE_ENDPOINT"], "https://10.1.0.10:8006/");
     assert_eq!(env["TF_IN_AUTOMATION"], "1");
     assert_eq!(env["TF_INPUT"], "0");
@@ -747,7 +751,7 @@ async fn destroy_no_changes_and_errors() {
         &fx,
         "n-1",
         "preview",
-        &input(false, json!({ "FAKE_PLAN_EXIT": "0" })),
+        &input(false, json!({ "TF_VAR_FAKE_PLAN_EXIT": "0" })),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -765,7 +769,7 @@ async fn destroy_no_changes_and_errors() {
         &fx,
         "e-1",
         "preview",
-        &input(false, json!({ "FAKE_PLAN_EXIT": "1" })),
+        &input(false, json!({ "TF_VAR_FAKE_PLAN_EXIT": "1" })),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -784,7 +788,7 @@ async fn destroy_no_changes_and_errors() {
 
     // Missing secret, escaping root, reserved env.
     let mut bad = input(false, json!({}));
-    bad["secretEnv"]["X_TOKEN"] = json!("not.provided");
+    bad["secretEnv"]["TF_VAR_x_token"] = json!("not.provided");
     let r = run(
         &fx,
         "e-2",
@@ -830,7 +834,7 @@ async fn destroy_no_changes_and_errors() {
     )
     .await;
     assert!(
-        matches!(&r.result, Err(Failure::Failed { message, .. }) if message.contains("reserved")),
+        matches!(&r.result, Err(Failure::Failed { message, .. }) if message.contains("is not allowed")),
         "{:?}",
         r.result
     );
@@ -927,7 +931,7 @@ async fn apply_refuses_a_corrupt_or_missing_plan() {
         &fx,
         "a-4",
         "apply",
-        &input(false, json!({ "FAKE_APPLY_EXIT": "1" })),
+        &input(false, json!({ "TF_VAR_FAKE_APPLY_EXIT": "1" })),
         repo_tar(None),
         vec![ok],
         CancellationToken::new(),
@@ -954,7 +958,7 @@ async fn cancel_stops_a_running_plan() {
         &fx,
         "c-1",
         "preview",
-        &input(false, json!({ "FAKE_PLAN_SLEEP": "60" })),
+        &input(false, json!({ "TF_VAR_FAKE_PLAN_SLEEP": "60" })),
         repo_tar(None),
         vec![],
         cancel,
@@ -1129,7 +1133,7 @@ async fn tool_written_plan_and_lock_links_fail_the_preview() {
             &fx,
             "unsafe",
             "preview",
-            &input(false, json!({"FAKE_LINK": target})),
+            &input(false, json!({"TF_VAR_FAKE_LINK": target})),
             repo_tar(None),
             vec![],
             CancellationToken::new(),
@@ -1164,7 +1168,7 @@ async fn a_tool_written_state_link_makes_apply_uncertain() {
         &fx,
         "apply-link",
         "apply",
-        &input(false, json!({"FAKE_LINK": "state"})),
+        &input(false, json!({"TF_VAR_FAKE_LINK": "state"})),
         repo_tar(None),
         preview.artifacts,
         CancellationToken::new(),
@@ -1186,9 +1190,9 @@ async fn opentofu_timeout_fails_plans_and_preserves_interrupted_apply_state_and_
         let mut values = input(
             false,
             if action == "apply" {
-                json!({"FAKE_APPLY_SLEEP": "600", "FAKE_GRACEFUL": "1"})
+                json!({"TF_VAR_FAKE_APPLY_SLEEP": "600", "TF_VAR_FAKE_GRACEFUL": "1"})
             } else {
-                json!({"FAKE_PLAN_SLEEP": "600"})
+                json!({"TF_VAR_FAKE_PLAN_SLEEP": "600"})
             },
         );
         values["timeoutMinutes"] = json!(1);
@@ -1295,7 +1299,7 @@ async fn normal_cancel_leaves_apply_running_but_force_stops_and_saves_state() {
         action: "apply".into(),
         input_json: input(
             false,
-            json!({"FAKE_APPLY_SLEEP": "600", "FAKE_GRACEFUL": "1"}),
+            json!({"TF_VAR_FAKE_APPLY_SLEEP": "600", "TF_VAR_FAKE_GRACEFUL": "1"}),
         )
         .to_string(),
         files_tar_gz: repo_tar(None),
@@ -1366,7 +1370,7 @@ async fn a_failed_init_is_tried_again_and_the_log_says_why() {
         &fx,
         "p-init",
         "preview",
-        &input(false, json!({ "FAKE_INIT_FAILS": "1" })),
+        &input(false, json!({ "TF_VAR_FAKE_INIT_FAILS": "1" })),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -1390,7 +1394,7 @@ async fn a_failed_init_is_tried_again_and_the_log_says_why() {
         &fx,
         "p-init-3",
         "preview",
-        &input(false, json!({ "FAKE_INIT_FAILS": "3" })),
+        &input(false, json!({ "TF_VAR_FAKE_INIT_FAILS": "3" })),
         repo_tar(None),
         vec![],
         CancellationToken::new(),
@@ -1410,7 +1414,7 @@ async fn an_apply_is_never_tried_again_though_its_init_is() {
     let fx = Fixture::new();
     let result = failed_apply(
         &fx,
-        json!({ "FAKE_INIT_FAILS": "1", "FAKE_APPLY_EXIT": "1" }),
+        json!({ "TF_VAR_FAKE_INIT_FAILS": "1", "TF_VAR_FAKE_APPLY_EXIT": "1" }),
     )
     .await;
 

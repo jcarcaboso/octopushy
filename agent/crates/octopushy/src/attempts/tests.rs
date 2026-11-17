@@ -408,7 +408,7 @@ async fn an_apply_reports_its_state_even_when_it_fails() {
         r#"#!/bin/sh
 case "$1" in
   version) echo '{"terraform_version":"1.13.1"}' ;;
-  apply) echo '{"version":4,"serial":5,"lineage":"l"}' > "$STATE_FILE"; exit 1 ;;
+  apply) echo '{"version":4,"serial":5,"lineage":"l"}' > "$TF_VAR_state_file"; exit 1 ;;
 esac
 "#,
     )
@@ -431,7 +431,7 @@ esac
     let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
     let input = serde_json::json!({
         "root": ".",
-        "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate") },
+        "env": { "TF_VAR_state_file": work.join("a1/state/terraform.tfstate") },
     });
     let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());
     apply.files_tar_gz = archive::pack(&[("main.tf", b"".as_slice())]).unwrap();

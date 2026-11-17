@@ -1,7 +1,10 @@
 # A stand-in for a Proxmox host's sshd and storage: Debian with systemd and OpenSSH, and pvesh and
 # pvesm replaced by stubs that keep one datastore in a JSON file. Nothing of Proxmox itself runs.
+# One stage per release run.sh builds for, each pinned by digest; DEBIAN picks one.
 ARG DEBIAN=trixie
-FROM docker.io/library/debian:${DEBIAN}
+FROM docker.io/library/debian:bookworm@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8 AS bookworm
+FROM docker.io/library/debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS trixie
+FROM ${DEBIAN}
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       systemd systemd-sysv openssh-server openssh-client python3 \
  && rm -rf /var/lib/apt/lists/* \

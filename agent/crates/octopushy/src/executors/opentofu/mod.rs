@@ -106,8 +106,12 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 }
 
-/// Names the agent sets itself, or that would change how the container runtime
-/// (which shares the tool's environment) behaves.
+/// What the input's `env` and `secretEnv` may set: what the controller sends, the Proxmox
+/// provider's settings and OpenTofu variables. Workflows declare no environment of their own.
+pub const ENV_PREFIXES: &[&str] = &["PROXMOX_VE_", "TF_VAR_"];
+
+/// Allows only names starting with one of [`ENV_PREFIXES`], so nothing the agent sets
+/// itself, or that changes how OpenTofu or the container runtime behaves, can be set.
 fn check_env_name(name: &str) -> Result<(), Failure> {
     let valid = !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
@@ -117,27 +121,14 @@ fn check_env_name(name: &str) -> Result<(), Failure> {
             "{name:?} is not a valid environment variable name"
         )));
     }
-    const RESERVED: &[&str] = &[
-        "TF_IN_AUTOMATION",
-        "TF_INPUT",
-        "TF_PLUGIN_CACHE_DIR",
-        "TF_DATA_DIR",
-        "HOME",
-        "PATH",
-        "TMPDIR",
-        "USER",
-        "XDG_RUNTIME_DIR",
-    ];
-    const RESERVED_PREFIXES: &[&str] = &[
-        "TF_CLI_ARGS",
-        "CONTAINERS_",
-        "PODMAN_",
-        "DOCKER_",
-        "BUILDAH_",
-    ];
-    if RESERVED.contains(&name) || RESERVED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+    if !ENV_PREFIXES
+        .iter()
+        .any(|p| name.len() > p.len() && name.starts_with(p))
+    {
         return Err(Failure::msg(format!(
-            "the environment variable {name} is reserved by the agent"
+            "the environment variable {name} is not allowed: OpenTofu's environment takes only \
+             names starting with {}",
+            ENV_PREFIXES.join(" or ")
         )));
     }
     Ok(())
@@ -799,16 +790,33 @@ mod tests {
 
     #[test]
     fn env_names() {
-        assert!(check_env_name("PROXMOX_VE_API_TOKEN").is_ok());
-        assert!(check_env_name("PG_CONN_STR").is_ok());
+        // Every name the controller sends (RunFactory, SecretNames).
+        for good in [
+            "PROXMOX_VE_ENDPOINT",
+            "PROXMOX_VE_INSECURE",
+            "PROXMOX_VE_API_TOKEN",
+            "PROXMOX_VE_SSH_USERNAME",
+            "PROXMOX_VE_SSH_PRIVATE_KEY",
+            "TF_VAR_octopushy_host_key",
+        ] {
+            assert!(check_env_name(good).is_ok(), "{good}");
+        }
         for bad in [
             "",
             "1X",
             "A-B",
             "HOME",
+            "PATH",
+            "PG_CONN_STR",
+            "LD_PRELOAD",
+            "HTTPS_PROXY",
+            "TF_VAR_",
+            "PROXMOX_VE_",
             "TF_PLUGIN_CACHE_DIR",
             "TF_CLI_ARGS_plan",
+            "TF_CLI_CONFIG_FILE",
             "CONTAINERS_CONF",
+            "DOCKER_HOST",
         ] {
             assert!(check_env_name(bad).is_err(), "{bad}");
         }
