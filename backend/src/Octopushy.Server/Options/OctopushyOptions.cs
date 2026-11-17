@@ -44,6 +44,8 @@ public sealed class OctopushyOptions
 
     public RepositoryEditorOptions RepositoryEditor { get; set; } = new();
 
+    public SnapshotOptions Snapshots { get; set; } = new();
+
     public ChangeOptions Changes { get; set; } = new();
 
     public DeployOptions Deploy { get; set; } = new();
@@ -102,6 +104,24 @@ public sealed class DeployOptions
     public int? ObservationMaxAgeMinutes { get; set; }
 }
 
+/// <summary>
+/// How much of a commit is read as a snapshot, from the lab repository or a workflows repository. A commit over one is not
+/// read: the sync records why, as a fetch error. The defaults are far above any lab Octopushy was built for.
+/// </summary>
+public sealed class SnapshotOptions
+{
+    /// <summary>The most bytes a commit's files may hold together.</summary>
+    public long MaxTotalBytes { get; set; } = Octopushy.Definitions.SnapshotLimits.Default.MaxTotalBytes;
+
+    /// <summary>The most bytes one file may hold.</summary>
+    public long MaxFileBytes { get; set; } = Octopushy.Definitions.SnapshotLimits.Default.MaxFileBytes;
+
+    /// <summary>The most files and folders a commit may hold.</summary>
+    public int MaxEntries { get; set; } = Octopushy.Definitions.SnapshotLimits.Default.MaxEntries;
+
+    public Octopushy.Definitions.SnapshotLimits Limits => new(MaxTotalBytes, MaxFileBytes, MaxEntries);
+}
+
 public sealed class RepositoryEditorOptions
 {
     /// <summary>Explicitly allow publishing drafts as commits pushed with the configured repository credential.</summary>
@@ -133,6 +153,12 @@ public sealed class AgentChannelOptions
     public int HeartbeatSeconds { get; set; } = 10;
 
     public int LeaseSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// The most bytes of log, as stored, kept for one attempt. Past it the rest is dropped, and the log says so in one line;
+    /// the attempt itself carries on.
+    /// </summary>
+    public long MaxLogBytesPerAttempt { get; set; } = 64L * 1024 * 1024;
 
     public int EnrollmentTokenMinutes { get; set; } = 60;
 

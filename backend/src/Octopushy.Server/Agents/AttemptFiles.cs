@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
@@ -20,6 +21,10 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly string _directory = Path.Combine(options.Value.DataDirectory, "logs");
+    private readonly long _maxBytes = options.Value.AgentChannel.MaxLogBytesPerAttempt;
+
+    /// <summary>The stream of a line the server writes into an attempt's log itself, not the agent.</summary>
+    public const string ServerStream = "server";
     // One gate per attempt, for as long as anything holds it: a writer, a close or a delete. An entry goes only when its last
     // user leaves and nothing is registered to mask with, so a second gate never runs beside a writer that still holds the first.
     private readonly Dictionary<Guid, LogGate> _gates = new();
@@ -109,7 +114,9 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
     /// <summary>
     /// Appends the lines not stored yet; returns the number of lines stored in total. <paramref name="stillKept"/>, when given, is
-    /// asked under the attempt's gate first, and nothing is written when it says no.
+    /// asked under the attempt's gate first, and nothing is written when it says no. A log keeps at most
+    /// <see cref="AgentChannelOptions.MaxLogBytesPerAttempt"/> bytes: the first line past it is replaced, once, by a line of
+    /// <see cref="ServerStream"/> that says the rest was dropped, and every line after it is dropped.
     /// </summary>
     public Task<long> AppendAsync(Guid attemptId, long firstSequence, IReadOnlyList<(long UnixMs, string Stream, string Text)> lines, CancellationToken cancellationToken,
         Func<Task<bool>>? stillKept = null) =>
@@ -118,7 +125,11 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
             var path = PathFor(attemptId);
             if (stillKept is not null && !await stillKept())
                 return gate.Next ?? CountLines(path);
-            var next = gate.Next ?? CountLines(path);
+            if (gate.Next is null)
+                Measure(path, gate);
+            var next = gate.Next!.Value;
+            if (gate.Full)
+                return next;
             Directory.CreateDirectory(_directory);
             await using (var writer = new StreamWriter(path, append: true))
             {
@@ -132,14 +143,45 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
                     // Masked under the gate: a close waits for this write, so its values are not forgotten halfway through it.
                     var (unixMs, stream, text) = lines[i];
-                    await writer.WriteLineAsync(JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, MaskDiagnostic(attemptId, text)), Json));
+                    var record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, stream, MaskDiagnostic(attemptId, text)), Json);
+                    var bytes = Encoding.UTF8.GetByteCount(record) + 1;
+                    if (gate.Bytes + bytes > _maxBytes)
+                    {
+                        record = JsonSerializer.Serialize(new LogLineRecord(next, unixMs, ServerStream,
+                            $"Octopushy dropped the rest of this log: it reached {_maxBytes} bytes, the limit Octopushy:AgentChannel:MaxLogBytesPerAttempt. The attempt itself carries on."), Json);
+                        bytes = Encoding.UTF8.GetByteCount(record) + 1;
+                        gate.Full = true;
+                    }
+
+                    await writer.WriteLineAsync(record);
+                    gate.Bytes += bytes;
                     next++;
+                    if (gate.Full)
+                        break;
                 }
             }
 
             gate.Next = next;
             return next;
         }, cancellationToken);
+
+    /// <summary>Reads what the gate keeps of a log from its file: its lines, its bytes, and whether its last line says it is full.</summary>
+    private static void Measure(string path, LogGate gate)
+    {
+        var (count, last) = (0L, (string?)null);
+        if (File.Exists(path))
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                count++;
+                last = line;
+            }
+        }
+
+        gate.Next = count;
+        gate.Bytes = File.Exists(path) ? new FileInfo(path).Length : 0;
+        gate.Full = last is not null && JsonSerializer.Deserialize<LogLineRecord>(last, Json)?.Stream == ServerStream;
+    }
 
     public async Task<List<LogLineRecord>> ReadAsync(Guid attemptId, long after, int limit, CancellationToken cancellationToken)
     {
@@ -188,6 +230,8 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
                 // An attempt that never logged anything has no log directory yet.
             }
             gate.Next = 0;
+            gate.Bytes = 0;
+            gate.Full = false;
             return Task.FromResult(0L);
         }, cancellationToken);
 
@@ -266,6 +310,12 @@ public sealed class AttemptLogStore(IOptions<OctopushyOptions> options)
 
         /// <summary>The next line's sequence, once read from the file.</summary>
         public long? Next;
+
+        /// <summary>The bytes the file holds, once <see cref="Next"/> is read.</summary>
+        public long Bytes;
+
+        /// <summary>Whether the log reached its limit, and says so in its last line.</summary>
+        public bool Full;
     }
 
     private string PathFor(Guid attemptId) => Path.Combine(_directory, $"{attemptId}.jsonl");

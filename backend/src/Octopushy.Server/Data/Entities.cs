@@ -1007,7 +1007,8 @@ public sealed class Attempt
 
     /// <summary>
     /// The SHA-256 of the result the server took, as the agent sent it. The same result sent again, as an agent does until it
-    /// is acknowledged, changes nothing.
+    /// is acknowledged, changes nothing. For an attempt the server cancelled, the agent's report on it, which settles
+    /// nothing and ends its log.
     /// </summary>
     public string? ResultSha256 { get; set; }
 }

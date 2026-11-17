@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
 using YamlDotNet.RepresentationModel;
 
 namespace Octopushy.Definitions.Yaml;
@@ -52,14 +53,41 @@ public sealed class YamlReadException(string message, int? line) : Exception(mes
 /// <c>0400</c> is the number 400. Anchors and aliases resolve; duplicate keys and several
 /// documents in one file are errors.
 /// </summary>
+/// <remarks>
+/// Repository content is hostile, so what one file may expand to is bounded: its length, the values it holds once its
+/// aliases are expanded, and how deep they nest. Going over one is a <see cref="YamlReadException"/> like any other.
+/// </remarks>
 public static partial class YamlDocumentReader
 {
+    /// <summary>The most characters a YAML file read here may hold.</summary>
+    public const int MaxCharacters = 1024 * 1024;
+
+    /// <summary>The most values a YAML file may hold, with each alias counted as often as it is used.</summary>
+    public const int MaxNodes = 100_000;
+
+    /// <summary>How deep its mappings and sequences may nest. The document's own value is depth 1.</summary>
+    public const int MaxDepth = 64;
+
+    /// <summary>
+    /// The most characters the file's keys and values, and the pointers kept to them, may hold together once its aliases
+    /// are expanded.
+    /// </summary>
+    public const int MaxExpandedCharacters = 8 * MaxCharacters;
+
     public static YamlDocument Read(string text)
     {
+        if (text.Length > MaxCharacters)
+        {
+            throw new YamlReadException(
+                $"The file holds {text.Length} characters; the limit on the size of a YAML file is {MaxCharacters}.", null);
+        }
+
         var stream = new YamlStream();
         try
         {
-            stream.Load(new StringReader(text));
+            // YamlDotNet builds nodes recursively, keeps every expanded tag, and formats a repeated key with its aliases
+            // expanded. So depth, tags and keys are checked as the parser reads, before it builds anything from them.
+            stream.Load(new BoundedParser(new Parser(new StringReader(text))));
         }
         catch (YamlException e)
         {
@@ -82,15 +110,30 @@ public static partial class YamlDocumentReader
             return new YamlDocument(null, lines);
         }
 
-        var root = Convert(stream.Documents[0].RootNode, "", lines);
+        var (nodes, characters) = (0, 0L);
+        var root = Convert(stream.Documents[0].RootNode, "", lines, 1, ref nodes, ref characters);
 
         // Round-tripping through text makes every value JSON-backed, so a number reads as int,
         // long, or double alike, the same as JSON parsed anywhere else.
         return new YamlDocument(root is null ? null : JsonNode.Parse(root.ToJsonString()), lines);
     }
 
-    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines)
+    private static JsonNode? Convert(YamlNode node, string pointer, Dictionary<string, int> lines, int depth, ref int nodes, ref long characters)
     {
+        // Counted as they are expanded: an alias used ten times is ten values, so a few nested aliases cannot become millions.
+        if (++nodes > MaxNodes)
+        {
+            throw new YamlReadException(
+                $"The file holds more than {MaxNodes} values once its aliases are expanded, the limit on values in a YAML file.", LineOf(node.Start));
+        }
+
+        if (depth > MaxDepth && node is YamlMappingNode or YamlSequenceNode)
+        {
+            throw TooDeep(node.Start);
+        }
+
+        // A pointer repeats every key above its value, so one long key over many values is long many times.
+        Count(pointer, node, ref characters);
         lines[pointer] = LineOf(node.Start) ?? 1;
         switch (node)
         {
@@ -109,8 +152,9 @@ public static partial class YamlDocumentReader
                         throw new YamlReadException($"The key '{key}' appears twice.", LineOf(keyNode.Start));
                     }
 
+                    Count(key, keyNode, ref characters);
                     var childPointer = pointer + "/" + EscapePointer(key);
-                    result[key] = Convert(valueNode, childPointer, lines);
+                    result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes, ref characters);
                 }
 
                 return result;
@@ -121,16 +165,29 @@ public static partial class YamlDocumentReader
                 var index = 0;
                 foreach (var item in sequence.Children)
                 {
-                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines));
+                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes, ref characters));
                     index++;
                 }
 
                 return result;
             }
             case YamlScalarNode scalar:
+                Count(scalar.Value, scalar, ref characters);
                 return ConvertScalar(scalar);
             default:
                 throw new YamlReadException("Unsupported YAML node.", LineOf(node.Start));
+        }
+    }
+
+    /// <summary>Counted as it is expanded, like the values: one long text behind an alias used a thousand times is a thousand texts.</summary>
+    private static void Count(string? text, YamlNode node, ref long characters)
+    {
+        characters += text?.Length ?? 0;
+        if (characters > MaxExpandedCharacters)
+        {
+            throw new YamlReadException(
+                $"The file's keys, values and the paths to them hold more than {MaxExpandedCharacters} characters once its aliases are expanded, the limit on text in a YAML file.",
+                LineOf(node.Start));
         }
     }
 
@@ -195,6 +252,90 @@ public static partial class YamlDocumentReader
         }
 
         return JsonValue.Create(value);
+    }
+
+    private static YamlReadException TooDeep(Mark mark) =>
+        new($"The file nests deeper than {MaxDepth} levels, the limit on depth in a YAML file.", LineOf(mark));
+
+    private sealed class BoundedParser(IParser inner) : IParser
+    {
+        private int _depth;
+        private long _tagCharacters;
+
+        // One entry per open mapping or sequence: whether a mapping's next node is a key, or null in a sequence.
+        private readonly Stack<bool?> _open = new();
+
+        // The anchors defined so far in this document, and whether each names a mapping or a sequence. An alias must
+        // follow its anchor, as YAML requires: the library resolves one that comes first later, and recurses without
+        // end when it is a key.
+        private readonly Dictionary<string, bool> _anchors = new(StringComparer.Ordinal);
+
+        public ParsingEvent? Current => inner.Current;
+
+        public bool MoveNext()
+        {
+            if (!inner.MoveNext())
+                return false;
+            var current = inner.Current;
+            if (current is DocumentStart)
+            {
+                _anchors.Clear();
+            }
+
+            var collection = current is MappingStart or SequenceStart;
+            if (current is AnchorAlias alias)
+            {
+                if (!_anchors.TryGetValue(alias.Value.Value, out collection))
+                {
+                    throw new YamlReadException($"The alias '*{alias.Value.Value}' comes before its anchor.", LineOf(current.Start));
+                }
+            }
+
+            if (current is NodeEvent or AnchorAlias && _open.TryPeek(out var key) && key is { } isKey)
+            {
+                if (isKey && collection)
+                {
+                    throw new YamlReadException("Mapping keys must be plain strings.", LineOf(current.Start));
+                }
+
+                _open.Pop();
+                _open.Push(!isKey);
+            }
+
+            if (current is NodeEvent node)
+            {
+                // A %TAG prefix is written once and repeated in the tag of every node that uses its handle.
+                if (!node.Tag.IsEmpty && (_tagCharacters += node.Tag.Value.Length) > MaxExpandedCharacters)
+                {
+                    throw new YamlReadException(
+                        $"The file's tags hold more than {MaxExpandedCharacters} characters once their prefixes are expanded, the limit on text in a YAML file.",
+                        LineOf(node.Start));
+                }
+
+                if (!node.Anchor.IsEmpty)
+                {
+                    _anchors[node.Anchor.Value] = collection;
+                }
+            }
+
+            switch (current)
+            {
+                case MappingStart or SequenceStart when ++_depth > MaxDepth:
+                    throw TooDeep(current.Start);
+                case MappingStart:
+                    _open.Push(true);
+                    break;
+                case SequenceStart:
+                    _open.Push(null);
+                    break;
+                case MappingEnd or SequenceEnd:
+                    _depth--;
+                    _open.Pop();
+                    break;
+            }
+
+            return true;
+        }
     }
 
     internal static string EscapePointer(string segment) => segment.Replace("~", "~0").Replace("/", "~1");
