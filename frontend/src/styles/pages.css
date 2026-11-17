@@ -2763,6 +2763,16 @@
   color: var(--text-muted);
 }
 
+.agent-detail__reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agent-detail__disk {
+  display: block;
+}
+
 .agent-detail__warning {
   color: var(--warning-fg);
 }

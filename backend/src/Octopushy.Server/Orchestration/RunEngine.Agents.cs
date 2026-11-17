@@ -181,11 +181,15 @@ public sealed partial class RunEngine
                         var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
                         if (candidates.Count == 0)
                         {
-                            var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
-                            waiting = matchingLabels
+                            var labelled = agents.Where(a => attempt.RequiredLabels.All(a.Labels.Contains))
+                                .Select(a => connections.Get(a.Id)).OfType<AgentSession>().ToList();
+                            // The agents that lack the executor, with each one's reason; one that lacks only built-in state
+                            // keeps the wording below.
+                            var lacking = AgentAvailability.Lacking(attempt.Executor, labelled);
+                            waiting = labelled.Count > 0
                                 ? needsBuiltInState
-                                    ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
-                                    : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
+                                    ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older.{lacking}"
+                                    : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels.{lacking}"
                                 : attempt.RequiredLabels.Length == 0
                                     ? "Waiting for a connected agent."
                                     : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
@@ -472,6 +476,28 @@ public sealed partial class RunEngine
             await db.SaveChangesAsync(cancellationToken);
             signal.Wake();
         }, cancellationToken);
+
+    /// <summary>
+    /// What an agent offers after it probed again. Dispatch reads the session, so work follows the new set at once; an
+    /// attempt already running is not touched. The agent's record is written only when something changed, outside the
+    /// engine's gate (it is no run's), and the engine is woken so waiting work is offered or its text updated.
+    /// </summary>
+    public async Task OnExecutorsChangedAsync(AgentSession session, ExecutorsChanged changed, CancellationToken cancellationToken)
+    {
+        var executors = AgentAvailability.Executors(changed.Executors);
+        var unavailable = AgentAvailability.Unavailable(changed.Unavailable);
+        if (!session.SetExecutors(executors, unavailable))
+            return;
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var stored = executors.ToArray();
+        var reasons = AgentAvailability.Serialize(unavailable);
+        await db.Agents.Where(a => a.Id == session.AgentId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, stored).SetProperty(a => a.Unavailable, reasons), cancellationToken);
+        logger.LogInformation("Agent {Name} ({Agent}) now offers {Executors}; without {Unavailable}.", session.Name, session.AgentId,
+            string.Join(",", executors.Where(AgentAvailability.KnownExecutors.Contains)), string.Join(",", unavailable.Keys));
+        signal.Wake();
+    }
 
     public async Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken)
     {

@@ -5390,6 +5390,26 @@
           }
         }
       },
+      "AgentCacheSize": {
+        "required": [
+          "name",
+          "bytes",
+          "complete"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        }
+      },
       "AgentDto": {
         "required": [
           "id",
@@ -5506,6 +5526,46 @@
             "items": {
               "$ref": "#/components/schemas/ReachabilityEntry"
             }
+          },
+          "unavailable": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentStorage"
+              }
+            ]
+          }
+        }
+      },
+      "AgentFreeSpace": {
+        "required": [
+          "name",
+          "freeBytes",
+          "totalBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "freeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5529,6 +5589,32 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "AgentStorage": {
+        "required": [
+          "reportedAt",
+          "free",
+          "caches"
+        ],
+        "type": "object",
+        "properties": {
+          "reportedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "free": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentFreeSpace"
+            }
+          },
+          "caches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentCacheSize"
+            }
           }
         }
       },

@@ -9,16 +9,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
+use std::sync::Mutex;
+
 use octopushy_proto::v1::{
-    AgentMessage, Heartbeat, Hello, ServerMessage, agent_channel_client::AgentChannelClient,
-    agent_message::Kind as Out, server_message::Kind as In,
+    AgentMessage, CacheSize, ExecutorsChanged, Heartbeat, Hello, ServerMessage, StorageReport,
+    agent_channel_client::AgentChannelClient, agent_message::Kind as Out,
+    server_message::Kind as In,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::attempts::{AttemptManager, SessionCursor};
+use crate::availability::{self, Availability, StorageDirs};
 use crate::identity::{self, Identity};
 use crate::paths::StatePaths;
 use crate::reachability::Prober;
@@ -39,12 +43,50 @@ pub struct Agent {
     pub paths: StatePaths,
     pub manager: Arc<AttemptManager>,
     pub tool_runtime: RuntimeKind,
-    /// Executors usable with the runtime probed at startup.
-    pub executors: Vec<String>,
-    /// Features usable with the runtime probed at startup.
+    /// The executors offered and why the rest are not, as probed last. Each connection sends
+    /// a change as [`ExecutorsChanged`].
+    pub availability: watch::Sender<Availability>,
+    /// Features of this binary.
     pub capabilities: Vec<String>,
     /// Answers the server's reachability probes.
     pub prober: Arc<Prober>,
+    /// The room reported with every few heartbeats.
+    pub storage: Storage,
+}
+
+/// The folders whose room heartbeats report, and the cache sizes measured last.
+pub struct Storage {
+    dirs: StorageDirs,
+    caches: Mutex<Vec<CacheSize>>,
+}
+
+impl Storage {
+    pub fn new(dirs: StorageDirs) -> Self {
+        Self {
+            dirs,
+            caches: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Walks the caches, a bounded walk each, off the async threads.
+    pub async fn measure_caches(&self) {
+        let dirs = self.dirs.clone();
+        if let Ok(sizes) =
+            tokio::task::spawn_blocking(move || availability::cache_sizes(&dirs)).await
+        {
+            *self.caches.lock().unwrap_or_else(|e| e.into_inner()) = sizes;
+        }
+    }
+
+    /// Free space now, from `statvfs`, and the cache sizes measured last.
+    pub fn report(&self) -> StorageReport {
+        let caches = self
+            .caches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        availability::report(&self.dirs, &caches)
+    }
 }
 
 enum End {
@@ -129,14 +171,37 @@ pub async fn run(agent: Arc<Agent>, shutdown: CancellationToken) -> Result<()> {
     }
 }
 
-fn hello(agent: &Agent) -> AgentMessage {
+fn hello(agent: &Agent, availability: &Availability) -> AgentMessage {
     AgentMessage {
         kind: Some(Out::Hello(Hello {
             agent_version: crate::VERSION.to_owned(),
-            executors: agent.executors.clone(),
+            executors: availability.executors(),
             running_attempt_ids: agent.manager.active_ids(),
             tool_runtime: agent.tool_runtime.as_str().to_owned(),
             capabilities: agent.capabilities.clone(),
+            unavailable: availability.unavailable().into_iter().collect(),
+        })),
+    }
+}
+
+fn executors_changed(availability: &Availability) -> AgentMessage {
+    AgentMessage {
+        kind: Some(Out::ExecutorsChanged(ExecutorsChanged {
+            executors: availability.executors(),
+            unavailable: availability.unavailable().into_iter().collect(),
+        })),
+    }
+}
+
+/// A heartbeat; every [`availability::STORAGE_EVERY_HEARTBEATS`]th of a connection, the first
+/// included, carries the room left.
+fn heartbeat_message(agent: &Agent, number: u64) -> AgentMessage {
+    AgentMessage {
+        kind: Some(Out::Heartbeat(Heartbeat {
+            running_attempt_ids: agent.manager.active_ids(),
+            storage: number
+                .is_multiple_of(availability::STORAGE_EVERY_HEARTBEATS)
+                .then(|| agent.storage.report()),
         })),
     }
 }
@@ -173,8 +238,11 @@ async fn session(
         .max_decoding_message_size(MAX_MESSAGE_BYTES)
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
 
+    // Subscribed before Hello is built, so a change after it is sent as ExecutorsChanged.
+    let mut changes = agent.availability.subscribe();
     let (tx, rx) = mpsc::channel::<AgentMessage>(256);
-    tx.send(hello(agent)).await.expect("the receiver is alive");
+    let first = hello(agent, &changes.borrow_and_update());
+    tx.send(first).await.expect("the receiver is alive");
     let mut inbound = client
         .connect(ReceiverStream::new(rx))
         .await
@@ -234,6 +302,7 @@ async fn session(
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     }
     let mut idle_since: Option<Instant> = None;
+    let mut beats = 0u64;
     // Probes of this connection end with it: their reports would have nowhere to go.
     let probes = CancellationToken::new();
     let _probes_end = probes.clone().drop_guard();
@@ -259,12 +328,13 @@ async fn session(
                 Err(s) => bail!("stream error: {} ({:?})", s.message(), s.code()),
             },
             _ = heartbeat.tick() => {
-                let hb = AgentMessage {
-                    kind: Some(Out::Heartbeat(Heartbeat {
-                        running_attempt_ids: agent.manager.active_ids(),
-                    })),
-                };
+                let hb = heartbeat_message(agent, beats);
+                beats += 1;
                 send_all(&tx, vec![hb]).await?;
+            }
+            Ok(()) = changes.changed() => {
+                let changed = executors_changed(&changes.borrow_and_update());
+                send_all(&tx, vec![changed]).await?;
             }
             _ = flush.tick() => send_all(&tx, agent.manager.collect(&mut cursor)).await?,
             _ = wake.notified() => send_all(&tx, agent.manager.collect(&mut cursor)).await?,

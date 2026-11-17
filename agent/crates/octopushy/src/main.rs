@@ -2,10 +2,10 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
-use octopushy::cli::{AgentCommand, Cli, Command};
+use octopushy::cli::{AgentCommand, Cli, Command, RunArgs};
 use octopushy::enrollment::{self, EnrollOptions, EnrollmentToken};
 use octopushy::paths::{StatePaths, default_state_dir};
-use octopushy::run::{RunOptions, run};
+use octopushy::run::{RunOptions, doctor, run};
 use tokio_util::sync::CancellationToken;
 
 fn init_tracing() {
@@ -65,27 +65,39 @@ async fn agent(command: AgentCommand) -> anyhow::Result<()> {
             Ok(())
         }
         AgentCommand::Run(args) => {
-            let mut opts = RunOptions::new(args.state_dir.unwrap_or_else(default_state_dir));
-            opts.work_dir = args.work_dir;
-            opts.tool_runtime = args.tool_runtime;
-            opts.tofu_binary = args.tofu_binary;
-            opts.ansible_binary = args.ansible_binary;
-            opts.nix_binary = args.nix_binary;
-            opts.nix_min_free_bytes = args.nix_min_free_gb.saturating_mul(1 << 30);
-            opts.nix_store_max_bytes = args.nix_store_max_gb.saturating_mul(1 << 30);
-            opts.container_binary = args.container_binary;
-            opts.container_network = args.container_network;
-            opts.container_pids_limit = Some(args.container_pids_limit).filter(|&n| n > 0);
-            opts.container_memory = args.container_memory;
-            opts.require_image_digest = args.require_image_digest;
             let shutdown = CancellationToken::new();
             handle_signals(shutdown.clone());
-            run(opts, shutdown).await
+            run(run_options(args), shutdown).await
+        }
+        AgentCommand::Doctor(args) => {
+            if doctor(run_options(args)).await {
+                Ok(())
+            } else {
+                anyhow::bail!("an executor this agent should offer is unavailable")
+            }
         }
         AgentCommand::Status(args) => octopushy::status::print(&StatePaths::new(
             args.state_dir.unwrap_or_else(default_state_dir),
         )),
     }
+}
+
+fn run_options(args: RunArgs) -> RunOptions {
+    let t = args.tools;
+    let mut opts = RunOptions::new(args.state_dir.unwrap_or_else(default_state_dir));
+    opts.work_dir = args.work_dir;
+    opts.tool_runtime = t.tool_runtime;
+    opts.tofu_binary = t.tofu_binary;
+    opts.ansible_binary = t.ansible_binary;
+    opts.nix_binary = t.nix_binary;
+    opts.nix_min_free_bytes = t.nix_min_free_gb.saturating_mul(1 << 30);
+    opts.nix_store_max_bytes = t.nix_store_max_gb.saturating_mul(1 << 30);
+    opts.container_binary = t.container_binary;
+    opts.container_network = t.container_network;
+    opts.container_pids_limit = Some(t.container_pids_limit).filter(|&n| n > 0);
+    opts.container_memory = t.container_memory;
+    opts.require_image_digest = t.require_image_digest;
+    opts
 }
 
 #[tokio::main]

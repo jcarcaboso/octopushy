@@ -507,7 +507,10 @@ public static partial class Endpoints
                     ? reachability.Snapshot(session).Select(e => names.TryGetValue((e.Kind, e.Endpoint), out var name)
                         ? e with { Name = name.Name, ResourceId = name.ResourceId }
                         : e).ToList()
-                    : [])).ToList());
+                    : [],
+                // What the agent said last, connected or not; its room only while connected, never a stale figure.
+                connections.Get(a.Id)?.Unavailable ?? AgentAvailability.Deserialize(a.Unavailable),
+                connections.Get(a.Id)?.Storage)).ToList());
         })
         .WithName("listAgents");
 

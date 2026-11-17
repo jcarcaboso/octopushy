@@ -61,7 +61,8 @@ public class BuiltTemplateTests(PostgresFixture postgres) : IClassFixture<Postgr
         var tofu = await server.ConnectAgentAsync("home");
         await server.TickAsync();
         Assert.DoesNotContain(tofu.TakeAssignments(), a => a.Executor == "nix");
-        Assert.Equal("Waiting for a connected agent advertising executor nix.", (await BuildAttemptAsync(server)).WaitingReason);
+        Assert.Equal("Waiting for a connected agent advertising executor nix. Without nix: fake: gives no reason (it may be older).",
+            (await BuildAttemptAsync(server)).WaitingReason);
 
         var full = await server.ConnectNixAgentAsync("full", maxConcurrency: 0);
         await server.TickAsync();

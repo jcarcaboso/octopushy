@@ -391,9 +391,14 @@ public sealed class ServerHarness : IAsyncDisposable
     public Task<FakeAgent> ConnectNixAgentAsync(string name = "nix", int maxConcurrency = 4) =>
         ConnectAsync(name, [], [], "local", null, ["nix"], maxConcurrency);
 
+    /// <summary>An agent like <see cref="ConnectAgentAsync"/> that lacks the executors <paramref name="unavailable"/> names, for its reasons.</summary>
+    public Task<FakeAgent> ConnectAgentLackingAsync(string name, IReadOnlyDictionary<string, string> unavailable, params string[] labels) =>
+        ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], "podman", FakeAgent.ReachEverything,
+            new[] { "opentofu", "proxmox", "ansible" }.Except(unavailable.Keys).ToArray(), unavailable: unavailable);
+
     private async Task<FakeAgent> ConnectAsync(string name, string[] labels, string[] capabilities, string? runtime,
         Func<ReachabilityProbe, ReachabilityReport>? responder, string[]? executors = null, int maxConcurrency = 4,
-        System.Net.IPAddress? remote = null)
+        System.Net.IPAddress? remote = null, IReadOnlyDictionary<string, string>? unavailable = null)
     {
         var agent = new AgentRecord
         {
@@ -411,7 +416,8 @@ public sealed class ServerHarness : IAsyncDisposable
             db.Agents.Add(agent);
             await db.SaveChangesAsync();
         });
-        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime) { Responder = responder, RemoteAddress = remote };
+        var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime,
+            unavailable is null ? null : AgentAvailability.Unavailable(unavailable)) { Responder = responder, RemoteAddress = remote };
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         Services.GetRequiredService<AgentConnections>().Add(session);
         return new FakeAgent(this, agent.Id, session);

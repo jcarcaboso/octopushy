@@ -4,7 +4,7 @@ import { useUpdateAgent } from "../../api/queries";
 import type { Agent } from "../../api/types";
 import { RelativeTime } from "../../components/RelativeTime";
 import { useNow } from "../../components/useNow";
-import { humanize, operationLabel, plural } from "../../lib/format";
+import { formatBytes, humanize, operationLabel, plural } from "../../lib/format";
 import { formatAbsolute, formatDuration, toDate } from "../../lib/time";
 import { ReachMark } from "./ReachMark";
 import { entryMark, entryName, entryState, kinds } from "./reach";
@@ -12,7 +12,68 @@ import { entryMark, entryName, entryState, kinds } from "./reach";
 const hour = 3600 * 1000;
 const day = 24 * hour;
 
-const tools: Record<string, string> = { opentofu: "OpenTofu", ansible: "Ansible", proxmox: "Proxmox" };
+const tools: Record<string, string> = { opentofu: "OpenTofu", ansible: "Ansible", proxmox: "Proxmox", nix: "Nix" };
+
+const places: Record<string, string> = { state: "State", work: "Workspaces", "nix-store": "Nix store", providers: "Provider cache", "nix-cache": "Nix cache" };
+
+/** Why each tool the agent knows is missing, as it said last. Its words, shown only as text. */
+function Missing({ agent }: { agent: Agent }) {
+  const entries = Object.entries(agent.unavailable ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div>
+      <dt>Without</dt>
+      <dd>
+        <ul className="agent-detail__reasons" aria-label={`Tools ${agent.name} cannot run`}>
+          {entries.map(([executor, reason]) => (
+            <li key={executor}>
+              <span>{tools[executor] ?? humanize(executor)}</span>
+              {reason ? <span className="muted small break"> {reason}</span> : null}
+            </li>
+          ))}
+        </ul>
+      </dd>
+    </div>
+  );
+}
+
+/** Free disk and cache sizes from the agent's last report on this connection. Nothing when it has not reported. */
+function Storage({ agent }: { agent: Agent }) {
+  const storage = agent.storage;
+  if (!storage) return null;
+  return (
+    <>
+      {storage.free.length > 0 ? (
+        <div>
+          <dt>Free disk</dt>
+          <dd>
+            {storage.free.map((f) => (
+              <span key={f.name} className="agent-detail__disk">
+                {places[f.name] ?? humanize(f.name)} {formatBytes(f.freeBytes)} of {formatBytes(f.totalBytes)}
+              </span>
+            ))}
+          </dd>
+        </div>
+      ) : null}
+      {storage.caches.length > 0 ? (
+        <div>
+          <dt>Caches</dt>
+          <dd>
+            {storage.caches.map((c) => (
+              <span key={c.name} className="agent-detail__disk">
+                {places[c.name] ?? humanize(c.name)} {c.complete ? "" : "at least "}
+                {formatBytes(c.bytes)}
+              </span>
+            ))}
+            <span className="muted small">
+              Reported <RelativeTime value={storage.reportedAt} />
+            </span>
+          </dd>
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 function Concurrency({ agent }: { agent: Agent }) {
   const update = useUpdateAgent();
@@ -173,6 +234,8 @@ export function AgentDetail({ agent, id }: { agent: Agent; id: string }) {
             <dt>Tools</dt>
             <dd>{agent.executors.length > 0 ? agent.executors.map((e) => tools[e] ?? humanize(e)).join(", ") : <span className="muted">None</span>}</dd>
           </div>
+          <Missing agent={agent} />
+          <Storage agent={agent} />
           {agent.toolRuntime ? (
             <div>
               <dt>Runtime</dt>

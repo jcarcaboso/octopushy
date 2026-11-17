@@ -4,17 +4,25 @@ import { useDeleteAgent, useUpdateAgent } from "../../api/queries";
 import type { Agent } from "../../api/types";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { RelativeTime } from "../../components/RelativeTime";
-import { plural } from "../../lib/format";
+import { formatBytes, plural } from "../../lib/format";
 import { AgentDetail } from "./AgentDetail";
 import { AgentVersion } from "./AgentVersion";
 import { ReachMark } from "./ReachMark";
 import { reachPills } from "./reach";
 
+/** The least free space the agent reported on this connection, or nothing when it has not reported any. */
+function leastFree(agent: Agent): number | null {
+  const free = agent.storage?.free ?? [];
+  return free.length > 0 ? Math.min(...free.map((f) => f.freeBytes)) : null;
+}
+
 function Status({ agent }: { agent: Agent }) {
   const updating = agent.update.state === "updating";
+  const free = agent.connected ? leastFree(agent) : null;
   return (
     <span className="agent-row__status">
       {agent.connected ? "Connected" : agent.lastSeenAt ? <>Last seen <RelativeTime value={agent.lastSeenAt} /></> : "Never connected"}
+      {free !== null ? ` · ${formatBytes(free)} free` : null}
       {updating ? " · Updating" : agent.draining ? " · Paused" : null}
       {agent.disabled ? " · Blocked" : null}
     </span>

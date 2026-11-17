@@ -1251,6 +1251,12 @@ export interface components {
             approval: string;
             setBy: string;
         };
+        AgentCacheSize: {
+            name: string;
+            /** Format: int64 */
+            bytes: number;
+            complete: boolean;
+        };
         AgentDto: {
             /** Format: uuid */
             id: string;
@@ -1279,12 +1285,29 @@ export interface components {
             /** @default false */
             reportsReachability: boolean;
             reachability?: null | components["schemas"]["ReachabilityEntry"][];
+            unavailable?: null | {
+                [key: string]: string;
+            };
+            storage?: null | components["schemas"]["AgentStorage"];
+        };
+        AgentFreeSpace: {
+            name: string;
+            /** Format: int64 */
+            freeBytes: number;
+            /** Format: int64 */
+            totalBytes: number;
         };
         AgentGuest: {
             /** Format: uuid */
             resourceId: string;
             address: string;
             declaredVersion: null | string;
+        };
+        AgentStorage: {
+            /** Format: date-time */
+            reportedAt: string;
+            free: components["schemas"]["AgentFreeSpace"][];
+            caches: components["schemas"]["AgentCacheSize"][];
         };
         AgentUpdate: {
             labels: null | string[];

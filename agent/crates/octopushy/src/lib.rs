@@ -13,6 +13,7 @@
 //! - [`renewal`], [`identity`], [`tls`], [`paths`]: credentials and state.
 
 pub mod attempts;
+pub mod availability;
 pub mod cli;
 pub mod connection;
 pub mod enrollment;

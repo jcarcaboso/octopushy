@@ -134,6 +134,48 @@ it("opens a row in place: every route it checked, its work and its settings", as
   expect(screen.getByText("It was installed by hand, so update it on its machine.", { selector: "dd" })).toBeVisible();
 });
 
+it("shows free disk, cache sizes and why a tool is missing, and nothing for what an agent has not said", async () => {
+  const user = userEvent.setup();
+  const hostile = "cannot run <b>octopushy-ansible</b>: No such file or directory";
+  serve([
+    agent({
+      id: "d1", name: "roomy", executors: ["opentofu", "proxmox"],
+      unavailable: { ansible: hostile, nix: "nix runs only with the local tool runtime" },
+      storage: {
+        reportedAt: minutesAgo(1),
+        free: [
+          { name: "state", freeBytes: 41.2 * 2 ** 30, totalBytes: 98 * 2 ** 30 },
+          { name: "work", freeBytes: 6 * 2 ** 30, totalBytes: 32 * 2 ** 30 },
+        ],
+        caches: [{ name: "providers", bytes: 300 * 2 ** 20, complete: false }],
+      },
+    }),
+    agent({ id: "d2", name: "older", unavailable: {}, storage: null }),
+    agent({ id: "d3", name: "away", connected: false, unavailable: { ansible: "gone" }, storage: null }),
+  ]);
+  const roomy = await row("roomy");
+  expect(roomy).toHaveTextContent("Connected · 6.0 GiB free");
+  expect(await row("older")).not.toHaveTextContent("free");
+  expect(await row("away")).not.toHaveTextContent("free");
+
+  await user.click(within(roomy).getByRole("button", { name: /^roomy/ }));
+  const missing = screen.getByRole("list", { name: "Tools roomy cannot run" });
+  expect(within(missing).getAllByRole("listitem").map((l) => l.textContent)).toEqual([
+    `Ansible ${hostile}`,
+    "Nix nix runs only with the local tool runtime",
+  ]);
+  // The agent's words are text, never markup.
+  expect(missing.querySelector("b")).toBeNull();
+  expect(screen.getByText("State 41.2 GiB of 98.0 GiB")).toBeVisible();
+  expect(screen.getByText("Workspaces 6.0 GiB of 32.0 GiB")).toBeVisible();
+  expect(screen.getByText("Provider cache at least 300 MiB")).toBeVisible();
+
+  await user.click(within(await row("older")).getByRole("button", { name: /^older/ }));
+  expect(screen.queryByRole("list", { name: "Tools older cannot run" })).not.toBeInTheDocument();
+  expect(screen.getAllByText("Free disk")).toHaveLength(1);
+  expect(screen.queryByText(/0 B/)).not.toBeInTheDocument();
+});
+
 it("saves how many runs it takes at once", async () => {
   const user = userEvent.setup();
   const { requests } = serve([behind], [], { "PATCH /api/agents/a2": () => undefined });

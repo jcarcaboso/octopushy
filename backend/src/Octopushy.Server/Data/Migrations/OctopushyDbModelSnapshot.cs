@@ -86,6 +86,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("tool_runtime");
 
+                    b.Property<string>("Unavailable")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("unavailable");
+
                     b.Property<DateTimeOffset?>("UpdateAppliedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("update_applied_at");

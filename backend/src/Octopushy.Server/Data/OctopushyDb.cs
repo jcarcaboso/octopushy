@@ -220,6 +220,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
         model.Entity<AgentRecord>(e =>
         {
             e.HasIndex(x => x.CertificateSerial).IsUnique();
+            e.Property(x => x.Unavailable).HasColumnType("jsonb");
         });
 
         model.Entity<EnrollmentToken>(e =>

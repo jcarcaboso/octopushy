@@ -199,6 +199,7 @@ public sealed partial class RunEngine
         {
             attempt.WaitingReason = candidates.Count == 0
                 ? $"Waiting for a connected agent advertising executor {TemplateImages.Executor}."
+                  + AgentAvailability.Lacking(TemplateImages.Executor, agents.Select(a => connections.Get(a.Id)).OfType<AgentSession>())
                 : "Waiting for agent capacity.";
             return null;
         }

@@ -105,10 +105,13 @@ public sealed class AgentChannelService(
         }
 
         var hello = requestStream.Current.Hello;
+        var executors = AgentAvailability.Executors(hello.Executors);
+        var unavailable = AgentAvailability.Unavailable(hello.Unavailable);
         await UpdateAgentAsync(agent.Id, a =>
         {
             a.Version = hello.AgentVersion;
-            a.Executors = hello.Executors.ToArray();
+            a.Executors = executors.ToArray();
+            a.Unavailable = AgentAvailability.Serialize(unavailable);
             a.ToolRuntime = hello.ToolRuntime;
             a.ConnectedAt = a.LastSeenAt = clock.GetUtcNow();
             if (a.CertificateSerial == serial)
@@ -117,7 +120,7 @@ public sealed class AgentChannelService(
             }
         }, call.Token);
 
-        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList(), hello.ToolRuntime)
+        var session = new AgentSession(agent.Id, agent.Name, executors, hello.Capabilities.ToList(), hello.ToolRuntime, unavailable)
         {
             RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
         };
@@ -237,7 +240,7 @@ public sealed class AgentChannelService(
                 }
 
                 if (message.KindCase is not (AgentMessage.KindOneofCase.Heartbeat or AgentMessage.KindOneofCase.Log
-                    or AgentMessage.KindOneofCase.Reachability))
+                    or AgentMessage.KindOneofCase.Reachability or AgentMessage.KindOneofCase.ExecutorsChanged))
                 {
                     ordered.Writer.TryWrite(message);
                     continue;
@@ -246,7 +249,15 @@ public sealed class AgentChannelService(
                 try
                 {
                     if (message.Heartbeat is { } heartbeat)
+                    {
+                        // Kept with the connection only: a database write here would come every few heartbeats of every
+                        // agent and wake the engine each time (see SavedWrites).
+                        if (heartbeat.Storage is { } storage)
+                            session.Storage = AgentAvailability.Storage(storage, clock.GetUtcNow());
                         await engine.OnHeartbeatAsync(agent.Id, heartbeat.RunningAttemptIds, call.Token);
+                    }
+                    else if (message.ExecutorsChanged is { } changed)
+                        await engine.OnExecutorsChangedAsync(session, changed, call.Token);
                     else if (message.Log is { } log && Guid.TryParse(log.AttemptId, out var attemptId))
                         await engine.OnLogAsync(agent.Id, attemptId, (long)log.FirstSequence,
                             log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);
