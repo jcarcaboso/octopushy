@@ -547,10 +547,16 @@ public sealed class Resource
     /// <summary>When an installation was last sent to be observed; the schedule observes it again once this is older than the interval.</summary>
     public DateTimeOffset? ObserveRequestedAt { get; set; }
 
-    /// <summary>Why the installation's latest observation did not succeed; cleared when one does.</summary>
+    /// <summary>Why the installation's latest observation did not succeed; cleared when one does. Read by people: see <see cref="ObserveBlockReason"/>.</summary>
     public string? ObserveError { get; set; }
 
     public DateTimeOffset? ObserveErrorAt { get; set; }
+
+    /// <summary>
+    /// Why the latest observation was not sent, rather than failed, where something depends on it: one of
+    /// <see cref="ObserveBlockReasons"/>, or null. Set and cleared with <see cref="ObserveError"/>.
+    /// </summary>
+    public string? ObserveBlockReason { get; set; }
 
     /// <summary>
     /// An installation that said <c>manage: false</c> in its last definition that could be read. It stays
@@ -804,6 +810,13 @@ public static class RunEndReasons
 {
     /// <summary>Cancelled before it changed anything, because a later revision proposes the resource's work again.</summary>
     public const string Superseded = "superseded";
+}
+
+/// <summary>Why an installation's observation was not sent, rather than failed. See <see cref="Resource.ObserveBlockReason"/>.</summary>
+public static class ObserveBlockReasons
+{
+    /// <summary>A credential it needs is unavailable: nothing was sent, and the fix is in Variables.</summary>
+    public const string Credentials = "credentials";
 }
 
 /// <summary>Why a run is blocked, where something depends on it. See <see cref="Run.BlockReason"/>.</summary>

@@ -254,7 +254,8 @@ public sealed partial class RunEngine
                             attempt.FinishedAt = clock.GetUtcNow();
                             if (step is null)
                             {
-                                await FinishObservationAsync(db, attempt, null, cancellationToken);
+                                await FinishObservationAsync(db, attempt, null, cancellationToken,
+                                    e is CredentialUnavailableException ? ObserveBlockReasons.Credentials : null);
                             }
                             else
                             {

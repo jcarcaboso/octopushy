@@ -22,10 +22,17 @@ namespace Octopushy.Server.Data.Migrations
                 type: "text",
                 nullable: true);
 
-            // What the server recognised in a run's words until now, recorded on the run. Each statement only fills what is
+            migrationBuilder.AddColumn<string>(
+                name: "observe_block_reason",
+                table: "resources",
+                type: "text",
+                nullable: true);
+
+            // What the server and the web interface recognised in words until now, recorded in its own field. Each statement only fills what is
             // still empty, so running it again changes nothing.
             migrationBuilder.Sql(SupersededRuns);
             migrationBuilder.Sql(TrustBlockedRuns);
+            migrationBuilder.Sql(CredentialBlockedObservations);
             foreach (var table in IssueTables)
                 migrationBuilder.Sql(IssueSourcesOf(table));
         }
@@ -46,6 +53,12 @@ namespace Octopushy.Server.Data.Migrations
         internal const string TrustBlockedRuns = """
             UPDATE runs SET block_reason = 'installation-trust'
             WHERE block_reason IS NULL AND status = 'blocked' AND detail LIKE 'Waiting for trust%';
+            """;
+
+        /// <summary>An installation whose observation was not sent for unavailable credentials, as the web interface told it apart until now.</summary>
+        internal const string CredentialBlockedObservations = """
+            UPDATE resources SET observe_block_reason = 'credentials'
+            WHERE observe_block_reason IS NULL AND observe_error ILIKE 'blocked credentials%';
             """;
 
         /// <summary>Every stored issue of <paramref name="table"/> gets its source: a workflow schema's error is the one whose words name the workflow.</summary>
@@ -83,6 +96,10 @@ namespace Octopushy.Server.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "end_reason",
                 table: "runs");
+
+            migrationBuilder.DropColumn(
+                name: "observe_block_reason",
+                table: "resources");
         }
     }
 }

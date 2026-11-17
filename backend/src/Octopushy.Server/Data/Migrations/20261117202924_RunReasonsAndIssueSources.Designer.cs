@@ -13,7 +13,7 @@ using Octopushy.Server.Data;
 namespace Octopushy.Server.Data.Migrations
 {
     [DbContext(typeof(OctopushyDb))]
-    [Migration("20261117184331_RunReasonsAndIssueSources")]
+    [Migration("20261117202924_RunReasonsAndIssueSources")]
     partial class RunReasonsAndIssueSources
     {
         /// <inheritdoc />
@@ -1342,6 +1342,10 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<DateTimeOffset?>("MissingSince")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("missing_since");
+
+                    b.Property<string>("ObserveBlockReason")
+                        .HasColumnType("text")
+                        .HasColumnName("observe_block_reason");
 
                     b.Property<string>("ObserveError")
                         .HasColumnType("text")

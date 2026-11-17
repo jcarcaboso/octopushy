@@ -334,6 +334,7 @@ public sealed record InstallationSummaryDto(
     DateTimeOffset? ObservedAt,
     string? ObserveError,
     DateTimeOffset? ObserveErrorAt,
+    string? ObserveBlockReason,
     bool Observing,
     string? ObserveWaiting,
     string? ProxmoxVersion,
@@ -562,7 +563,8 @@ public sealed record SnippetAccessDto(
 public sealed record SnippetHostDto(string Host, string Address, int Port, string HostKeyStore, bool HostKeySet);
 
 /// <summary>An installation whose latest observation did not succeed.</summary>
-public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At);
+/// <param name="BlockReason">One of <c>ObserveBlockReasons</c> when the observation was not sent rather than failed, or null.</param>
+public sealed record ObserveErrorDto(Guid InstallationId, string Address, string Name, string Error, DateTimeOffset? At, string? BlockReason);
 
 public sealed record OverviewCounts(
     int Guests,

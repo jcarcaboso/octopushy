@@ -907,7 +907,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             connections.All.Count,
             agents,
             attention.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
-            observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt)).ToList(),
+            observeErrors.Select(r => new ObserveErrorDto(r.Id, r.Address, InstallationName(r), r.ObserveError!, r.ObserveErrorAt, r.ObserveBlockReason)).ToList(),
             recent.Select(r => Summary(r, addresses.GetValueOrDefault(r.ResourceId, ("?", "?")))).ToList(),
             failed,
             new OverviewWeekDto(week.Values.Sum(), Week(RunStatuses.Succeeded), Week(RunStatuses.Failed), Week(RunStatuses.Cancelled), unfinished));
@@ -968,6 +968,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             observation?["observedAt"]?.GetValue<DateTimeOffset>(),
             installation.ObserveError,
             installation.ObserveErrorAt,
+            installation.ObserveBlockReason,
             observing.ContainsKey(installation.Id),
             observing.GetValueOrDefault(installation.Id),
             observation?["version"]?.GetValue<string>(),

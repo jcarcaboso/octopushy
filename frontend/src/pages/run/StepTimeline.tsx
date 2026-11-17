@@ -86,7 +86,7 @@ function StepItem({ step, detail }: { step: Step; detail: RunDetail }) {
         {step.detail && !(step.kind === "approval" && step.status === "awaiting-approval") ? (
           <p className={step.status === "failed" || step.status === "blocked" || step.status === "uncertain" ? "timeline__detail timeline__detail--strong" : "timeline__detail"}>
             {step.detail}
-            {step.status === "blocked" && /missing secret/i.test(step.detail) ? (
+            {step.status === "blocked" ? (
               <>
                 {" "}
                 <Link to="/variables">Open Variables</Link>

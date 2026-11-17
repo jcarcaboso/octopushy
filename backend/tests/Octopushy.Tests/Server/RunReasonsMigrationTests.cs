@@ -116,6 +116,40 @@ public class RunReasonsMigrationTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
+    public async Task Upgrade_records_which_installations_observation_was_blocked_for_credentials_rather_than_failed()
+    {
+        await using var db = await NewDbAsync();
+        await db.Database.GetService<IMigrator>().MigrateAsync(Previous);
+        var blocked = await InsertInstallationAsync(db, "lab/a", "Blocked credentials: lab/a/token: missing.");
+        // As the web interface matched it: the start of the words, in any case.
+        var lower = await InsertInstallationAsync(db, "lab/b", "blocked credentials: lab/b/token: missing.");
+        var failed = await InsertInstallationAsync(db, "lab/c", "The API answered 401: Blocked credentials are not the cause.");
+        var observed = await InsertInstallationAsync(db, "lab/d", null);
+
+        await db.Database.MigrateAsync();
+        db.ChangeTracker.Clear();
+
+        var installations = await db.Resources.AsNoTracking().ToDictionaryAsync(r => r.Id);
+        Assert.Equal(ObserveBlockReasons.Credentials, installations[blocked].ObserveBlockReason);
+        Assert.Equal(ObserveBlockReasons.Credentials, installations[lower].ObserveBlockReason);
+        Assert.Null(installations[failed].ObserveBlockReason);
+        Assert.Null(installations[observed].ObserveBlockReason);
+        Assert.Equal("Blocked credentials: lab/a/token: missing.", installations[blocked].ObserveError);
+        Assert.Equal(0, await db.Database.ExecuteSqlRawAsync(RunReasonsAndIssueSources.CredentialBlockedObservations));
+        Assert.False(db.Database.HasPendingModelChanges());
+    }
+
+    private static async Task<Guid> InsertInstallationAsync(OctopushyDb db, string address, string? error)
+    {
+        var id = Guid.NewGuid();
+        await db.Database.ExecuteSqlAsync($$"""
+            INSERT INTO resources (id, address, kind, lab, issues, first_seen_at, observed_only, valid, observed_only_store_keys, observed_only_endpoints, observe_error)
+            VALUES ({{id}}, {{address}}, 'installation', 'lab', '[]', now(), false, true, '{}', '{}', NULLIF({{error ?? ""}}, ''));
+            """);
+        return id;
+    }
+
+    [Fact]
     public void An_issue_stored_without_a_source_reads_as_the_definitions_own()
     {
         var read = JsonSerializer.Deserialize<List<DefinitionIssue>>(

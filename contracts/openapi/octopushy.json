@@ -8280,6 +8280,7 @@
           "observedAt",
           "observeError",
           "observeErrorAt",
+          "observeBlockReason",
           "observing",
           "observeWaiting",
           "proxmoxVersion",
@@ -8342,6 +8343,12 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "observeBlockReason": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "observing": {
             "type": "boolean"
@@ -8930,7 +8937,8 @@
           "address",
           "name",
           "error",
-          "at"
+          "at",
+          "blockReason"
         ],
         "type": "object",
         "properties": {
@@ -8953,6 +8961,12 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "blockReason": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

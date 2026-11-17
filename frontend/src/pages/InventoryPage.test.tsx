@@ -24,7 +24,7 @@ const haos: ObservedGuest = {
 function installation(name: string, endpoint: string, online: boolean, guests: GuestSummary[], unmanaged: ObservedGuest[] = []): InstallationSummary {
   return {
     id: `installation-${name}`, address: `home/${name}`, name, type: "standalone", endpoint, valid: true, managed: true, issueCount: 0,
-    observedAt: null, observeError: null, observeErrorAt: null, observing: false, observeWaiting: null, proxmoxVersion: "8.4.1",
+    observedAt: null, observeError: null, observeErrorAt: null, observeBlockReason: null, observing: false, observeWaiting: null, proxmoxVersion: "8.4.1",
     hosts: [{ name, declared: true, online, cpu: online ? 0.2 : null, maxCpu: 8, memoryBytes: null, maxMemoryBytes: null, uptimeSeconds: null,
       concurrentOperations: null, endpoint }],
     guests, unmanagedCount: unmanaged.length, unmanagedGuests: unmanaged,

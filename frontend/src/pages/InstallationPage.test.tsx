@@ -24,6 +24,7 @@ function summary(trust: Partial<InstallationTrust> = {}): InstallationSummary {
     observedAt: null,
     observeError: null,
     observeErrorAt: null,
+    observeBlockReason: null,
     observing: false,
     observeWaiting: null,
     proxmoxVersion: null,

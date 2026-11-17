@@ -1348,6 +1348,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("missing_since");
 
+                    b.Property<string>("ObserveBlockReason")
+                        .HasColumnType("text")
+                        .HasColumnName("observe_block_reason");
+
                     b.Property<string>("ObserveError")
                         .HasColumnType("text")
                         .HasColumnName("observe_error");
