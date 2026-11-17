@@ -668,6 +668,12 @@ public sealed partial class RunEngine(
 
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
+        if (StepEffectFor(step.Name) is { } effect)
+        {
+            await effect.ApplyAsync(this, db, store, run, step, resource, outputs, now, cancellationToken);
+            return;
+        }
+
         switch (step.Name)
         {
             case StepNames.Plan:
