@@ -15,6 +15,8 @@ public class RunHistoryIntegrityTests(PostgresFixture postgres) : IClassFixture<
     {
         await using var db = await NewDbAsync();
         await db.Database.GetService<IMigrator>().MigrateAsync("20261113082632_ServiceIcons");
+        // The model no longer writes log_lines, which this schema still requires: it was always 0.
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE attempts ALTER COLUMN log_lines SET DEFAULT 0");
         var orphan = NewAttempt();
         orphan.RunId = Guid.NewGuid();
         var observation = NewAttempt();

@@ -199,7 +199,6 @@ public class RunListQueryTests(PostgresFixture postgres, ITestOutputHelper outpu
             CreatedAt = run.CreatedAt,
             Error = status == AttemptStatuses.Failed ? "It broke." : null,
             Outputs = "{\"log\":\"" + new string('y', 2000) + "\"}",
-            LogLines = 120,
         });
 
         // Succeeded long ago: plan, approval, and an apply that took two attempts.

@@ -993,9 +993,6 @@ public sealed class Attempt
 
     public string? Outputs { get; set; }
 
-    /// <summary>How many log lines the server has stored.</summary>
-    public long LogLines { get; set; }
-
     /// <summary>The result arrived after the lease had expired.</summary>
     public bool LateResult { get; set; }
 
