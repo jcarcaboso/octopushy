@@ -392,9 +392,7 @@ public sealed partial class RunEngine(
             switch (step.Status)
             {
                 case StepStatuses.Pending or StepStatuses.Blocked when step.Kind == StepKinds.Approval:
-                    if (context.Kind == RunKinds.Pipeline ? await DecidePipelineApprovalAsync(db, run, step, context, cancellationToken)
-                        : context.Kind == RunKinds.Configure ? await DecideConfigureApprovalAsync(db, run, step, context, cancellationToken)
-                        : await DecideApprovalAsync(db, run, step, context, cancellationToken))
+                    if (await ApprovalDeciderFor(context).DecideAsync(this, db, run, step, context, cancellationToken))
                     {
                         continue;
                     }
