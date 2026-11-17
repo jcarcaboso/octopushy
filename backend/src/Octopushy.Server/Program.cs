@@ -88,6 +88,7 @@ if (!generatingDocument && settings.RunBackgroundServices)
 
 builder.Services.AddScoped<Views>();
 builder.Services.AddSingleton<SetupCode>();
+builder.Services.AddSingleton<AccountLoginLimiter>();
 
 builder.Services.AddGrpc(options =>
 {
@@ -142,20 +143,28 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddOpenApi();
+var apiAddresses = ApiListener.Resolve(settings.ApiBindAddress);
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     if (settings.TrustForwardedHeaders)
     {
-        // The API port is reached only through the frontend's web server.
+        // The API port is reached through the frontend's web server; nobody else may name the client's address.
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
+        foreach (var network in ApiListener.TrustedNetworks(settings.TrustedProxies, apiAddresses, ApiListener.Interfaces()))
+        {
+            options.KnownIPNetworks.Add(network);
+        }
     }
 });
 
 builder.WebHost.ConfigureKestrel((context, kestrel) =>
 {
-    kestrel.Listen(IPAddress.Parse(settings.ApiBindAddress), settings.ApiPort, listen => listen.Protocols = HttpProtocols.Http1);
+    foreach (var address in apiAddresses)
+    {
+        kestrel.Listen(address, settings.ApiPort, listen => listen.Protocols = HttpProtocols.Http1);
+    }
     kestrel.Listen(IPAddress.Parse(settings.AgentChannel.BindAddress), settings.AgentChannel.Port, listen =>
     {
         listen.Protocols = HttpProtocols.Http1AndHttp2;
@@ -283,7 +292,8 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.MapOpenApi("/api/openapi/{documentName}.json");
+// The build writes the document without this endpoint (GetDocument.Insider), and the frontend reads that file.
+app.MapOpenApi("/api/openapi/{documentName}.json").RequireAuthorization();
 app.MapGet("/api/health", async (OctopushyDb db, EngineHealth health, CancellationToken cancellationToken) =>
 {
     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

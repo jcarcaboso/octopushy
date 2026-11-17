@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -61,11 +62,39 @@ public sealed record SetupRequest(string SetupCode, string Username, string Pass
 
 public sealed record LoginRequest(string Username, string Password);
 
+/// <summary>
+/// Sign-in attempts per user name, from any address, next to the limit per address. Someone who sends wrong passwords
+/// for a real user name holds that user's sign-in off until they stop and a window passes; sessions and operator
+/// tokens keep working meanwhile.
+/// </summary>
+public sealed class AccountLoginLimiter : IDisposable
+{
+    public const int PermitLimit = 20;
+    public static readonly TimeSpan Window = TimeSpan.FromMinutes(15);
+
+    /// <summary>User names share this many buckets, so names nobody has bound the memory the limiter keeps.</summary>
+    public const int Buckets = 4096;
+
+    public PartitionedRateLimiter<int> AttemptLimiter { get; } = PartitionedRateLimiter.Create<int, int>(bucket =>
+        RateLimitPartition.GetFixedWindowLimiter(bucket, _ => new FixedWindowRateLimiterOptions { PermitLimit = PermitLimit, Window = Window }));
+
+    /// <summary>The bucket of a user name as login looks it up: trimmed, and compared exactly.</summary>
+    public static int Bucket(string username) =>
+        (int)(BitConverter.ToUInt32(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(username))) % Buckets);
+
+    public void Dispose() => AttemptLimiter.Dispose();
+}
+
 public static class AccountEndpoints
 {
     public const string LoginRateLimit = "login";
 
     private static readonly PasswordHasher<User> Hasher = new();
+
+    private static readonly User DummyUser = new() { Username = "", PasswordHash = "" };
+
+    // Hashed once with the current algorithm and work factor, so verifying against it costs what a real one does.
+    private static readonly Lazy<string> DummyHash = new(() => Hasher.HashPassword(DummyUser, Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))));
 
     public static void MapAccount(this IEndpointRouteBuilder app)
     {
@@ -111,10 +140,26 @@ public static class AccountEndpoints
         .WithName("setupAccount")
         .RequireRateLimiting(LoginRateLimit);
 
-        group.MapPost("/login", async Task<Results<Ok<AuthState>, ProblemHttpResult>> (LoginRequest request, HttpContext http, OctopushyDb db, CancellationToken ct) =>
+        group.MapPost("/login", async Task<Results<Ok<AuthState>, ProblemHttpResult>> (LoginRequest request, HttpContext http, OctopushyDb db, AccountLoginLimiter limiter, CancellationToken ct) =>
         {
-            var user = await db.Users.FirstOrDefaultAsync(u => u.Username == request.Username.Trim(), ct);
-            var result = user is null ? PasswordVerificationResult.Failed : Hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
+            var username = request.Username.Trim();
+            using var lease = limiter.AttemptLimiter.AttemptAcquire(AccountLoginLimiter.Bucket(username));
+            if (!lease.IsAcquired)
+            {
+                return TypedResults.Problem(title: "Too many sign-in attempts for this user name. Try again later.", statusCode: StatusCodes.Status429TooManyRequests);
+            }
+
+            var user = await db.Users.FirstOrDefaultAsync(u => u.Username == username, ct);
+            var result = PasswordVerificationResult.Failed;
+            if (user is null)
+            {
+                // An unknown user name takes as long as a wrong password.
+                Hasher.VerifyHashedPassword(DummyUser, DummyHash.Value, request.Password);
+            }
+            else
+            {
+                result = Hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
+            }
             if (result == PasswordVerificationResult.Failed)
             {
                 return TypedResults.Problem(title: "The user name or password is wrong.", statusCode: StatusCodes.Status401Unauthorized);

@@ -34,6 +34,10 @@ podman compose up -d                      # or: docker compose up -d
   before exposing it to the network (`OCTOPUSHY_UI_BIND`).
 - Agents connect to port 8443 on `OCTOPUSHY_AGENT_HOST`. That name goes into the agent
   endpoint's certificate, so agents must use it.
+- The API (port 8080) listens only on the default network, as `backend-api`; the agents
+  network reaches port 8443 alone. The backend takes the client's address from
+  `X-Forwarded-For` only from that network. To trust other sources instead, list
+  networks or addresses in `Octopushy__TrustedProxies__0`, `__1` and so on.
 - The backend writes a one-time setup code to its data volume; read it with
   `podman compose exec backend cat /var/lib/octopushy/setup-code` and enter it in the
   web interface to create the account.
