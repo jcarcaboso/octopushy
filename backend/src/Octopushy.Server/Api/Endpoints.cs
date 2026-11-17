@@ -393,7 +393,9 @@ public static partial class Endpoints
                 run.Status == RunStatuses.Uncertain,
                 context.Workflow is { } w ? new RunWorkflowDto(w.Id, w.Version, w.Reference, w.Commit, w.Repository) : null,
                 await Planner.CanRunAgainAsync(db, run, ct),
-                !RunStatuses.IsTerminal(run.Status) && Views.Applying(run)));
+                !RunStatuses.IsTerminal(run.Status) && Views.Applying(run),
+                context.ComposeImages?.Images.Select(i => new RunImageDto(i.Service, i.Before, i.After)).ToList(),
+                context.ComposeImages?.BaselineCommit));
         })
         .WithName("getRun");
 

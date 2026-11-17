@@ -9525,6 +9525,46 @@
           "canForceStop": {
             "type": "boolean",
             "default": false
+          },
+          "images": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RunImageDto"
+            }
+          },
+          "baselineCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RunImageDto": {
+        "required": [
+          "service",
+          "before",
+          "after"
+        ],
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "before": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "after": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

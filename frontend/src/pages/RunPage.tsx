@@ -1,25 +1,21 @@
 import { Ban, CircleX, OctagonX, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { isNotFound } from "../api/client";
 import { Link, useNavigate, useParams } from "react-router";
-import { isRunFinished, useCancelRun, useCloseRun, useForceStopRun, useRun, useRunAgain } from "../api/queries";
+import { isRunFinished, useCancelRun, useCloseRun, useForceStopRun, useRun, useRunAgain, useService } from "../api/queries";
 import type { RunDetail } from "../api/types";
-import { StatusBadge } from "../components/Badge";
-import { WaitingNote } from "../components/WaitingNote";
 import { Callout } from "../components/Callout";
-import { Card } from "../components/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { KeyValue } from "../components/KeyValue";
-import { LabelList } from "../components/LabelEditor";
-import { Commit } from "../components/Mono";
-import { PageHeader } from "../components/PageHeader";
-import { PolicyView } from "../components/PolicyView";
-import { RelativeTime } from "../components/RelativeTime";
-import { useNow } from "../components/useNow";
+import { ServiceIcon } from "../components/ServiceIcon";
+import { useDocumentTitle } from "../components/useDocumentTitle";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
-import { humanize, operationLabel, reasonLabel, runResourcePath } from "../lib/format";
-import { elapsed, formatDuration } from "../lib/time";
-import { StepTimeline } from "./run/StepTimeline";
+import { buildRunOverview } from "../lib/changes";
+import { operationLabel, reasonLabel, runResourcePath } from "../lib/format";
+import { RunChanges } from "./run/RunChanges";
+import { RunFoot } from "./run/RunFoot";
+import { RunVerdict } from "./run/RunVerdict";
+import { lastSegment } from "./run/steps";
+import { StepList } from "./run/StepList";
 
 const closeExplanation =
   "Closing records the run as failed after you have looked at it. Nothing is changed on Proxmox; the next plan shows the real state.";
@@ -49,62 +45,10 @@ function UncertainNotice({ detail, onClose }: { detail: RunDetail; onClose: () =
   );
 }
 
-function RunFacts({ detail }: { detail: RunDetail }) {
-  const run = detail.run;
-  const now = useNow();
-  const duration = elapsed(run.startedAt, run.finishedAt, now);
-  return (
-    <KeyValue
-      items={[
-        {
-          term: humanize(run.resourceKind),
-          value: (
-            <Link to={runResourcePath(run)} className="mono break">
-              {run.address}
-            </Link>
-          ),
-        },
-        { term: "Operation", value: operationLabel(run.operation) },
-        {
-          term: "Reason",
-          value: run.reasonDetail ? (
-            <span className="stack stack--small">
-              <span>{reasonLabel(run.reason)}</span>
-              <span className="muted">{run.reasonDetail}</span>
-            </span>
-          ) : (
-            reasonLabel(run.reason)
-          ),
-        },
-        { term: "Commit", value: <Commit commit={run.commit} length={10} /> },
-        ...(detail.workflow
-          ? [
-              {
-                term: "Workflow",
-                value: (
-                  <span className="stack stack--small">
-                    <span title={`Named as ${detail.workflow.reference}`}>
-                      <span className="mono">
-                        {detail.workflow.id}@{detail.workflow.version}
-                      </span>{" "}
-                      at <Commit commit={detail.workflow.commit} length={10} />
-                    </span>
-                    <span className="muted small break">{detail.workflow.repository ?? "from this repository"}</span>
-                  </span>
-                ),
-              },
-            ]
-          : []),
-        { term: "Created", value: <RelativeTime value={run.createdAt} /> },
-        { term: "Started", value: <RelativeTime value={run.startedAt} empty="Not yet" /> },
-        { term: "Finished", value: <RelativeTime value={run.finishedAt} empty="Not yet" /> },
-        {
-          term: "Duration",
-          value: duration === null ? <span className="muted">—</span> : <span className="num">{formatDuration(duration)}</span>,
-        },
-      ]}
-    />
-  );
+/** A service's own icon, else its letter while the service loads or when it cannot be read. */
+function ResourceIcon({ id, name }: { id: string; name: string }) {
+  const { data } = useService(id);
+  return <ServiceIcon service={{ name, icon: data?.service.icon ?? null }} />;
 }
 
 export function RunPage() {
@@ -116,6 +60,9 @@ export function RunPage() {
   const again = useRunAgain();
   const navigate = useNavigate();
   const [confirm, setConfirm] = useState<"cancel" | "stop" | "close" | "again" | null>(null);
+  const steps = data?.steps;
+  const tiles = useMemo(() => (steps ? buildRunOverview(steps) : []), [steps]);
+  useDocumentTitle(data ? `Run #${data.run.number}` : undefined);
 
   if (isPending) return <PageSkeleton rows={3} />;
   if (!data) return isNotFound(error) ? <NotFound what="run" /> : <ErrorMessage error={error} title="The run could not be loaded" />;
@@ -123,38 +70,33 @@ export function RunPage() {
   const run = data.run;
   const number = run.number;
   const live = !isRunFinished(run.status);
+  const name = lastSegment(run.address);
+  const hasActions = data.canCancel || data.canForceStop || data.canClose || data.canRunAgain;
 
   return (
-    <>
-      <PageHeader
-        eyebrow={
-          <>
-            <Link to="/runs">Runs</Link> / Run
-          </>
-        }
-        title={
-          <>
-            Run #{number} · {operationLabel(run.operation)}{" "}
-            <Link to={runResourcePath(run)} className="mono page-header__address">
-              {run.address}
-            </Link>
-          </>
-        }
-        documentTitle={`Run #${number}`}
-        meta={
-          <span className="inline-group">
-            <StatusBadge status={run.status} />
-            {run.currentStep && live ? <span>at {humanize(run.currentStep)}</span> : null}
-            {run.detail ? <span>{run.detail}</span> : null}
-            {run.waiting && run.waiting !== run.detail ? <WaitingNote text={run.waiting} /> : null}
-            {live ? (
-              <span className="muted small">
-                <span className="live-dot" aria-hidden="true" /> Updating
-              </span>
-            ) : null}
-          </span>
-        }
-        actions={
+    <div className="run-page">
+      <nav className="run-page__crumbs" aria-label="Breadcrumb">
+        <Link to="/runs">Runs</Link> / Run #{number}
+      </nav>
+      <header className="run-head">
+        <h1 className="run-head__title">
+          {run.resourceKind === "service" ? <ResourceIcon id={run.resourceId} name={name} /> : null}
+          <span className="run-head__name">{name}</span>
+          <Link to={runResourcePath(run)} className="mono run-head__address">
+            {run.address}
+          </Link>
+        </h1>
+        <span className="run-head__why">
+          <span>{operationLabel(run.operation)}</span> · <span>{reasonLabel(run.reason)}</span>
+        </span>
+      </header>
+      {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
+      <RunVerdict
+        detail={data}
+        tiles={tiles}
+        live={live}
+        notice={run.status === "uncertain" ? <UncertainNotice detail={data} onClose={() => setConfirm("close")} /> : null}
+        actions={hasActions ? (
           <>
             {data.canCancel ? (
               <button type="button" className="button button--danger-outline" onClick={() => setConfirm("cancel")}>
@@ -181,33 +123,14 @@ export function RunPage() {
               </button>
             ) : null}
           </>
-        }
+        ) : null}
       />
-      <div className="stack stack--large">
-        {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
-        {run.status === "uncertain" ? <UncertainNotice detail={data} onClose={() => setConfirm("close")} /> : null}
-        <div className="columns columns--main-side">
-          <Card title="Steps">
-            <StepTimeline detail={data} />
-          </Card>
-          <div className="stack stack--large">
-            <Card title="Run">
-              <RunFacts detail={data} />
-            </Card>
-            {data.policy ? (
-              <Card title="Policy">
-                <PolicyView policy={data.policy} />
-              </Card>
-            ) : null}
-            <Card title="Agent labels">
-              <div className="stack stack--small">
-                <LabelList labels={data.agentLabels} empty="Any agent" />
-                {data.agentLabelsSetBy ? <span className="muted small">set by {data.agentLabelsSetBy}</span> : null}
-              </div>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <RunChanges detail={data} tiles={tiles} finished={!live} />
+      <section className="run-section" aria-labelledby="run-steps-title">
+        <h2 id="run-steps-title" className="run-section__title">{live ? "How it is going" : "How it went"}</h2>
+        <StepList detail={data} />
+      </section>
+      <RunFoot detail={data} />
       <ConfirmDialog
         open={confirm === "cancel"}
         title={`Cancel run #${number}?`}
@@ -283,6 +206,6 @@ export function RunPage() {
           policy says. Nothing of this run is reused.
         </p>
       </ConfirmDialog>
-    </>
+    </div>
   );
 }

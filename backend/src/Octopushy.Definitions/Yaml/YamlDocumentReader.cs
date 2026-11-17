@@ -134,7 +134,8 @@ public static partial class YamlDocumentReader
         }
     }
 
-    private static JsonNode? ConvertScalar(YamlScalarNode scalar)
+    /// <summary>A scalar read with the same rules as a document: quoted or <c>!!str</c> is text, plain may be a number, bool or null.</summary>
+    internal static JsonNode? ConvertScalar(YamlScalarNode scalar)
     {
         var value = scalar.Value ?? "";
         var tag = scalar.Tag.IsEmpty ? null : scalar.Tag.Value;

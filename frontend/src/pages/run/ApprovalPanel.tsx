@@ -84,7 +84,7 @@ export function ApprovalPanel({ runId, step, plan, overview = [], configure = fa
       <Callout kind="info" title="Your approval is needed">
         {step.detail ?? "This guest's policy asks for approval before applying."}{" "}
         {pipeline
-          ? "Approving covers every stage above, as planned and previewed, and applies them in order. Nothing has changed yet. If a stage fails, the ones before it stay applied."
+          ? "Approving covers every stage, as planned and previewed, and applies them in order. Nothing has changed yet. If a stage fails, the ones before it stay applied."
           : rotation
           ? "Approving does this stage of the rotation and nothing else. It only ever chooses Octopushy's own keys on the guest."
           : configure

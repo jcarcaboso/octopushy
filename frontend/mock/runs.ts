@@ -272,6 +272,9 @@ interface RunInput {
   policy: RunDetail["policy"];
   workflow: { id: string; version: string };
   steps: StepInput[];
+  /** A service run's compose images, before and after, and the commit the before side was read at. */
+  images?: RunDetail["images"];
+  baselineCommit?: string;
 }
 
 function run(input: RunInput): RunDetail {
@@ -314,6 +317,8 @@ function run(input: RunInput): RunDetail {
       commit: hex(`${input.workflow.id}-${input.workflow.version}`, 40),
       repository: workflowsRepository,
     },
+    images: input.images ?? null,
+    baselineCommit: input.baselineCommit ?? null,
   };
 }
 
@@ -330,6 +335,8 @@ export const resources = {
   web: { id: "web", kind: "guest", address: "home/pve01/web", host: "ops@10.15.60.20:22" },
   dns: { id: "dns", kind: "guest", address: "home/pve01/dns", host: "ops@10.15.60.21:22" },
   app: { id: "web-app", kind: "service", address: "home/pve01/web/app", host: "ops@10.15.60.20:22" },
+  fleet: { id: "svc-fleet", kind: "service", address: "home/pve01/dev/fleet", host: "ops@10.15.60.13:22" },
+  jellyfin: { id: "svc-jellyfin", kind: "service", address: "home/pve01/media/jellyfin", host: "ops@10.15.60.15:22" },
 } satisfies Record<string, Resource>;
 
 const vmChanges = [
@@ -468,10 +475,43 @@ const deployPreview: ConfigurePreview = {
   changedFiles: ["M modules/ansible/web/deploy.yml"],
   vars: { app_hostname: "app.home.example.org", app_port: 8080 },
   secrets: [{ name: "web_password", reference: "home/pve01/web/app/web_password v3" }],
-  prepared: { image: "ghcr.io/example/app:1.8.2", replicas: 1 },
-  previousPrepared: { image: "ghcr.io/example/app:1.8.1", replicas: 1 },
+  prepared: { image: "ghcr.io/example/app:2.0.0", replicas: 1 },
+  previousPrepared: { image: "ghcr.io/example/app:1.8.2", replicas: 1 },
   hostKeyFingerprints: ["ssh-ed25519 SHA256:k8Hn2pQ5rT1vX7yB3cD9fG0jL4mN6sW2aE5uI8oP1zA"],
   previewSha256: hex("pipeline-app"),
+};
+
+const fleetPreview: ConfigurePreview = {
+  ...deployPreview,
+  host: resources.fleet.host,
+  tasks: ["play #1 (all): Deploy fleet", "  Pull the images", "  Write the compose file", "  Restart the services", "  Wait for /v1/health"],
+  changedFiles: [],
+  vars: { compose_project: "fleet" },
+  secrets: [{ name: "fleet_token", reference: "home/pve01/dev/fleet/fleet_token v2" }],
+  prepared: null,
+  previousPrepared: null,
+  hostKeyFingerprints: ["ssh-ed25519 SHA256:Z1bq8vC0kE4mJ2s9dXyR7tL5wN3aH6pU0oG4iF8cV2M"],
+  previewSha256: hex("pipeline-fleet"),
+};
+
+const jellyfinPreview: ConfigurePreview = {
+  ...fleetPreview,
+  host: resources.jellyfin.host,
+  tasks: ["play #1 (all): Deploy jellyfin", "  Pull the images", "  Write the compose file", "  Restart the services", "  Wait for the container to be healthy"],
+  vars: { compose_project: "jellyfin" },
+  secrets: [],
+  hostKeyFingerprints: ["ssh-ed25519 SHA256:m4Kd9sT2bV7xQ1nR5yE8hJ3wL6pF0aC2gU9oI4zN1kB"],
+  previewSha256: hex("pipeline-jellyfin"),
+};
+
+const jellyfinPlan: Plan = {
+  hasChanges: true,
+  planSha256: hex("plan-jellyfin-dns"),
+  toolVersion: "1.10.6",
+  counts: { create: 0, update: 1, delete: 0, replace: 0 },
+  changes: [
+    { address: "technitium_dns_record.jellyfin", type: "technitium_dns_record", name: "jellyfin", actions: ["update"], attributes: [] },
+  ],
 };
 
 const recap = (host: string, ok: number, changed: number, failed = 0) =>
@@ -479,6 +519,59 @@ const recap = (host: string, ok: number, changed: number, failed = 0) =>
 
 function scenarios(): RunDetail[] {
   const runs: RunDetail[] = [];
+
+  // g. A service deployed: fleet goes from 0.12 to 0.13 across three images.
+  {
+    const id = "deployed";
+    const t = (s: number) => ago(1, s);
+    runs.push(run({
+      id, number: 52, operation: "pipeline", resource: resources.fleet, reason: "revision", status: "succeeded", detail: null,
+      minutesAgo: 1, seconds: 52, currentStep: null, policy: automatic, workflow: { id: "compose-app", version: "1.3" },
+      steps: [
+        ran(id, 0, "preview", "succeeded", t(2), 9, ansiblePreview("deploy.yml", fleetPreview.tasks), { configurePreview: fleetPreview, stage: "deploy" }),
+        decided(fleetPreview.previewSha256!, t(12), "policy", "Approval is automatic (set by octopushy.yaml)."),
+        ran(id, 2, "playbook", "succeeded", t(13), 38, ansibleRun(resources.fleet.host, ["Pull the images", "Write the compose file", "Restart the services", "Wait for /v1/health"], recap("dev", 12, 4)), { stage: "deploy" }),
+      ],
+      images: [
+        { service: "server", before: "docker.io/skorcius/fleet-manager:0.12.4", after: "docker.io/skorcius/fleet-manager:0.13.0" },
+        { service: "dashboard", before: "docker.io/skorcius/fleet-dashboard:dashboard-0.12.4", after: "docker.io/skorcius/fleet-dashboard:dashboard-0.13.0" },
+        { service: "worker", before: "docker.io/skorcius/fleet-worker:0.12.4", after: "docker.io/skorcius/fleet-worker:0.13.1" },
+        { service: "db", before: "docker.io/library/postgres:17.2-alpine", after: "docker.io/library/postgres:17.2-alpine" },
+      ],
+      baselineCommit: hex("revision-7", 40),
+    }));
+  }
+
+  // h. A service run that failed at its later stage: jellyfin's DNS record is applied, its deploy is not.
+  {
+    const id = "pipeline-failed";
+    const t = (s: number) => ago(2, s);
+    const error = "fatal: [media]: FAILED! => {\"msg\": \"Container jellyfin is unhealthy after 60 s: exited with code 1\"}";
+    runs.push(run({
+      id, number: 51, operation: "pipeline", resource: resources.jellyfin, reason: "revision", status: "failed",
+      detail: "The deploy stage failed. The dns stage stays applied.", minutesAgo: 2, seconds: 104, currentStep: null,
+      policy: automatic, workflow: { id: "compose-app", version: "1.3" },
+      steps: [
+        ran(id, 0, "plan", "succeeded", t(2), 14, tofuPlan(["  # technitium_dns_record.jellyfin will be updated in-place", "      ~ ttl = 3600 -> 300"],
+          "Plan: 0 to add, 1 to change, 0 to destroy."), { plan: jellyfinPlan, stage: "dns" }),
+        ran(id, 1, "preview", "succeeded", t(17), 10, ansiblePreview("deploy.yml", jellyfinPreview.tasks), { configurePreview: jellyfinPreview, stage: "deploy" }),
+        { ...decided(jellyfinPreview.previewSha256!, t(28), "policy", "Approval is automatic (set by octopushy.yaml)."), stage: null },
+        ran(id, 3, "apply", "succeeded", t(29), 11, tofuApply(["technitium_dns_record.jellyfin"]), { stage: "dns" }),
+        ran(id, 4, "playbook", "failed", t(41), 63, ansibleRun(resources.jellyfin.host, ["Pull the images", "Write the compose file", "Restart the services"], recap("media", 7, 2, 1), [
+          ["stdout", "TASK [Wait for the container to be healthy] ************************************"],
+          ["stdout", "FAILED - RETRYING: [media]: Wait for the container to be healthy (12 retries left)."],
+          ["stdout", "FAILED - RETRYING: [media]: Wait for the container to be healthy (1 retries left)."],
+          ["stderr", error],
+          ["stderr", "[jellyfin] Error: unable to open database file /config/data/library.db: permission denied"],
+        ]), { stage: "deploy", error, detail: "The playbook failed at Wait for the container to be healthy." }),
+      ],
+      images: [
+        { service: "jellyfin", before: "docker.io/jellyfin/jellyfin:10.10.7", after: "docker.io/jellyfin/jellyfin:10.11.0" },
+        { service: "jellyseerr", before: "docker.io/fallenbagel/jellyseerr:2.5.2", after: "docker.io/fallenbagel/jellyseerr:2.5.2" },
+      ],
+      baselineCommit: hex("revision-9", 40),
+    }));
+  }
 
   // e. Running: a new container being created.
   {
@@ -570,6 +663,13 @@ function scenarios(): RunDetail[] {
         pending("apply", "infra"),
         pending("playbook", "deploy"),
       ],
+      images: [
+        { service: "app", before: "ghcr.io/example/app:1.8.2", after: "ghcr.io/example/app:2.0.0" },
+        { service: "worker", before: "ghcr.io/example/app-worker:1.8.2", after: "ghcr.io/example/app-worker:2.0.0" },
+        { service: "cache", before: "docker.io/library/redis:7.4.1", after: "docker.io/library/redis:7.4.1" },
+        { service: "proxy", before: null, after: "docker.io/library/nginx:1.27-alpine" },
+      ],
+      baselineCommit: hex("revision-5", 40),
     }));
   }
 

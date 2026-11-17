@@ -284,6 +284,56 @@ public class PipelineRunTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task A_service_run_shows_the_images_its_compose_file_changes_as_they_were_when_it_was_made()
+    {
+        const string Compose = "labs/home/proxmox/korriban/guests/krb-app-01/services/web/compose.yaml";
+        const string Fleet = "ghcr.io/example/fleet-manager:0.12.4";
+        var test = Repository.Repository();
+        test.Write(Compose, $"services:\n  app: {{ image: {Fleet} }}\n  db: {{ image: docker.io/library/postgres:17.2-alpine }}\n");
+        await using var server = await ServerHarness.StartAsync(postgres, test);
+        var (agent, http) = await ReadyAsync(server);
+        using var _ = http;
+
+        // A guest's run is not a service's.
+        var configure = await server.LatestRunAsync(Guest, Operations.Configure);
+        Assert.Null((await http.GetFromJsonAsync<JsonObject>($"/api/runs/{configure.Id}"))!["images"]);
+
+        // The first deploy has nothing applied before it.
+        await ScheduleAsync(server);
+        var first = await server.LatestRunAsync(Service, Operations.Pipeline);
+        async Task<JsonObject> ViewAsync(Guid id) => (await http.GetFromJsonAsync<JsonObject>($"/api/runs/{id}"))!;
+        string Images(JsonObject view) => view["images"]!.ToJsonString();
+        var view = await ViewAsync(first.Id);
+        Assert.Null(view["baselineCommit"]);
+        Assert.Equal($$"""[{"service":"app","before":null,"after":"{{Fleet}}"},{"service":"db","before":null,"after":"docker.io/library/postgres:17.2-alpine"}]""",
+            Images(view));
+        var (plan, preview) = await PlanStagesAsync(agent);
+        await ApplyStagesAsync(server, agent);
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Service, Operations.Pipeline)).Status);
+
+        // Shown only: no agent and no approval sees it.
+        Assert.DoesNotContain("fleet-manager", plan.InputJson);
+        Assert.DoesNotContain("fleet-manager", preview.InputJson);
+        Assert.DoesNotContain("fleet-manager", (await ApprovalOfAsync(server)).Document!);
+
+        test.Write(Compose, "services:\n  app: { image: ghcr.io/example/fleet-manager:0.13.0 }\n  cache: { image: redis:7 }\n");
+        server.Commit("Upgrade the fleet manager");
+        await server.SyncAsync();
+        await ScheduleAsync(server);
+        var second = await server.LatestRunAsync(Service, Operations.Pipeline);
+        Assert.NotEqual(first.Id, second.Id);
+        view = await ViewAsync(second.Id);
+        Assert.Equal(first.Commit, view["baselineCommit"]!.GetValue<string>());
+        Assert.Equal($$"""[{"service":"app","before":"{{Fleet}}","after":"ghcr.io/example/fleet-manager:0.13.0"},{"service":"cache","before":null,"after":"redis:7"},{"service":"db","before":"docker.io/library/postgres:17.2-alpine","after":null}]""",
+            Images(view));
+
+        // The first run still shows what it was made with.
+        view = await ViewAsync(first.Id);
+        Assert.Null(view["baselineCommit"]);
+        Assert.Contains($"\"after\":\"{Fleet}\"", Images(view));
+    }
+
+    [Fact]
     public async Task With_no_policy_anywhere_a_service_deploys_by_itself_once_per_input_hash()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
