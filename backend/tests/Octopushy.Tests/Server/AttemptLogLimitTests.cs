@@ -82,8 +82,7 @@ public sealed class AttemptLogCapTests : IDisposable
 }
 
 /// <summary>Which attempts take an agent's log lines.</summary>
-[Collection(PostgresCollection.Name)]
-public class AttemptLogAcceptanceTests(PostgresFixture postgres)
+public class AttemptLogAcceptanceTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private static Task LogAsync(ServerHarness server, Guid agent, Guid attempt, long sequence, string text) =>
         server.Engine.OnLogAsync(agent, attempt, sequence, [(0, "stdout", text)], CancellationToken.None);
