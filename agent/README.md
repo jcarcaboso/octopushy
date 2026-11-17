@@ -59,6 +59,7 @@ octopushy agent run [--state-dir DIR] [--tool-runtime podman|docker|local]
                     [--tofu-binary PATH] [--ansible-binary PATH] [--container-binary PATH]
                     [--container-network NAME] [--container-pids-limit N]
                     [--container-memory SIZE] [--require-image-digest] [--work-dir DIR]
+octopushy agent doctor [the flags of run]
 octopushy agent status [--state-dir DIR]
 octopushy version
 ```
@@ -84,21 +85,48 @@ at once.
 At startup the enrolled state directory, work directory and provider cache are
 resolved to canonical absolute paths, including relative paths and symlinks.
 Container mounts and OpenTofu's repository root therefore use the same paths.
-The runtime is probed once: if that probe fails, the agent warns and omits
-`opentofu` from `Hello`, while native `proxmox` remains advertised.
-Fix the tool/runtime and restart the agent to advertise OpenTofu again. A successful
-version probe does not prove image pulls, provider access or backend connectivity.
-`nix` is advertised only with the `local` runtime, when `nix --version` works and the
-file system holding `/nix` has `OCTOPUSHY_NIX_MIN_FREE_GB` (20) free, checked at start.
+Executors are probed at start and again every 5 minutes, one probe at a time, each a
+`--version` that gives up after 20 seconds: the container CLI (or `tofu version` with
+`local`) for `opentofu`, `octopushy-ansible --version` with `local` for `ansible`, and
+`nix --version` with the store's free space for `nix`. A probe never pulls an image,
+starts a container or takes a lock, so it runs next to attempts. An executor whose probe
+fails is left out of `Hello` with its reason in `Hello.unavailable`, which the Agents page
+and a run waiting for that executor show. When a later probe finds a change, the agent
+sends `ExecutorsChanged` on the open connection and the server offers work by the new set;
+an attempt already running is not touched. `proxmox` needs no tool and is always offered.
+A successful version probe does not prove image pulls, provider access or backend
+connectivity. `nix` is offered only with the `local` runtime, when `nix --version` works and the
+file system holding `/nix` has `OCTOPUSHY_NIX_MIN_FREE_GB` (20) free.
 After a build the store is collected down to `OCTOPUSHY_NIX_STORE_MAX_GB` (40). The agent
 image carries a single-user Nix 2.34 owned by the agent's user, without a sandbox.
+
+`octopushy agent doctor` takes the flags of `run`, makes the same probes and prints one
+line per executor, available or why not, then free disk and cache sizes, the Nix store's
+included (a walk of at most 500 000 entries). It reads no enrollment, contacts no server and
+changes nothing, so it runs next to a running agent, as the same user so it sees the same
+programs. It exits 1 when an executor these flags mean to offer is unavailable; `nix` with
+`podman` or `docker` is "not offered" and does not count.
+
+```text
+$ octopushy agent doctor --tool-runtime local --ansible-binary /opt/octopushy-ansible
+tool runtime: local
+opentofu   available (OpenTofu v1.10.6)
+proxmox    available (needs no tool)
+ansible    UNAVAILABLE: cannot run /opt/octopushy-ansible: No such file or directory (os error 2)
+nix        UNAVAILABLE: the Nix store has 12.3 GiB free, less than the 20.0 GiB a build needs
+free disk  state      41.2 GiB of 98.3 GiB
+cache      providers  312.5 MiB
+```
 
 What the agent does on the channel:
 
 - Connects with mutual TLS (its key and certificate; the stored CA as the only root),
   sends `Hello` (version, available executors, attempts still running,
   tool runtime), and waits for `Welcome` (`max_concurrency`, `heartbeat_seconds`).
-- Heartbeats every `heartbeat_seconds` with the running attempt IDs.
+- Heartbeats every `heartbeat_seconds` with the running attempt IDs. Every sixth carries a
+  `StorageReport`: free space of the state, work and Nix store file systems (`statvfs`,
+  each file system once) and the provider cache's and Nix cache's size, measured every 5
+  minutes by a walk of at most 20 000 entries (a lower bound when it stops early).
 - Runs assignments concurrently up to `max_concurrency` (extra ones wait), sends
   `AttemptStarted` (again on each new connection while the attempt runs), log
   batches every 500 ms or 100 lines, and one `AttemptResult` per attempt.

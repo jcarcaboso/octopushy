@@ -16,9 +16,14 @@ public sealed class RunException(string message) : Exception(message);
 public sealed class OrchestratorSignal
 {
     private readonly SemaphoreSlim _signal = new(0, 1);
+    private long _wakes;
+
+    /// <summary>How many times <see cref="Wake"/> was called, for tests.</summary>
+    public long Wakes => Interlocked.Read(ref _wakes);
 
     public void Wake()
     {
+        Interlocked.Increment(ref _wakes);
         if (_signal.CurrentCount == 0)
         {
             try

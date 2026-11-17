@@ -181,11 +181,15 @@ public sealed partial class RunEngine
                         var reachable = candidates.Count == 0 ? default : await ReachableAsync(db, step, context, candidates, cancellationToken);
                         if (candidates.Count == 0)
                         {
-                            var matchingLabels = agents.Any(a => connections.Get(a.Id) is not null && attempt.RequiredLabels.All(a.Labels.Contains));
-                            waiting = matchingLabels
+                            var labelled = agents.Where(a => attempt.RequiredLabels.All(a.Labels.Contains))
+                                .Select(a => connections.Get(a.Id)).OfType<AgentSession>().ToList();
+                            // The agents that lack the executor, with each one's reason; one that lacks only built-in state
+                            // keeps the wording below.
+                            var lacking = AgentAvailability.Lacking(attempt.Executor, labelled);
+                            waiting = labelled.Count > 0
                                 ? needsBuiltInState
-                                    ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older."
-                                    : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels."
+                                    ? $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels and built-in OpenTofu state; update the agent if it is older.{lacking}"
+                                    : $"Waiting for a connected agent advertising executor {attempt.Executor} with the required labels.{lacking}"
                                 : attempt.RequiredLabels.Length == 0
                                     ? "Waiting for a connected agent."
                                     : $"Waiting for a connected agent with the labels {string.Join(", ", attempt.RequiredLabels)}.";
@@ -472,6 +476,71 @@ public sealed partial class RunEngine
             await db.SaveChangesAsync(cancellationToken);
             signal.Wake();
         }, cancellationToken);
+
+    /// <summary>How often a changing offer is logged, woken for and stored, per connection: the engine ticks this often anyway.</summary>
+    public static readonly TimeSpan OfferEffectsEvery = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// What an agent offers after it probed again. Applied under the engine's gate, which dispatch holds from reading an agent's
+    /// executors to handing it work, so work for an executor is never handed over after its removal was applied; an attempt
+    /// already running is not touched. The session always takes the latest offer at once. Logging it, waking the engine and
+    /// storing it on the agent's record happen at most once per <see cref="OfferEffectsEvery"/> per connection, so an agent
+    /// that flaps costs no more; an offer not stored then is stored by <see cref="FlushOfferAsync"/>, which the next heartbeat
+    /// after the interval queues, or by the next change after it.
+    /// </summary>
+    public Task OnExecutorsChangedAsync(AgentSession session, ExecutorsChanged changed, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            if (session.SetExecutors(AgentAvailability.Executors(changed.Executors), AgentAvailability.Unavailable(changed.Unavailable)))
+                session.OfferUnsaved = true;
+            await ApplyOfferEffectsAsync(db, session, cancellationToken);
+        }, cancellationToken);
+
+    /// <summary>Stores an offer that a change left unsaved, once its interval is over.</summary>
+    public Task FlushOfferAsync(AgentSession session, CancellationToken cancellationToken) =>
+        WithDbAsync(db => ApplyOfferEffectsAsync(db, session, cancellationToken), cancellationToken);
+
+    /// <summary>
+    /// Makes <paramref name="session"/> its agent's connection and stores what it offers, as one step under the engine's gate:
+    /// the offer first, then <paramref name="register"/>, with nothing in between that can be cancelled. An older connection
+    /// of the agent may have stored its own offer since this one's Hello did; after this the record is this connection's, and
+    /// the older one stores nothing more (see <see cref="ApplyOfferEffectsAsync"/>). If the write fails or is cancelled, the
+    /// connection is not registered.
+    /// </summary>
+    public Task RegisterAsync(AgentSession session, Action register, CancellationToken cancellationToken) =>
+        WithDbAsync(async db =>
+        {
+            await WriteOfferAsync(db, session, cancellationToken);
+            register();
+        }, cancellationToken);
+
+    private static Task WriteOfferAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
+    {
+        // What the session holds now: the latest offer, whichever report brought it.
+        var executors = session.Executors.ToArray();
+        var reasons = AgentAvailability.Serialize(session.Unavailable);
+        return db.Agents.Where(a => a.Id == session.AgentId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.Executors, executors).SetProperty(a => a.Unavailable, reasons), cancellationToken);
+    }
+
+    private async Task ApplyOfferEffectsAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
+    {
+        var now = clock.GetUtcNow();
+        if (!session.OfferUnsaved || now < session.OfferEffectsAfter)
+            return;
+        // A connection a newer one of the same agent replaced stores nothing: the record is the newer one's now.
+        if (connections.Get(session.AgentId) != session)
+            return;
+        session.OfferEffectsAfter = now + OfferEffectsEvery;
+        var executors = session.Executors;
+        var unavailable = session.Unavailable;
+        await WriteOfferAsync(db, session, cancellationToken);
+        // Only now: a write that failed is tried again by the next heartbeat after the interval.
+        session.OfferUnsaved = false;
+        logger.LogInformation("Agent {Name} ({Agent}) now offers {Executors}; without {Unavailable}.", session.Name, session.AgentId,
+            string.Join(",", executors.Where(AgentAvailability.KnownExecutors.Contains)), string.Join(",", unavailable.Keys));
+        signal.Wake();
+    }
 
     public async Task OnHeartbeatAsync(Guid agentId, IEnumerable<string> runningAttemptIds, CancellationToken cancellationToken)
     {

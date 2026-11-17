@@ -95,6 +95,9 @@ public sealed class AgentChannelService(
     TimeProvider clock,
     ILogger<AgentChannelService> logger) : AgentChannel.AgentChannelBase
 {
+    /// <summary>Queued behind an agent's ordered messages to store an offer a burst of changes left unsaved. Never sent by an agent.</summary>
+    private static readonly AgentMessage FlushOffer = new();
+
     public override async Task Connect(IAsyncStreamReader<AgentMessage> requestStream, IServerStreamWriter<ServerMessage> responseStream, ServerCallContext context)
     {
         var (agent, serial) = await AuthenticateAsync(context);
@@ -105,10 +108,12 @@ public sealed class AgentChannelService(
         }
 
         var hello = requestStream.Current.Hello;
+        var executors = AgentAvailability.Executors(hello.Executors);
+        var unavailable = AgentAvailability.Unavailable(hello.Unavailable);
+        // What it offers is not stored here: only a connection that becomes the agent's stores it, as it is registered.
         await UpdateAgentAsync(agent.Id, a =>
         {
             a.Version = hello.AgentVersion;
-            a.Executors = hello.Executors.ToArray();
             a.ToolRuntime = hello.ToolRuntime;
             a.ConnectedAt = a.LastSeenAt = clock.GetUtcNow();
             if (a.CertificateSerial == serial)
@@ -117,7 +122,7 @@ public sealed class AgentChannelService(
             }
         }, call.Token);
 
-        var session = new AgentSession(agent.Id, agent.Name, hello.Executors.ToList(), hello.Capabilities.ToList(), hello.ToolRuntime)
+        var session = new AgentSession(agent.Id, agent.Name, executors, hello.Capabilities.ToList(), hello.ToolRuntime, unavailable)
         {
             RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
         };
@@ -126,7 +131,9 @@ public sealed class AgentChannelService(
         try
         {
             await engine.OnHelloAsync(agent.Id, hello, call.Token);
-            connections.Add(session);
+            // Registered under the engine's gate together with its offer: a connection it replaces may have stored its own
+            // since the Hello's, and stores nothing once this one is the agent's.
+            await engine.RegisterAsync(session, () => connections.Add(session), call.Token);
             reachability.OnConnected(session);
             logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage
@@ -184,8 +191,20 @@ public sealed class AgentChannelService(
                             message = newestStates.Remove(waiting.AttemptId, out var newest) ? newest : message;
                     try
                     {
+                        if (ReferenceEquals(message, FlushOffer))
+                        {
+                            session.OfferFlushTaken();
+                            await engine.FlushOfferAsync(session, call.Token);
+                            continue;
+                        }
+
                         switch (message.KindCase)
                         {
+                            // Under the engine's gate, so dispatch never hands over work for an executor whose removal was
+                            // applied. In order: the last of several changes wins. Never coalesced, unlike a state.
+                            case AgentMessage.KindOneofCase.ExecutorsChanged:
+                                await engine.OnExecutorsChangedAsync(session, message.ExecutorsChanged, call.Token);
+                                break;
                             case AgentMessage.KindOneofCase.Started when Guid.TryParse(message.Started.AttemptId, out var started):
                                 await engine.OnStartedAsync(agent.Id, started, call.Token);
                                 break;
@@ -246,7 +265,16 @@ public sealed class AgentChannelService(
                 try
                 {
                     if (message.Heartbeat is { } heartbeat)
+                    {
+                        // Kept with the connection only: a database write here would come every few heartbeats of every
+                        // agent and wake the engine each time (see SavedWrites).
+                        if (heartbeat.Storage is { } storage)
+                            session.Storage = AgentAvailability.Storage(storage, clock.GetUtcNow());
                         await engine.OnHeartbeatAsync(agent.Id, heartbeat.RunningAttemptIds, call.Token);
+                        // An offer a burst of changes left unsaved is stored behind them, under the gate, never here.
+                        if (session.TryQueueOfferFlush(clock.GetUtcNow()))
+                            ordered.Writer.TryWrite(FlushOffer);
+                    }
                     else if (message.Log is { } log && Guid.TryParse(log.AttemptId, out var attemptId))
                         await engine.OnLogAsync(agent.Id, attemptId, (long)log.FirstSequence,
                             log.Lines.Select(l => (l.UnixMs, StreamName(l.Stream), l.Text)).ToList(), call.Token);

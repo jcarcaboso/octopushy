@@ -17,6 +17,27 @@ again on each new connection while an attempt runs. `Hello.capabilities` lists f
 that are not executors; a controller sends built-in OpenTofu state work only to agents
 that advertise `opentofu-builtin-state`, and older agents send no capabilities.
 
+### Which executors an agent offers
+
+The agent probes its executors when it starts and again every 5 minutes: the tool runtime's
+`--version` (or `tofu version` with the `local` runtime), `octopushy-ansible --version` with
+the `local` runtime, and `nix --version` with the Nix store's free space. A probe never pulls
+an image, starts a container or takes a lock, and each gives up after 20 seconds. `proxmox`
+needs no tool and is always offered.
+
+`Hello.executors` lists what is offered and `Hello.unavailable` says why each other executor
+the binary knows is not, in at most 300 characters without control characters. When a probe
+finds a change, the agent sends `ExecutorsChanged` with the whole new set; the controller
+offers work by it from then on and leaves attempts already running alone. A controller
+keeps only the executor names it knows from `unavailable`, cleans and bounds every reason
+again, and shows reasons only as text. An older controller ignores both.
+
+Every sixth heartbeat (once a minute at the default 10 seconds) carries a `StorageReport`:
+free space of the state directory's, the work directory's and the Nix store's file systems,
+each listed once, from `statvfs`; and the size of the provider cache and of Nix's cache from
+a walk of at most 20,000 entries, measured every 5 minutes. `octopushy agent doctor` prints
+the same probes and figures, with the Nix store's size, without connecting.
+
 ### Changes and reads: `Assignment.mutating`
 
 `Assignment.mutating` says whether the attempt may change infrastructure. The controller

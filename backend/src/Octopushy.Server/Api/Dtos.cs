@@ -609,7 +609,9 @@ public sealed record AgentDto(
     AgentUpdateState Update,
     bool Draining = false,
     bool ReportsReachability = false,
-    IReadOnlyList<Agents.ReachabilityEntry>? Reachability = null);
+    IReadOnlyList<Agents.ReachabilityEntry>? Reachability = null,
+    IReadOnlyDictionary<string, string>? Unavailable = null,
+    Agents.AgentStorage? Storage = null);
 
 /// <summary>
 /// An attempt assigned to or running on an agent. <c>Operation</c> and <c>Address</c> are as a run summary has them, <c>Step</c>

@@ -69,6 +69,10 @@ pub enum AgentCommand {
     Run(RunArgs),
     /// Show the stored enrollment and pending work.
     Status(StatusArgs),
+    /// Probe the executors as `run` would, print each with its reason, and print free disk
+    /// and cache sizes. Needs no enrollment, contacts no server and runs next to a running
+    /// agent. Exits non-zero when an executor these options mean to offer is unavailable.
+    Doctor(RunArgs),
 }
 
 #[derive(Debug, Args)]
@@ -97,6 +101,16 @@ pub struct RunArgs {
     /// State directory (see `enroll`).
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
+    #[command(flatten)]
+    pub tools: ToolArgs,
+    /// Directory for attempt workspaces (default: <state>/work).
+    #[arg(long)]
+    pub work_dir: Option<PathBuf>,
+}
+
+/// How tools run: what `run` uses and `doctor` probes.
+#[derive(Debug, Args)]
+pub struct ToolArgs {
     /// How to run tools such as OpenTofu.
     #[arg(long, value_enum, default_value_t = RuntimeKind::Podman)]
     pub tool_runtime: RuntimeKind,
@@ -132,9 +146,6 @@ pub struct RunArgs {
     #[arg(long, env = "OCTOPUSHY_REQUIRE_IMAGE_DIGEST", action = clap::ArgAction::SetTrue,
           value_parser = clap::builder::BoolishValueParser::new())]
     pub require_image_digest: bool,
-    /// Directory for attempt workspaces (default: <state>/work).
-    #[arg(long)]
-    pub work_dir: Option<PathBuf>,
 }
 
 /// A size as the runtimes take it: digits and an optional unit, `b`, `k`, `m` or `g`.
@@ -162,12 +173,42 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn run_args(extra: &[&str]) -> RunArgs {
+    fn run_args(extra: &[&str]) -> ToolArgs {
         let args = ["octopushy", "agent", "run"].iter().chain(extra);
         match Cli::try_parse_from(args).unwrap().command {
             Command::Agent {
                 command: AgentCommand::Run(args),
-            } => args,
+            } => args.tools,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn doctor_takes_the_flags_of_run() {
+        let args = [
+            "octopushy",
+            "agent",
+            "doctor",
+            "--state-dir",
+            "/s",
+            "--tool-runtime",
+            "local",
+            "--ansible-binary",
+            "/a",
+            "--require-image-digest",
+            "--work-dir",
+            "/w",
+        ];
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Agent {
+                command: AgentCommand::Doctor(args),
+            } => {
+                assert_eq!(args.state_dir.as_deref(), Some(std::path::Path::new("/s")));
+                assert_eq!(args.tools.tool_runtime, RuntimeKind::Local);
+                assert_eq!(args.tools.ansible_binary, PathBuf::from("/a"));
+                assert!(args.tools.require_image_digest);
+                assert_eq!(args.work_dir.as_deref(), Some(std::path::Path::new("/w")));
+            }
             other => panic!("{other:?}"),
         }
     }

@@ -176,6 +176,54 @@ public class IdleTickTests(PostgresFixture postgres, ITestOutputHelper output) :
         Assert.Equal(idle, await counter.CountAsync(server.TickAsync));
     }
 
+    [Fact]
+    public async Task Heartbeats_with_disk_figures_add_no_write_and_leave_an_idle_tick_as_it_was()
+    {
+        var counter = new CommandCounter();
+        using var repository = ManualApproval();
+        await using var server = await StartAsync(postgres, repository, counter, new TestClock { Now = Start });
+        var (run, agent, _) = await WaitingRunAsync(server);
+        await CopyAsync(server, run.Id, 4);
+        await IdleTickAsync(server, counter);
+
+        // Agents connected over the stream, each sending heartbeats with and without its room, as an agent does.
+        var connections = server.Services.GetRequiredService<Octopushy.Server.Agents.AgentConnections>();
+        connections.Disconnect(agent.Id);
+        var stream = new AgentStream();
+        stream.Send(new AgentMessage { Hello = new Hello { AgentVersion = "test", Executors = { "opentofu", "proxmox", "ansible" } } });
+        var service = ActivatorUtilities.CreateInstance<Octopushy.Server.Agents.AgentChannelService>(server.Services);
+        _ = service.Connect(stream, stream, await AgentStream.CallAsAsync(server, agent));
+        await stream.ReadingMessages.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await IdleTickAsync(server, counter);
+        var idle = await counter.CountAsync(server.TickAsync);
+        var writes = server.Services.GetRequiredService<SavedWrites>();
+        var saved = writes.Count;
+        var session = connections.Get(agent.Id)!;
+        async Task<int> HeartbeatAsync(StorageReport? storage)
+        {
+            var before = counter.Count;
+            var seen = session.Storage;
+            stream.Send(new AgentMessage { Heartbeat = new Heartbeat { Storage = storage } });
+            stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
+            for (var i = 0; i < 200 && counter.Count < before + 4; i++)
+                await Task.Delay(25);
+            Assert.True(storage is null || session.Storage != seen, "the room was not kept");
+            return counter.Count - before;
+        }
+
+        var plain = await HeartbeatAsync(null);
+        var withRoom = await HeartbeatAsync(new StorageReport
+        {
+            Free = { new FreeSpace { Name = "state", FreeBytes = 1 << 30, TotalBytes = 4L << 30 } },
+            Caches = { new CacheSize { Name = "providers", Bytes = 1 << 20, Complete = true } },
+        });
+        output.WriteLine($"heartbeat pair commands: plain {plain}, with room {withRoom}; idle tick {idle}");
+        Assert.Equal(plain, withRoom);
+        Assert.Equal(saved, writes.Count);
+        Assert.Equal(idle, await counter.CountAsync(server.TickAsync));
+        stream.Complete();
+    }
+
     /// <summary>Approves a waiting run's step behind the engine's back, as a save it is not told of would.</summary>
     private static Task ApproveUnseenAsync(ServerHarness server, Guid runId) =>
         server.WithDbAsync(db => db.Steps.Where(s => s.RunId == runId && s.Status == StepStatuses.AwaitingApproval)

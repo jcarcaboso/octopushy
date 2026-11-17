@@ -519,6 +519,15 @@ export const agents: Agent[] = [
     id: "agent-pve01-01", name: "pve01-agent-01", labels: ["home"], maxConcurrency: 2, disabled: false, connected: true, enrolledAt: ago(60000),
     lastSeenAt: ago(0.05), version: "0.8.1", executors: ["opentofu", "ansible", "proxmox"], toolRuntime: "podman 5.6.2",
     certificateExpiresAt: ago(-120000), runningAttempts: 1, draining: false, reportsReachability: true,
+    unavailable: { nix: "nix runs only with the local tool runtime" },
+    storage: {
+      reportedAt: ago(0.4),
+      free: [
+        { name: "state", freeBytes: 41.2 * 2 ** 30, totalBytes: 98.3 * 2 ** 30 },
+        { name: "work", freeBytes: 6.1 * 2 ** 30, totalBytes: 32 * 2 ** 30 },
+      ],
+      caches: [{ name: "providers", bytes: 312.5 * 2 ** 20, complete: true }],
+    },
     reachability: [
       reach("proxmox-api", "home/pve01", endpoint, "reachable", 2, { detail: "TLS handshake completed" }),
       reach("proxmox-api", "home/korriban", korriban, "timeout", 0.7, { detail: "connecting timed out" }),
@@ -534,6 +543,12 @@ export const agents: Agent[] = [
     id: "agent-pve01-02", name: "pve01-agent-02", labels: ["home", "gpu"], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(20000),
     lastSeenAt: ago(0.1), version: "0.7.1", executors: ["opentofu", "ansible", "proxmox"], toolRuntime: "podman 5.6.2",
     certificateExpiresAt: ago(-88000), runningAttempts: 0, draining: false, reportsReachability: true,
+    unavailable: {},
+    storage: {
+      reportedAt: ago(0.7),
+      free: [{ name: "state", freeBytes: 120.4 * 2 ** 30, totalBytes: 250 * 2 ** 30 }],
+      caches: [{ name: "providers", bytes: 1.4 * 2 ** 30, complete: false }],
+    },
     reachability: [
       reach("proxmox-api", "home/korriban", korriban, "reachable", 1, { detail: "TLS handshake completed" }),
       reach("proxmox-api", "home/pve01", endpoint, "unreachable", 3, { detail: "no route to host" }),
@@ -547,6 +562,8 @@ export const agents: Agent[] = [
     id: "agent-media", name: "media-agent", labels: [], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(150000),
     lastSeenAt: ago(0.2), version: "0.5.2", executors: ["opentofu", "proxmox"], toolRuntime: "local",
     certificateExpiresAt: ago(-30000), runningAttempts: 0, draining: true, reportsReachability: false, reachability: null,
+    // An older agent: it says nothing about missing tools or disk, and nothing is shown for them.
+    unavailable: {}, storage: null,
     work: [],
     guest: { resourceId: "media", address: "home/pve01/media", declaredVersion: "0.5.2" },
     update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null },
@@ -555,6 +572,12 @@ export const agents: Agent[] = [
     id: "agent-laptop", name: "laptop", labels: ["dev"], maxConcurrency: 1, disabled: false, connected: false, enrolledAt: ago(90000),
     lastSeenAt: ago(4300), version: "0.6.4", executors: ["opentofu"], toolRuntime: "podman 5.4.0",
     certificateExpiresAt: ago(-1500), runningAttempts: 0, draining: false, reportsReachability: false, reachability: null,
+    // Offline: what it said last about its tools; its disk is not shown.
+    unavailable: {
+      ansible: "the tool runtime podman is not usable: cannot run podman: No such file or directory (os error 2)",
+      nix: "nix runs only with the local tool runtime",
+    },
+    storage: null,
     work: [],
     guest: null,
     update: {

@@ -43,6 +43,9 @@ pub const ATTEMPT_LABEL: &str = "io.octopushy.attempt";
 pub const DEFAULT_PIDS_LIMIT: u32 = 4096;
 /// How long one runtime command at startup may take.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a `--version` probe may take before its program is killed and the tool counted
+/// unavailable. A cold `podman --version` answers well within a second.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// The longest value passed through `--env-file`; longer ones go by name. Both runtimes read
 /// the file a line at a time with a 64 KiB line limit.
 const MAX_ENV_FILE_VALUE: usize = 32 * 1024;
@@ -337,32 +340,14 @@ impl ToolRuntime {
         }
     }
 
-    /// Checks that the runtime can start (logs a warning otherwise).
+    /// Checks that the runtime can start: `<runtime> --version`, or `tofu version` with the local
+    /// runtime. Never pulls an image or starts a container.
     pub async fn probe(&self) -> Result<String> {
         let (bin, args): (&Path, &[&str]) = match self.kind {
             RuntimeKind::Local => (&self.tofu_binary, &["version"]),
             _ => (&self.container_binary, &["--version"]),
         };
-        let out = Command::new(bin)
-            .args(args)
-            .stdin(Stdio::null())
-            .output()
-            .await
-            .with_context(|| format!("cannot run {}", bin.display()))?;
-        if !out.status.success() {
-            bail!(
-                "{} {} exited with {}",
-                bin.display(),
-                args.join(" "),
-                out.status
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_owned())
+        version_line(bin, args).await
     }
 
     /// Whether Ansible can run. A container runtime pulls its image when it is needed.
@@ -370,25 +355,7 @@ impl ToolRuntime {
         if self.is_container() {
             return Ok("from its image".to_owned());
         }
-        let out = Command::new(&self.ansible_binary)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
-            .await
-            .with_context(|| format!("cannot run {}", self.ansible_binary.display()))?;
-        if !out.status.success() {
-            bail!(
-                "{} --version exited with {}",
-                self.ansible_binary.display(),
-                out.status
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_owned())
+        version_line(&self.ansible_binary, &["--version"]).await
     }
 
     /// Whether `nix` can run: only directly, never in a container.
@@ -396,26 +363,7 @@ impl ToolRuntime {
         if self.is_container() {
             bail!("nix runs only with the local tool runtime");
         }
-        let out = Command::new(&self.nix_binary)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .with_context(|| format!("cannot run {}", self.nix_binary.display()))?;
-        if !out.status.success() {
-            bail!(
-                "{} --version exited with {}",
-                self.nix_binary.display(),
-                out.status
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_owned())
+        version_line(&self.nix_binary, &["--version"]).await
     }
 
     fn local_binary(&self, tool: Tool) -> &Path {
@@ -929,6 +877,42 @@ async fn drain<A, B>(
             read = &mut *second, if second_read.is_none() => *second_read = Some(read),
         }
     }
+}
+
+/// The first line of `<bin> args`' stdout, within [`PROBE_TIMEOUT`]. The program is killed when
+/// it takes longer. Its stderr is never kept: an error names the program and how it exited.
+async fn version_line(bin: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(PROBE_TIMEOUT, out)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{} {} gave no answer within {}s",
+                bin.display(),
+                args.join(" "),
+                PROBE_TIMEOUT.as_secs()
+            )
+        })?
+        .with_context(|| format!("cannot run {}", bin.display()))?;
+    if !out.status.success() {
+        bail!(
+            "{} {} exited with {}",
+            bin.display(),
+            args.join(" "),
+            out.status
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_owned())
 }
 
 #[cfg(test)]

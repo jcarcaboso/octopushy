@@ -1,18 +1,21 @@
 //! `octopushy agent run`: sets up the state directory, recovers from a restart,
 //! and runs the agent channel.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
+use tokio::sync::watch;
+
 use crate::attempts::AttemptManager;
-use crate::connection::{self, Agent};
-use crate::executors::nix::{self, NixSettings};
+use crate::availability::{self, Availability, StorageDirs};
+use crate::connection::{self, Agent, Storage};
+use crate::executors::ExecutorConfig;
+use crate::executors::nix::NixSettings;
 use crate::executors::opentofu::state;
-use crate::executors::{EXECUTORS, ExecutorConfig};
 use crate::fsutil::ensure_private_dir;
 use crate::identity;
 use crate::images::ServerLink;
@@ -45,6 +48,8 @@ pub struct RunOptions {
     /// Refuse tool images not named by digest.
     pub require_image_digest: bool,
     pub poll_interval: Duration,
+    /// How often executors are probed again while running.
+    pub reprobe_interval: Duration,
 }
 
 impl RunOptions {
@@ -65,6 +70,7 @@ impl RunOptions {
             container_memory: None,
             require_image_digest: false,
             poll_interval: Duration::from_secs(5),
+            reprobe_interval: availability::REPROBE_INTERVAL,
         }
     }
 }
@@ -80,78 +86,21 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
 
     let outbox = Outbox::open(paths.outbox())?;
 
-    let mut runtime = ToolRuntime::new(
-        opts.tool_runtime,
-        opts.container_binary.clone(),
-        opts.tofu_binary.clone(),
-        opts.container_network.clone(),
-    );
-    runtime.ansible_binary = opts.ansible_binary.clone();
-    runtime.nix_binary = opts.nix_binary.clone();
-    runtime.owner = Some(id.record.agent_id.clone());
-    runtime.pids_limit = opts.container_pids_limit;
-    runtime.memory_limit = opts.container_memory.clone();
-    runtime.require_image_digest = opts.require_image_digest;
-    let tools_available = match runtime.probe().await {
-        Ok(v) => {
-            tracing::info!("tool runtime {}: {v}", opts.tool_runtime.as_str());
-            true
-        }
-        Err(e) => {
-            tracing::warn!(
-                "tool runtime {} is not usable ({e:#}); not advertising opentofu (restart after fixing it)",
-                opts.tool_runtime.as_str()
-            );
-            false
-        }
-    };
-    let ansible_available = match runtime.probe_ansible().await {
-        Ok(v) => {
-            tracing::info!("ansible: {v}");
-            true
-        }
-        Err(e) => {
-            tracing::info!("ansible is not usable ({e:#}); not advertising it");
-            false
-        }
-    };
-    let nix_available = match nix::availability(
-        !runtime.is_container(),
-        runtime.probe_nix().await.map_err(|e| format!("{e:#}")),
-        nix::free_bytes(&opts.nix_store_dir),
-        opts.nix_min_free_bytes,
-    ) {
-        Ok(v) => {
-            tracing::info!("nix: {v}");
-            true
-        }
-        Err(e) => {
-            tracing::info!("not advertising nix: {e}");
-            false
-        }
-    };
-    let executors = EXECUTORS
-        .iter()
-        .filter(|&&name| match name {
-            "opentofu" => tools_available,
-            "ansible" => tools_available && ansible_available,
-            "nix" => nix_available,
-            _ => true,
-        })
-        .map(|&name| name.to_owned())
-        .collect();
+    let runtime = tool_runtime(&opts, Some(id.record.agent_id.clone()));
+    let probed = availability::probe(&runtime, &opts.nix_store_dir, opts.nix_min_free_bytes).await;
+    log_changes(None, &probed);
     // Probes need no tool: an agent-process probe is the executor's own connection, and a tool
-    // context that cannot be probed says so in its report.
-    let capabilities = tools_available
-        .then(|| state::CAPABILITY.to_owned())
-        .into_iter()
-        .chain([
-            crate::attempts::FORCE_STOP_CAPABILITY.to_owned(),
-            reachability::CAPABILITY.to_owned(),
-            reachability::UPTIME_CAPABILITY.to_owned(),
-            reachability::UPTIME_TCP_CAPABILITY.to_owned(),
-        ])
-        .collect();
+    // context that cannot be probed says so in its report. Built-in state is a feature of this
+    // binary, offered whenever `opentofu` is, so it is advertised even while the runtime is down:
+    // the runtime may come back without a reconnect.
+    let capabilities = vec![
+        state::CAPABILITY.to_owned(),
+        crate::attempts::FORCE_STOP_CAPABILITY.to_owned(),
+        reachability::CAPABILITY.to_owned(),
+        reachability::UPTIME_CAPABILITY.to_owned(),
+        reachability::UPTIME_TCP_CAPABILITY.to_owned(),
+    ];
+    let storage_dirs = storage_dirs(&opts, &paths.root, &work_dir, &provider_cache);
     let exec = Arc::new(ExecutorConfig {
         runtime,
         provider_cache,
@@ -167,6 +116,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
     });
 
     let prober = Arc::new(Prober::new(exec.clone()));
+    let exec_for_probes = exec.clone();
     // Before recovery: a tool a killed agent left running is stopped before its attempt's
     // saved state is read and its attempt reported. That attempt is uncertain if it was a
     // change, and nothing retries it.
@@ -185,11 +135,119 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         paths,
         manager,
         tool_runtime: opts.tool_runtime,
-        executors,
+        availability: watch::channel(probed).0,
         capabilities,
         prober,
+        storage: Storage::new(storage_dirs),
     });
-    connection::run(agent, shutdown).await
+    let reprobe = tokio::spawn(reprobe(
+        agent.clone(),
+        exec_for_probes,
+        opts.nix_store_dir.clone(),
+        opts.nix_min_free_bytes,
+        opts.reprobe_interval,
+        shutdown.clone(),
+    ));
+    let result = connection::run(agent, shutdown).await;
+    reprobe.abort();
+    result
+}
+
+/// Probes the executors again every `interval`, one probe at a time,
+/// and measures the caches. A change goes to the open connection through the watch.
+async fn reprobe(
+    agent: Arc<Agent>,
+    exec: Arc<ExecutorConfig>,
+    nix_store_dir: PathBuf,
+    nix_min_free: u64,
+    interval: Duration,
+    shutdown: CancellationToken,
+) {
+    let mut every = tokio::time::interval(interval);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut first = true;
+    loop {
+        tokio::select! {
+            _ = every.tick() => {}
+            _ = shutdown.cancelled() => return,
+        }
+        // The first tick is at once: the caches are measured now, the executors were at startup.
+        if !std::mem::take(&mut first) {
+            let probed = availability::probe(&exec.runtime, &nix_store_dir, nix_min_free).await;
+            agent.availability.send_if_modified(|current| {
+                if *current == probed {
+                    return false;
+                }
+                log_changes(Some(current), &probed);
+                *current = probed;
+                true
+            });
+        }
+        agent.storage.measure_caches().await;
+    }
+}
+
+/// Logs what is offered and why the rest is not; after a re-probe, only what changed.
+fn log_changes(before: Option<&Availability>, after: &Availability) {
+    for p in &after.probes {
+        let was = before.and_then(|b| b.probes.iter().find(|q| q.name == p.name));
+        if was.is_some_and(|q| q.result.is_ok() == p.result.is_ok()) {
+            continue;
+        }
+        match &p.result {
+            Ok(detail) => tracing::info!("offering {}: {detail}", p.name),
+            Err(reason) if p.expected || was.is_some() => {
+                tracing::warn!("not offering {}: {reason}", p.name)
+            }
+            Err(reason) => tracing::info!("not offering {}: {reason}", p.name),
+        }
+    }
+}
+
+/// The tool runtime `opts` set up. `owner` labels its containers.
+fn tool_runtime(opts: &RunOptions, owner: Option<String>) -> ToolRuntime {
+    let mut runtime = ToolRuntime::new(
+        opts.tool_runtime,
+        opts.container_binary.clone(),
+        opts.tofu_binary.clone(),
+        opts.container_network.clone(),
+    );
+    runtime.ansible_binary = opts.ansible_binary.clone();
+    runtime.nix_binary = opts.nix_binary.clone();
+    runtime.owner = owner;
+    runtime.pids_limit = opts.container_pids_limit;
+    runtime.memory_limit = opts.container_memory.clone();
+    runtime.require_image_digest = opts.require_image_digest;
+    runtime
+}
+
+fn storage_dirs(opts: &RunOptions, state: &Path, work: &Path, providers: &Path) -> StorageDirs {
+    StorageDirs {
+        state: state.to_path_buf(),
+        work: work.to_path_buf(),
+        nix_store: opts.nix_store_dir.clone(),
+        providers: providers.to_path_buf(),
+        nix_cache: state.join("cache").join("nix"),
+    }
+}
+
+/// `octopushy agent doctor`: the probes `run` makes with the same options, and the machine's
+/// room, printed. Reads no enrollment, creates nothing and contacts nobody, so it runs next to a
+/// running agent. Returns whether every executor the options mean to offer is available.
+pub async fn doctor(opts: RunOptions) -> bool {
+    let paths = StatePaths::new(opts.state_dir.clone());
+    let work = opts
+        .work_dir
+        .clone()
+        .unwrap_or_else(|| paths.default_work_dir());
+    let runtime = tool_runtime(&opts, None);
+    let probed = availability::probe(&runtime, &opts.nix_store_dir, opts.nix_min_free_bytes).await;
+    let dirs = storage_dirs(&opts, &paths.root, &work, &paths.provider_cache());
+    tokio::task::spawn_blocking(move || {
+        availability::print(opts.tool_runtime.as_str(), &probed, &dirs)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Container mounts and OpenTofu's canonical repository root must use the same

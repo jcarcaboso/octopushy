@@ -166,27 +166,92 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             vec!["proxmox"]
         };
         assert_eq!(hello.executors, expected, "{kind:?}: {binary}");
-        // Probes need no tool: an unusable runtime is the probe's own answer.
-        let capabilities: &[&str] = if available {
-            &[
-                "opentofu-builtin-state",
-                "forced-mutation-stop-v1",
-                "reachability-v1",
-                "uptime-v1",
-                "uptime-tcp-v1",
-            ]
+        // Probes need no tool: an unusable runtime is the probe's own answer. Built-in state is
+        // the binary's, offered whenever opentofu is, even once the runtime comes back.
+        let capabilities: &[&str] = &[
+            "opentofu-builtin-state",
+            "forced-mutation-stop-v1",
+            "reachability-v1",
+            "uptime-v1",
+            "uptime-tcp-v1",
+        ];
+        if available {
+            assert!(!hello.unavailable.contains_key("opentofu"));
         } else {
-            &[
-                "forced-mutation-stop-v1",
-                "reachability-v1",
-                "uptime-v1",
-                "uptime-tcp-v1",
-            ]
-        };
+            assert!(
+                hello.unavailable["opentofu"].contains(binary),
+                "{kind:?}: {:?}",
+                hello.unavailable
+            );
+            assert!(
+                hello.unavailable["ansible"].starts_with("the tool runtime"),
+                "{:?}",
+                hello.unavailable
+            );
+        }
+        assert!(!hello.unavailable.contains_key("proxmox"));
         assert_eq!(hello.capabilities, capabilities, "{kind:?}: {binary}");
         shutdown.cancel();
         task.await.unwrap().unwrap();
     }
+}
+
+#[tokio::test]
+async fn a_tool_installed_while_running_is_offered_without_a_reconnect() {
+    let mut server = FakeServer::start(Options::default()).await;
+    let state = tempfile::tempdir().unwrap();
+    enroll_into(&server, state.path()).await;
+    let tools = tempfile::tempdir().unwrap();
+    let tofu = tools.path().join("tofu");
+    let mut opts = RunOptions::new(state.path().to_path_buf());
+    opts.tool_runtime = RuntimeKind::Local;
+    opts.tofu_binary = tofu.clone();
+    opts.ansible_binary = "/bin/true".into();
+    opts.nix_binary = "/nonexistent/octopushy-test-nix".into();
+    opts.reprobe_interval = Duration::from_millis(200);
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(run(opts, shutdown.clone()));
+    let hello = server
+        .wait_for(|event| match event {
+            Event::Message(m) => match &m.kind {
+                Some(AgentKind::Hello(h)) => Some(h.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+    assert_eq!(hello.executors, ["proxmox"]);
+    assert!(hello.unavailable["opentofu"].starts_with("cannot run "));
+
+    // The first heartbeat of a connection carries the room left.
+    let storage = server
+        .wait_for(|event| match event {
+            Event::Message(m) => match &m.kind {
+                Some(AgentKind::Heartbeat(h)) => h.storage.clone(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+    assert_eq!(storage.free[0].name, "state");
+    assert!(storage.free[0].free_bytes > 0);
+
+    std::fs::write(&tofu, "#!/bin/sh\necho 'OpenTofu v1.10.0'\n").unwrap();
+    std::fs::set_permissions(&tofu, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let changed = server
+        .wait_for(|event| match event {
+            Event::Message(m) => match &m.kind {
+                Some(AgentKind::ExecutorsChanged(c)) => Some(c.clone()),
+                Some(AgentKind::Hello(_)) => panic!("the agent reconnected"),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+    assert_eq!(changed.executors, ["opentofu", "proxmox", "ansible"]);
+    assert_eq!(changed.unavailable.keys().collect::<Vec<_>>(), ["nix"]);
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
 }
 
 #[tokio::test]

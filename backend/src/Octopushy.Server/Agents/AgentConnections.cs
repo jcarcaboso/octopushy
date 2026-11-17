@@ -6,9 +6,15 @@ namespace Octopushy.Server.Agents;
 
 /// <summary>One connected agent's stream: messages to it go through a bounded queue.</summary>
 /// <param name="toolRuntime">How the agent runs tools, as its Hello said: <c>local</c>, <c>podman</c> or <c>docker</c>.</param>
+/// <param name="unavailable">Why each executor the agent knows and does not offer is missing, cleaned: see <see cref="AgentAvailability"/>.</param>
 public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string> executors, IReadOnlyList<string>? capabilities = null,
-    string? toolRuntime = null)
+    string? toolRuntime = null, IReadOnlyDictionary<string, string>? unavailable = null)
 {
+    private sealed record Offer(IReadOnlyList<string> Executors, IReadOnlyDictionary<string, string> Unavailable);
+
+    private volatile Offer _offer = new(executors, unavailable ?? new SortedDictionary<string, string>());
+    private volatile AgentStorage? _storage;
+
     /// <summary>The operator-only ability to stop a running mutating tool.</summary>
     public const string ForcedMutationStopCapability = "forced-mutation-stop-v1";
 
@@ -29,7 +35,65 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
 
     public string Name { get; } = name;
 
-    public IReadOnlyList<string> Executors { get; } = executors;
+    /// <summary>
+    /// The executors the agent offers now: from its Hello, then from its last <c>ExecutorsChanged</c>. Dispatch reads this,
+    /// so a change takes effect on the open connection.
+    /// </summary>
+    public IReadOnlyList<string> Executors => _offer.Executors;
+
+    /// <summary>Why each executor the agent does not offer is missing, as it said last.</summary>
+    public IReadOnlyDictionary<string, string> Unavailable => _offer.Unavailable;
+
+    /// <summary>The room the agent reported last on this connection; null until a heartbeat carries it.</summary>
+    public AgentStorage? Storage
+    {
+        get => _storage;
+        set => _storage = value;
+    }
+
+    // When the next offer change may be logged, woken for and stored (ticks of the server's clock), whether the latest one is not
+    // stored yet, and whether a flush of it is queued. Changed only under the engine's gate, except the flush flag.
+    private long _offerEffectsAfter = long.MinValue;
+    private int _offerUnsaved;
+    private int _offerFlushQueued;
+
+    /// <summary>The offer in memory is newer than what the agent's record holds.</summary>
+    public bool OfferUnsaved
+    {
+        get => Volatile.Read(ref _offerUnsaved) == 1;
+        set => Volatile.Write(ref _offerUnsaved, value ? 1 : 0);
+    }
+
+    /// <summary>Before this, a change of the offer is applied in memory only: no log line, no wake, no write.</summary>
+    public DateTimeOffset OfferEffectsAfter
+    {
+        get => Volatile.Read(ref _offerEffectsAfter) is var t && t == long.MinValue ? DateTimeOffset.MinValue : new DateTimeOffset(t, TimeSpan.Zero);
+        set => Volatile.Write(ref _offerEffectsAfter, value.UtcTicks);
+    }
+
+    /// <summary>
+    /// Whether an unsaved offer is due to be stored at <paramref name="now"/> and no flush is queued yet; if so, a flush counts
+    /// as queued until <see cref="OfferFlushTaken"/>.
+    /// </summary>
+    public bool TryQueueOfferFlush(DateTimeOffset now) =>
+        OfferUnsaved && now >= OfferEffectsAfter && Interlocked.CompareExchange(ref _offerFlushQueued, 1, 0) == 0;
+
+    public void OfferFlushTaken() => Volatile.Write(ref _offerFlushQueued, 0);
+
+    /// <summary>
+    /// Replaces what the agent offers. Returns false when nothing changed. <paramref name="executors"/> is a set as
+    /// <see cref="AgentAvailability.Executors"/> makes it. Called under the engine's gate, which dispatch holds from reading
+    /// <see cref="Executors"/> to handing work over.
+    /// </summary>
+    public bool SetExecutors(IReadOnlyList<string> executors, IReadOnlyDictionary<string, string> unavailable)
+    {
+        var current = _offer;
+        if (current.Executors.SequenceEqual(executors) && current.Unavailable.Count == unavailable.Count
+            && current.Unavailable.All(r => unavailable.TryGetValue(r.Key, out var other) && other == r.Value))
+            return false;
+        _offer = new Offer(executors, unavailable);
+        return true;
+    }
 
     public IReadOnlyList<string> Capabilities { get; } = capabilities ?? [];
 

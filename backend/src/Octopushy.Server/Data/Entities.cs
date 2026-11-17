@@ -1129,6 +1129,12 @@ public sealed class AgentRecord
 
     public string[] Executors { get; set; } = [];
 
+    /// <summary>
+    /// JSON object: why each executor the agent knows and does not offer is missing, as it said last, cleaned (see
+    /// <see cref="Agents.AgentAvailability"/>). Null when it gave none. Written only when it changes.
+    /// </summary>
+    public string? Unavailable { get; set; }
+
     public string? ToolRuntime { get; set; }
 
     public required string CertificateSerial { get; set; }

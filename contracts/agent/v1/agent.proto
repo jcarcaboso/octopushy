@@ -90,6 +90,9 @@ message AgentMessage {
     // Added in reachability-v1. Never in the result outbox: a report lost with a connection is
     // simply not evidence, and the server asks again.
     ReachabilityReport reachability = 7;
+    // Sent when the agent probes its executors again and finds them changed, on the open stream. An
+    // older server ignores it and keeps what Hello said until the agent reconnects.
+    ExecutorsChanged executors_changed = 8;
   }
 }
 
@@ -104,10 +107,51 @@ message Hello {
   // Features of this binary that are not executors, such as
   // "opentofu-builtin-state" or "reachability-v1". Older agents send none.
   repeated string capabilities = 5;
+  // Why each executor this binary knows but does not offer is missing, such as "ansible": "cannot run
+  // octopushy-ansible: No such file or directory". For people, written by the agent, at most 300
+  // characters, never a credential. Older agents send none, and an executor missing from both
+  // executors and this map has no known reason.
+  map<string, string> unavailable = 6;
+}
+
+// The agent's executors after a periodic probe found a change. Replaces Hello's executors and
+// unavailable for the rest of the connection: work is offered by this set from then on. An
+// attempt already running is unaffected.
+message ExecutorsChanged {
+  repeated string executors = 1;
+  // As Hello.unavailable.
+  map<string, string> unavailable = 2;
 }
 
 message Heartbeat {
   repeated string running_attempt_ids = 1;
+  // On every few heartbeats, not each: the latest figures. Absent from older agents and from the
+  // heartbeats in between; the server keeps the last one it received for the connection.
+  StorageReport storage = 2;
+}
+
+// Room on the agent's machine, measured by the agent.
+message StorageReport {
+  repeated FreeSpace free = 1;
+  repeated CacheSize caches = 2;
+}
+
+// Free space of the file system holding one of the agent's folders, from statvfs, as an
+// unprivileged user may use it. A folder on the same file system as one listed before it is left out.
+message FreeSpace {
+  // "state" (the state directory), "work" (attempt workspaces) or "nix-store".
+  string name = 1;
+  uint64 free_bytes = 2;
+  uint64 total_bytes = 3;
+}
+
+// Bytes a cache occupies on disk, measured by a walk that stops at a fixed number of entries.
+message CacheSize {
+  // "providers" (OpenTofu's provider cache) or "nix-cache" (Nix's fetcher and evaluation cache).
+  string name = 1;
+  uint64 bytes = 2;
+  // False when the walk stopped at its limit: bytes is then a lower bound.
+  bool complete = 3;
 }
 
 message AttemptStarted {
