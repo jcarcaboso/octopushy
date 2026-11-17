@@ -408,7 +408,7 @@ async fn an_apply_reports_its_state_even_when_it_fails() {
         r#"#!/bin/sh
 case "$1" in
   version) echo '{"terraform_version":"1.13.1"}' ;;
-  apply) echo '{"version":4,"serial":5,"lineage":"l"}' > "$STATE_FILE"; exit 1 ;;
+  apply) echo '{"version":4,"serial":5,"lineage":"l"}' > "$TF_VAR_state_file"; exit 1 ;;
 esac
 "#,
     )
@@ -431,7 +431,7 @@ esac
     let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
     let input = serde_json::json!({
         "root": ".",
-        "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate") },
+        "env": { "TF_VAR_state_file": work.join("a1/state/terraform.tfstate") },
     });
     let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());
     apply.files_tar_gz = archive::pack(&[("main.tf", b"".as_slice())]).unwrap();
@@ -605,9 +605,9 @@ async fn a_restart_during_init_failed_and_one_during_the_apply_is_uncertain() {
 case "$1" in
   version) echo '{"terraform_version":"1.13.1"}' ;;
   init|apply)
-    touch "$GATES/$1"
-    while [ ! -e "$GATES/go-$1" ]; do sleep 0.02; done
-    [ "$1" = apply ] && echo '{"version":4,"serial":5,"lineage":"l"}' > "$STATE_FILE"
+    touch "$TF_VAR_gates/$1"
+    while [ ! -e "$TF_VAR_gates/go-$1" ]; do sleep 0.02; done
+    [ "$1" = apply ] && echo '{"version":4,"serial":5,"lineage":"l"}' > "$TF_VAR_state_file"
     ;;
 esac
 exit 0
@@ -635,7 +635,7 @@ exit 0
     let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
     let input = serde_json::json!({
         "root": ".",
-        "env": { "STATE_FILE": work.join("a1/state/terraform.tfstate"), "GATES": gates },
+        "env": { "TF_VAR_state_file": work.join("a1/state/terraform.tfstate"), "TF_VAR_gates": gates },
     });
     let mut apply = assignment("a1", "opentofu", "apply", &input.to_string());
     apply.mutating = Some(true);

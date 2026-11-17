@@ -1,7 +1,7 @@
 # The backend image: the server, the Git CLI it reads the lab repository with, and its
 # migrations (run with `migrate`). Build from the repository root:
 #   podman build -f backend/Containerfile -t octopushy-backend:<version> .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
 WORKDIR /src
 COPY contracts/ contracts/
 COPY backend/ backend/
@@ -12,7 +12,7 @@ RUN dotnet publish backend/src/Octopushy.Server \
       -p:OpenApiGenerateDocuments=false \
       --output /app
 
-FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0@sha256:9cab4d7d886226d47b5489ef9abf0544e2f109fde11a8acc190217610af26c00
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends git openssh-client ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \

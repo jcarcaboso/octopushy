@@ -2,12 +2,21 @@
 //! (`podman`, `docker`) or directly (`local`). Nix runs only directly.
 //!
 //! Secrets never appear on a command line, where `/proc/<pid>/cmdline` would
-//! show them: the tool's environment is set on the child process, and container
-//! runtimes get only `-e NAME` so they copy the value from their own environment.
-//! A tool that takes secrets on stdin gets `-i` and a pipe.
+//! show them. The `local` runtime sets the tool's environment on the child process.
+//! A container runtime reads the input's environment from `--env-file /dev/fd/N`, an
+//! in-memory file only it holds, so those names and values stay out of its own
+//! environment; a value on more than one line, which an env file cannot hold, is passed
+//! as `-e NAME` and copied from the runtime's environment. A tool that takes secrets on
+//! stdin gets `-i` and a pipe.
+//!
+//! Every container carries [`AGENT_LABEL`] with this agent's ID, so at startup
+//! [`ToolRuntime::remove_leftovers`] removes what a killed agent left, and nothing of
+//! another agent's sharing the runtime.
 
 mod lines;
 
+use std::io::Write;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -25,6 +34,18 @@ use crate::attempts::logs::AttemptLogger;
 pub const CONTAINER_WORKSPACE: &str = "/work";
 /// Where the provider cache appears inside a container.
 pub const CONTAINER_PLUGIN_CACHE: &str = "/octopushy/plugin-cache";
+
+/// The label naming the agent a container belongs to: its agent ID.
+pub const AGENT_LABEL: &str = "io.octopushy.agent";
+/// The label naming the attempt a tool container runs for.
+pub const ATTEMPT_LABEL: &str = "io.octopushy.attempt";
+/// The default `--pids-limit` of a container.
+pub const DEFAULT_PIDS_LIMIT: u32 = 4096;
+/// How long one runtime command at startup may take.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest value passed through `--env-file`; longer ones go by name. Both runtimes read
+/// the file a line at a time with a 64 KiB line limit.
+const MAX_ENV_FILE_VALUE: usize = 32 * 1024;
 
 /// Lines of stderr kept for error messages.
 const STDERR_TAIL: usize = 20;
@@ -82,6 +103,15 @@ pub struct ToolRuntime {
     pub network: Option<String>,
     /// How long a cancelled tool gets to exit after SIGTERM.
     pub kill_grace: Duration,
+    /// This agent's ID, set on every container as [`AGENT_LABEL`]. Without it containers carry
+    /// no owner and [`ToolRuntime::remove_leftovers`] removes nothing.
+    pub owner: Option<String>,
+    /// `--pids-limit` for containers; `None` leaves the runtime's default.
+    pub pids_limit: Option<u32>,
+    /// `--memory` for containers, such as `4g`; `None` sets no limit.
+    pub memory_limit: Option<String>,
+    /// Refuse an image that is not named by digest (`...@sha256:<64 hex>`).
+    pub require_image_digest: bool,
     docker_rootless: OnceCell<bool>,
 }
 
@@ -105,7 +135,9 @@ pub struct Invocation<'a> {
     /// Not secret: container runtimes get them as `-e NAME=VALUE`, so they never
     /// change the runtime's own behavior (podman reads `HOME`, for example).
     pub settings: Vec<(String, String)>,
-    /// The input's `env` and `secretEnv`, passed by name only.
+    /// The input's `env` and `secretEnv`. Container runtimes read them from an in-memory env
+    /// file, never from their command line or, unless a value has more than one line, their
+    /// own environment.
     pub env: Vec<(String, String)>,
     /// Written to the tool's stdin, then closed. Without it stdin is empty.
     pub stdin: Option<Vec<u8>>,
@@ -186,8 +218,94 @@ impl ToolRuntime {
             nix_binary: PathBuf::from("nix"),
             network,
             kill_grace: Duration::from_secs(10),
+            owner: None,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
+            memory_limit: None,
+            require_image_digest: false,
             docker_rootless: OnceCell::new(),
         }
+    }
+
+    /// Refuses an image not named by digest when [`ToolRuntime::require_image_digest`] is on.
+    pub fn check_image(&self, image: &str) -> Result<()> {
+        if self.require_image_digest && !is_pinned(image) {
+            bail!(
+                "the image {image} is not pinned by digest, and this agent requires one \
+                 (--require-image-digest, OCTOPUSHY_REQUIRE_IMAGE_DIGEST): name it as \
+                 image:tag@sha256:<64 hex> in the workflow or the server's Octopushy:Tools settings"
+            );
+        }
+        Ok(())
+    }
+
+    /// Removes every container, running or not, that carries this agent's [`AGENT_LABEL`]: what
+    /// a killed agent or a crashed runtime left, with the environment its config holds on disk.
+    /// Runs at startup before recovery, so a tool still running is stopped before its attempt's
+    /// saved state is read. That attempt is reported as a restart left it (uncertain for a
+    /// change) and never retried. Returns how many were removed.
+    pub async fn remove_leftovers(&self) -> Result<usize> {
+        let Some(owner) = self.owner.as_deref().filter(|_| self.is_container()) else {
+            return Ok(0);
+        };
+        let filter = format!("label={AGENT_LABEL}={owner}");
+        let ids = self
+            .startup_command(&["ps", "-a", "-q", "--no-trunc", "--filter", &filter])
+            .await?;
+        let ids: Vec<&str> = ids.split_whitespace().collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let format = format!(
+            "{{{{.Id}}}} {{{{index .Config.Labels \"{AGENT_LABEL}\"}}}} \
+             {{{{index .Config.Labels \"{ATTEMPT_LABEL}\"}}}}"
+        );
+        let mut args = vec!["inspect", "--format", &format, "--"];
+        args.extend(&ids);
+        let found = self.startup_command(&args).await?;
+        let mut removed = 0;
+        for line in found.lines() {
+            let mut fields = line.split_whitespace();
+            let (Some(id), Some(agent)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            // The filter is the runtime's; the label is checked here too.
+            if agent != owner {
+                continue;
+            }
+            let attempt = fields.next().unwrap_or("");
+            tracing::warn!(
+                container = %id, attempt = %attempt,
+                "removing a container a previous agent process left"
+            );
+            match self.startup_command(&["rm", "-f", "--", id]).await {
+                Ok(_) => removed += 1,
+                Err(e) => tracing::warn!(container = %id, "cannot remove the container: {e:#}"),
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Runs `<runtime> args` and returns its stdout, within [`STARTUP_TIMEOUT`].
+    async fn startup_command(&self, args: &[&str]) -> Result<String> {
+        let out = Command::new(&self.container_binary)
+            .args(args)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::time::timeout(STARTUP_TIMEOUT, out)
+            .await
+            .with_context(|| format!("{} {} timed out", self.kind.as_str(), args[0]))?
+            .with_context(|| format!("cannot run {}", self.container_binary.display()))?;
+        if !out.status.success() {
+            bail!(
+                "{} {} exited with {}: {}",
+                self.kind.as_str(),
+                args[0],
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     pub fn is_container(&self) -> bool {
@@ -348,6 +466,17 @@ impl ToolRuntime {
         }
         cmd.args(["--name", name]);
         cmd.args(["--label", label]);
+        if let Some(owner) = &self.owner {
+            cmd.args(["--label".to_owned(), format!("{AGENT_LABEL}={owner}")]);
+        }
+        if let Some(pids) = self.pids_limit {
+            cmd.arg(format!("--pids-limit={pids}"));
+        }
+        if let Some(memory) = &self.memory_limit {
+            // Swap as large as memory: the limit is the whole of what the tool may use.
+            cmd.arg(format!("--memory={memory}"));
+            cmd.arg(format!("--memory-swap={memory}"));
+        }
         // The tool's output may contain secrets; keep it out of the
         // runtime's log store (journald by default on Fedora).
         cmd.arg("--log-driver=none");
@@ -378,6 +507,7 @@ impl ToolRuntime {
         log: &AttemptLogger,
         cancel: &CancellationToken,
     ) -> Result<Pull> {
+        self.check_image(image)?;
         let present = Command::new(&self.container_binary)
             .args(["image", "inspect", "--", image])
             .stdin(Stdio::null())
@@ -433,9 +563,11 @@ impl ToolRuntime {
     }
 
     /// The command line (without the tool's own arguments' secrets: there are
-    /// none) and the process to start.
-    async fn command(&self, inv: &Invocation<'_>) -> Result<Command> {
+    /// none) and the process to start, with the env file it reads, which must stay open
+    /// until it has started.
+    async fn command(&self, inv: &Invocation<'_>) -> Result<(Command, Option<OwnedFd>)> {
         let mut cmd;
+        let mut env_file = None;
         match self.kind {
             RuntimeKind::Local => {
                 cmd = Command::new(self.local_binary(inv.tool));
@@ -452,6 +584,7 @@ impl ToolRuntime {
                 if inv.image.trim().is_empty() {
                     bail!("the input names no container image");
                 }
+                self.check_image(inv.image)?;
                 for p in [Some(inv.workspace), inv.plugin_cache]
                     .into_iter()
                     .flatten()
@@ -461,8 +594,18 @@ impl ToolRuntime {
                         bail!("{s} cannot be mounted: it contains ':' or ','");
                     }
                 }
+                // The workspace is named after the attempt.
+                let attempt = inv
+                    .workspace
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 cmd = self
-                    .container_run(&inv.name, "io.octopushy.attempt=true", inv.stdin.is_some())
+                    .container_run(
+                        &inv.name,
+                        &format!("{ATTEMPT_LABEL}={attempt}"),
+                        inv.stdin.is_some(),
+                    )
                     .await;
                 // The workspace is private to this container (`Z`); the cache is
                 // shared by concurrent attempts (`z`), so it gets the shared label.
@@ -480,12 +623,33 @@ impl ToolRuntime {
                 for (k, v) in &inv.settings {
                     cmd.args(["-e".to_owned(), format!("{k}={v}")]);
                 }
-                // Names only: the runtime copies each value from its own
-                // environment, set below on the runtime process.
-                for (k, _) in &inv.env {
+                let (in_file, by_name): (Vec<_>, Vec<_>) =
+                    inv.env.iter().partition(|(_, v)| fits_env_file(v));
+                if !in_file.is_empty() {
+                    let fd = env_memfd(&in_file)?;
+                    let raw = fd.as_raw_fd();
+                    cmd.args(["--env-file".to_owned(), format!("/dev/fd/{raw}")]);
+                    // SAFETY: fcntl is async-signal-safe, and only the child's copy of the
+                    // descriptor loses close-on-exec; the agent's other children never get it.
+                    unsafe {
+                        cmd.pre_exec(move || {
+                            let flags = libc::fcntl(raw, libc::F_GETFD);
+                            if flags < 0
+                                || libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
+                        });
+                    }
+                    env_file = Some(fd);
+                }
+                // A value an env file cannot hold: by name, copied from the runtime's own
+                // environment, never its command line.
+                for (k, _) in &by_name {
                     cmd.args(["-e", k]);
                 }
-                cmd.envs(inv.env.iter().map(|(k, v)| (k, v)));
+                cmd.envs(by_name.iter().map(|(k, v)| (k, v)));
                 cmd.arg(inv.image);
                 // The image's entrypoint is the tool.
                 cmd.args(&inv.args);
@@ -502,7 +666,7 @@ impl ToolRuntime {
         // Own process group: a Ctrl-C at the agent's terminal does not reach
         // the tool, and cancel can signal the whole group.
         .process_group(0);
-        Ok(cmd)
+        Ok((cmd, env_file))
     }
 
     /// Runs the tool, streaming its output into the attempt log.
@@ -513,13 +677,15 @@ impl ToolRuntime {
         cancel: &CancellationToken,
     ) -> Result<ToolOutput> {
         log.agent(format!("$ {} {}", inv.tool.label(), inv.args.join(" ")));
-        let mut cmd = self.command(&inv).await?;
+        let (mut cmd, env_file) = self.command(&inv).await?;
         let mut child = cmd.spawn().with_context(|| match self.kind {
             RuntimeKind::Local => {
                 format!("cannot start {}", self.local_binary(inv.tool).display())
             }
             _ => format!("cannot start {}", self.container_binary.display()),
         })?;
+        // The runtime holds its own copy.
+        drop(env_file);
         let pgid = child.id().map(|pid| pid as libc::pid_t);
         if let Some(input) = inv.stdin.take() {
             let mut stdin = child.stdin.take().expect("stdin is piped");
@@ -695,6 +861,46 @@ impl ToolRuntime {
     }
 }
 
+/// Whether `image` is named by digest: `name[:tag]@sha256:<64 lowercase hex>`.
+pub fn is_pinned(image: &str) -> bool {
+    image.split_once("@sha256:").is_some_and(|(name, digest)| {
+        !name.is_empty()
+            && digest.len() == 64
+            && digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// Whether a value can go in an env file: both runtimes read one line per variable and
+/// drop a trailing `\r`.
+fn fits_env_file(value: &str) -> bool {
+    value.len() <= MAX_ENV_FILE_VALUE && !value.contains(['\n', '\r', '\0'])
+}
+
+/// An in-memory file of `NAME=VALUE` lines, closed on exec. Nothing of it reaches a file
+/// system: the runtime opens it as `/dev/fd/N`.
+fn env_memfd(env: &[&(String, String)]) -> Result<OwnedFd> {
+    // SAFETY: a valid C string and flags; the result is checked before use.
+    let raw = unsafe { libc::memfd_create(c"octopushy-env".as_ptr(), libc::MFD_CLOEXEC) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error()).context("creating the env file");
+    }
+    // SAFETY: memfd_create returned a new descriptor that nothing else owns.
+    let fd = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+    let mut file = std::fs::File::from(fd);
+    let mut text = String::new();
+    for (k, v) in env {
+        text.push_str(k);
+        text.push('=');
+        text.push_str(v);
+        text.push('\n');
+    }
+    file.write_all(text.as_bytes())
+        .context("writing the env file")?;
+    Ok(file.into())
+}
+
 async fn capture_stdout(
     reader: impl tokio::io::AsyncRead + Unpin,
     cap: u64,
@@ -827,42 +1033,78 @@ mod tests {
         assert!(!format!("{out:?}").contains("secret"));
     }
 
+    fn tofu_invocation<'a>(ws: &'a Path, workdir: &'a Path, cache: &'a Path) -> Invocation<'a> {
+        Invocation {
+            tool: Tool::OpenTofu,
+            name: "octopushy-att-1-init".into(),
+            image: "ghcr.io/opentofu/opentofu:1.13.1",
+            workspace: ws,
+            workdir,
+            plugin_cache: Some(cache),
+            args: vec!["init".into(), "-input=false".into()],
+            settings: vec![("HOME".into(), "/work/home".into())],
+            env: vec![
+                ("PG_CONN_STR".into(), "postgres://u:supersecret@db/x".into()),
+                (
+                    "MULTI_LINE".into(),
+                    "-----BEGIN KEY-----\nmultisecret\n".into(),
+                ),
+            ],
+            stdin: None,
+            capture_stdout: false,
+            stderr_mark: None,
+            control_prefix: None,
+        }
+    }
+
+    fn args_of(cmd: &Command) -> String {
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     #[tokio::test]
-    async fn container_command_passes_env_by_name_only() {
-        let rt = ToolRuntime::new(
+    async fn container_command_keeps_env_values_off_the_command_line_and_environment() {
+        use std::io::{Read, Seek};
+        let mut rt = ToolRuntime::new(
             RuntimeKind::Podman,
             None,
             "tofu".into(),
             Some("octonet".into()),
         );
+        rt.owner = Some("agent-7".into());
         let ws = PathBuf::from("/srv/work/att-1");
         let workdir = ws.join("repo/root");
         let cache = PathBuf::from("/srv/cache");
-        let inv = Invocation {
-            tool: Tool::OpenTofu,
-            name: "octopushy-att-1-init".into(),
-            image: "ghcr.io/opentofu/opentofu:1.13.1",
-            workspace: &ws,
-            workdir: &workdir,
-            plugin_cache: Some(&cache),
-            args: vec!["init".into(), "-input=false".into()],
-            settings: vec![("HOME".into(), "/work/home".into())],
-            env: vec![("PG_CONN_STR".into(), "postgres://u:supersecret@db/x".into())],
-            stdin: None,
-            capture_stdout: false,
-            stderr_mark: None,
-            control_prefix: None,
-        };
-        let cmd = rt.command(&inv).await.unwrap();
-        let std = cmd.as_std();
-        let args: Vec<String> = std
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        let joined = args.join(" ");
+        let inv = tofu_invocation(&ws, &workdir, &cache);
+        let (cmd, env_file) = rt.command(&inv).await.unwrap();
+        let joined = args_of(&cmd);
         assert!(!joined.contains("supersecret"), "{joined}");
-        assert!(joined.contains("-e PG_CONN_STR "), "{joined}");
+        assert!(!joined.contains("multisecret"), "{joined}");
+        assert!(!joined.contains("PG_CONN_STR"), "{joined}");
+        let fd = env_file.expect("an env file");
+        assert!(
+            joined.contains(&format!("--env-file /dev/fd/{} ", fd.as_raw_fd())),
+            "{joined}"
+        );
+        let mut file = std::fs::File::from(fd);
+        file.rewind().unwrap();
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "PG_CONN_STR=postgres://u:supersecret@db/x\n");
+        // A value on several lines cannot go in the file: by name, from the runtime's environment.
+        assert!(joined.contains("-e MULTI_LINE "), "{joined}");
         assert!(joined.contains("-e HOME=/work/home"), "{joined}");
+        assert!(
+            joined.contains("--label io.octopushy.attempt=att-1"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("--label io.octopushy.agent=agent-7"),
+            "{joined}"
+        );
         assert!(joined.contains("--userns=keep-id"));
         assert!(joined.contains("-v /srv/work/att-1:/work:Z"));
         assert!(joined.contains("-v /srv/cache:/octopushy/plugin-cache:z"));
@@ -873,14 +1115,106 @@ mod tests {
             joined.ends_with("ghcr.io/opentofu/opentofu:1.13.1 init -input=false"),
             "{joined}"
         );
-        let env: Vec<_> = std.get_envs().collect();
+        let env: Vec<_> = cmd.as_std().get_envs().collect();
         assert!(
-            env.iter().any(|(k, v)| *k == "PG_CONN_STR"
-                && v.is_some_and(|v| v == "postgres://u:supersecret@db/x"))
+            !env.iter().any(|(k, _)| *k == "PG_CONN_STR"),
+            "a one-line value stays out of the runtime's environment"
+        );
+        assert!(
+            env.iter()
+                .all(|(_, v)| v.is_none_or(|v| !v.to_string_lossy().contains("supersecret")))
         );
         assert!(
             !env.iter().any(|(k, _)| *k == "HOME"),
             "the runtime keeps its own HOME"
+        );
+    }
+
+    #[tokio::test]
+    async fn container_limits_default_to_pids_only() {
+        let ws = PathBuf::from("/srv/work/att-1");
+        let workdir = ws.join("repo/root");
+        let cache = PathBuf::from("/srv/cache");
+        let mut rt = ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None);
+        let (cmd, _) = rt
+            .command(&tofu_invocation(&ws, &workdir, &cache))
+            .await
+            .unwrap();
+        let joined = args_of(&cmd);
+        assert!(joined.contains("--pids-limit=4096"), "{joined}");
+        assert!(!joined.contains("--memory"), "{joined}");
+        assert!(
+            !joined.contains("io.octopushy.agent"),
+            "no owner, no owner label"
+        );
+
+        rt.memory_limit = Some("6g".into());
+        rt.pids_limit = Some(512);
+        let (cmd, _) = rt
+            .command(&tofu_invocation(&ws, &workdir, &cache))
+            .await
+            .unwrap();
+        let joined = args_of(&cmd);
+        assert!(joined.contains("--pids-limit=512"), "{joined}");
+        assert!(joined.contains("--memory=6g --memory-swap=6g"), "{joined}");
+    }
+
+    #[tokio::test]
+    async fn an_image_named_by_tag_is_refused_only_when_digests_are_required() {
+        let ws = PathBuf::from("/srv/work/att-1");
+        let workdir = ws.join("repo/root");
+        let cache = PathBuf::from("/srv/cache");
+        let mut rt = ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None);
+        let digest = format!("ghcr.io/opentofu/opentofu:1.13.1@sha256:{}", "a".repeat(64));
+        let mut inv = tofu_invocation(&ws, &workdir, &cache);
+        assert!(
+            rt.command(&inv).await.is_ok(),
+            "a tag is accepted by default"
+        );
+
+        rt.require_image_digest = true;
+        let err = rt.command(&inv).await.unwrap_err().to_string();
+        assert!(err.contains("not pinned by digest"), "{err}");
+        assert!(err.contains("--require-image-digest"), "{err}");
+        let log = AttemptLogger::new(
+            std::sync::Arc::new(crate::attempts::logs::LogBuffer::default()),
+            std::sync::Arc::new(crate::masking::Masker::default()),
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+        );
+        assert!(
+            rt.pull(inv.image, &log, &CancellationToken::new())
+                .await
+                .is_err(),
+            "nor pulled"
+        );
+        inv.image = &digest;
+        assert!(rt.command(&inv).await.is_ok());
+
+        for (image, pinned) in [
+            (digest.as_str(), true),
+            ("ghcr.io/opentofu/opentofu:1.13.1", false),
+            ("ghcr.io/opentofu/opentofu@sha256:abc", false),
+            (&format!("@sha256:{}", "a".repeat(64)), false),
+            (&format!("x@sha256:{}", "A".repeat(64)), false),
+            (&format!("x@sha256:{}", "b".repeat(64)), true),
+        ] {
+            assert_eq!(is_pinned(image), pinned, "{image}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_runtime_sets_env_on_the_tool() {
+        let rt = ToolRuntime::new(RuntimeKind::Local, None, "tofu".into(), None);
+        let ws = PathBuf::from("/srv/work/att-1");
+        let cache = PathBuf::from("/srv/cache");
+        let (cmd, env_file) = rt
+            .command(&tofu_invocation(&ws, &ws, &cache))
+            .await
+            .unwrap();
+        assert!(env_file.is_none());
+        assert!(
+            cmd.as_std().get_envs().any(|(k, v)| k == "PG_CONN_STR"
+                && v.is_some_and(|v| v == "postgres://u:supersecret@db/x"))
         );
     }
 }

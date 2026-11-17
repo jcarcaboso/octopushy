@@ -75,6 +75,9 @@ async fn agent(command: AgentCommand) -> anyhow::Result<()> {
             opts.nix_store_max_bytes = args.nix_store_max_gb.saturating_mul(1 << 30);
             opts.container_binary = args.container_binary;
             opts.container_network = args.container_network;
+            opts.container_pids_limit = Some(args.container_pids_limit).filter(|&n| n > 0);
+            opts.container_memory = args.container_memory;
+            opts.require_image_digest = args.require_image_digest;
             let shutdown = CancellationToken::new();
             handle_signals(shutdown.clone());
             run(opts, shutdown).await

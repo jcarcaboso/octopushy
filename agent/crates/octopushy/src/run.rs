@@ -38,6 +38,12 @@ pub struct RunOptions {
     pub nix_store_max_bytes: u64,
     pub container_binary: Option<PathBuf>,
     pub container_network: Option<String>,
+    /// `--pids-limit` for tool containers; `None` leaves the runtime's default.
+    pub container_pids_limit: Option<u32>,
+    /// `--memory` for tool containers; `None` sets no limit.
+    pub container_memory: Option<String>,
+    /// Refuse tool images not named by digest.
+    pub require_image_digest: bool,
     pub poll_interval: Duration,
 }
 
@@ -55,6 +61,9 @@ impl RunOptions {
             nix_store_max_bytes: NixSettings::DEFAULT_STORE_MAX_GB << 30,
             container_binary: None,
             container_network: None,
+            container_pids_limit: Some(crate::tools::DEFAULT_PIDS_LIMIT),
+            container_memory: None,
+            require_image_digest: false,
             poll_interval: Duration::from_secs(5),
         }
     }
@@ -79,6 +88,10 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
     );
     runtime.ansible_binary = opts.ansible_binary.clone();
     runtime.nix_binary = opts.nix_binary.clone();
+    runtime.owner = Some(id.record.agent_id.clone());
+    runtime.pids_limit = opts.container_pids_limit;
+    runtime.memory_limit = opts.container_memory.clone();
+    runtime.require_image_digest = opts.require_image_digest;
     let tools_available = match runtime.probe().await {
         Ok(v) => {
             tracing::info!("tool runtime {}: {v}", opts.tool_runtime.as_str());
@@ -154,6 +167,14 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
     });
 
     let prober = Arc::new(Prober::new(exec.clone()));
+    // Before recovery: a tool a killed agent left running is stopped before its attempt's
+    // saved state is read and its attempt reported. That attempt is uncertain if it was a
+    // change, and nothing retries it.
+    match exec.runtime.remove_leftovers().await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("removed {n} containers a previous agent process left"),
+        Err(e) => tracing::warn!("cannot remove containers a previous agent process left: {e:#}"),
+    }
     let manager = AttemptManager::new(work_dir, outbox, exec);
     let pending = manager.recover()?;
     if pending > 0 {

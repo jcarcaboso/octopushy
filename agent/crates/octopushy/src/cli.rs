@@ -121,9 +121,33 @@ pub struct RunArgs {
     /// Container network for tool containers (`--network`).
     #[arg(long)]
     pub container_network: Option<String>,
+    /// Most processes a tool container may run (`--pids-limit`); 0 leaves the runtime's default.
+    #[arg(long, env = "OCTOPUSHY_CONTAINER_PIDS_LIMIT", default_value_t = crate::tools::DEFAULT_PIDS_LIMIT)]
+    pub container_pids_limit: u32,
+    /// Most memory a tool container may use, such as `4g` (`--memory`, swap included). No
+    /// limit by default: a tool killed for memory midway through a change leaves it uncertain.
+    #[arg(long, env = "OCTOPUSHY_CONTAINER_MEMORY", value_parser = parse_memory)]
+    pub container_memory: Option<String>,
+    /// Refuse a tool image not named by digest (`image:tag@sha256:<64 hex>`).
+    #[arg(long, env = "OCTOPUSHY_REQUIRE_IMAGE_DIGEST", action = clap::ArgAction::SetTrue,
+          value_parser = clap::builder::BoolishValueParser::new())]
+    pub require_image_digest: bool,
     /// Directory for attempt workspaces (default: <state>/work).
     #[arg(long)]
     pub work_dir: Option<PathBuf>,
+}
+
+/// A size as the runtimes take it: digits and an optional unit, `b`, `k`, `m` or `g`.
+fn parse_memory(s: &str) -> Result<String, String> {
+    let digits = s.trim_end_matches(['b', 'k', 'm', 'g', 'B', 'K', 'M', 'G']);
+    let unit = s.len() - digits.len();
+    if digits.is_empty() || unit > 1 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("expected a size such as 4g, 512m or 1073741824".into());
+    }
+    if digits.bytes().all(|b| b == b'0') {
+        return Err("a memory limit must be more than zero".into());
+    }
+    Ok(s.to_ascii_lowercase())
 }
 
 #[derive(Debug, Args)]
@@ -131,4 +155,47 @@ pub struct StatusArgs {
     /// State directory (see `enroll`).
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn run_args(extra: &[&str]) -> RunArgs {
+        let args = ["octopushy", "agent", "run"].iter().chain(extra);
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Agent {
+                command: AgentCommand::Run(args),
+            } => args,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn container_limits_and_digests() {
+        let defaults = run_args(&[]);
+        assert_eq!(defaults.container_pids_limit, 4096);
+        assert_eq!(
+            defaults.container_memory, None,
+            "no memory limit by default"
+        );
+        assert!(!defaults.require_image_digest);
+        let set = run_args(&[
+            "--container-pids-limit",
+            "0",
+            "--container-memory",
+            "4G",
+            "--require-image-digest",
+        ]);
+        assert_eq!(set.container_pids_limit, 0);
+        assert_eq!(set.container_memory.as_deref(), Some("4g"));
+        assert!(set.require_image_digest);
+        for good in ["512m", "1073741824", "2g"] {
+            assert!(parse_memory(good).is_ok(), "{good}");
+        }
+        for bad in ["", "g", "0", "0m", "4gb", "-1g", "4 g", "1e9"] {
+            assert!(parse_memory(bad).is_err(), "{bad}");
+        }
+    }
 }

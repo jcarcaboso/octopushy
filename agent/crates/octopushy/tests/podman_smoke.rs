@@ -64,7 +64,10 @@ async fn podman_tofu_version() {
                         "/octopushy/plugin-cache".into(),
                     ),
                 ],
-                env: vec![("SOME_SECRET".into(), "not-a-real-secret-value".into())],
+                env: vec![(
+                    "TF_VAR_some_secret".into(),
+                    "not-a-real-secret-value".into(),
+                )],
                 stdin: None,
                 capture_stdout: true,
                 control_prefix: None,
@@ -181,4 +184,108 @@ output "secret" {
     assert_eq!(std::fs::metadata(plan).unwrap().uid(), unsafe {
         libc::getuid()
     });
+}
+
+/// A real runtime (`OCTOPUSHY_SMOKE_RUNTIME`, podman by default) starts a container with the
+/// limits, reads the environment from the in-memory env file, and at startup removes a
+/// container this agent left and keeps another agent's.
+#[tokio::test]
+#[ignore = "needs rootless podman (or docker) and a busybox image"]
+async fn real_runtime_limits_env_file_and_leftovers() {
+    let kind = match std::env::var("OCTOPUSHY_SMOKE_RUNTIME").as_deref() {
+        Ok("docker") => RuntimeKind::Docker,
+        _ => RuntimeKind::Podman,
+    };
+    let image = "docker.io/library/busybox:1.37";
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("att-smoke");
+    std::fs::create_dir_all(&ws).unwrap();
+    let mut rt = ToolRuntime::new(kind, None, "tofu".into(), None);
+    let me = format!("smoke-{}", fastrand::u32(..));
+    rt.owner = Some(me.clone());
+    rt.pids_limit = Some(64);
+    rt.memory_limit = Some("256m".into());
+    let (log, buffer) = logger(&[SECRET]);
+    let out = rt
+        .run(
+            Invocation {
+                tool: Tool::OpenTofu,
+                name: format!("octopushy-{me}-env"),
+                image,
+                workspace: &ws,
+                workdir: &ws,
+                plugin_cache: None,
+                args: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "echo \"one=$TF_VAR_one\"; echo \"multi=$TF_VAR_multi\" | head -1; \
+                     cat /sys/fs/cgroup/pids.max /sys/fs/cgroup/memory.max"
+                        .into(),
+                ],
+                settings: vec![],
+                env: vec![
+                    ("TF_VAR_one".into(), format!("{SECRET} with = and spaces ")),
+                    ("TF_VAR_multi".into(), "first\nsecond".into()),
+                ],
+                stdin: None,
+                capture_stdout: true,
+                control_prefix: None,
+                stderr_mark: None,
+            },
+            &log,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    println!("{stdout}\n{:#?}", lines(&buffer));
+    assert_eq!(out.code, Some(0), "stderr: {:?}", out.stderr_tail);
+    assert!(
+        stdout.contains(&format!("one={SECRET} with = and spaces \n")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("multi=first\n"), "{stdout}");
+    assert!(stdout.contains("\n64\n"), "pids.max: {stdout}");
+    assert!(stdout.contains("268435456"), "memory.max: {stdout}");
+
+    // Left behind: one of this agent's, one of another's.
+    let bin = kind.as_str();
+    let start = |name: &str, owner: &str| {
+        let status = std::process::Command::new(bin)
+            .args(["run", "-d", "--name", name, "--label"])
+            .arg(format!("io.octopushy.agent={owner}"))
+            .args([
+                "--label",
+                "io.octopushy.attempt=att-left",
+                image,
+                "sleep",
+                "600",
+            ])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    let mine = format!("octopushy-{me}-mine");
+    let theirs = format!("octopushy-{me}-theirs");
+    start(&mine, &me);
+    start(&theirs, &format!("{me}-other"));
+    let exists = |name: &str| {
+        std::process::Command::new(bin)
+            .args(["container", "inspect", name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let removed = rt.remove_leftovers().await.unwrap();
+    let (mine_left, theirs_left) = (exists(&mine), exists(&theirs));
+    let _ = std::process::Command::new(bin)
+        .args(["rm", "-f", &theirs, &mine])
+        .stdout(std::process::Stdio::null())
+        .status();
+    assert_eq!(removed, 1);
+    assert!(!mine_left, "this agent's leftover is removed");
+    assert!(theirs_left, "another agent's container stays");
 }
