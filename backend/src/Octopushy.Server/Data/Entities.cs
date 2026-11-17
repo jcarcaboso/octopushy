@@ -773,6 +773,12 @@ public static class Operations
 /// <summary>Why a run was started, where something depends on it.</summary>
 public static class RunReasons
 {
+    /// <summary>A revision of the lab repository proposed it.</summary>
+    public const string Revision = "revision";
+
+    /// <summary>A person started it.</summary>
+    public const string Manual = "manual";
+
     public const string Schedule = "schedule";
 
     /// <summary>A store value the guest's setup names changed its active version.</summary>
@@ -858,6 +864,16 @@ public sealed class Run
     public DateTimeOffset? FinishedAt { get; set; }
 
     public List<Step> Steps { get; set; } = [];
+}
+
+/// <summary>What an approval step's <see cref="Step.Decision"/> is, and who made it when no person did.</summary>
+public static class StepDecisions
+{
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+
+    /// <summary>The <see cref="Step.DecidedBy"/> of a decision the policy made on its own.</summary>
+    public const string ByPolicy = "policy";
 }
 
 public static class StepKinds

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
@@ -38,11 +39,11 @@ public static class NetworkRequirements
         var action = AssignmentBuilder.ActionFor(stepName);
         switch (action.Executor)
         {
-            case "proxmox":
+            case Executors.Proxmox:
                 // observe, verify-guest (a VM's address comes from the guest agent through the API, a container's host
                 // keys from its create task), verify-absent, set-protection: all in the agent process.
                 return new(true, [await ApiAsync(db, context, NetworkTarget.AgentContext, null, null, cancellationToken)]);
-            case "opentofu":
+            case Executors.OpenTofu:
                 // A pipeline's OpenTofu stage gets no endpoint and no provider credential from the server: nothing to derive.
                 if (context.Stage is not null || context.OpenTofu is not { } tofu)
                     return NetworkNeeds.NotModeled;
@@ -52,7 +53,7 @@ public static class NetworkRequirements
                 if (context.Snippets is { } snippets && AssignmentBuilder.SecretsFor(stepName, context).Contains(SecretNames.SnippetsHostKey))
                     targets.Add(Ssh("snippets-ssh", snippets.Address, snippets.Port, tofu.Image, proxy));
                 return new(true, targets);
-            case "ansible":
+            case Executors.Ansible:
                 // A preview makes no contact with the guest.
                 if (stepName == StepNames.Preview)
                     return NetworkNeeds.None;

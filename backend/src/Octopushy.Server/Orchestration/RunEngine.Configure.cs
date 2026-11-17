@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
 using Octopushy.Server.Store;
@@ -54,13 +55,13 @@ public sealed partial class RunEngine
             return false;
         }
 
-        var manual = policy.Approval == "manual";
-        var destructiveManual = ansible.Destructive && policy.Destructive == "manual";
+        var manual = policy.Approval == PolicyResolver.Manual;
+        var destructiveManual = ansible.Destructive && policy.Destructive == PolicyResolver.Manual;
         step.ApprovalRequired = manual || destructiveManual;
         if (!step.ApprovalRequired)
         {
-            step.Decision = "approved";
-            step.DecidedBy = "policy";
+            step.Decision = StepDecisions.Approved;
+            step.DecidedBy = StepDecisions.ByPolicy;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = ansible.Destructive
                 ? $"Approval and destructive are automatic (approval set by {policy.ApprovalSetBy}, destructive {policy.DestructiveSetBy})."
@@ -116,7 +117,7 @@ public sealed partial class RunEngine
         && !RunStatuses.IsTerminal(run.Status)
         && run.Status != RunStatuses.Uncertain
         && (RunContext.Parse(run.Context).ScheduledFor ?? run.CreatedAt) + Planner.ScheduleLateLimit < now
-        && !run.Steps.Any(s => s.Status == StepStatuses.AwaitingApproval || s is { ApprovalRequired: true, Decision: "approved" })
+        && !run.Steps.Any(s => s.Status == StepStatuses.AwaitingApproval || s is { ApprovalRequired: true, Decision: StepDecisions.Approved })
         && !run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && a.Status != AttemptStatuses.Queued);
 
     /// <summary>

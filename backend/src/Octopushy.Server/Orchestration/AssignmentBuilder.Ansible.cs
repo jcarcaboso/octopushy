@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Google.Protobuf;
 using Microsoft.EntityFrameworkCore;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Agents;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
@@ -162,8 +163,8 @@ public sealed partial class AssignmentBuilder
         var assignment = new Assignment
         {
             AttemptId = attempt.Id.ToString(),
-            Executor = "ansible",
-            Action = step.Name == StepNames.Preview ? "preview" : "run",
+            Executor = Executors.Ansible,
+            Action = step.Name == StepNames.Preview ? ExecutorActions.Preview : ExecutorActions.Run,
             LeaseSeconds = (uint)options.Value.AgentChannel.LeaseSeconds,
             InputJson = input.ToJsonString(),
             FilesTarGz = ByteString.CopyFrom(rotation is null ? await bundles.ForAsync(run, context, cancellationToken) : GuestAccessPlaybooks.Bundle()),
@@ -235,7 +236,7 @@ public sealed partial class AssignmentBuilder
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var preview = steps.SingleOrDefault(s => s.Name == StepNames.Preview);
         var approval = steps.SingleOrDefault(s => s.Name == StepNames.Approval);
-        if (preview?.Status != StepStatuses.Succeeded || approval?.Status != StepStatuses.Succeeded || approval.Decision != "approved")
+        if (preview?.Status != StepStatuses.Succeeded || approval?.Status != StepStatuses.Succeeded || approval.Decision != StepDecisions.Approved)
             throw new AssignmentException("A playbook requires a successful preview and approval for this run. Run it again.");
         // A lost result means a task may have run: only a known end lets another attempt start.
         if (run.Status == RunStatuses.Uncertain || step.Status == StepStatuses.Uncertain)
@@ -261,7 +262,7 @@ public sealed partial class AssignmentBuilder
     {
         var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == run.Id).ToListAsync(cancellationToken);
         var approval = steps.SingleOrDefault(s => s.Name == StepNames.OutcomeApproval);
-        if (approval?.Status != StepStatuses.Succeeded || approval.Decision != "approved" || approval.DecidedBy is null or "policy")
+        if (approval?.Status != StepStatuses.Succeeded || approval.Decision != StepDecisions.Approved || approval.DecidedBy is null or StepDecisions.ByPolicy)
             throw new AssignmentException("A further run needs a person's approval of the reported outcome.");
         var withSteps = new Run { Operation = run.Operation, Reason = run.Reason, Context = run.Context, Steps = steps };
         return RunEngine.OutcomeOf(withSteps)?.Declared

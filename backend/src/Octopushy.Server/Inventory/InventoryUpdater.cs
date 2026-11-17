@@ -302,7 +302,7 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
         Run proposed;
         try
         {
-            proposed = factory.Guest(repository, guest, resource, revision, "revision", keyIssued, hostKeyIssued, image);
+            proposed = factory.Guest(repository, guest, resource, revision, RunReasons.Revision, keyIssued, hostKeyIssued, image);
         }
         catch (RunException error)
         {

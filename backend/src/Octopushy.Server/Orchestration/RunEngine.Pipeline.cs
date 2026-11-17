@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Git;
 
@@ -92,13 +93,13 @@ public sealed partial class RunEngine
         step.Document = document.Text;
         step.PlanSha256 = document.Sha256;
         var policy = context.Policy!;
-        var manual = policy.Approval == "manual" && document.HasChanges;
-        var destructiveManual = document.Destructive.Count > 0 && policy.Destructive == "manual";
+        var manual = policy.Approval == PolicyResolver.Manual && document.HasChanges;
+        var destructiveManual = document.Destructive.Count > 0 && policy.Destructive == PolicyResolver.Manual;
         step.ApprovalRequired = manual || destructiveManual;
         if (!step.ApprovalRequired)
         {
-            step.Decision = "approved";
-            step.DecidedBy = "policy";
+            step.Decision = StepDecisions.Approved;
+            step.DecidedBy = StepDecisions.ByPolicy;
             step.DecidedAt = clock.GetUtcNow();
             step.DecisionNote = !document.HasChanges
                 ? "No stage has anything to change, so this needs no approval."

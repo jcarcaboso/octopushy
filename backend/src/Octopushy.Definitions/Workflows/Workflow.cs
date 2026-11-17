@@ -74,11 +74,12 @@ public static class GuestTypes
     public static string ProxmoxKind(string? type) => type == Container ? "lxc" : "qemu";
 }
 
-/// <summary>The tools a stage can run.</summary>
+/// <summary>The tools a stage can run, and the agent's own Proxmox executor, which no stage names. See contracts/agent/v1/executors.md.</summary>
 public static class Executors
 {
     public const string OpenTofu = "opentofu";
     public const string Ansible = "ansible";
+    public const string Proxmox = "proxmox";
 }
 
 /// <summary>

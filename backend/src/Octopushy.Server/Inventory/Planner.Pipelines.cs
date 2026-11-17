@@ -23,7 +23,7 @@ public sealed partial class Planner
             throw new RunException(waiting);
         var state = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == resource.Id, cancellationToken);
         var images = await ComposeImagesAsync(db, service, revision, state, cancellationToken);
-        var run = factory.Pipeline(repository, service, resource, guest, revision, "manual", images);
+        var run = factory.Pipeline(repository, service, resource, guest, revision, RunReasons.Manual, images);
         if (state is not null)
             state.ProposedHash = run.InputsHash;
         await engine.AddRunsAsync(db, [run], cancellationToken);
@@ -61,7 +61,7 @@ public sealed partial class Planner
                 if (guest is null || await GuestWork.WaitingForAsync(db, guest, repository, cancellationToken, service) is not null)
                     continue;
                 var images = await ComposeImagesAsync(db, service, revision, item.State, cancellationToken);
-                var run = factory.Pipeline(repository, service, item.Resource, guest, revision, "revision", images);
+                var run = factory.Pipeline(repository, service, item.Resource, guest, revision, RunReasons.Revision, images);
                 item.State.DesiredHash = run.InputsHash;
                 item.State.ProposedHash = run.InputsHash;
                 runs.Add(run);

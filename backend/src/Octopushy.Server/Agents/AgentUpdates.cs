@@ -191,7 +191,7 @@ public sealed class AgentUpdates(
         var labels = PolicyResolver.AgentLabels(head.Repository, guest).Value;
         var guestAddress = ConfigureInputs.AddressOf(guest);
         var others = agents.Where(a => a.Id != agent.Id && !a.Disabled && !a.Draining && labels.All(a.Labels.Contains)
-                                       && connections.Get(a.Id) is { } session && session.Executors.Contains("ansible")
+                                       && connections.Get(a.Id) is { } session && session.Executors.Contains(Executors.Ansible)
                                        && !(guestAddress is not null && session.RemoteAddress is { } remote && Same(guestAddress, remote)));
         if (!others.Any())
             return $"No other connected agent that is not paused can set up {guest.Address}: it needs one with the ansible executor"
@@ -518,7 +518,7 @@ public sealed class AgentUpdates(
     /// </summary>
     internal static async Task<ResourceChange?> CoveringAsync(OctopushyDb db, Run run, Func<ResourceChange, Task> refresh, CancellationToken ct)
     {
-        if (run.Reason != "revision" || run.RevisionId is null)
+        if (run.Reason != RunReasons.Revision || run.RevisionId is null)
             return null;
         var ids = await db.Agents.AsNoTracking().Where(a => a.UpdateState == AgentUpdateStates.Updating && a.UpdateChangeId != null)
             .Select(a => a.UpdateChangeId!.Value).ToListAsync(ct);

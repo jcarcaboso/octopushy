@@ -25,7 +25,7 @@ public sealed partial class RunEngine
     private async Task<(bool Approved, string? Declined)> PreApproveAsync(OctopushyDb db, Run run, Step step, RunContext context, string? moreThanCreate, bool needed,
         CancellationToken ct)
     {
-        if (run.Reason != "revision" || run.RevisionId is null)
+        if (run.Reason != RunReasons.Revision || run.RevisionId is null)
             return (false, null);
         var resource = await db.Resources.AsNoTracking().FirstOrDefaultAsync(r => r.Id == run.ResourceId, ct);
         if (resource is null || resource.Kind is not (ResourceKinds.Guest or ResourceKinds.Service))
@@ -63,7 +63,7 @@ public sealed partial class RunEngine
             return (false, reason);
         }
 
-        step.Decision = "approved";
+        step.Decision = StepDecisions.Approved;
         step.DecidedBy = change.Author;
         step.DecidedAt = clock.GetUtcNow();
         step.DecisionNote = $"{char.ToUpperInvariant(ApprovedAtDeploy[0])}{ApprovedAtDeploy[1..]} (change {change.Id}): the plan only creates.";
@@ -89,7 +89,7 @@ public sealed partial class RunEngine
             return $"Only the {expected} plan of a deploy is approved at deploy; approve run #{run.Number} yourself.";
         // The first run the deploy's revision proposed for the resource, and only its first decision.
         var earlier = await db.Runs.AsNoTracking().AnyAsync(r => r.ResourceId == resource.Id && r.Id != run.Id && r.CreatedAt >= change.CreatedAt && r.CreatedAt <= run.CreatedAt
-            && r.Reason == "revision" && r.Operation == expected, ct);
+            && r.Reason == RunReasons.Revision && r.Operation == expected, ct);
         if (earlier || run.Steps.Any(s => s.Kind == StepKinds.Approval && s.Id != step.Id && s.Decision is not null))
             return "Only the deploy's first plan is approved at deploy; approve this one yourself.";
         if (moreThanCreate is not null)
@@ -120,7 +120,7 @@ public sealed partial class RunEngine
             c => ChangeTracker.RefreshAsync(db, mirror, revisions, c, clock.GetUtcNow(), ct), ct);
         if (change is null)
             return false;
-        step.Decision = "approved";
+        step.Decision = StepDecisions.Approved;
         step.DecidedBy = change.Author;
         step.DecidedAt = clock.GetUtcNow();
         step.DecisionNote = $"Approved with the agent update (change {change.Id}).";

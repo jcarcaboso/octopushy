@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Octopushy.Definitions;
 using Octopushy.Server.Data;
 using Octopushy.Server.Store;
 
@@ -92,7 +93,7 @@ internal static class CredentialBindings
     private static async Task<HashSet<string>> ProxmoxKeysAsync(OctopushyDb db, string[] keys, CancellationToken ct)
     {
         var released = await db.SecretResolutions.AsNoTracking()
-            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == "ansible"))
+            .Where(r => keys.Contains(r.Key) && !db.Attempts.Any(a => a.Id == r.AttemptId && a.Executor == Executors.Ansible))
             .Select(r => r.Key).Distinct().ToListAsync(ct);
         var definitions = await db.Resources.AsNoTracking()
             .Where(r => r.Kind == ResourceKinds.Installation && r.Definition != null)

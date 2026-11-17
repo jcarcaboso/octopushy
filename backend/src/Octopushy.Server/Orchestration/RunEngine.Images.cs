@@ -410,7 +410,7 @@ public sealed partial class RunEngine
             var attempt = await db.Attempts.AsNoTracking().Include(a => a.Step).ThenInclude(s => s!.Run)
                 .FirstOrDefaultAsync(a => a.Id == attemptId, cancellationToken);
             if (attempt?.Step?.Run is not { } run || attempt.AgentId != agentId || !AttemptStatuses.IsActive(attempt.Status)
-                || attempt.Executor != "opentofu"
+                || attempt.Executor != Executors.OpenTofu
                 || RunContext.Parse(run.Context).ForStep(attempt.Step).OpenTofu?.TemplateImage is not { } image || image.Sha256 != sha256)
                 throw new ImageAccessException("This attempt is not assigned to this agent, under way, and in need of this image.");
             await db.ImageBuilds.Where(b => b.Sha256 == sha256 && b.Status == ImageBuildStatuses.Built)

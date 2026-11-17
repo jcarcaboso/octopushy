@@ -44,7 +44,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
         if (await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken) is { } collision)
             throw new RunException(collision);
         // A guest whose template is built is planned with its image, and waits while there is none: see RunFactory.WaitingForImage.
-        var run = factory.Guest(repository, guest, resource, revision, "manual", await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
+        var run = factory.Guest(repository, guest, resource, revision, RunReasons.Manual, await GuestAccessCredentials.IssuedAsync(db, resource.Id, cancellationToken),
             await GuestHostCredentials.IssuedAsync(db, resource.Id, cancellationToken),
             await Images.TemplateImages.ForAsync(db, repository, guest, cancellationToken));
         resource.ProvisionWaiting = null;
@@ -83,10 +83,10 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
     /// follows changes. A person's run queues behind what is running. A schedule's does not: it
     /// is refused, so nothing piles up behind a run that is waiting or uncertain.
     /// </summary>
-    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual", DateTimeOffset? scheduledFor = null) =>
+    public Task<Guid> ConfigureGuestAsync(Guid resourceId, string? action, CancellationToken cancellationToken, string reason = RunReasons.Manual, DateTimeOffset? scheduledFor = null) =>
         engine.ExecuteAsync((db, _) => ConfigureGuestAsync(db, resourceId, action, cancellationToken, reason, scheduledFor), cancellationToken);
 
-    private async Task<Guid> ConfigureGuestAsync(OctopushyDb db, Guid resourceId, string? action, CancellationToken cancellationToken, string reason = "manual", DateTimeOffset? scheduledFor = null)
+    private async Task<Guid> ConfigureGuestAsync(OctopushyDb db, Guid resourceId, string? action, CancellationToken cancellationToken, string reason = RunReasons.Manual, DateTimeOffset? scheduledFor = null)
     {
         var (resource, revision, repository) = await LoadAsync(db, resourceId, ResourceKinds.Guest, cancellationToken);
         var guest = repository.Guest(resource.Address) ?? throw new RunException("The guest is not in the latest revision.");
@@ -210,7 +210,7 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 item.Configuration.ProposedHash = inputs.Hash;
                 await FollowedSecrets.RecordAsync(db, item.Configuration, inputs.FollowedSecrets, cancellationToken);
                 if (inputs.Configure.OnChange is { } action)
-                    runs.Add(await ConfigureRunAsync(db, repository, guest, item.Resource, revision, action.Id, "revision", cancellationToken));
+                    runs.Add(await ConfigureRunAsync(db, repository, guest, item.Resource, revision, action.Id, RunReasons.Revision, cancellationToken));
             }
 
             // Read without building the inputs, which hashes the workflow's files: this runs every
