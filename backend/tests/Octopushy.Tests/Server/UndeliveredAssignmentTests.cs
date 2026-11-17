@@ -140,6 +140,57 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         Assert.Single(await server.QueryAsync(db => db.Attempts.Where(a => a.Action == "preview").ToListAsync()));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task What_a_session_never_wrote_is_not_kept_as_released_even_once_its_read_was_queued_or_handed_off_again(bool handedOffAgain)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        connections.Disconnect(agent.Id);
+        await server.SyncAndTrustAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new AgentStream
+        {
+            OnWrite = m => m.ResultAck is not null ? Block(entered, release) : Task.CompletedTask,
+        };
+        var oldConnection = await ConnectAsync(server, agent, old, Hello([TofuStateStore.AgentCapability]));
+        // The writer is busy with a message ahead of the preview, so the preview is handed off and never written.
+        Assert.True(connections.Get(agent.Id)!.TrySend(new ServerMessage { ResultAck = new ResultAck { AttemptId = "x" } }));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(AttemptStatuses.Assigned, preview.Status);
+        var first = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList();
+        Assert.NotEmpty(first);
+
+        // A newer connection's Hello queues the read again before the older session has closed and said what it never wrote.
+        var fresh = new AgentStream();
+        await ConnectAsync(server, agent, fresh, Hello([TofuStateStore.AgentCapability]));
+        Assert.Equal(AttemptStatuses.Queued, (await PreviewAsync(server)).Status);
+        var second = new List<long>();
+        if (handedOffAgain)
+        {
+            await server.TickAsync();
+            Assert.Equal(preview.Id.ToString(), (await NextAssignmentAsync(fresh)).AttemptId);
+            second = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).Except(first).ToList();
+            Assert.NotEmpty(second);
+        }
+
+        release.SetResult();
+        await oldConnection.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // What the older session recorded as released was never sent, and is gone; what the newer one sent stays.
+        Assert.Equal(second, (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList());
+        preview = await PreviewAsync(server);
+        Assert.Equal((handedOffAgain ? AttemptStatuses.Assigned : AttemptStatuses.Queued, 1), (preview.Status, preview.Number));
+        Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
+        await Task.Delay(200);
+        Assert.DoesNotContain(Drain(fresh), m => m.Assignment is not null);
+    }
+
     [Fact]
     public async Task A_change_put_back_has_its_plan_checked_again()
     {

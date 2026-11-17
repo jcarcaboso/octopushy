@@ -314,7 +314,7 @@ public sealed partial class RunEngine
                         {
                             handedOff = true;
                             sent++;
-                            _handOffs[attempt.Id] = handOff;
+                            _handOffs[(attempt.Id, ready.Session.Id)] = handOff;
                         }
                         else
                         {
@@ -366,7 +366,16 @@ public sealed partial class RunEngine
     private sealed record HandOff(Guid AgentId, Guid SessionId, long[] Releases, ReservationChange? Reservation);
 
     // Protected by the gate. In memory only: after a restart nothing is put back, and a lost assignment is decided by its lease.
-    private readonly Dictionary<Guid, HandOff> _handOffs = [];
+    // By attempt and session: a read its agent's next Hello queued again can be handed off anew before the session that never
+    // wrote it has closed, and that session's record must still be there to take back what it recorded.
+    private readonly Dictionary<(Guid Attempt, Guid Session), HandOff> _handOffs = [];
+
+    /// <summary>Forgets the hand-off of an attempt its agent has just answered for: it was delivered, through the agent's connection.</summary>
+    private void ForgetHandOff(Guid attemptId, Guid agentId)
+    {
+        if (connections.Get(agentId) is { } session)
+            _handOffs.Remove((attemptId, session.Id));
+    }
 
     /// <summary>The reservation building an assignment changed, if it did.</summary>
     private static ReservationChange? ReservationChanged(OctopushyDb db) =>
@@ -416,15 +425,21 @@ public sealed partial class RunEngine
         WithDbAsync(async db =>
         {
             // Whatever the session did write is decided by results and leases; its records are of no more use.
-            var others = _handOffs.Where(h => h.Value.SessionId == sessionId && !attemptIds.Contains(h.Key)).Select(h => h.Key).ToList();
-            foreach (var id in others)
-                _handOffs.Remove(id);
-            var requeued = 0;
+            var others = _handOffs.Keys.Where(k => k.Session == sessionId && !attemptIds.Contains(k.Attempt)).ToList();
+            foreach (var key in others)
+                _handOffs.Remove(key);
+            var (cleaned, requeued) = (0, 0);
             foreach (var attemptId in attemptIds.Distinct())
             {
-                if (!_handOffs.TryGetValue(attemptId, out var handOff) || handOff.AgentId != agentId || handOff.SessionId != sessionId)
+                if (!_handOffs.Remove((attemptId, sessionId), out var handOff) || handOff.AgentId != agentId)
                     continue;
-                _handOffs.Remove(attemptId);
+                // Never written: the secrets this hand-off recorded as released were not, whatever became of the attempt since.
+                // A read may already be queued again by its agent's next Hello, or handed off anew.
+                db.SecretResolutions.RemoveRange(await db.SecretResolutions.Where(r => handOff.Releases.Contains(r.Id)).ToListAsync(cancellationToken));
+                cleaned++;
+                // The attempt itself goes back only while this hand-off is still the one it is assigned by.
+                if (_handOffs.Keys.Any(k => k.Attempt == attemptId))
+                    continue;
                 var attempt = await db.Attempts.Include(a => a.Step)
                     .FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
                 if (attempt is not { Status: AttemptStatuses.Assigned, StartedAt: null })
@@ -434,11 +449,10 @@ public sealed partial class RunEngine
                 requeued++;
             }
 
-            if (requeued > 0)
-            {
+            if (cleaned > 0)
                 await db.SaveChangesAsync(cancellationToken);
+            if (requeued > 0)
                 signal.Wake();
-            }
         }, cancellationToken);
 
     private async Task FailUnsentAttemptAsync(Guid attemptId, Exception error, CancellationToken cancellationToken)
@@ -692,7 +706,7 @@ public sealed partial class RunEngine
         {
             var attempt = await db.Attempts.FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
             if (attempt is not null)
-                _handOffs.Remove(attempt.Id);
+                ForgetHandOff(attempt.Id, agentId);
             if (attempt?.Status == AttemptStatuses.Assigned)
             {
                 attempt.Status = AttemptStatuses.Running;
@@ -745,7 +759,7 @@ public sealed partial class RunEngine
                 return true;
             }
 
-            _handOffs.Remove(attempt.Id);
+            ForgetHandOff(attempt.Id, agentId);
 
             // The result this attempt was settled with, sent again: nothing to do.
             if (attempt.ResultSha256 == received)
@@ -983,7 +997,8 @@ public sealed partial class RunEngine
             .ToListAsync(cancellationToken);
         foreach (var attempt in expired)
         {
-            _handOffs.Remove(attempt.Id);
+            // Its hand-off record stays until its session closes: if the session never wrote it, what it recorded as released
+            // is still taken back then. The attempt is settled here, so it is not put back.
             attempt.Status = AttemptStatuses.Uncertain;
             attempt.Error = LeaseExpired;
             attempt.FinishedAt = now;
